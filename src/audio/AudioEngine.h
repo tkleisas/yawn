@@ -4,6 +4,8 @@
 #include "audio/Transport.h"
 #include "audio/ClipEngine.h"
 #include "audio/Mixer.h"
+#include "audio/Metronome.h"
+#include "midi/MidiEffectChain.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
 #include <atomic>
@@ -40,6 +42,8 @@ public:
     ClipEngine& clipEngine() { return m_clipEngine; }
     Mixer& mixer() { return m_mixer; }
     const Mixer& mixer() const { return m_mixer; }
+    Metronome& metronome() { return m_metronome; }
+    midi::MidiEffectChain& midiEffectChain(int track) { return m_midiEffectChains[track]; }
 
     double sampleRate() const { return m_config.sampleRate; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
@@ -70,6 +74,8 @@ private:
     Transport m_transport;
     ClipEngine m_clipEngine;
     Mixer m_mixer;
+    Metronome m_metronome;
+    midi::MidiEffectChain m_midiEffectChains[kMaxMidiTracks];
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;

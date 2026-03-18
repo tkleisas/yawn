@@ -95,6 +95,18 @@ struct SetReturnMuteMsg {
     bool muted;
 };
 
+struct MetronomeToggleMsg {
+    bool enabled;
+};
+
+struct MetronomeSetVolumeMsg {
+    float volume;
+};
+
+struct MetronomeSetBeatsPerBarMsg {
+    int beatsPerBar;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -114,7 +126,10 @@ using AudioCommand = std::variant<
     SetSendEnabledMsg,
     SetReturnVolumeMsg,
     SetReturnPanMsg,
-    SetReturnMuteMsg
+    SetReturnMuteMsg,
+    MetronomeToggleMsg,
+    MetronomeSetVolumeMsg,
+    MetronomeSetBeatsPerBarMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

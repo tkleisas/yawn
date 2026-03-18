@@ -32,6 +32,11 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_clipEngine.setTransport(&m_transport);
     m_clipEngine.setSampleRate(config.sampleRate);
 
+    m_metronome.init(config.sampleRate, config.framesPerBuffer);
+
+    for (int t = 0; t < kMaxMidiTracks; ++t)
+        m_midiEffectChains[t].init(config.sampleRate);
+
     // Allocate per-track scratch buffers on heap
     const int bufferStride = kMaxFramesPerBuffer * config.outputChannels;
     m_trackBufferHeap.resize(kMaxTracks * bufferStride, 0.0f);
@@ -160,6 +165,12 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
     // Mixer clears output before writing
     m_mixer.process(m_trackBufferPtrs, kMaxTracks, output, nf, nc);
 
+    // Metronome: add click directly to master output (bypasses mixer routing)
+    m_metronome.process(output, nf, nc,
+                        m_transport.bpm(),
+                        m_transport.positionInSamples(),
+                        m_transport.isPlaying());
+
     // Add test tone on top of mixer output (bypasses mixer routing)
     if (m_testTone.enabled) {
         double phaseInc = 2.0 * M_PI * m_testTone.frequency / m_config.sampleRate;
@@ -254,6 +265,15 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, SetReturnMuteMsg>) {
                 m_mixer.setReturnMute(msg.busIndex, msg.muted);
+            }
+            else if constexpr (std::is_same_v<T, MetronomeToggleMsg>) {
+                m_metronome.setEnabled(msg.enabled);
+            }
+            else if constexpr (std::is_same_v<T, MetronomeSetVolumeMsg>) {
+                m_metronome.setVolume(msg.volume);
+            }
+            else if constexpr (std::is_same_v<T, MetronomeSetBeatsPerBarMsg>) {
+                m_metronome.setBeatsPerBar(msg.beatsPerBar);
             }
         }, cmd);
     }
