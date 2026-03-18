@@ -77,6 +77,20 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(stb)
 
 # ──────────────────────────────────────────────
+# RtMidi (cross-platform MIDI I/O)
+# ──────────────────────────────────────────────
+FetchContent_Declare(
+    rtmidi
+    GIT_REPOSITORY https://github.com/thestk/rtmidi.git
+    GIT_TAG        6.0.0
+    GIT_SHALLOW    TRUE
+)
+set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(RTMIDI_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+set(RTMIDI_TARGETNAME_UNINSTALL "rtmidi_uninstall" CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(rtmidi)
+
+# ──────────────────────────────────────────────
 # Google Test (for unit testing)
 # ──────────────────────────────────────────────
 FetchContent_Declare(

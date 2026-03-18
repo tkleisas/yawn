@@ -17,6 +17,10 @@ static constexpr int kMaxScenes        = 256;
 static constexpr int kMaxFramesPerBuffer = 4096;
 static constexpr int kMaxOutputChannels  = 2;
 
+// --- MIDI buffer limits ---
+static constexpr int kMaxMidiMessagesPerBuffer = 1024;
+static constexpr int kMaxMidiPorts             = 16;
+
 // --- Defaults ---
 static constexpr int kDefaultNumTracks = 8;
 static constexpr int kDefaultNumScenes = 8;

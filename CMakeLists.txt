@@ -40,6 +40,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glad
     PortAudio
     sndfile
+    rtmidi
 )
 
 # Platform-specific

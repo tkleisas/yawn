@@ -67,8 +67,8 @@ void MixerView::render(Renderer2D& renderer, Font& font,
     renderer.drawRect(afterTracks, y + 4, kSeparatorWidth, height - 8, Theme::clipSlotBorder);
     float retX = afterTracks + kSeparatorWidth + 4;
 
-    // Return bus strips
-    float retStripW = Theme::kTrackWidth * 0.7f;
+    // Return bus strips (narrower than track strips)
+    float retStripW = 70.0f;
     for (int r = 0; r < kMaxReturnBuses; ++r) {
         renderReturnStrip(renderer, font, r, retX, stripY, retStripW, stripH);
         retX += retStripW + kStripPadding;
@@ -79,82 +79,88 @@ void MixerView::render(Renderer2D& renderer, Font& font,
     retX += kSeparatorWidth + 4;
 
     // Master strip
-    renderMasterStrip(renderer, font, retX, stripY, retStripW + 20, stripH);
+    renderMasterStrip(renderer, font, retX, stripY, retStripW, stripH);
 }
 
 void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
                                     int trackIndex, float x, float y, float w, float h) {
-    // Strip background with padding inside track column
     float pad = Theme::kSlotPadding;
-    renderer.drawRect(x + pad, y, w - pad * 2, h, Theme::background);
+    float ix = x + pad;
+    float iw = w - pad * 2;
+    float pixH = font.pixelHeight();
+    if (pixH < 1.0f) pixH = 1.0f;
+    float scale = Theme::kSmallFontSize / pixH;
+    float smallScale = scale * 0.8f;
+
+    // Strip background
+    renderer.drawRect(ix, y, iw, h, Theme::background);
 
     Color trackCol = Theme::trackColors[m_project->track(trackIndex).colorIndex % Theme::kNumTrackColors];
-    float scale = Theme::kSmallFontSize / font.pixelHeight();
-
-    // Track color bar at top
-    renderer.drawRect(x + pad, y, w - pad * 2, 3, trackCol);
-
-    // Track name
-    float nameY = y + 5;
-    char name[16];
-    std::snprintf(name, sizeof(name), "%d", trackIndex + 1);
-    drawText(renderer, font, name, x + pad + 4, nameY, scale, Theme::textPrimary);
-
-    // Mute / Solo buttons
-    float btnY = y + 24;
     const auto& ch = m_engine->mixer().trackChannel(trackIndex);
 
+    // Row 1: Track color bar (3px)
+    renderer.drawRect(ix, y, iw, 3, trackCol);
+
+    // Row 2: Track number
+    float curY = y + 5;
+    char name[16];
+    std::snprintf(name, sizeof(name), "%d", trackIndex + 1);
+    drawText(renderer, font, name, ix + 4, curY, scale, Theme::textPrimary);
+
+    // Row 3: Mute / Solo buttons
+    curY = y + 30;
     Color muteCol = ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty;
     Color soloCol = ch.soloed ? Color{255, 200, 50} : Theme::clipSlotEmpty;
-    renderButton(renderer, font, x + pad + 4, btnY, kButtonWidth, kButtonHeight, "M", muteCol,
+    float btnW = (iw - 12) * 0.5f;
+    if (btnW > kButtonWidth) btnW = kButtonWidth;
+    renderButton(renderer, font, ix + 4, curY, btnW, kButtonHeight, "M", muteCol,
                  ch.muted ? Color{0, 0, 0} : Theme::textSecondary);
-    renderButton(renderer, font, x + pad + 4 + kButtonWidth + 2, btnY, kButtonWidth, kButtonHeight, "S", soloCol,
+    renderButton(renderer, font, ix + 4 + btnW + 2, curY, btnW, kButtonHeight, "S", soloCol,
                  ch.soloed ? Color{0, 0, 0} : Theme::textSecondary);
 
-    // Fader
-    float faderX = x + pad + 4;
-    float faderY = btnY + kButtonHeight + 6;
-    float faderH = h - (faderY - y) - 4;
-    renderFader(renderer, faderX, faderY, kFaderWidth, faderH, ch.volume, trackCol);
+    // Row 4: Pan bar (full width)
+    curY += kButtonHeight + 6;
+    float panW = iw - 8;
+    float panH = 8;
+    renderer.drawRect(ix + 4, curY, panW, panH, Theme::clipSlotEmpty);
+    float panCenter = ix + 4 + panW * 0.5f;
+    float panPos = panCenter + ch.pan * (panW * 0.5f - 2);
+    renderer.drawRect(panPos - 2, curY, 4, panH, trackCol);
 
-    // Meter
-    float meterX = faderX + kFaderWidth + 4;
-    renderMeter(renderer, meterX, faderY, kMeterWidth, faderH,
-                m_trackMeters[trackIndex].peakL, m_trackMeters[trackIndex].peakR);
-
-    // Pan knob (simplified as a horizontal bar)
-    float panX = meterX + kMeterWidth + 8;
-    float panW = w - pad * 2 - (panX - x - pad) - 4;
-    if (panW > 10) {
-        float panY = faderY;
-        float panH = 8;
-        renderer.drawRect(panX, panY, panW, panH, Theme::clipSlotEmpty);
-        float panCenter = panX + panW * 0.5f;
-        float panPos = panCenter + ch.pan * (panW * 0.5f - 2);
-        renderer.drawRect(panPos - 2, panY, 4, panH, trackCol);
-
-        // Send level indicators (small dots)
-        float sendY = panY + panH + 6;
-        for (int s = 0; s < kMaxReturnBuses; ++s) {
-            const auto& send = ch.sends[s];
-            float dotX = panX + s * 12;
-            Color dotCol = send.enabled && send.level > 0.01f
-                ? Color{100, 180, 255}.withAlpha(static_cast<uint8_t>(100 + send.level * 155))
-                : Theme::clipSlotEmpty;
-            renderer.drawRect(dotX, sendY, 8, 8, dotCol);
-        }
+    // Row 5: Send indicators (compact row)
+    curY += panH + 4;
+    int maxDotsVisible = std::min(kMaxReturnBuses, static_cast<int>((panW + 2) / 10));
+    for (int s = 0; s < maxDotsVisible; ++s) {
+        const auto& send = ch.sends[s];
+        float dotX = ix + 4 + s * 10;
+        Color dotCol = send.enabled && send.level > 0.01f
+            ? Color{100, 180, 255}.withAlpha(static_cast<uint8_t>(100 + send.level * 155))
+            : Theme::clipSlotEmpty;
+        renderer.drawRect(dotX, curY, 7, 7, dotCol);
     }
 
-    // dB label
+    // Row 6: Fader + Meter (remaining vertical space)
+    curY += 12;
+    float faderBottom = y + h - 22;
+    float faderH = faderBottom - curY;
+    if (faderH < 20) faderH = 20;
+
+    // Fader on left, meter pair on right
+    float faderX = ix + 4;
+    renderFader(renderer, faderX, curY, kFaderWidth, faderH, ch.volume, trackCol);
+
+    float meterX = faderX + kFaderWidth + 3;
+    renderMeter(renderer, meterX, curY, kMeterWidth * 2, faderH,
+                m_trackMeters[trackIndex].peakL, m_trackMeters[trackIndex].peakR);
+
+    // Row 7: dB label at bottom
     float db = ch.volume > 0.001f ? 20.0f * std::log10(ch.volume) : -60.0f;
     char dbText[16];
     if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
     else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-    float labelScale = scale * 0.85f;
-    float labelY = y + h - 18;
-    drawText(renderer, font, dbText, x + pad + 4, labelY, labelScale, Theme::textDim);
+    drawText(renderer, font, dbText, ix + 4, y + h - 18, smallScale, Theme::textDim);
 
-    // Column border (matching session grid)
+    // Column border
     renderer.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);
 }
 
@@ -166,27 +172,40 @@ void MixerView::renderReturnStrip(Renderer2D& renderer, Font& font,
     float pixH = font.pixelHeight();
     if (pixH < 1.0f) pixH = 1.0f;
     float scale = Theme::kSmallFontSize / pixH;
-
-    renderer.drawRect(x, y, w, 3, busCol);
-
-    const char* names[] = {"Ret A", "Ret B", "Ret C", "Ret D", "Ret E", "Ret F", "Ret G", "Ret H"};
-    drawText(renderer, font, names[busIndex], x + 4, y + 5, scale, Theme::textPrimary);
+    float smallScale = scale * 0.8f;
 
     const auto& rb = m_engine->mixer().returnBus(busIndex);
 
+    // Color bar
+    renderer.drawRect(x, y, w, 3, busCol);
+
+    // Name
+    const char* names[] = {"Ret A", "Ret B", "Ret C", "Ret D", "Ret E", "Ret F", "Ret G", "Ret H"};
+    drawText(renderer, font, names[busIndex], x + 4, y + 5, scale, Theme::textPrimary);
+
     // Mute button
-    float btnY = y + 24;
+    float curY = y + 26;
     Color muteCol = rb.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty;
-    renderButton(renderer, font, x + 4, btnY, kButtonWidth, kButtonHeight, "M", muteCol,
+    renderButton(renderer, font, x + 4, curY, kButtonWidth, kButtonHeight, "M", muteCol,
                  rb.muted ? Color{0, 0, 0} : Theme::textSecondary);
 
-    // Fader
-    float faderY = btnY + kButtonHeight + 6;
-    float faderH = h - (faderY - y) - 4;
-    renderFader(renderer, x + 4, faderY, kFaderWidth, faderH, rb.volume, busCol);
+    // Pan bar
+    curY += kButtonHeight + 6;
+    float panW = w - 8;
+    float panH = 8;
+    renderer.drawRect(x + 4, curY, panW, panH, Theme::clipSlotEmpty);
+    float panCenter = x + 4 + panW * 0.5f;
+    float panPos = panCenter + rb.pan * (panW * 0.5f - 2);
+    renderer.drawRect(panPos - 2, curY, 4, panH, busCol);
 
-    // Meter
-    renderMeter(renderer, x + 4 + kFaderWidth + 4, faderY, kMeterWidth, faderH,
+    // Fader + Meter
+    curY += panH + 8;
+    float faderBottom = y + h - 22;
+    float faderH = faderBottom - curY;
+    if (faderH < 20) faderH = 20;
+
+    renderFader(renderer, x + 4, curY, kFaderWidth, faderH, rb.volume, busCol);
+    renderMeter(renderer, x + 4 + kFaderWidth + 3, curY, kMeterWidth * 2, faderH,
                 m_returnMeters[busIndex].peakL, m_returnMeters[busIndex].peakR);
 
     // dB label
@@ -194,7 +213,7 @@ void MixerView::renderReturnStrip(Renderer2D& renderer, Font& font,
     char dbText[16];
     if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
     else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-    drawText(renderer, font, dbText, x + 4, y + h - 18, scale * 0.85f, Theme::textDim);
+    drawText(renderer, font, dbText, x + 4, y + h - 18, smallScale, Theme::textDim);
 }
 
 void MixerView::renderMasterStrip(Renderer2D& renderer, Font& font,
@@ -202,20 +221,27 @@ void MixerView::renderMasterStrip(Renderer2D& renderer, Font& font,
     renderer.drawRect(x, y, w, h, Color{35, 35, 40});
 
     Color masterCol = Theme::transportAccent;
-    float scale = Theme::kSmallFontSize / font.pixelHeight();
-
-    renderer.drawRect(x, y, w, 3, masterCol);
-    drawText(renderer, font, "MASTER", x + 4, y + 5, scale, Theme::textPrimary);
+    float pixH = font.pixelHeight();
+    if (pixH < 1.0f) pixH = 1.0f;
+    float scale = Theme::kSmallFontSize / pixH;
+    float smallScale = scale * 0.8f;
 
     const auto& master = m_engine->mixer().master();
 
-    // Fader
-    float faderY = y + 28;
-    float faderH = h - (faderY - y) - 22;
-    renderFader(renderer, x + 4, faderY, kFaderWidth + 4, faderH, master.volume, masterCol);
+    // Color bar
+    renderer.drawRect(x, y, w, 3, masterCol);
 
-    // Meter (wider for master)
-    renderMeter(renderer, x + kFaderWidth + 14, faderY, kMeterWidth * 2, faderH,
+    // Label
+    drawText(renderer, font, "MASTER", x + 4, y + 5, scale, Theme::textPrimary);
+
+    // Fader + Meter
+    float curY = y + 30;
+    float faderBottom = y + h - 22;
+    float faderH = faderBottom - curY;
+    if (faderH < 20) faderH = 20;
+
+    renderFader(renderer, x + 4, curY, kFaderWidth + 2, faderH, master.volume, masterCol);
+    renderMeter(renderer, x + kFaderWidth + 10, curY, kMeterWidth * 2 + 2, faderH,
                 m_masterMeter.peakL, m_masterMeter.peakR);
 
     // dB label
@@ -223,7 +249,7 @@ void MixerView::renderMasterStrip(Renderer2D& renderer, Font& font,
     char dbText[16];
     if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
     else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-    drawText(renderer, font, dbText, x + 4, y + h - 18, scale * 0.85f, Theme::textDim);
+    drawText(renderer, font, dbText, x + 4, y + h - 18, smallScale, Theme::textDim);
 }
 
 void MixerView::renderMeter(Renderer2D& renderer,

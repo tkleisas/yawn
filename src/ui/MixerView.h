@@ -75,13 +75,13 @@ private:
     float m_viewX = 0, m_viewY = 0, m_viewW = 0, m_viewH = 0;
 
     // Layout constants
-    static constexpr float kMixerHeight = 200.0f;
+    static constexpr float kMixerHeight = 280.0f;
     static constexpr float kStripWidth = 80.0f;
-    static constexpr float kMeterWidth = 8.0f;
-    static constexpr float kFaderWidth = 10.0f;
+    static constexpr float kMeterWidth = 6.0f;
+    static constexpr float kFaderWidth = 8.0f;
     static constexpr float kFaderHeight = 100.0f;
-    static constexpr float kButtonHeight = 18.0f;
-    static constexpr float kButtonWidth = 24.0f;
+    static constexpr float kButtonHeight = 22.0f;
+    static constexpr float kButtonWidth = 28.0f;
     static constexpr float kStripPadding = 2.0f;
     static constexpr float kSeparatorWidth = 2.0f;
 

@@ -9,11 +9,17 @@
 namespace yawn {
 
 struct Track {
+    enum class Type : uint8_t { Audio, Midi };
+
     std::string name;
+    Type type = Type::Audio;
     int colorIndex = 0;
     float volume = 1.0f;
     bool muted = false;
     bool soloed = false;
+    int midiInputPort = -1;   // -1 = all ports
+    int midiInputChannel = -1; // -1 = all channels
+    bool armed = false;        // For MIDI recording
 };
 
 struct Scene {
