@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Constants.h"
+#include "effects/EffectChain.h"
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -70,6 +71,12 @@ public:
             m_returnBufPtrs[r] = m_returnBufferHeap.data() + r * kMaxBufferSize;
         }
         reset();
+    }
+
+    void initEffectChains(double sampleRate, int maxBlockSize) {
+        for (auto& chain : m_trackFx)  chain.init(sampleRate, maxBlockSize);
+        for (auto& chain : m_returnFx) chain.init(sampleRate, maxBlockSize);
+        m_masterFx.init(sampleRate, maxBlockSize);
     }
 
     void reset() {
@@ -152,6 +159,16 @@ public:
     const MasterChannel& master() const { return m_master; }
     bool anySoloed() const { return m_anySoloed; }
 
+    // --- Effect chain access ---
+
+    effects::EffectChain& trackEffects(int track) {
+        return m_trackFx[std::max(0, std::min(track, kMaxTracks - 1))];
+    }
+    effects::EffectChain& returnEffects(int bus) {
+        return m_returnFx[std::max(0, std::min(bus, kMaxReturnBuses - 1))];
+    }
+    effects::EffectChain& masterEffects() { return m_masterFx; }
+
     // --- Core processing ---
     //
     // trackBuffers: array of pointers to per-track interleaved stereo buffers
@@ -175,6 +192,10 @@ public:
         // Process each track
         for (int t = 0; t < numTracks && t < kMaxTracks; ++t) {
             if (!trackBuffers[t]) continue;
+
+            // --- Track insert effects (pre-fader) ---
+            if (!m_trackFx[t].empty())
+                m_trackFx[t].process(trackBuffers[t], numFrames, numChannels);
 
             auto& ch = m_tracks[t];
             bool audible = isAudible(ch);
@@ -237,6 +258,10 @@ public:
 
         // --- Process return buses ---
         for (int r = 0; r < kMaxReturnBuses; ++r) {
+            // Return insert effects (e.g., reverb/delay on send bus)
+            if (!m_returnFx[r].empty())
+                m_returnFx[r].process(m_returnBufPtrs[r], numFrames, numChannels);
+
             auto& rb = m_returns[r];
             if (rb.muted) {
                 rb.peakL *= kPeakDecay;
@@ -268,6 +293,10 @@ public:
             rb.peakL = std::max(retPeakL, rb.peakL * kPeakDecay);
             rb.peakR = std::max(retPeakR, rb.peakR * kPeakDecay);
         }
+
+        // --- Master insert effects (pre-fader) ---
+        if (!m_masterFx.empty())
+            m_masterFx.process(output, numFrames, numChannels);
 
         // --- Master volume + metering ---
         float mPeakL = 0.0f, mPeakR = 0.0f;
@@ -317,6 +346,11 @@ private:
     std::array<ReturnBus, kMaxReturnBuses> m_returns;
     MasterChannel m_master;
     bool m_anySoloed = false;
+
+    // Per-channel effect chains
+    std::array<effects::EffectChain, kMaxTracks> m_trackFx;
+    std::array<effects::EffectChain, kMaxReturnBuses> m_returnFx;
+    effects::EffectChain m_masterFx;
 
     // Scratch buffers for return bus accumulation (heap-allocated, preallocated in ctor)
     static constexpr int kMaxBufferSize = 4096 * 2; // max frames * max channels
