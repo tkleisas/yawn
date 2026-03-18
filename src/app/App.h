@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ui/Window.h"
-#include <functional>
+#include "audio/AudioEngine.h"
 
 namespace yawn {
 
@@ -23,9 +23,16 @@ private:
     void processEvents();
     void update();
     void render();
+    void renderTransportInfo();
 
     ui::Window m_mainWindow;
+    audio::AudioEngine m_audioEngine;
     bool m_running = false;
+
+    // UI state from audio thread
+    int64_t m_displayPosition = 0;
+    double m_displayBeats = 0.0;
+    bool m_displayPlaying = false;
 };
 
 } // namespace yawn
