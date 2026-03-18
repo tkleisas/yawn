@@ -7,6 +7,7 @@
 #include <portaudio.h>
 #include <atomic>
 #include <cmath>
+#include <vector>
 
 namespace yawn {
 namespace audio {
@@ -79,9 +80,9 @@ private:
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
 
-    // Per-track scratch buffers for mixer routing
+    // Per-track scratch buffers for mixer routing (heap-allocated to avoid stack overflow)
     static constexpr int kMaxFramesPerBuffer = 4096;
-    float m_trackBufferStorage[kMaxTracks][kMaxFramesPerBuffer * 2] = {};
+    std::vector<float> m_trackBufferHeap;     // kMaxTracks * kMaxFramesPerBuffer * 2
     float* m_trackBufferPtrs[kMaxTracks] = {};
 };
 

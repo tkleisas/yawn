@@ -45,51 +45,58 @@ void MixerView::render(Renderer2D& renderer, Font& font,
 
     if (!m_project) return;
 
-    float stripX = x + 2;
+    // Align with session view: scene label area on left, then track columns
     float stripY = y + 2;
     float stripH = height - 4;
 
-    // Track channel strips
+    // Scene label gutter (empty or label "MIXER")
+    float scale = Theme::kSmallFontSize / font.pixelHeight();
+    drawText(renderer, font, "MIX", x + 6, y + stripH * 0.5f - 8, scale * 0.85f, Theme::textDim);
+
+    // Track channel strips — aligned to session grid columns
+    float gridX = x + Theme::kSceneLabelWidth;
     for (int t = 0; t < m_project->numTracks(); ++t) {
-        renderChannelStrip(renderer, font, t, stripX, stripY, kStripWidth, stripH);
-        stripX += kStripWidth + kStripPadding;
+        float sx = gridX + t * Theme::kTrackWidth;
+        renderChannelStrip(renderer, font, t, sx, stripY, Theme::kTrackWidth, stripH);
     }
 
-    // Separator before returns
-    renderer.drawRect(stripX, y + 4, kSeparatorWidth, height - 8, Theme::clipSlotBorder);
-    stripX += kSeparatorWidth + 4;
+    // Separator after track strips
+    float afterTracks = gridX + m_project->numTracks() * Theme::kTrackWidth;
+    renderer.drawRect(afterTracks, y + 4, kSeparatorWidth, height - 8, Theme::clipSlotBorder);
+    float retX = afterTracks + kSeparatorWidth + 4;
 
     // Return bus strips
-    const char* returnNames[] = {"A", "B", "C", "D"};
+    float retStripW = Theme::kTrackWidth * 0.7f;
     for (int r = 0; r < audio::kMaxReturnBuses; ++r) {
-        renderReturnStrip(renderer, font, r, stripX, stripY, kStripWidth, stripH);
-        stripX += kStripWidth + kStripPadding;
+        renderReturnStrip(renderer, font, r, retX, stripY, retStripW, stripH);
+        retX += retStripW + kStripPadding;
     }
 
     // Separator before master
-    renderer.drawRect(stripX, y + 4, kSeparatorWidth, height - 8, Theme::clipSlotBorder);
-    stripX += kSeparatorWidth + 4;
+    renderer.drawRect(retX, y + 4, kSeparatorWidth, height - 8, Theme::clipSlotBorder);
+    retX += kSeparatorWidth + 4;
 
     // Master strip
-    renderMasterStrip(renderer, font, stripX, stripY, kStripWidth + 20, stripH);
+    renderMasterStrip(renderer, font, retX, stripY, retStripW + 20, stripH);
 }
 
 void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
                                     int trackIndex, float x, float y, float w, float h) {
-    // Strip background
-    renderer.drawRect(x, y, w, h, Theme::background);
+    // Strip background with padding inside track column
+    float pad = Theme::kSlotPadding;
+    renderer.drawRect(x + pad, y, w - pad * 2, h, Theme::background);
 
     Color trackCol = Theme::trackColors[m_project->track(trackIndex).colorIndex % Theme::kNumTrackColors];
     float scale = Theme::kSmallFontSize / font.pixelHeight();
 
     // Track color bar at top
-    renderer.drawRect(x, y, w, 3, trackCol);
+    renderer.drawRect(x + pad, y, w - pad * 2, 3, trackCol);
 
     // Track name
     float nameY = y + 5;
     char name[16];
     std::snprintf(name, sizeof(name), "%d", trackIndex + 1);
-    drawText(renderer, font, name, x + 4, nameY, scale, Theme::textPrimary);
+    drawText(renderer, font, name, x + pad + 4, nameY, scale, Theme::textPrimary);
 
     // Mute / Solo buttons
     float btnY = y + 24;
@@ -97,13 +104,13 @@ void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
 
     Color muteCol = ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty;
     Color soloCol = ch.soloed ? Color{255, 200, 50} : Theme::clipSlotEmpty;
-    renderButton(renderer, font, x + 4, btnY, kButtonWidth, kButtonHeight, "M", muteCol,
+    renderButton(renderer, font, x + pad + 4, btnY, kButtonWidth, kButtonHeight, "M", muteCol,
                  ch.muted ? Color{0, 0, 0} : Theme::textSecondary);
-    renderButton(renderer, font, x + 4 + kButtonWidth + 2, btnY, kButtonWidth, kButtonHeight, "S", soloCol,
+    renderButton(renderer, font, x + pad + 4 + kButtonWidth + 2, btnY, kButtonWidth, kButtonHeight, "S", soloCol,
                  ch.soloed ? Color{0, 0, 0} : Theme::textSecondary);
 
     // Fader
-    float faderX = x + 4;
+    float faderX = x + pad + 4;
     float faderY = btnY + kButtonHeight + 6;
     float faderH = h - (faderY - y) - 4;
     renderFader(renderer, faderX, faderY, kFaderWidth, faderH, ch.volume, trackCol);
@@ -115,23 +122,25 @@ void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
 
     // Pan knob (simplified as a horizontal bar)
     float panX = meterX + kMeterWidth + 8;
-    float panW = w - (panX - x) - 4;
-    float panY = faderY;
-    float panH = 8;
-    renderer.drawRect(panX, panY, panW, panH, Theme::clipSlotEmpty);
-    float panCenter = panX + panW * 0.5f;
-    float panPos = panCenter + ch.pan * (panW * 0.5f - 2);
-    renderer.drawRect(panPos - 2, panY, 4, panH, trackCol);
+    float panW = w - pad * 2 - (panX - x - pad) - 4;
+    if (panW > 10) {
+        float panY = faderY;
+        float panH = 8;
+        renderer.drawRect(panX, panY, panW, panH, Theme::clipSlotEmpty);
+        float panCenter = panX + panW * 0.5f;
+        float panPos = panCenter + ch.pan * (panW * 0.5f - 2);
+        renderer.drawRect(panPos - 2, panY, 4, panH, trackCol);
 
-    // Send level indicators (small dots)
-    float sendY = panY + panH + 6;
-    for (int s = 0; s < audio::kMaxReturnBuses; ++s) {
-        const auto& send = ch.sends[s];
-        float dotX = panX + s * 12;
-        Color dotCol = send.enabled && send.level > 0.01f
-            ? Color{100, 180, 255}.withAlpha(static_cast<uint8_t>(100 + send.level * 155))
-            : Theme::clipSlotEmpty;
-        renderer.drawRect(dotX, sendY, 8, 8, dotCol);
+        // Send level indicators (small dots)
+        float sendY = panY + panH + 6;
+        for (int s = 0; s < audio::kMaxReturnBuses; ++s) {
+            const auto& send = ch.sends[s];
+            float dotX = panX + s * 12;
+            Color dotCol = send.enabled && send.level > 0.01f
+                ? Color{100, 180, 255}.withAlpha(static_cast<uint8_t>(100 + send.level * 155))
+                : Theme::clipSlotEmpty;
+            renderer.drawRect(dotX, sendY, 8, 8, dotCol);
+        }
     }
 
     // dB label
@@ -141,7 +150,10 @@ void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
     else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
     float labelScale = scale * 0.85f;
     float labelY = y + h - 18;
-    drawText(renderer, font, dbText, x + 4, labelY, labelScale, Theme::textDim);
+    drawText(renderer, font, dbText, x + pad + 4, labelY, labelScale, Theme::textDim);
+
+    // Column border (matching session grid)
+    renderer.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);
 }
 
 void MixerView::renderReturnStrip(Renderer2D& renderer, Font& font,
@@ -276,13 +288,13 @@ bool MixerView::handleClick(float mx, float my, bool isRightClick) {
     if (mx < m_viewX || mx > m_viewX + m_viewW) return false;
     if (my < m_viewY || my > m_viewY + m_viewH) return false;
 
-    float stripX = m_viewX + 2;
+    float gridX = m_viewX + Theme::kSceneLabelWidth;
     float btnY = m_viewY + 2 + 24;
 
-    // Check track strips
+    // Check track strips — aligned to session grid columns
     for (int t = 0; t < m_project->numTracks(); ++t) {
-        float sx = stripX;
-        if (mx >= sx && mx < sx + kStripWidth) {
+        float sx = gridX + t * Theme::kTrackWidth;
+        if (mx >= sx && mx < sx + Theme::kTrackWidth) {
             // Mute button
             if (my >= btnY && my < btnY + kButtonHeight) {
                 if (mx < sx + 4 + kButtonWidth) {
@@ -297,7 +309,6 @@ bool MixerView::handleClick(float mx, float my, bool isRightClick) {
                 }
             }
         }
-        stripX += kStripWidth + kStripPadding;
     }
 
     return false;

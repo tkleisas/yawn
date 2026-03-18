@@ -1,0 +1,20 @@
+Starting Y.A.W.N — Yet Another Audio Workstation New
+OpenGL 3.3 loaded
+Font loaded: C:\Windows\Fonts\segoeui.ttf (48px)
+Audio device: Ηχεία (Realtek(R) Audio)
+Sample rate: 44100 Hz, Buffer: 256 frames, Channels: 2
+Audio engine started
+
+Y.A.W.N initialized successfully
+  [Space] Play/Stop        [T] Toggle test tone
+  [Up/Down] BPM +/-        [Home] Reset position
+  [Q] Quantize: None/Beat/Bar
+  [M] Toggle mixer panel
+  Click clip slots to launch/stop
+  Drag & drop audio files to load clips
+  [Esc] Quit
+
+Audio engine stopped
+Y.A.W.N shutdown complete
+Y.A.W.N shutdown complete
+Y.A.W.N shutdown complete

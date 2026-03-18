@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <vector>
 
 namespace yawn {
 namespace audio {
@@ -65,7 +66,14 @@ struct MasterChannel {
 // Runs entirely on the audio thread.
 class Mixer {
 public:
-    Mixer() { reset(); }
+    Mixer() {
+        // Preallocate return bus scratch buffers on heap
+        m_returnBufferHeap.resize(kMaxReturnBuses * kMaxBufferSize, 0.0f);
+        for (int r = 0; r < kMaxReturnBuses; ++r) {
+            m_returnBufPtrs[r] = m_returnBufferHeap.data() + r * kMaxBufferSize;
+        }
+        reset();
+    }
 
     void reset() {
         for (auto& ch : m_tracks) ch = TrackChannel{};
@@ -160,7 +168,7 @@ public:
         // Clear output and return bus accumulators
         std::memset(output, 0, bufSize * sizeof(float));
         for (int r = 0; r < kMaxReturnBuses; ++r) {
-            std::memset(m_returnBuffers[r].data(), 0, bufSize * sizeof(float));
+            std::memset(m_returnBufPtrs[r], 0, bufSize * sizeof(float));
         }
 
         // Process each track
@@ -176,7 +184,7 @@ public:
                 if (!send.enabled || send.level <= 0.0f) continue;
                 if (send.mode != SendMode::PreFader) continue;
 
-                float* dst = m_returnBuffers[s].data();
+                float* dst = m_returnBufPtrs[s];
                 const float* src = trackBuffers[t];
                 for (int i = 0; i < bufSize; ++i) {
                     dst[i] += src[i] * send.level;
@@ -205,9 +213,9 @@ public:
                         if (!send.enabled || send.level <= 0.0f) continue;
                         if (send.mode != SendMode::PostFader) continue;
 
-                        m_returnBuffers[s][i * nc + 0] += outL * send.level;
+                        m_returnBufPtrs[s][i * nc + 0] += outL * send.level;
                         if (nc > 1)
-                            m_returnBuffers[s][i * nc + 1] += outR * send.level;
+                            m_returnBufPtrs[s][i * nc + 1] += outR * send.level;
                     }
 
                     // Sum into master
@@ -240,7 +248,7 @@ public:
             float gainR = rb.volume * std::sin(panAngle);
 
             float retPeakL = 0.0f, retPeakR = 0.0f;
-            const float* src = m_returnBuffers[r].data();
+            const float* src = m_returnBufPtrs[r];
 
             for (int i = 0; i < numFrames; ++i) {
                 float sL = src[i * nc + 0];
@@ -309,9 +317,10 @@ private:
     MasterChannel m_master;
     bool m_anySoloed = false;
 
-    // Scratch buffers for return bus accumulation (sized for max buffer)
+    // Scratch buffers for return bus accumulation (heap-allocated, preallocated in ctor)
     static constexpr int kMaxBufferSize = 4096 * 2; // max frames * max channels
-    std::array<std::array<float, kMaxBufferSize>, kMaxReturnBuses> m_returnBuffers{};
+    std::vector<float> m_returnBufferHeap;  // kMaxReturnBuses * kMaxBufferSize
+    float* m_returnBufPtrs[kMaxReturnBuses] = {};
 };
 
 } // namespace audio

@@ -32,6 +32,13 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_clipEngine.setTransport(&m_transport);
     m_clipEngine.setSampleRate(config.sampleRate);
 
+    // Allocate per-track scratch buffers on heap
+    const int bufferStride = kMaxFramesPerBuffer * config.outputChannels;
+    m_trackBufferHeap.resize(kMaxTracks * bufferStride, 0.0f);
+    for (int t = 0; t < kMaxTracks; ++t) {
+        m_trackBufferPtrs[t] = m_trackBufferHeap.data() + t * bufferStride;
+    }
+
     // Open default output stream
     PaStreamParameters outputParams;
     outputParams.device = Pa_GetDefaultOutputDevice();
@@ -138,16 +145,22 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
     int nc = m_config.outputChannels;
     int nf = static_cast<int>(numFrames);
 
-    // Clear per-track buffers
+    // Clear per-track buffers (pointers already set up in init)
     for (int t = 0; t < kMaxTracks; ++t) {
-        std::memset(m_trackBufferStorage[t], 0, nf * nc * sizeof(float));
-        m_trackBufferPtrs[t] = m_trackBufferStorage[t];
+        std::memset(m_trackBufferPtrs[t], 0, nf * nc * sizeof(float));
     }
 
-    // Clear output buffer
-    std::memset(output, 0, numFrames * nc * sizeof(float));
+    // Render each track's clip into its own buffer
+    m_clipEngine.checkAndFirePending();
+    for (int t = 0; t < kMaxTracks; ++t) {
+        m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
+    }
 
-    // Generate test tone into track 0 if enabled (pre-mixer)
+    // Run mixer: per-track fader/pan/mute/solo, sends→returns, master
+    // Mixer clears output before writing
+    m_mixer.process(m_trackBufferPtrs, kMaxTracks, output, nf, nc);
+
+    // Add test tone on top of mixer output (bypasses mixer routing)
     if (m_testTone.enabled) {
         double phaseInc = 2.0 * M_PI * m_testTone.frequency / m_config.sampleRate;
         for (int i = 0; i < nf; ++i) {
@@ -160,21 +173,6 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
                 m_testTone.phase -= 2.0 * M_PI;
             }
         }
-    }
-
-    // Render each track's clip into its own buffer
-    m_clipEngine.checkAndFirePending();
-    for (int t = 0; t < kMaxTracks; ++t) {
-        m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
-    }
-
-    // Run mixer: per-track fader/pan/mute/solo, sends→returns, master
-    float mixOutput[kMaxFramesPerBuffer * 2] = {};
-    m_mixer.process(m_trackBufferPtrs, kMaxTracks, mixOutput, nf, nc);
-
-    // Sum mixer output into final output (which may already have test tone)
-    for (int i = 0; i < nf * nc; ++i) {
-        output[i] += mixOutput[i];
     }
 
     // Advance transport
