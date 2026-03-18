@@ -43,14 +43,16 @@ void MixerView::render(Renderer2D& renderer, Font& font,
     renderer.drawRect(x, y, width, height, Theme::panelBg);
     renderer.drawRect(x, y, width, 1, Theme::clipSlotBorder);
 
-    if (!m_project) return;
+    if (!m_project || !m_engine) return;
 
     // Align with session view: scene label area on left, then track columns
     float stripY = y + 2;
     float stripH = height - 4;
 
     // Scene label gutter (empty or label "MIXER")
-    float scale = Theme::kSmallFontSize / font.pixelHeight();
+    float pixH = font.pixelHeight();
+    if (pixH < 1.0f) pixH = 1.0f;
+    float scale = Theme::kSmallFontSize / pixH;
     drawText(renderer, font, "MIX", x + 6, y + stripH * 0.5f - 8, scale * 0.85f, Theme::textDim);
 
     // Track channel strips — aligned to session grid columns
@@ -161,11 +163,13 @@ void MixerView::renderReturnStrip(Renderer2D& renderer, Font& font,
     renderer.drawRect(x, y, w, h, Theme::background);
 
     Color busCol{100, 180, 255};
-    float scale = Theme::kSmallFontSize / font.pixelHeight();
+    float pixH = font.pixelHeight();
+    if (pixH < 1.0f) pixH = 1.0f;
+    float scale = Theme::kSmallFontSize / pixH;
 
     renderer.drawRect(x, y, w, 3, busCol);
 
-    const char* names[] = {"Ret A", "Ret B", "Ret C", "Ret D"};
+    const char* names[] = {"Ret A", "Ret B", "Ret C", "Ret D", "Ret E", "Ret F", "Ret G", "Ret H"};
     drawText(renderer, font, names[busIndex], x + 4, y + 5, scale, Theme::textPrimary);
 
     const auto& rb = m_engine->mixer().returnBus(busIndex);

@@ -141,10 +141,14 @@ public:
 
     void setMasterVolume(float vol) { m_master.volume = clampVol(vol); }
 
-    // --- Getters ---
+    // --- Getters (with bounds safety) ---
 
-    const TrackChannel& trackChannel(int track) const { return m_tracks[track]; }
-    const ReturnBus& returnBus(int bus) const { return m_returns[bus]; }
+    const TrackChannel& trackChannel(int track) const {
+        return m_tracks[std::max(0, std::min(track, kMaxTracks - 1))];
+    }
+    const ReturnBus& returnBus(int bus) const {
+        return m_returns[std::max(0, std::min(bus, kMaxReturnBuses - 1))];
+    }
     const MasterChannel& master() const { return m_master; }
     bool anySoloed() const { return m_anySoloed; }
 
