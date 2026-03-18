@@ -5,11 +5,14 @@
 #include "audio/ClipEngine.h"
 #include "audio/Mixer.h"
 #include "audio/Metronome.h"
+#include "instruments/Instrument.h"
 #include "midi/MidiEffectChain.h"
+#include "midi/MidiTypes.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
 #include <atomic>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 namespace yawn {
@@ -45,6 +48,17 @@ public:
     Metronome& metronome() { return m_metronome; }
     midi::MidiEffectChain& midiEffectChain(int track) { return m_midiEffectChains[track]; }
 
+    // Instrument management (call before start or with appropriate sync)
+    void setInstrument(int track, std::unique_ptr<instruments::Instrument> inst) {
+        if (track < 0 || track >= kMaxTracks) return;
+        m_instruments[track] = std::move(inst);
+        if (m_instruments[track])
+            m_instruments[track]->init(m_config.sampleRate, m_config.framesPerBuffer);
+    }
+    instruments::Instrument* instrument(int track) {
+        return (track >= 0 && track < kMaxTracks) ? m_instruments[track].get() : nullptr;
+    }
+
     double sampleRate() const { return m_config.sampleRate; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
@@ -76,6 +90,8 @@ private:
     Mixer m_mixer;
     Metronome m_metronome;
     midi::MidiEffectChain m_midiEffectChains[kMaxMidiTracks];
+    std::unique_ptr<instruments::Instrument> m_instruments[kMaxTracks];
+    midi::MidiBuffer m_trackMidiBuffers[kMaxTracks];
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;

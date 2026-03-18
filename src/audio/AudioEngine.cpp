@@ -161,6 +161,28 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
         m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
     }
 
+    // Process instruments: MIDI effects → instrument → add to track buffer
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (!m_instruments[t]) {
+            m_trackMidiBuffers[t].clear();
+            continue;
+        }
+        // Run MIDI effect chain on this track's MIDI buffer
+        if (m_midiEffectChains[t].count() > 0) {
+            midi::TransportInfo ti;
+            ti.bpm = m_transport.bpm();
+            ti.positionInBeats = m_transport.positionInBeats();
+            ti.positionInSamples = m_transport.positionInSamples();
+            ti.sampleRate = m_config.sampleRate;
+            ti.playing = m_transport.isPlaying();
+            m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
+        }
+        // Render instrument into track buffer (adds to existing audio)
+        m_instruments[t]->process(m_trackBufferPtrs[t], nf, nc,
+                                  m_trackMidiBuffers[t]);
+        m_trackMidiBuffers[t].clear();
+    }
+
     // Run mixer: per-track fader/pan/mute/solo, sends→returns, master
     // Mixer clears output before writing
     m_mixer.process(m_trackBufferPtrs, kMaxTracks, output, nf, nc);
@@ -274,6 +296,17 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, MetronomeSetBeatsPerBarMsg>) {
                 m_metronome.setBeatsPerBar(msg.beatsPerBar);
+            }
+            else if constexpr (std::is_same_v<T, SendMidiToTrackMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    midi::MidiMessage m{};
+                    m.type = static_cast<midi::MidiMessage::Type>(msg.type);
+                    m.channel = msg.channel;
+                    m.note = msg.note;
+                    m.velocity = msg.velocity;
+                    m.value = msg.value;
+                    m_trackMidiBuffers[msg.trackIndex].addMessage(m);
+                }
             }
         }, cmd);
     }

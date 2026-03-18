@@ -107,6 +107,16 @@ struct MetronomeSetBeatsPerBarMsg {
     int beatsPerBar;
 };
 
+// Send a MIDI message to a specific track's instrument
+struct SendMidiToTrackMsg {
+    int trackIndex;
+    uint8_t type;       // MidiMessage::Type as uint8_t
+    uint8_t channel;
+    uint8_t note;
+    uint16_t velocity;
+    uint32_t value;     // for CC, pitch bend, etc.
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -129,7 +139,8 @@ using AudioCommand = std::variant<
     SetReturnMuteMsg,
     MetronomeToggleMsg,
     MetronomeSetVolumeMsg,
-    MetronomeSetBeatsPerBarMsg
+    MetronomeSetBeatsPerBarMsg,
+    SendMidiToTrackMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)
