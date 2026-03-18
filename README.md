@@ -175,4 +175,4 @@ yawn/
 
 ## License
 
-TBD
+[MIT](LICENSE.txt) © Tasos Kleisas
