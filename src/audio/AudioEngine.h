@@ -91,7 +91,8 @@ private:
     Metronome m_metronome;
     midi::MidiEffectChain m_midiEffectChains[kMaxMidiTracks];
     std::unique_ptr<instruments::Instrument> m_instruments[kMaxTracks];
-    midi::MidiBuffer m_trackMidiBuffers[kMaxTracks];
+    // Heap-allocated to avoid stack overflow (~1MB for 64 MidiBuffers)
+    std::vector<midi::MidiBuffer> m_trackMidiBuffers;
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;

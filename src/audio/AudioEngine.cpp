@@ -34,6 +34,9 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     m_metronome.init(config.sampleRate, config.framesPerBuffer);
 
+    // Preallocate per-track MIDI buffers on heap
+    m_trackMidiBuffers.resize(kMaxTracks);
+
     for (int t = 0; t < kMaxMidiTracks; ++t)
         m_midiEffectChains[t].init(config.sampleRate);
 
