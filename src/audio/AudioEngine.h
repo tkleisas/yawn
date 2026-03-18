@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/Transport.h"
+#include "audio/ClipEngine.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
 #include <atomic>
@@ -28,20 +29,17 @@ public:
     void stop();
     void shutdown();
 
-    // Send a command from UI thread to audio thread (lock-free)
     void sendCommand(const AudioCommand& cmd);
-
-    // Poll events from audio thread on the UI thread (lock-free)
     bool pollEvent(AudioEvent& event);
 
     Transport& transport() { return m_transport; }
     const Transport& transport() const { return m_transport; }
+    ClipEngine& clipEngine() { return m_clipEngine; }
 
     double sampleRate() const { return m_config.sampleRate; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
 private:
-    // PortAudio callback — static trampoline
     static int paCallback(
         const void* inputBuffer,
         void* outputBuffer,
@@ -51,12 +49,11 @@ private:
         void* userData
     );
 
-    // Audio processing — called on the audio thread
     void processAudio(float* output, unsigned long numFrames);
     void processCommands();
     void emitPositionUpdate();
+    void emitClipStates();
 
-    // Test tone state (audio thread only)
     struct TestTone {
         bool enabled = false;
         float frequency = 440.0f;
@@ -65,6 +62,7 @@ private:
 
     AudioEngineConfig m_config;
     Transport m_transport;
+    ClipEngine m_clipEngine;
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;
@@ -73,7 +71,6 @@ private:
     std::atomic<bool> m_running{false};
     bool m_paInitialized = false;
 
-    // Audio-thread-only state
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
 };

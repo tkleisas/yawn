@@ -29,6 +29,9 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_transport.setSampleRate(config.sampleRate);
     m_transport.reset();
 
+    m_clipEngine.setTransport(&m_transport);
+    m_clipEngine.setSampleRate(config.sampleRate);
+
     // Open default output stream
     PaStreamParameters outputParams;
     outputParams.device = Pa_GetDefaultOutputDevice();
@@ -141,7 +144,7 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
         for (unsigned long i = 0; i < numFrames; ++i) {
             float sample = static_cast<float>(std::sin(m_testTone.phase)) * 0.3f;
             for (int ch = 0; ch < m_config.outputChannels; ++ch) {
-                output[i * m_config.outputChannels + ch] = sample;
+                output[i * m_config.outputChannels + ch] += sample;
             }
             m_testTone.phase += phaseInc;
             if (m_testTone.phase >= 2.0 * M_PI) {
@@ -149,6 +152,9 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
             }
         }
     }
+
+    // Process clip playback
+    m_clipEngine.process(output, static_cast<int>(numFrames), m_config.outputChannels);
 
     // Advance transport
     m_transport.advance(static_cast<int>(numFrames));
@@ -159,6 +165,7 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
     if (m_posUpdateCounter >= updateInterval) {
         m_posUpdateCounter -= updateInterval;
         emitPositionUpdate();
+        emitClipStates();
     }
 }
 
@@ -185,6 +192,15 @@ void AudioEngine::processCommands() {
                 m_testTone.frequency = msg.frequency;
                 m_testTone.phase = 0.0;
             }
+            else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
+                m_clipEngine.scheduleClip(msg.trackIndex, msg.clip);
+            }
+            else if constexpr (std::is_same_v<T, StopClipMsg>) {
+                m_clipEngine.scheduleStop(msg.trackIndex);
+            }
+            else if constexpr (std::is_same_v<T, SetQuantizeMsg>) {
+                m_clipEngine.setQuantizeMode(msg.mode);
+            }
         }, cmd);
     }
 }
@@ -195,6 +211,19 @@ void AudioEngine::emitPositionUpdate() {
     update.positionInBeats = m_transport.positionInBeats();
     update.isPlaying = m_transport.isPlaying();
     m_eventQueue.push(update);
+}
+
+void AudioEngine::emitClipStates() {
+    for (int t = 0; t < kMaxTracks; ++t) {
+        const auto& state = m_clipEngine.trackState(t);
+        if (state.clip) {
+            ClipStateUpdate csu;
+            csu.trackIndex = t;
+            csu.playing = state.active;
+            csu.playPosition = state.playPosition;
+            m_eventQueue.push(csu);
+        }
+    }
 }
 
 } // namespace audio

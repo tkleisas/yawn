@@ -2,6 +2,10 @@
 
 #include "ui/Window.h"
 #include "audio/AudioEngine.h"
+#include "audio/Clip.h"
+#include "util/FileIO.h"
+#include <vector>
+#include <memory>
 
 namespace yawn {
 
@@ -25,9 +29,14 @@ private:
     void render();
     void renderTransportInfo();
 
+    bool loadClipFromFile(const std::string& path, int trackIndex);
+
     ui::Window m_mainWindow;
     audio::AudioEngine m_audioEngine;
     bool m_running = false;
+
+    // Loaded clips (owned here, pointers passed to audio thread)
+    std::vector<std::unique_ptr<audio::Clip>> m_clips;
 
     // UI state from audio thread
     int64_t m_displayPosition = 0;

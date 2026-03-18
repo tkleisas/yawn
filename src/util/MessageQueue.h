@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util/RingBuffer.h"
+#include "audio/ClipEngine.h"
 #include <cstdint>
 #include <variant>
 
@@ -24,12 +25,28 @@ struct TestToneMsg {
     float frequency;
 };
 
+struct LaunchClipMsg {
+    int trackIndex;
+    const Clip* clip; // must remain valid while playing (owned by UI-side Project)
+};
+
+struct StopClipMsg {
+    int trackIndex;
+};
+
+struct SetQuantizeMsg {
+    QuantizeMode mode;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
     TransportSetBPMMsg,
     TransportSetPositionMsg,
-    TestToneMsg
+    TestToneMsg,
+    LaunchClipMsg,
+    StopClipMsg,
+    SetQuantizeMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)
@@ -39,8 +56,15 @@ struct TransportPositionUpdate {
     bool isPlaying;
 };
 
+struct ClipStateUpdate {
+    int trackIndex;
+    bool playing;
+    int64_t playPosition;
+};
+
 using AudioEvent = std::variant<
-    TransportPositionUpdate
+    TransportPositionUpdate,
+    ClipStateUpdate
 >;
 
 // Command queue: UI → Audio (1024 slots)

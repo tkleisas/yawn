@@ -1,4 +1,5 @@
 #include "app/App.h"
+#include "util/FileIO.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -47,8 +48,12 @@ bool App::init() {
 
     m_running = true;
     std::printf("\nY.A.W.N initialized successfully\n");
-    std::printf("  [Space] Play/Stop   [T] Toggle test tone (440Hz)\n");
-    std::printf("  [Up/Down] BPM +/-   [Home] Reset position\n");
+    std::printf("  [Space] Play/Stop        [T] Toggle test tone\n");
+    std::printf("  [Up/Down] BPM +/-        [Home] Reset position\n");
+    std::printf("  [1-9] Launch clip on track 1-9\n");
+    std::printf("  [Shift+1-9] Stop track 1-9\n");
+    std::printf("  [Q] Quantize: None/Beat/Bar\n");
+    std::printf("  Drag & drop audio files to load clips\n");
     std::printf("  [Esc] Quit\n\n");
     return true;
 }
@@ -63,9 +68,37 @@ void App::run() {
 
 void App::shutdown() {
     m_audioEngine.shutdown();
+    m_clips.clear();
     m_mainWindow.destroy();
     SDL_Quit();
     std::printf("Y.A.W.N shutdown complete\n");
+}
+
+bool App::loadClipFromFile(const std::string& path, int trackIndex) {
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
+        std::printf("Resampling from %d Hz to %.0f Hz...\n",
+            info.sampleRate, m_audioEngine.sampleRate());
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    auto clip = std::make_unique<audio::Clip>();
+    clip->name = path;
+    clip->buffer = buffer;
+    clip->looping = true;
+    clip->gain = 0.8f;
+
+    std::printf("Clip loaded on track %d: %s (%lld frames, %d ch)\n",
+        trackIndex + 1, clip->name.c_str(),
+        static_cast<long long>(buffer->numFrames()), buffer->numChannels());
+
+    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, clip.get()});
+    m_clips.push_back(std::move(clip));
+    return true;
 }
 
 void App::processEvents() {
@@ -79,6 +112,8 @@ void App::processEvents() {
             case SDL_EVENT_KEY_DOWN:
                 if (event.key.repeat) break;
 
+                {
+                bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
                 switch (event.key.key) {
                     case SDLK_ESCAPE:
                         m_running = false;
@@ -93,8 +128,7 @@ void App::processEvents() {
                         break;
 
                     case SDLK_T:
-                        // Toggle 440Hz test tone
-                        {
+                        if (!shift) {
                             static bool toneOn = false;
                             toneOn = !toneOn;
                             m_audioEngine.sendCommand(audio::TestToneMsg{toneOn, 440.0f});
@@ -102,28 +136,53 @@ void App::processEvents() {
                         }
                         break;
 
-                    case SDLK_UP:
-                        {
-                            double newBpm = m_audioEngine.transport().bpm() + 1.0;
-                            if (newBpm > 300.0) newBpm = 300.0;
-                            m_audioEngine.sendCommand(audio::TransportSetBPMMsg{newBpm});
-                        }
+                    case SDLK_UP: {
+                        double newBpm = m_audioEngine.transport().bpm() + 1.0;
+                        if (newBpm > 300.0) newBpm = 300.0;
+                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{newBpm});
                         break;
+                    }
 
-                    case SDLK_DOWN:
-                        {
-                            double newBpm = m_audioEngine.transport().bpm() - 1.0;
-                            if (newBpm < 20.0) newBpm = 20.0;
-                            m_audioEngine.sendCommand(audio::TransportSetBPMMsg{newBpm});
-                        }
+                    case SDLK_DOWN: {
+                        double newBpm = m_audioEngine.transport().bpm() - 1.0;
+                        if (newBpm < 20.0) newBpm = 20.0;
+                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{newBpm});
                         break;
+                    }
 
                     case SDLK_HOME:
                         m_audioEngine.sendCommand(audio::TransportSetPositionMsg{0});
                         break;
 
+                    case SDLK_Q: {
+                        static int qMode = 2;
+                        qMode = (qMode + 1) % 3;
+                        auto mode = static_cast<audio::QuantizeMode>(qMode);
+                        m_audioEngine.sendCommand(audio::SetQuantizeMsg{mode});
+                        const char* names[] = {"None", "Beat", "Bar"};
+                        std::printf("Quantize: %s\n", names[qMode]);
+                        break;
+                    }
+
+                    case SDLK_1: case SDLK_2: case SDLK_3:
+                    case SDLK_4: case SDLK_5: case SDLK_6:
+                    case SDLK_7: case SDLK_8: case SDLK_9: {
+                        int trackIndex = static_cast<int>(event.key.key - SDLK_1);
+                        if (shift) {
+                            m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                            std::printf("Stop track %d\n", trackIndex + 1);
+                        } else if (!m_clips.empty()) {
+                            size_t clipIdx = trackIndex % m_clips.size();
+                            m_audioEngine.sendCommand(
+                                audio::LaunchClipMsg{trackIndex, m_clips[clipIdx].get()});
+                            std::printf("Launch clip on track %d\n", trackIndex + 1);
+                        }
+                        break;
+                    }
+
                     default:
                         break;
+                }
                 }
                 break;
 
@@ -132,6 +191,15 @@ void App::processEvents() {
                     m_running = false;
                 }
                 break;
+
+            case SDL_EVENT_DROP_FILE: {
+                const char* file = event.drop.data;
+                if (file) {
+                    int trackIndex = static_cast<int>(m_clips.size()) % 9;
+                    loadClipFromFile(file, trackIndex);
+                }
+                break;
+            }
 
             default:
                 break;
@@ -177,9 +245,10 @@ void App::renderTransportInfo() {
 
     char title[256];
     std::snprintf(title, sizeof(title),
-        "Y.A.W.N  |  %s  |  %3.0f BPM  |  %d.%d",
+        "Y.A.W.N  |  %s  |  %3.0f BPM  |  %d.%d  |  %d clips loaded",
         m_displayPlaying ? "PLAYING" : "STOPPED",
-        bpm, bar, beat);
+        bpm, bar, beat,
+        static_cast<int>(m_clips.size()));
 
     SDL_SetWindowTitle(m_mainWindow.getHandle(), title);
 }

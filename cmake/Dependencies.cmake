@@ -48,3 +48,19 @@ if(TARGET portaudio_static)
 elseif(TARGET portaudio)
     add_library(PortAudio ALIAS portaudio)
 endif()
+
+# ──────────────────────────────────────────────
+# libsndfile (audio file I/O: WAV, FLAC, OGG)
+# ──────────────────────────────────────────────
+FetchContent_Declare(
+    libsndfile
+    GIT_REPOSITORY https://github.com/libsndfile/libsndfile.git
+    GIT_TAG        1.2.2
+    GIT_SHALLOW    TRUE
+)
+set(BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ENABLE_EXTERNAL_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_REGTEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(libsndfile)
