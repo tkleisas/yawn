@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Constants.h"
 #include "audio/Transport.h"
 #include "audio/ClipEngine.h"
 #include "audio/Mixer.h"
@@ -80,8 +81,7 @@ private:
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
 
-    // Per-track scratch buffers for mixer routing (heap-allocated to avoid stack overflow)
-    static constexpr int kMaxFramesPerBuffer = 4096;
+    // Per-track scratch buffers for mixer routing (heap-allocated, preallocated in init)
     std::vector<float> m_trackBufferHeap;     // kMaxTracks * kMaxFramesPerBuffer * 2
     float* m_trackBufferPtrs[kMaxTracks] = {};
 };

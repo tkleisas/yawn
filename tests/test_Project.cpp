@@ -12,8 +12,8 @@ TEST(ProjectTest, DefaultUninitialized) {
 TEST(ProjectTest, InitDefault) {
     Project p;
     p.init();
-    EXPECT_EQ(p.numTracks(), Project::kDefaultNumTracks);
-    EXPECT_EQ(p.numScenes(), Project::kDefaultNumScenes);
+    EXPECT_EQ(p.numTracks(), kDefaultNumTracks);
+    EXPECT_EQ(p.numScenes(), kDefaultNumScenes);
 }
 
 TEST(ProjectTest, InitCustomSize) {

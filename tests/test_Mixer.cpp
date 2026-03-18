@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 
+using namespace yawn;
 using namespace yawn::audio;
 
 class MixerTest : public ::testing::Test {
@@ -101,7 +102,7 @@ TEST_F(MixerTest, ReturnBusControls) {
 TEST_F(MixerTest, OutOfRangeSafe) {
     // Should not crash
     m_mixer.setTrackVolume(-1, 0.5f);
-    m_mixer.setTrackVolume(kMixerMaxTracks, 0.5f);
+    m_mixer.setTrackVolume(kMaxTracks, 0.5f);
     m_mixer.setTrackPan(-1, 0.5f);
     m_mixer.setSendLevel(-1, 0, 0.5f);
     m_mixer.setSendLevel(0, -1, 0.5f);
@@ -115,7 +116,7 @@ TEST_F(MixerTest, ProcessSilence) {
     constexpr int nc = 2;
     float trackBuf[nf * nc] = {};
     float output[nf * nc] = {};
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     m_mixer.process(ptrs, 1, output, nf, nc);
@@ -132,7 +133,7 @@ TEST_F(MixerTest, ProcessUnityGain) {
     fillTrackBuffer(trackBuf, nf, nc, 0.5f, 0.5f);
 
     float output[nf * nc] = {};
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     // Volume=1, pan=center, master=1 → constant-power pan gives ~0.707 per side
@@ -152,7 +153,7 @@ TEST_F(MixerTest, MutedTrackProducesSilence) {
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
     float output[nf * nc] = {};
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     m_mixer.setTrackMute(0, true);
@@ -170,7 +171,7 @@ TEST_F(MixerTest, SoloMutesOtherTracks) {
     fillTrackBuffer(trackBuf0, nf, nc, 0.5f, 0.5f);
     fillTrackBuffer(trackBuf1, nf, nc, 0.3f, 0.3f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf0;
     ptrs[1] = trackBuf1;
 
@@ -191,7 +192,7 @@ TEST_F(MixerTest, PanLeftProducesMoreLeft) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     m_mixer.setTrackPan(0, -1.0f); // hard left
@@ -208,7 +209,7 @@ TEST_F(MixerTest, MasterVolumeScalesOutput) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     // Get baseline at master=1.0
@@ -231,7 +232,7 @@ TEST_F(MixerTest, PeakMeteringUpdates) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 0.8f, 0.6f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     float output[nf * nc] = {};
@@ -249,7 +250,7 @@ TEST_F(MixerTest, PreFaderSendBypassesFader) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     // Set track volume to 0 (muted fader) but pre-fader send to return A
@@ -278,7 +279,7 @@ TEST_F(MixerTest, PostFaderSendScalesWithFader) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     // Post-fader send with track volume = 0 → no send signal
@@ -300,7 +301,7 @@ TEST_F(MixerTest, MutedReturnProducesNoOutput) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     // Route all audio through send to return A, mute the track direct output
@@ -325,7 +326,7 @@ TEST_F(MixerTest, DecayPeaks) {
     float trackBuf[nf * nc];
     fillTrackBuffer(trackBuf, nf, nc, 1.0f, 1.0f);
 
-    float* ptrs[kMixerMaxTracks] = {};
+    float* ptrs[kMaxTracks] = {};
     ptrs[0] = trackBuf;
 
     float output[nf * nc] = {};

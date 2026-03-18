@@ -3,6 +3,7 @@
 #include <cmath>
 #include <vector>
 
+using namespace yawn;
 using namespace yawn::audio;
 
 class ClipEngineTest : public ::testing::Test {

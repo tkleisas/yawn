@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Constants.h"
 #include "audio/Clip.h"
 #include <vector>
 #include <memory>
@@ -23,9 +24,6 @@ struct Scene {
 // Owned by the UI thread. Clip pointers are passed to the audio engine.
 class Project {
 public:
-    static constexpr int kDefaultNumTracks = 8;
-    static constexpr int kDefaultNumScenes = 8;
-
     Project() = default;
 
     void init(int numTracks = kDefaultNumTracks, int numScenes = kDefaultNumScenes) {

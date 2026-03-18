@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Constants.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -52,7 +53,7 @@ private:
     audio::AudioEngine* m_engine = nullptr;
 
     // Per-track clip state from audio thread
-    ClipSlotUIState m_trackStates[audio::kMaxTracks] = {};
+    ClipSlotUIState m_trackStates[kMaxTracks] = {};
 
     // Transport display
     bool m_transportPlaying = false;

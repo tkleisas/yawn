@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Constants.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -60,8 +61,8 @@ private:
     audio::AudioEngine* m_engine = nullptr;
 
     // Meter data from audio thread
-    MeterData m_trackMeters[audio::kMixerMaxTracks] = {};
-    MeterData m_returnMeters[audio::kMaxReturnBuses] = {};
+    MeterData m_trackMeters[kMaxTracks] = {};
+    MeterData m_returnMeters[kMaxReturnBuses] = {};
     MeterData m_masterMeter = {};
 
     // Dragging state

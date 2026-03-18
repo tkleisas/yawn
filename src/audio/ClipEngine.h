@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Constants.h"
 #include "audio/Clip.h"
 #include "audio/Transport.h"
 #include <array>
@@ -7,9 +8,6 @@
 
 namespace yawn {
 namespace audio {
-
-// Maximum number of tracks that can play clips simultaneously
-static constexpr int kMaxTracks = 32;
 
 // Quantize mode for clip launching
 enum class QuantizeMode {

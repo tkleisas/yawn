@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Constants.h"
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -8,10 +9,6 @@
 
 namespace yawn {
 namespace audio {
-
-static constexpr int kMixerMaxTracks = 32;
-static constexpr int kMaxReturnBuses = 4;
-static constexpr int kMaxSendsPerTrack = kMaxReturnBuses;
 
 enum class SendMode {
     PreFader,
@@ -172,7 +169,7 @@ public:
         }
 
         // Process each track
-        for (int t = 0; t < numTracks && t < kMixerMaxTracks; ++t) {
+        for (int t = 0; t < numTracks && t < kMaxTracks; ++t) {
             if (!trackBuffers[t]) continue;
 
             auto& ch = m_tracks[t];
@@ -294,7 +291,7 @@ private:
     static constexpr float kPi = 3.14159265358979f;
     static constexpr float kPeakDecay = 0.95f;
 
-    static bool inTrackRange(int t) { return t >= 0 && t < kMixerMaxTracks; }
+    static bool inTrackRange(int t) { return t >= 0 && t < kMaxTracks; }
     static bool inSendRange(int s) { return s >= 0 && s < kMaxSendsPerTrack; }
     static bool inReturnRange(int r) { return r >= 0 && r < kMaxReturnBuses; }
     static float clampVol(float v) { return std::max(0.0f, std::min(v, 2.0f)); }
@@ -307,12 +304,12 @@ private:
 
     void updateSoloState() {
         m_anySoloed = false;
-        for (int i = 0; i < kMixerMaxTracks; ++i) {
+        for (int i = 0; i < kMaxTracks; ++i) {
             if (m_tracks[i].soloed) { m_anySoloed = true; return; }
         }
     }
 
-    std::array<TrackChannel, kMixerMaxTracks> m_tracks;
+    std::array<TrackChannel, kMaxTracks> m_tracks;
     std::array<ReturnBus, kMaxReturnBuses> m_returns;
     MasterChannel m_master;
     bool m_anySoloed = false;

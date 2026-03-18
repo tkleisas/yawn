@@ -12,7 +12,7 @@ void MixerView::init(Project* project, audio::AudioEngine* engine) {
 }
 
 void MixerView::updateMeter(int trackIndex, float peakL, float peakR) {
-    if (trackIndex >= 0 && trackIndex < audio::kMixerMaxTracks) {
+    if (trackIndex >= 0 && trackIndex < kMaxTracks) {
         m_trackMeters[trackIndex] = {peakL, peakR};
     } else if (trackIndex == -1) {
         m_masterMeter = {peakL, peakR};
@@ -67,7 +67,7 @@ void MixerView::render(Renderer2D& renderer, Font& font,
 
     // Return bus strips
     float retStripW = Theme::kTrackWidth * 0.7f;
-    for (int r = 0; r < audio::kMaxReturnBuses; ++r) {
+    for (int r = 0; r < kMaxReturnBuses; ++r) {
         renderReturnStrip(renderer, font, r, retX, stripY, retStripW, stripH);
         retX += retStripW + kStripPadding;
     }
@@ -133,7 +133,7 @@ void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
 
         // Send level indicators (small dots)
         float sendY = panY + panH + 6;
-        for (int s = 0; s < audio::kMaxReturnBuses; ++s) {
+        for (int s = 0; s < kMaxReturnBuses; ++s) {
             const auto& send = ch.sends[s];
             float dotX = panX + s * 12;
             Color dotCol = send.enabled && send.level > 0.01f

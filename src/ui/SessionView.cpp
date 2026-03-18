@@ -12,7 +12,7 @@ void SessionView::init(Project* project, audio::AudioEngine* engine) {
 }
 
 void SessionView::updateClipState(int trackIndex, bool playing, int64_t playPosition) {
-    if (trackIndex >= 0 && trackIndex < audio::kMaxTracks) {
+    if (trackIndex >= 0 && trackIndex < kMaxTracks) {
         m_trackStates[trackIndex].playing = playing;
         m_trackStates[trackIndex].playPosition = playPosition;
     }
