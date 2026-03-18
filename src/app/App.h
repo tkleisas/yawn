@@ -1,8 +1,12 @@
 #pragma once
 
 #include "ui/Window.h"
+#include "ui/Renderer.h"
+#include "ui/Font.h"
+#include "ui/SessionView.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
+#include "app/Project.h"
 #include "util/FileIO.h"
 #include <vector>
 #include <memory>
@@ -27,16 +31,22 @@ private:
     void processEvents();
     void update();
     void render();
-    void renderTransportInfo();
 
-    bool loadClipFromFile(const std::string& path, int trackIndex);
+    bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
+    bool loadFont();
 
     ui::Window m_mainWindow;
+    ui::Renderer2D m_renderer;
+    ui::Font m_font;
+    ui::SessionView m_sessionView;
+
     audio::AudioEngine m_audioEngine;
+    Project m_project;
     bool m_running = false;
 
-    // Loaded clips (owned here, pointers passed to audio thread)
-    std::vector<std::unique_ptr<audio::Clip>> m_clips;
+    // Track which scene/track to assign next dropped file to
+    int m_nextDropTrack = 0;
+    int m_nextDropScene = 0;
 
     // UI state from audio thread
     int64_t m_displayPosition = 0;

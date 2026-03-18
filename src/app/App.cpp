@@ -1,5 +1,4 @@
 #include "app/App.h"
-#include "util/FileIO.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -9,6 +8,28 @@ namespace yawn {
 
 App::~App() {
     shutdown();
+}
+
+bool App::loadFont() {
+    // Try common system font paths
+    const char* fontPaths[] = {
+#ifdef _WIN32
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\consola.ttf",
+#else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+#endif
+    };
+
+    for (const char* path : fontPaths) {
+        if (m_font.load(path, 24.0f)) return true;
+    }
+
+    std::fprintf(stderr, "Warning: Could not find a system font. Text will not render.\n");
+    return false;
 }
 
 bool App::init() {
@@ -24,17 +45,30 @@ bool App::init() {
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
-    ui::WindowConfig config;
-    config.title = "Y.A.W.N — Yet Another Audio Workstation New";
-    config.width = 1280;
-    config.height = 800;
-    config.resizable = true;
+    ui::WindowConfig winConfig;
+    winConfig.title = "Y.A.W.N — Yet Another Audio Workstation New";
+    winConfig.width = 1280;
+    winConfig.height = 800;
+    winConfig.resizable = true;
 
-    if (!m_mainWindow.create(config)) {
+    if (!m_mainWindow.create(winConfig)) return false;
+
+    // Init 2D renderer
+    if (!m_renderer.init()) {
+        std::fprintf(stderr, "Failed to initialize 2D renderer\n");
         return false;
     }
 
-    // Initialize audio engine
+    // Load font
+    loadFont();
+
+    // Init project
+    m_project.init(8, 8);
+
+    // Init session view
+    m_sessionView.init(&m_project, &m_audioEngine);
+
+    // Init audio engine
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = 44100.0;
     audioConfig.framesPerBuffer = 256;
@@ -46,13 +80,14 @@ bool App::init() {
         std::fprintf(stderr, "Warning: Audio engine failed to start\n");
     }
 
+    SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
+
     m_running = true;
     std::printf("\nY.A.W.N initialized successfully\n");
     std::printf("  [Space] Play/Stop        [T] Toggle test tone\n");
     std::printf("  [Up/Down] BPM +/-        [Home] Reset position\n");
-    std::printf("  [1-9] Launch clip on track 1-9\n");
-    std::printf("  [Shift+1-9] Stop track 1-9\n");
     std::printf("  [Q] Quantize: None/Beat/Bar\n");
+    std::printf("  Click clip slots to launch/stop\n");
     std::printf("  Drag & drop audio files to load clips\n");
     std::printf("  [Esc] Quit\n\n");
     return true;
@@ -68,13 +103,14 @@ void App::run() {
 
 void App::shutdown() {
     m_audioEngine.shutdown();
-    m_clips.clear();
+    m_renderer.shutdown();
+    m_font.destroy();
     m_mainWindow.destroy();
     SDL_Quit();
     std::printf("Y.A.W.N shutdown complete\n");
 }
 
-bool App::loadClipFromFile(const std::string& path, int trackIndex) {
+bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex) {
     util::AudioFileInfo info;
     auto buffer = util::loadAudioFile(path, &info);
     if (!buffer) return false;
@@ -86,18 +122,27 @@ bool App::loadClipFromFile(const std::string& path, int trackIndex) {
         if (!buffer) return false;
     }
 
+    // Extract just the filename for display
+    std::string name = path;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    // Remove extension
+    auto dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
+
     auto clip = std::make_unique<audio::Clip>();
-    clip->name = path;
+    clip->name = name;
     clip->buffer = buffer;
     clip->looping = true;
     clip->gain = 0.8f;
 
-    std::printf("Clip loaded on track %d: %s (%lld frames, %d ch)\n",
-        trackIndex + 1, clip->name.c_str(),
-        static_cast<long long>(buffer->numFrames()), buffer->numChannels());
+    auto* clipPtr = m_project.setClip(trackIndex, sceneIndex, std::move(clip));
 
-    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, clip.get()});
-    m_clips.push_back(std::move(clip));
+    std::printf("Loaded '%s' -> Track %d, Scene %d\n",
+        name.c_str(), trackIndex + 1, sceneIndex + 1);
+
+    // Auto-launch
+    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, clipPtr});
     return true;
 }
 
@@ -109,11 +154,10 @@ void App::processEvents() {
                 m_running = false;
                 break;
 
-            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_DOWN: {
                 if (event.key.repeat) break;
-
-                {
                 bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+
                 switch (event.key.key) {
                     case SDLK_ESCAPE:
                         m_running = false;
@@ -132,24 +176,19 @@ void App::processEvents() {
                             static bool toneOn = false;
                             toneOn = !toneOn;
                             m_audioEngine.sendCommand(audio::TestToneMsg{toneOn, 440.0f});
-                            std::printf("Test tone: %s\n", toneOn ? "ON" : "OFF");
                         }
                         break;
 
                     case SDLK_UP: {
                         double newBpm = m_audioEngine.transport().bpm() + 1.0;
-                        if (newBpm > 300.0) newBpm = 300.0;
-                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{newBpm});
+                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::min(newBpm, 300.0)});
                         break;
                     }
-
                     case SDLK_DOWN: {
                         double newBpm = m_audioEngine.transport().bpm() - 1.0;
-                        if (newBpm < 20.0) newBpm = 20.0;
-                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{newBpm});
+                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::max(newBpm, 20.0)});
                         break;
                     }
-
                     case SDLK_HOME:
                         m_audioEngine.sendCommand(audio::TransportSetPositionMsg{0});
                         break;
@@ -157,34 +196,26 @@ void App::processEvents() {
                     case SDLK_Q: {
                         static int qMode = 2;
                         qMode = (qMode + 1) % 3;
-                        auto mode = static_cast<audio::QuantizeMode>(qMode);
-                        m_audioEngine.sendCommand(audio::SetQuantizeMsg{mode});
+                        m_audioEngine.sendCommand(
+                            audio::SetQuantizeMsg{static_cast<audio::QuantizeMode>(qMode)});
                         const char* names[] = {"None", "Beat", "Bar"};
                         std::printf("Quantize: %s\n", names[qMode]);
-                        break;
-                    }
-
-                    case SDLK_1: case SDLK_2: case SDLK_3:
-                    case SDLK_4: case SDLK_5: case SDLK_6:
-                    case SDLK_7: case SDLK_8: case SDLK_9: {
-                        int trackIndex = static_cast<int>(event.key.key - SDLK_1);
-                        if (shift) {
-                            m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
-                            std::printf("Stop track %d\n", trackIndex + 1);
-                        } else if (!m_clips.empty()) {
-                            size_t clipIdx = trackIndex % m_clips.size();
-                            m_audioEngine.sendCommand(
-                                audio::LaunchClipMsg{trackIndex, m_clips[clipIdx].get()});
-                            std::printf("Launch clip on track %d\n", trackIndex + 1);
-                        }
                         break;
                     }
 
                     default:
                         break;
                 }
-                }
                 break;
+            }
+
+            case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+                float mx = event.button.x;
+                float my = event.button.y;
+                bool rightClick = (event.button.button == SDL_BUTTON_RIGHT);
+                m_sessionView.handleClick(mx, my, rightClick);
+                break;
+            }
 
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 if (event.window.windowID == SDL_GetWindowID(m_mainWindow.getHandle())) {
@@ -195,8 +226,16 @@ void App::processEvents() {
             case SDL_EVENT_DROP_FILE: {
                 const char* file = event.drop.data;
                 if (file) {
-                    int trackIndex = static_cast<int>(m_clips.size()) % 9;
-                    loadClipFromFile(file, trackIndex);
+                    loadClipToSlot(file, m_nextDropTrack, m_nextDropScene);
+                    // Advance to next slot
+                    m_nextDropTrack++;
+                    if (m_nextDropTrack >= m_project.numTracks()) {
+                        m_nextDropTrack = 0;
+                        m_nextDropScene++;
+                        if (m_nextDropScene >= m_project.numScenes()) {
+                            m_nextDropScene = 0;
+                        }
+                    }
                 }
                 break;
             }
@@ -208,7 +247,6 @@ void App::processEvents() {
 }
 
 void App::update() {
-    // Drain audio events (position updates ~30Hz)
     audio::AudioEvent evt;
     while (m_audioEngine.pollEvent(evt)) {
         std::visit([this](auto&& msg) {
@@ -218,8 +256,14 @@ void App::update() {
                 m_displayBeats = msg.positionInBeats;
                 m_displayPlaying = msg.isPlaying;
             }
+            else if constexpr (std::is_same_v<T, audio::ClipStateUpdate>) {
+                m_sessionView.updateClipState(msg.trackIndex, msg.playing, msg.playPosition);
+            }
         }, evt);
     }
+
+    m_sessionView.setTransportState(m_displayPlaying, m_displayBeats,
+                                     m_audioEngine.transport().bpm());
 }
 
 void App::render() {
@@ -232,25 +276,12 @@ void App::render() {
     glClearColor(0.12f, 0.12f, 0.13f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    renderTransportInfo();
+    m_renderer.beginFrame(w, h);
+    m_sessionView.render(m_renderer, m_font, 0, 0,
+                          static_cast<float>(w), static_cast<float>(h));
+    m_renderer.endFrame();
 
     m_mainWindow.swap();
-}
-
-void App::renderTransportInfo() {
-    // For now, output to window title until we have proper text rendering
-    double bpm = m_audioEngine.transport().bpm();
-    int bar = static_cast<int>(m_displayBeats / 4.0) + 1;
-    int beat = static_cast<int>(std::fmod(m_displayBeats, 4.0)) + 1;
-
-    char title[256];
-    std::snprintf(title, sizeof(title),
-        "Y.A.W.N  |  %s  |  %3.0f BPM  |  %d.%d  |  %d clips loaded",
-        m_displayPlaying ? "PLAYING" : "STOPPED",
-        bpm, bar, beat,
-        static_cast<int>(m_clips.size()));
-
-    SDL_SetWindowTitle(m_mainWindow.getHandle(), title);
 }
 
 } // namespace yawn

@@ -31,6 +31,7 @@ add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${stb_SOURCE_DIR}
 )
 
 # Link dependencies
@@ -55,3 +56,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     ${CMAKE_CURRENT_SOURCE_DIR}/assets
     $<TARGET_FILE_DIR:${PROJECT_NAME}>/assets
 )
+
+# Testing
+enable_testing()
+add_subdirectory(tests)
