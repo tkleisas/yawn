@@ -72,8 +72,8 @@ namespace Theme {
     inline constexpr float kSceneLabelWidth    = 44.0f;
     inline constexpr float kSlotPadding        = 2.0f;
     inline constexpr float kSlotCornerRadius   = 3.0f;
-    inline constexpr float kFontSize           = 13.0f;
-    inline constexpr float kSmallFontSize      = 11.0f;
+    inline constexpr float kFontSize           = 26.0f;
+    inline constexpr float kSmallFontSize      = 22.0f;
 
 } // namespace Theme
 } // namespace ui

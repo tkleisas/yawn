@@ -4,6 +4,7 @@
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/SessionView.h"
+#include "ui/MixerView.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -39,10 +40,12 @@ private:
     ui::Renderer2D m_renderer;
     ui::Font m_font;
     ui::SessionView m_sessionView;
+    ui::MixerView m_mixerView;
 
     audio::AudioEngine m_audioEngine;
     Project m_project;
     bool m_running = false;
+    bool m_showMixer = true;
 
     // Track which scene/track to assign next dropped file to
     int m_nextDropTrack = 0;

@@ -48,6 +48,17 @@ void ClipEngine::process(float* output, int numFrames, int numChannels) {
     }
 }
 
+void ClipEngine::processTrackToBuffer(int trackIndex, float* buffer, int numFrames, int numChannels) {
+    if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
+    if (m_tracks[trackIndex].active) {
+        processTrack(trackIndex, buffer, numFrames, numChannels);
+    }
+}
+
+void ClipEngine::checkAndFirePending() {
+    checkPendingLaunches();
+}
+
 bool ClipEngine::isTrackPlaying(int trackIndex) const {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return false;
     return m_tracks[trackIndex].active;

@@ -25,7 +25,7 @@ bool App::loadFont() {
     };
 
     for (const char* path : fontPaths) {
-        if (m_font.load(path, 24.0f)) return true;
+        if (m_font.load(path, 48.0f)) return true;
     }
 
     std::fprintf(stderr, "Warning: Could not find a system font. Text will not render.\n");
@@ -68,6 +68,9 @@ bool App::init() {
     // Init session view
     m_sessionView.init(&m_project, &m_audioEngine);
 
+    // Init mixer view
+    m_mixerView.init(&m_project, &m_audioEngine);
+
     // Init audio engine
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = 44100.0;
@@ -87,6 +90,7 @@ bool App::init() {
     std::printf("  [Space] Play/Stop        [T] Toggle test tone\n");
     std::printf("  [Up/Down] BPM +/-        [Home] Reset position\n");
     std::printf("  [Q] Quantize: None/Beat/Bar\n");
+    std::printf("  [M] Toggle mixer panel\n");
     std::printf("  Click clip slots to launch/stop\n");
     std::printf("  Drag & drop audio files to load clips\n");
     std::printf("  [Esc] Quit\n\n");
@@ -203,6 +207,12 @@ void App::processEvents() {
                         break;
                     }
 
+                    case SDLK_M:
+                        if (!shift) {
+                            m_showMixer = !m_showMixer;
+                        }
+                        break;
+
                     default:
                         break;
                 }
@@ -213,7 +223,10 @@ void App::processEvents() {
                 float mx = event.button.x;
                 float my = event.button.y;
                 bool rightClick = (event.button.button == SDL_BUTTON_RIGHT);
-                m_sessionView.handleClick(mx, my, rightClick);
+                // Try mixer first (it's at the bottom), then session view
+                if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
+                    m_sessionView.handleClick(mx, my, rightClick);
+                }
                 break;
             }
 
@@ -259,6 +272,9 @@ void App::update() {
             else if constexpr (std::is_same_v<T, audio::ClipStateUpdate>) {
                 m_sessionView.updateClipState(msg.trackIndex, msg.playing, msg.playPosition);
             }
+            else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {
+                m_mixerView.updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
+            }
         }, evt);
     }
 
@@ -277,8 +293,18 @@ void App::render() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     m_renderer.beginFrame(w, h);
+
+    float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
+    float sessionH = static_cast<float>(h) - mixerH;
+
     m_sessionView.render(m_renderer, m_font, 0, 0,
-                          static_cast<float>(w), static_cast<float>(h));
+                          static_cast<float>(w), sessionH);
+
+    if (m_showMixer) {
+        m_mixerView.render(m_renderer, m_font, 0, sessionH,
+                            static_cast<float>(w), mixerH);
+    }
+
     m_renderer.endFrame();
 
     m_mainWindow.swap();

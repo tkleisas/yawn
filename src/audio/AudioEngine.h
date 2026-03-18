@@ -2,6 +2,7 @@
 
 #include "audio/Transport.h"
 #include "audio/ClipEngine.h"
+#include "audio/Mixer.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
 #include <atomic>
@@ -35,6 +36,8 @@ public:
     Transport& transport() { return m_transport; }
     const Transport& transport() const { return m_transport; }
     ClipEngine& clipEngine() { return m_clipEngine; }
+    Mixer& mixer() { return m_mixer; }
+    const Mixer& mixer() const { return m_mixer; }
 
     double sampleRate() const { return m_config.sampleRate; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
@@ -53,6 +56,7 @@ private:
     void processCommands();
     void emitPositionUpdate();
     void emitClipStates();
+    void emitMeterUpdates();
 
     struct TestTone {
         bool enabled = false;
@@ -63,6 +67,7 @@ private:
     AudioEngineConfig m_config;
     Transport m_transport;
     ClipEngine m_clipEngine;
+    Mixer m_mixer;
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;
@@ -73,6 +78,11 @@ private:
 
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
+
+    // Per-track scratch buffers for mixer routing
+    static constexpr int kMaxFramesPerBuffer = 4096;
+    float m_trackBufferStorage[kMaxTracks][kMaxFramesPerBuffer * 2] = {};
+    float* m_trackBufferPtrs[kMaxTracks] = {};
 };
 
 } // namespace audio

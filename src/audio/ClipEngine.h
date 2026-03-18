@@ -46,6 +46,13 @@ public:
     // Process one audio buffer worth of frames. Writes into output (interleaved stereo).
     void process(float* output, int numFrames, int numChannels);
 
+    // Render a single track into its own buffer (for per-track mixer routing).
+    // Buffer must be pre-zeroed. Only renders if the track is active.
+    void processTrackToBuffer(int trackIndex, float* buffer, int numFrames, int numChannels);
+
+    // Check and fire pending quantized launches. Call once per buffer before processing tracks.
+    void checkAndFirePending();
+
     // Query state
     bool isTrackPlaying(int trackIndex) const;
     const ClipPlayState& trackState(int trackIndex) const { return m_tracks[trackIndex]; }
