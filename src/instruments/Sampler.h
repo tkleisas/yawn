@@ -55,6 +55,10 @@ public:
             const auto& msg = midi[i];
             if (msg.isNoteOn()) noteOn(msg.note, msg.velocity, msg.channel);
             else if (msg.isNoteOff()) noteOff(msg.note, msg.channel);
+            else if (msg.isCC() && msg.ccNumber == 123) {
+                for (auto& v : m_voices)
+                    if (v.active) { v.env.gate(false); }
+            }
         }
 
         for (int v = 0; v < kMaxVoices; ++v) {

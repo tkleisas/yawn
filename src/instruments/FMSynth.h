@@ -55,6 +55,10 @@ public:
             const auto& msg = midi[i];
             if (msg.isNoteOn()) noteOn(msg.note, msg.velocity, msg.channel);
             else if (msg.isNoteOff()) noteOff(msg.note, msg.channel);
+            else if (msg.isCC() && msg.ccNumber == 123) {
+                for (auto& v : m_voices)
+                    if (v.active) { for (auto& e : v.env) e.gate(false); }
+            }
             else if (msg.type == midi::MidiMessage::Type::PitchBend)
                 m_pitchBend = midi::Convert::pb32toFloat(msg.value);
         }

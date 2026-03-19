@@ -322,6 +322,11 @@ bool App::init() {
         switch (type) {
             case ui::DetailPanel::DeviceType::MidiFx:
                 m_audioEngine.midiEffectChain(m_selectedTrack).removeEffect(chainIndex);
+                // Send all-notes-off (CC 123) to clear any stuck notes
+                m_audioEngine.sendCommand(audio::SendMidiToTrackMsg{
+                    m_selectedTrack,
+                    (uint8_t)midi::MidiMessage::Type::ControlChange,
+                    0, 0, 0, 0, 123});
                 std::printf("Removed MIDI effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
                 break;
             case ui::DetailPanel::DeviceType::AudioFx:

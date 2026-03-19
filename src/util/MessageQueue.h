@@ -115,6 +115,7 @@ struct SendMidiToTrackMsg {
     uint8_t note;
     uint16_t velocity;
     uint32_t value;     // for CC, pitch bend, etc.
+    uint16_t ccNumber = 0;
 };
 
 using AudioCommand = std::variant<

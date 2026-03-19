@@ -177,6 +177,7 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
             ti.positionInBeats = m_transport.positionInBeats();
             ti.positionInSamples = m_transport.positionInSamples();
             ti.sampleRate = m_config.sampleRate;
+            ti.samplesPerBeat = ti.sampleRate * 60.0 / ti.bpm;
             ti.playing = m_transport.isPlaying();
             m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
         }
@@ -308,6 +309,7 @@ void AudioEngine::processCommands() {
                     m.note = msg.note;
                     m.velocity = msg.velocity;
                     m.value = msg.value;
+                    m.ccNumber = msg.ccNumber;
                     m_trackMidiBuffers[msg.trackIndex].addMessage(m);
                 }
             }

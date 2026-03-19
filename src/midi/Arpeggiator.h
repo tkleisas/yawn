@@ -35,23 +35,26 @@ public:
         m_activeNote = -1;
         m_gateOffBeat = -1000.0;
         m_heldChannel = 0;
-        m_freeRunBeat = -1.0;
+        m_freeRunSamples = -1;
     }
 
     void process(MidiBuffer& buffer, int numFrames,
                  const TransportInfo& transport) override {
         MidiBuffer output;
 
-        // Compute beat position: use transport when playing, free-run otherwise
-        double beatsPerBuf = (double)numFrames / transport.samplesPerBeat;
+        // Compute beat position and buffer duration in beats
+        double spb = transport.samplesPerBeat;
+        if (spb <= 0) spb = transport.sampleRate * 60.0 / transport.bpm;
+        double beatsPerBuf = (double)numFrames / spb;
         double beatPos;
         if (transport.playing) {
             beatPos = transport.positionInBeats;
-            m_freeRunBeat = -1.0;  // reset free-run when transport is playing
+            m_freeRunSamples = -1;  // reset free-run when transport plays
         } else {
-            if (m_freeRunBeat < 0) m_freeRunBeat = 0;
-            beatPos = m_freeRunBeat;
-            m_freeRunBeat += beatsPerBuf;
+            // Free-running clock based on sample count
+            if (m_freeRunSamples < 0) m_freeRunSamples = 0;
+            beatPos = (double)m_freeRunSamples / spb;
+            m_freeRunSamples += numFrames;
         }
 
         // Phase 1: Consume input notes, pass through non-note messages
@@ -64,10 +67,15 @@ public:
                 m_noteOrder[msg.note] = ++m_orderCounter;
                 rebuildPattern();
                 if (countHeldNotes() == 1) {
+                    // Reset timing so first arp step fires immediately
+                    if (!transport.playing) {
+                        m_freeRunSamples = 0;
+                        beatPos = 0;
+                        beatsPerBuf = (double)numFrames / spb;
+                    }
                     m_lastStepBeat =
                         std::floor(beatPos / m_rate) * m_rate - m_rate;
                     m_stepIndex = 0;
-                    if (!transport.playing) m_freeRunBeat = beatPos;
                 }
             } else if (msg.isNoteOff()) {
                 m_heldVelocity[msg.note] = 0;
@@ -93,8 +101,7 @@ public:
                 m_gateOffBeat >= bufStart && m_gateOffBeat < bufEnd) {
                 double nextStep = m_lastStepBeat + m_rate;
                 if (m_gateOffBeat < nextStep || nextStep >= bufEnd) {
-                    int f = beatToFrame(m_gateOffBeat, bufStart,
-                                        transport.samplesPerBeat, numFrames);
+                    int f = beatToFrame(m_gateOffBeat, bufStart, spb, numFrames);
                     output.addMessage(MidiMessage::noteOff16(
                         m_heldChannel, (uint8_t)m_activeNote, 0, f));
                     m_activeNote = -1;
@@ -105,8 +112,7 @@ public:
             double nextStep = m_lastStepBeat + m_rate;
             while (nextStep < bufEnd) {
                 if (nextStep >= bufStart) {
-                    int f = beatToFrame(nextStep, bufStart,
-                                        transport.samplesPerBeat, numFrames);
+                    int f = beatToFrame(nextStep, bufStart, spb, numFrames);
                     if (m_activeNote >= 0)
                         output.addMessage(MidiMessage::noteOff16(
                             m_heldChannel, (uint8_t)m_activeNote, 0, f));
@@ -129,8 +135,7 @@ public:
             // Gate-off for newly triggered notes
             if (m_activeNote >= 0 &&
                 m_gateOffBeat >= bufStart && m_gateOffBeat < bufEnd) {
-                int f = beatToFrame(m_gateOffBeat, bufStart,
-                                    transport.samplesPerBeat, numFrames);
+                int f = beatToFrame(m_gateOffBeat, bufStart, spb, numFrames);
                 output.addMessage(MidiMessage::noteOff16(
                     m_heldChannel, (uint8_t)m_activeNote, 0, f));
                 m_activeNote = -1;
@@ -299,7 +304,7 @@ private:
     double m_gateOffBeat  = -1000.0;
     int    m_activeNote   = -1;
     uint32_t m_rng        = 12345;
-    double m_freeRunBeat  = -1.0;
+    int64_t m_freeRunSamples = -1;
 };
 
 } // namespace midi

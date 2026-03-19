@@ -67,6 +67,11 @@ public:
                 noteOn(msg.note, msg.velocity, msg.channel);
             else if (msg.isNoteOff())
                 noteOff(msg.note, msg.channel);
+            else if (msg.isCC() && msg.ccNumber == 123) {
+                // All Notes Off: release all voices
+                for (auto& v : m_voices)
+                    if (v.active) { v.ampEnv.gate(false); v.filtEnv.gate(false); }
+            }
             else if (msg.type == midi::MidiMessage::Type::PitchBend)
                 m_pitchBend = midi::Convert::pb32toFloat(msg.value);
         }
