@@ -33,6 +33,7 @@ public:
     static constexpr float kHeaderHeight   = 28.0f;
     static constexpr float kLabelHeight    = 16.0f;
     static constexpr float kRowPadding     = 6.0f;
+    static constexpr int   kMaxKnobsPerRow = 12;
 
     bool isOpen() const { return m_open; }
     void setOpen(bool open) { m_open = open; }
@@ -40,16 +41,18 @@ public:
 
     float height() const { return m_open ? kPanelHeight : kCollapsedHeight; }
 
-    // Show parameters for an instrument
+    // Show parameters for an instrument (skip if already showing same one)
     void showInstrument(instruments::Instrument* inst) {
+        if (m_instrument == inst && !m_effect) return;
         m_instrument = inst;
         m_effect = nullptr;
         m_open = true;
         rebuildParams();
     }
 
-    // Show parameters for an effect
+    // Show parameters for an effect (skip if already showing same one)
     void showEffect(effects::AudioEffect* fx) {
+        if (m_effect == fx && !m_instrument) return;
         m_effect = fx;
         m_instrument = nullptr;
         m_open = true;
@@ -104,7 +107,7 @@ public:
 
         // Multi-row knob layout
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::max(1, (int)((width - 24.0f) / cellW));
+        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((width - 24.0f) / cellW)));
         float startX = x + 12;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
@@ -186,7 +189,7 @@ public:
         // Multi-row hit test
         float bodyY = panelY + kHeaderHeight;
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::max(1, (int)((panelW - 24.0f) / cellW));
+        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((panelW - 24.0f) / cellW)));
         float startX = panelX + 12;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
@@ -246,7 +249,7 @@ public:
 
         float bodyY = panelY + kHeaderHeight;
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::max(1, (int)((panelW - 24.0f) / cellW));
+        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((panelW - 24.0f) / cellW)));
         float startX = panelX + 12;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
