@@ -84,6 +84,7 @@
 - 🎹 Arrangement View (timeline + piano roll)
 - 🔌 VST3 plugin hosting
 - 💾 Project save/load (JSON format)
+- 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
 
@@ -104,9 +105,13 @@
 | Testing | Google Test 1.14 |
 | Platforms | Windows, Linux |
 
-All dependencies are fetched automatically via CMake FetchContent — no manual installs needed.
+All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
 
 ## Building
+
+> **Fun fact:** This project has been rebuilt approximately 847 times. 
+> The AI broke the build 212 of those times. The PM broke it 0 times because the PM doesn't touch C++.
+> The remaining 635 rebuilds were "just to be sure."
 
 ### Prerequisites
 
@@ -152,6 +157,8 @@ cd build && ctest --output-on-failure -C Release
 
 ## Controls
 
+*The PM learned all of these by pressing random keys until something happened. The AI learned all of these by implementing them and then immediately forgetting.*
+
 | Key | Action |
 |---|---|
 | `Space` | Play / Stop |
@@ -172,6 +179,8 @@ cd build && ctest --output-on-failure -C Release
 | **Drag & drop audio file** | Load clip into slot under cursor |
 
 ## Architecture
+
+*Designed by an AI that has read every audio programming tutorial on the internet but has never actually heard a sound.*
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -199,7 +208,7 @@ cd build && ctest --output-on-failure -C Release
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Thread model:** UI thread (SDL main loop) + Audio thread (PortAudio callback). Communication is entirely via lock-free SPSC ring buffers — no mutexes or allocations on the audio thread.
+**Thread model:** UI thread (SDL main loop) + Audio thread (PortAudio callback). Communication is entirely via lock-free SPSC ring buffers — no mutexes or allocations on the audio thread. We asked the AI to explain lock-free programming and it wrote a 200-line ring buffer. We asked it again and it wrote a different 200-line ring buffer. Both passed tests. We don't ask questions anymore.
 
 **Audio signal flow:**
 ```
@@ -308,6 +317,8 @@ yawn/
 
 ## Implementation Phases
 
+*Each phase was implemented by saying "do this" and then saying "no, not like that" between 2 and 47 times.*
+
 | Phase | Status | Description |
 |---|---|---|
 | 1. Project Scaffolding | ✅ Done | CMake build system, SDL3+OpenGL window, directory structure |
@@ -365,10 +376,36 @@ Final polish to make Y.A.W.N a usable production tool:
 
 | Role | Entity | Responsibilities |
 |---|---|---|
-| **Project Manager** | Tasos Kleisas | Vision, QA, yelling "it still doesn't work", changing requirements mid-sentence, clicking things really fast to find bugs |
-| **Chief Engineer** | Claude (Anthropic) | Writing code, rewriting code, explaining why the code was wrong, rewriting it again, apologizing |
+| **Project Manager** | Tasos Kleisas | Vision, QA, yelling "it still doesn't work", changing requirements mid-sentence, clicking things really fast to find bugs, discovering that resonance + fast cutoff sweep = pain |
+| **Chief Engineer** | Claude (Anthropic) | Writing code, rewriting code, explaining why the code was wrong, rewriting it again, apologizing, "I see the issue!", writing commit messages longer than the actual fix |
 
-*This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. Ship it.*
+### Development Methodology
+
+```
+while (true) {
+    PM: "Add feature X"
+    AI: *writes 200 lines*
+    PM: "It doesn't work"
+    AI: "Ah, I see the issue!" *rewrites 200 lines*
+    PM: "Now Y is broken"
+    AI: "Ah, I see the issue!" *rewrites 150 lines*
+    PM: "OK it works. But..."
+    AI: *sweating in tokens*
+    PM: "...can we also—"
+    AI: "Of course!"  // narrator: it could not
+}
+```
+
+### Lessons Learned
+
+1. **"It compiles" ≠ "It works"** — But it's a great start when your engineer has no ears
+2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
+3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
+4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
+5. **293 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
+6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
+
+*This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
 
 ## License
 
