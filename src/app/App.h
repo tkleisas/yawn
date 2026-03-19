@@ -10,6 +10,7 @@
 #include "ui/DetailPanel.h"
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
+#include "ui/ConfirmDialog.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -53,6 +54,7 @@ private:
     ui::DetailPanel m_detailPanel;
     ui::VirtualKeyboard m_virtualKeyboard;
     ui::ContextMenu m_contextMenu;
+    ui::ConfirmDialog m_confirmDialog;
     ui::InputState m_inputState;
 
     audio::AudioEngine m_audioEngine;

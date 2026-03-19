@@ -46,9 +46,13 @@ public:
     virtual float getParameter(int index) const = 0;
     virtual void  setParameter(int index, float value) = 0;
 
+    bool bypassed() const { return m_bypassed; }
+    void setBypassed(bool b) { m_bypassed = b; }
+
 protected:
     double m_sampleRate   = 44100.0;
     int    m_maxBlockSize = 256;
+    bool   m_bypassed     = false;
 };
 
 } // namespace instruments

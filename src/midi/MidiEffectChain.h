@@ -51,6 +51,12 @@ public:
         return (index >= 0 && index < m_count) ? m_effects[index].get() : nullptr;
     }
 
+    void clear() {
+        for (int i = 0; i < m_count; ++i)
+            m_effects[i].reset();
+        m_count = 0;
+    }
+
     int  count() const { return m_count; }
     bool empty() const { return m_count == 0; }
 

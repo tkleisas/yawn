@@ -115,20 +115,36 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 
     std::vector<ui::ContextMenu::Item> items;
 
-    // Track type selection
+    // Track type selection (with confirmation dialog)
     items.push_back({"Set as Audio Track", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Audio;
-        std::printf("Track %d set to Audio\n", trackIndex + 1);
+        auto& trk = m_project.track(trackIndex);
+        if (trk.type == Track::Type::Audio) return;
+        m_confirmDialog.show(
+            "Change track type? All devices will be removed.",
+            [this, trackIndex]() {
+                m_audioEngine.midiEffectChain(trackIndex).clear();
+                m_audioEngine.mixer().trackEffects(trackIndex).clear();
+                m_audioEngine.setInstrument(trackIndex, nullptr);
+                m_project.track(trackIndex).type = Track::Type::Audio;
+                m_detailPanel.clear();
+                std::printf("Track %d changed to Audio\n", trackIndex + 1);
+            });
     }, false, track.type != Track::Type::Audio});
 
     items.push_back({"Set as MIDI Track", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        if (!m_audioEngine.instrument(trackIndex)) {
-            m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::SubtractiveSynth>());
-            std::printf("Track %d set to MIDI (auto-assigned SubSynth)\n", trackIndex + 1);
-        } else {
-            std::printf("Track %d set to MIDI\n", trackIndex + 1);
-        }
+        auto& trk = m_project.track(trackIndex);
+        if (trk.type == Track::Type::Midi) return;
+        m_confirmDialog.show(
+            "Change track type? All devices will be removed.",
+            [this, trackIndex]() {
+                m_audioEngine.midiEffectChain(trackIndex).clear();
+                m_audioEngine.mixer().trackEffects(trackIndex).clear();
+                m_project.track(trackIndex).type = Track::Type::Midi;
+                m_audioEngine.setInstrument(trackIndex,
+                    std::make_unique<instruments::SubtractiveSynth>());
+                m_detailPanel.clear();
+                std::printf("Track %d changed to MIDI (SubSynth assigned)\n", trackIndex + 1);
+            });
     }, false, track.type != Track::Type::Midi});
 
     // Separator + Instruments submenu
@@ -241,43 +257,11 @@ void App::updateDetailForSelectedTrack() {
         return;
     }
 
-    // Scan effect chain for visualizer effects
-    auto& chain = m_audioEngine.mixer().trackEffects(m_selectedTrack);
-    effects::AudioEffect* vizEffect = nullptr;
-    effects::AudioEffect* firstNonVizEffect = nullptr;
-    for (int i = 0; i < chain.count(); ++i) {
-        auto* fx = chain.effectAt(i);
-        if (!fx) continue;
-        if (fx->isVisualizer() && !vizEffect) {
-            vizEffect = fx;
-        } else if (!fx->isVisualizer() && !firstNonVizEffect) {
-            firstNonVizEffect = fx;
-        }
-    }
-
-    // Always set visualizer if found
-    m_detailPanel.setVisualizer(vizEffect);
-
-    // Show instrument if available (for MIDI tracks)
+    auto* midiChain = &m_audioEngine.midiEffectChain(m_selectedTrack);
     auto* inst = m_audioEngine.instrument(m_selectedTrack);
-    if (inst) {
-        m_detailPanel.showInstrument(inst);
-        return;
-    }
+    auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
 
-    // Show first non-visualizer audio effect if available
-    if (firstNonVizEffect) {
-        m_detailPanel.showEffect(firstNonVizEffect);
-        return;
-    }
-
-    // Show the visualizer effect itself if nothing else
-    if (vizEffect) {
-        m_detailPanel.showEffect(vizEffect);
-        return;
-    }
-
-    m_detailPanel.clear();
+    m_detailPanel.setDeviceChain(midiChain, inst, fxChain);
 }
 
 bool App::init() {
@@ -328,6 +312,25 @@ bool App::init() {
     SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
 
     m_running = true;
+
+    // Wire up detail panel remove device callback
+    m_detailPanel.setOnRemoveDevice([this](ui::DetailPanel::DeviceType type, int chainIndex) {
+        if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+        switch (type) {
+            case ui::DetailPanel::DeviceType::MidiFx:
+                m_audioEngine.midiEffectChain(m_selectedTrack).removeEffect(chainIndex);
+                std::printf("Removed MIDI effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
+                break;
+            case ui::DetailPanel::DeviceType::AudioFx:
+                m_audioEngine.mixer().trackEffects(m_selectedTrack).remove(chainIndex);
+                std::printf("Removed audio effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
+                break;
+            default:
+                break;
+        }
+        m_detailPanel.clear();  // Force rebuild on next frame
+    });
+
     std::printf("\nY.A.W.N initialized successfully\n");
     std::printf("  [Space] Play/Stop        [Up/Down] BPM +/-\n");
     std::printf("  [Home] Reset position    [M] Toggle mixer\n");
@@ -402,6 +405,12 @@ void App::processEvents() {
                 bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
                 bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
 
+                // Block keys when confirm dialog is open
+                if (m_confirmDialog.isOpen()) {
+                    if (event.key.key == SDLK_ESCAPE) m_confirmDialog.close();
+                    break;
+                }
+
                 // Keyboard shortcuts for menus (Ctrl combos always take priority)
                 if (ctrl) {
                     switch (event.key.key) {
@@ -420,6 +429,12 @@ void App::processEvents() {
                 // Virtual keyboard (intercepts musical keys before shortcuts)
                 if (m_virtualKeyboard.onKeyDown(event.key.key))
                     break;
+
+                // Detail panel arrow key navigation
+                if (m_showDetailPanel && m_detailPanel.isFocused()) {
+                    if (event.key.key == SDLK_LEFT) { m_detailPanel.scrollLeft(); break; }
+                    if (event.key.key == SDLK_RIGHT) { m_detailPanel.scrollRight(); break; }
+                }
 
                 switch (event.key.key) {
                     case SDLK_ESCAPE:
@@ -513,6 +528,14 @@ void App::processEvents() {
                 float my = event.button.y;
                 int btn = event.button.button;
 
+                // Confirm dialog takes top priority (modal)
+                if (m_confirmDialog.isOpen()) {
+                    float sw = static_cast<float>(m_mainWindow.getWidth());
+                    float sh = static_cast<float>(m_mainWindow.getHeight());
+                    m_confirmDialog.handleClick(mx, my, sw, sh);
+                    break;
+                }
+
                 // Context menu takes priority when open
                 if (m_contextMenu.isOpen()) {
                     m_contextMenu.handleClick(mx, my);
@@ -546,13 +569,20 @@ void App::processEvents() {
                     float detailY = menuH2 + sessionH2 + mixerH2;
 
                     if (rightClick) {
-                        if (m_detailPanel.handleRightClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth())))
+                        if (m_detailPanel.handleRightClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth()))) {
+                            m_detailPanel.setFocused(true);
                             break;
+                        }
                     } else {
-                        if (m_detailPanel.handleClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth())))
+                        if (m_detailPanel.handleClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth()))) {
+                            // Focus is set inside handleClick
                             break;
+                        }
                     }
                 }
+
+                // Clicking outside detail panel clears focus
+                m_detailPanel.setFocused(false);
 
                 // Right-click on track headers → open context menu
                 if (rightClick) {
@@ -728,6 +758,10 @@ void App::render() {
 
     // Context menu (very top layer)
     m_contextMenu.render(m_renderer, m_font);
+
+    // Confirm dialog (topmost modal overlay)
+    m_confirmDialog.render(m_renderer, m_font,
+                           static_cast<float>(w), static_cast<float>(h));
 
     m_renderer.endFrame();
 

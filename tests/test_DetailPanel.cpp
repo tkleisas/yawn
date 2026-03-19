@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "ui/DetailPanel.h"
+#include "effects/EffectChain.h"
+#include "midi/MidiEffectChain.h"
 
 using namespace yawn::ui;
 using namespace yawn::instruments;
@@ -38,14 +40,13 @@ TEST(DetailPanel, InitiallyClosed) {
     EXPECT_FLOAT_EQ(panel.height(), DetailPanel::kCollapsedHeight);
 }
 
-TEST(DetailPanel, ShowInstrumentOpens) {
+TEST(DetailPanel, SetDeviceChainPopulates) {
     DetailPanel panel;
     TestInstrument inst;
     inst.init(44100, 256);
-
-    panel.showInstrument(&inst);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
     EXPECT_TRUE(panel.isOpen());
-    EXPECT_STREQ(panel.title(), "TestSynth");
     EXPECT_FLOAT_EQ(panel.height(), DetailPanel::kPanelHeight);
 }
 
@@ -63,9 +64,10 @@ TEST(DetailPanel, HeaderClickToggles) {
     DetailPanel panel;
     TestInstrument inst;
     inst.init(44100, 256);
-    panel.showInstrument(&inst);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
 
-    // Click on header (y = panelY + 10, which is within kHeaderHeight = 24)
+    // Click on header (within kHeaderHeight = 28)
     bool consumed = panel.handleClick(100, 10, 0, 0, 800);
     EXPECT_TRUE(consumed);
     EXPECT_FALSE(panel.isOpen()); // toggled closed
@@ -75,19 +77,22 @@ TEST(DetailPanel, KnobDragChangesParam) {
     DetailPanel panel;
     TestInstrument inst;
     inst.init(44100, 256);
-    panel.showInstrument(&inst);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
 
-    // Click on first knob (at approximately x=12, y=kHeaderHeight+8 = 32)
-    float panelY = 0;
-    float knobCenterX = 12 + DetailPanel::kKnobSize * 0.5f;
-    float knobCenterY = panelY + DetailPanel::kHeaderHeight + 8 + DetailPanel::kKnobSize * 0.5f;
+    // Knob grid in device panel body:
+    // bodyY = kHeaderHeight(28), device header = kDeviceHeaderH(24)
+    // knob area starts at dx+8, bodyY + kDeviceHeaderH + 4 = 56
+    // First knob center: x=8+24=32, y=56+24=80
+    float knobCX = 8 + DetailPanel::kKnobSize * 0.5f;
+    float knobCY = DetailPanel::kHeaderHeight + DetailPanel::kDeviceHeaderH + 4
+                   + DetailPanel::kKnobSize * 0.5f;
 
-    panel.handleClick(knobCenterX, knobCenterY, 0, panelY, 800);
+    panel.handleClick(knobCX, knobCY, 0, 0, 800);
     EXPECT_TRUE(panel.isDragging());
 
-    // Drag up (decrease my) should increase value
     float startVal = inst.getParameter(0);
-    panel.handleDrag(knobCenterX, knobCenterY - 30);
+    panel.handleDrag(knobCX, knobCY - 30);
     float newVal = inst.getParameter(0);
     EXPECT_GT(newVal, startVal);
 
@@ -99,19 +104,21 @@ TEST(DetailPanel, BooleanParamToggles) {
     DetailPanel panel;
     TestInstrument inst;
     inst.init(44100, 256);
-    panel.showInstrument(&inst);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
 
-    // Param 2 is boolean ("Bypass"), initially 0.0
+    // 3 params, kMaxKnobRows=2 → cols=ceil(3/2)=2
+    // Param 2: row=2/2=1, col=2%2=0
+    // cellH = kKnobSize(48) + 22 = 70
+    // ky = 56 + 1*70 = 126
     EXPECT_NEAR(inst.getParameter(2), 0.0f, 0.01f);
 
-    // Click on third knob
-    float panelY = 0;
-    float knobX = 12 + 2 * (DetailPanel::kKnobSize + DetailPanel::kKnobSpacing)
-                  + DetailPanel::kKnobSize * 0.5f;
-    float knobY = panelY + DetailPanel::kHeaderHeight + 8 + DetailPanel::kKnobSize * 0.5f;
+    float knobX = 8 + DetailPanel::kKnobSize * 0.5f;
+    float cellH = DetailPanel::kKnobSize + 22.0f;
+    float knobY = DetailPanel::kHeaderHeight + DetailPanel::kDeviceHeaderH + 4
+                  + cellH + DetailPanel::kKnobSize * 0.5f;
 
-    panel.handleClick(knobX, knobY, 0, panelY, 800);
-    // Boolean params toggle, don't drag
+    panel.handleClick(knobX, knobY, 0, 0, 800);
     EXPECT_FALSE(panel.isDragging());
     EXPECT_NEAR(inst.getParameter(2), 1.0f, 0.01f);
 }
@@ -120,28 +127,69 @@ TEST(DetailPanel, RightClickResetsDefault) {
     DetailPanel panel;
     TestInstrument inst;
     inst.init(44100, 256);
-    panel.showInstrument(&inst);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
 
-    // Change param 0 away from default
     inst.setParameter(0, 0.2f);
     EXPECT_NEAR(inst.getParameter(0), 0.2f, 0.01f);
 
-    // Right-click on first knob
-    float panelY = 0;
-    float knobCenterX = 12 + DetailPanel::kKnobSize * 0.5f;
-    float knobCenterY = panelY + DetailPanel::kHeaderHeight + 8 + DetailPanel::kKnobSize * 0.5f;
+    float knobCX = 8 + DetailPanel::kKnobSize * 0.5f;
+    float knobCY = DetailPanel::kHeaderHeight + DetailPanel::kDeviceHeaderH + 4
+                   + DetailPanel::kKnobSize * 0.5f;
 
-    panel.handleRightClick(knobCenterX, knobCenterY, 0, panelY, 800);
-    EXPECT_NEAR(inst.getParameter(0), 0.7f, 0.01f); // default is 0.7
+    panel.handleRightClick(knobCX, knobCY, 0, 0, 800);
+    EXPECT_NEAR(inst.getParameter(0), 0.7f, 0.01f);
 }
 
-TEST(DetailPanel, ClearRemovesTarget) {
+TEST(DetailPanel, ClearResetsState) {
     DetailPanel panel;
     TestInstrument inst;
     inst.init(44100, 256);
-    panel.showInstrument(&inst);
-    EXPECT_STREQ(panel.title(), "TestSynth");
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
 
     panel.clear();
-    EXPECT_STREQ(panel.title(), "No Selection");
+    // After clear, body click should not hit any device knobs
+    float knobCX = 8 + DetailPanel::kKnobSize * 0.5f;
+    float knobCY = DetailPanel::kHeaderHeight + DetailPanel::kDeviceHeaderH + 4
+                   + DetailPanel::kKnobSize * 0.5f;
+    // handleClick returns true (consumed) but no drag started since no devices
+    panel.handleClick(knobCX, knobCY, 0, 0, 800);
+    EXPECT_FALSE(panel.isDragging());
+}
+
+TEST(DetailPanel, FocusManagement) {
+    DetailPanel panel;
+    EXPECT_FALSE(panel.isFocused());
+
+    TestInstrument inst;
+    inst.init(44100, 256);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
+
+    // Clicking on panel sets focus
+    panel.handleClick(100, 40, 0, 0, 800);
+    EXPECT_TRUE(panel.isFocused());
+
+    // Can be cleared externally
+    panel.setFocused(false);
+    EXPECT_FALSE(panel.isFocused());
+}
+
+TEST(DetailPanel, BypassToggle) {
+    DetailPanel panel;
+    TestInstrument inst;
+    inst.init(44100, 256);
+    panel.setOpen(true);
+    panel.setDeviceChain(nullptr, &inst, nullptr);
+
+    EXPECT_FALSE(inst.bypassed());
+
+    // Bypass button is at dx+18, hy = bodyY+5 = 33
+    // bodyY = kHeaderHeight = 28, so hy = 33
+    float bpX = 18 + DetailPanel::kBtnSize * 0.5f;
+    float bpY = DetailPanel::kHeaderHeight + 5 + DetailPanel::kBtnSize * 0.5f;
+
+    panel.handleClick(bpX, bpY, 0, 0, 800);
+    EXPECT_TRUE(inst.bypassed());
 }
