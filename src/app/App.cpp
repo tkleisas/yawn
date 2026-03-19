@@ -332,14 +332,12 @@ void App::processEvents() {
                 if (m_inputState.onMouseDown(mx, my, btn))
                     break;
 
-                // Detail panel
+                // Detail panel (at the very bottom)
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 if (m_showDetailPanel) {
-                    float menuH = m_menuBar.height();
-                    float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
-                    float detailH = m_detailPanel.height();
                     int wh = m_mainWindow.getHeight();
-                    float detailY = static_cast<float>(wh) - mixerH - detailH;
+                    float detailH = m_detailPanel.height();
+                    float detailY = static_cast<float>(wh) - detailH;
 
                     if (rightClick) {
                         if (m_detailPanel.handleRightClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth())))
@@ -372,6 +370,20 @@ void App::processEvents() {
                     m_running = false;
                 }
                 break;
+
+            case SDL_EVENT_MOUSE_WHEEL: {
+                float dx = event.wheel.x;
+                float dy = event.wheel.y;
+                // Forward scroll to session view when mouse is over it
+                float menuH = m_menuBar.height();
+                float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
+                float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
+                float sessionH = std::max(100.0f, static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH);
+                if (m_lastMouseY >= menuH && m_lastMouseY < menuH + sessionH) {
+                    m_sessionView.handleScroll(dx, dy);
+                }
+                break;
+            }
 
             case SDL_EVENT_DROP_FILE: {
                 const char* file = event.drop.data;
@@ -433,22 +445,28 @@ void App::render() {
     float menuH = m_menuBar.height();
     float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
     float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
-    float sessionH = static_cast<float>(h) - menuH - mixerH - detailH;
+    float bottomPanels = mixerH + detailH;
+    float sessionH = std::max(100.0f, static_cast<float>(h) - menuH - bottomPanels);
 
-    // Session view (below menu bar)
-    m_sessionView.render(m_renderer, m_font, 0, menuH,
+    // Layout top-to-bottom: menu → session → mixer → detail panel
+    float sessionY = menuH;
+    float mixerY   = sessionY + sessionH;
+    float detailY  = mixerY + mixerH;
+
+    // Session view (transport + track headers + clip grid)
+    m_sessionView.render(m_renderer, m_font, 0, sessionY,
                           static_cast<float>(w), sessionH);
 
-    // Detail panel (between session and mixer)
-    if (m_showDetailPanel) {
-        m_detailPanel.render(m_renderer, m_font, 0, menuH + sessionH,
-                              static_cast<float>(w));
+    // Mixer section
+    if (m_showMixer) {
+        m_mixerView.render(m_renderer, m_font, 0, mixerY,
+                            static_cast<float>(w), mixerH);
     }
 
-    // Mixer at the bottom
-    if (m_showMixer) {
-        m_mixerView.render(m_renderer, m_font, 0, menuH + sessionH + detailH,
-                            static_cast<float>(w), mixerH);
+    // Detail panel / device strip (bottom)
+    if (m_showDetailPanel) {
+        m_detailPanel.render(m_renderer, m_font, 0, detailY,
+                              static_cast<float>(w));
     }
 
     // Menu bar (drawn last, on top of everything)

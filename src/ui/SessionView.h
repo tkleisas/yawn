@@ -33,8 +33,16 @@ public:
     // Handle mouse input. Returns true if the click was consumed.
     bool handleClick(float mx, float my, bool isRightClick);
 
+    // Handle scroll wheel. dx = horizontal, dy = vertical.
+    void handleScroll(float dx, float dy);
+
     // Transport info for rendering
     void setTransportState(bool playing, double beats, double bpm);
+
+    // Preferred height showing up to kVisibleScenes scenes
+    float preferredHeight() const;
+
+    static constexpr int kVisibleScenes = 8;
 
 private:
     void renderTransportBar(Renderer2D& renderer, Font& font,

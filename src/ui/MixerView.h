@@ -80,7 +80,7 @@ private:
     static constexpr float kMixerHeight = 280.0f;
     static constexpr float kStripWidth = 80.0f;
     static constexpr float kMeterWidth = 6.0f;
-    static constexpr float kFaderWidth = 8.0f;
+    static constexpr float kFaderWidth = 20.0f;
     static constexpr float kFaderHeight = 100.0f;
     static constexpr float kButtonHeight = 22.0f;
     static constexpr float kButtonWidth = 28.0f;

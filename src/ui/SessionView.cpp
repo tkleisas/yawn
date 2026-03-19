@@ -25,6 +25,12 @@ void SessionView::setTransportState(bool playing, double beats, double bpm) {
     m_animTimer += 1.0f / 60.0f; // approximate
 }
 
+float SessionView::preferredHeight() const {
+    int scenes = m_project ? std::min(m_project->numScenes(), kVisibleScenes) : kVisibleScenes;
+    return Theme::kTransportBarHeight + Theme::kTrackHeaderHeight
+         + scenes * Theme::kClipSlotHeight;
+}
+
 void SessionView::render(Renderer2D& renderer, Font& font,
                           float x, float y, float width, float height) {
     m_viewX = x;
@@ -119,11 +125,14 @@ void SessionView::renderTrackHeaders(Renderer2D& renderer, Font& font,
     renderer.drawRect(x, y, w, h, Theme::trackHeaderBg);
     renderer.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
 
+    renderer.pushClip(x, y, w, h);
     float scale = Theme::kSmallFontSize / font.pixelHeight();
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
-        float tx = x + t * Theme::kTrackWidth;
+        float tx = x + t * Theme::kTrackWidth - m_scrollX;
         float tw = Theme::kTrackWidth;
+
+        if (tx + tw < x || tx > x + w) continue; // off-screen
 
         // Track color indicator bar
         Color trackCol = Theme::trackColors[m_project->track(t).colorIndex % Theme::kNumTrackColors];
@@ -146,6 +155,7 @@ void SessionView::renderTrackHeaders(Renderer2D& renderer, Font& font,
         // Separator
         renderer.drawRect(tx + tw - 1, y, 1, h, Theme::clipSlotBorder);
     }
+    renderer.popClip();
 }
 
 void SessionView::renderSceneLabels(Renderer2D& renderer, Font& font,
@@ -155,21 +165,23 @@ void SessionView::renderSceneLabels(Renderer2D& renderer, Font& font,
     float w = Theme::kSceneLabelWidth;
     renderer.drawRect(x, y, w, h, Theme::sceneLabelBg);
 
+    renderer.pushClip(x, y, w, h);
     float scale = Theme::kSmallFontSize / font.pixelHeight();
 
     for (int s = 0; s < m_project->numScenes(); ++s) {
-        float sy = y + s * Theme::kClipSlotHeight;
+        float sy = y + s * Theme::kClipSlotHeight - m_scrollY;
         float sh = Theme::kClipSlotHeight;
+
+        if (sy + sh < y || sy > y + h) continue; // off-screen
 
         // Scene launch button area
         renderer.drawRect(x + 2, sy + 2, w - 4, sh - 4, Theme::clipSlotEmpty);
 
-        // Scene number — render as a play triangle if this is the active scene
+        // Scene number
         if (font.isLoaded()) {
             float textX = x + 8;
             float textY = sy + sh * 0.5f - Theme::kSmallFontSize * 0.5f;
 
-            // Scene label text
             char label[8];
             std::snprintf(label, sizeof(label), "%s", m_project->scene(s).name.c_str());
             Color labelCol = Theme::textSecondary;
@@ -186,6 +198,7 @@ void SessionView::renderSceneLabels(Renderer2D& renderer, Font& font,
         // Separator
         renderer.drawRect(x, sy + sh - 1, w, 1, Theme::clipSlotBorder);
     }
+    renderer.popClip();
 }
 
 void SessionView::renderClipGrid(Renderer2D& renderer, Font& font,
@@ -196,10 +209,14 @@ void SessionView::renderClipGrid(Renderer2D& renderer, Font& font,
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
         for (int s = 0; s < m_project->numScenes(); ++s) {
-            float sx = x + t * Theme::kTrackWidth;
-            float sy = y + s * Theme::kClipSlotHeight;
+            float sx = x + t * Theme::kTrackWidth - m_scrollX;
+            float sy = y + s * Theme::kClipSlotHeight - m_scrollY;
             float sw = Theme::kTrackWidth;
             float sh = Theme::kClipSlotHeight;
+
+            // Skip off-screen slots
+            if (sx + sw < x || sx > x + w) continue;
+            if (sy + sh < y || sy > y + h) continue;
 
             renderClipSlot(renderer, font, t, s, sx, sy, sw, sh);
         }
@@ -284,11 +301,21 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick) {
     float gridX = m_viewX + Theme::kSceneLabelWidth;
     float gridY = m_viewY + Theme::kTransportBarHeight + Theme::kTrackHeaderHeight;
 
+    // Not in our area
+    if (my < m_viewY || my > m_viewY + m_viewH) return false;
+    if (mx < m_viewX || mx > m_viewX + m_viewW) return false;
+
+    // Not in grid area (above headers/transport)
+    if (my < gridY) return false;
+
+    // Account for scroll offsets
+    float contentMX = mx + m_scrollX;
+    float contentMY = my + m_scrollY;
+
     // Check if click is in scene label area (launch entire scene)
-    if (mx >= m_viewX && mx < gridX && my >= gridY) {
-        int sceneIndex = static_cast<int>((my - gridY) / Theme::kClipSlotHeight);
+    if (mx >= m_viewX && mx < gridX) {
+        int sceneIndex = static_cast<int>((contentMY - gridY) / Theme::kClipSlotHeight);
         if (sceneIndex >= 0 && sceneIndex < m_project->numScenes()) {
-            // Launch all clips in this scene
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* clip = m_project->getClip(t, sceneIndex);
                 if (clip) {
@@ -304,9 +331,9 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick) {
     }
 
     // Check if click is in clip grid
-    if (mx >= gridX && my >= gridY) {
-        int trackIndex = static_cast<int>((mx - gridX) / Theme::kTrackWidth);
-        int sceneIndex = static_cast<int>((my - gridY) / Theme::kClipSlotHeight);
+    if (mx >= gridX) {
+        int trackIndex = static_cast<int>((contentMX - gridX) / Theme::kTrackWidth);
+        int sceneIndex = static_cast<int>((contentMY - gridY) / Theme::kClipSlotHeight);
 
         if (trackIndex >= 0 && trackIndex < m_project->numTracks() &&
             sceneIndex >= 0 && sceneIndex < m_project->numScenes()) {
@@ -314,11 +341,9 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick) {
             auto* clip = m_project->getClip(trackIndex, sceneIndex);
 
             if (isRightClick) {
-                // Stop this track
                 m_engine->sendCommand(audio::StopClipMsg{trackIndex});
                 std::printf("Stop track %d\n", trackIndex + 1);
             } else if (clip) {
-                // Launch this clip
                 m_engine->sendCommand(audio::LaunchClipMsg{trackIndex, clip});
                 std::printf("Launch clip [%d, %d]\n", trackIndex + 1, sceneIndex + 1);
             }
@@ -327,6 +352,20 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick) {
     }
 
     return false;
+}
+
+void SessionView::handleScroll(float dx, float dy) {
+    if (!m_project) return;
+
+    float gridH = m_viewH - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight;
+    float contentH = m_project->numScenes() * Theme::kClipSlotHeight;
+    float maxScrollY = std::max(0.0f, contentH - gridH);
+    m_scrollY = std::clamp(m_scrollY - dy * 30.0f, 0.0f, maxScrollY);
+
+    float gridW = m_viewW - Theme::kSceneLabelWidth;
+    float contentW = m_project->numTracks() * Theme::kTrackWidth;
+    float maxScrollX = std::max(0.0f, contentW - gridW);
+    m_scrollX = std::clamp(m_scrollX - dx * 30.0f, 0.0f, maxScrollX);
 }
 
 } // namespace ui

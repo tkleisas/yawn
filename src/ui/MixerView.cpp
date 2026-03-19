@@ -121,11 +121,11 @@ void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
     // Row 4: Pan bar (full width)
     curY += kButtonHeight + 6;
     float panW = iw - 8;
-    float panH = 8;
+    float panH = 16;
     renderer.drawRect(ix + 4, curY, panW, panH, Theme::clipSlotEmpty);
     float panCenter = ix + 4 + panW * 0.5f;
-    float panPos = panCenter + ch.pan * (panW * 0.5f - 2);
-    renderer.drawRect(panPos - 2, curY, 4, panH, trackCol);
+    float panPos = panCenter + ch.pan * (panW * 0.5f - 4);
+    renderer.drawRect(panPos - 4, curY, 8, panH, trackCol);
 
     // Row 5: Send indicators (compact row)
     curY += panH + 4;
@@ -192,11 +192,11 @@ void MixerView::renderReturnStrip(Renderer2D& renderer, Font& font,
     // Pan bar
     curY += kButtonHeight + 6;
     float panW = w - 8;
-    float panH = 8;
+    float panH = 16;
     renderer.drawRect(x + 4, curY, panW, panH, Theme::clipSlotEmpty);
     float panCenter = x + 4 + panW * 0.5f;
-    float panPos = panCenter + rb.pan * (panW * 0.5f - 2);
-    renderer.drawRect(panPos - 2, curY, 4, panH, busCol);
+    float panPos = panCenter + rb.pan * (panW * 0.5f - 4);
+    renderer.drawRect(panPos - 4, curY, 8, panH, busCol);
 
     // Fader + Meter
     curY += panH + 8;
@@ -291,11 +291,11 @@ void MixerView::renderFader(Renderer2D& renderer,
 
     // Fader position (0.0 = bottom, 2.0 = top, 1.0 = unity)
     float frac = std::min(value / 2.0f, 1.0f);
-    float knobY = y + h - frac * h - 4;
-    float knobH = 8;
+    float knobH = 32;
+    float knobY = y + h - frac * h - knobH * 0.5f;
 
     renderer.drawRect(x, knobY, w, knobH, trackColor);
-    renderer.drawRect(x + 1, knobY + 1, w - 2, knobH - 2, Color{200, 200, 200});
+    renderer.drawRect(x + 1, knobY + 2, w - 2, knobH - 4, Color{200, 200, 200});
 
     // Unity mark at 0.5 of the range (volume = 1.0)
     float unityY = y + h - 0.5f * h;
