@@ -55,9 +55,9 @@ public:
         int note = m_octave * 12 + it->second;
         if (note < 0 || note > 127) return false;
 
-        // Don't retrigger if already held
-        if (m_heldNotes[note]) return true;
-        m_heldNotes[note] = true;
+        // Don't retrigger if this physical key is already held
+        if (m_keyToNote.count(key)) return true;
+        m_keyToNote[key] = (uint8_t)note;
 
         m_engine->sendCommand(audio::SendMidiToTrackMsg{
             m_targetTrack,
@@ -75,20 +75,17 @@ public:
 
         if (key == SDLK_Z || key == SDLK_X) return true;
 
-        auto it = m_keyMap.find(key);
-        if (it == m_keyMap.end()) return false;
+        auto it = m_keyToNote.find(key);
+        if (it == m_keyToNote.end()) return false;
 
-        int note = m_octave * 12 + it->second;
-        if (note < 0 || note > 127) return false;
-
-        if (!m_heldNotes[note]) return true;
-        m_heldNotes[note] = false;
+        uint8_t note = it->second;
+        m_keyToNote.erase(it);
 
         m_engine->sendCommand(audio::SendMidiToTrackMsg{
             m_targetTrack,
             static_cast<uint8_t>(midi::MidiMessage::Type::NoteOff),
             0,
-            static_cast<uint8_t>(note),
+            note,
             0,
             0
         });
@@ -98,18 +95,16 @@ public:
     // Release all held notes (e.g., when switching tracks or disabling)
     void allNotesOff() {
         if (!m_engine) return;
-        for (int n = 0; n < 128; ++n) {
-            if (m_heldNotes[n]) {
-                m_heldNotes[n] = false;
-                m_engine->sendCommand(audio::SendMidiToTrackMsg{
-                    m_targetTrack,
-                    static_cast<uint8_t>(midi::MidiMessage::Type::NoteOff),
-                    0,
-                    static_cast<uint8_t>(n),
-                    0, 0
-                });
-            }
+        for (auto& [key, note] : m_keyToNote) {
+            m_engine->sendCommand(audio::SendMidiToTrackMsg{
+                m_targetTrack,
+                static_cast<uint8_t>(midi::MidiMessage::Type::NoteOff),
+                0,
+                note,
+                0, 0
+            });
         }
+        m_keyToNote.clear();
     }
 
 private:
@@ -140,7 +135,7 @@ private:
     int m_octave = 3;  // C3 = MIDI note 36
     uint16_t m_velocity = midi::Convert::vel7to16(100); // ~80% velocity
     bool m_enabled = true;
-    bool m_heldNotes[128] = {};
+    std::unordered_map<SDL_Keycode, uint8_t> m_keyToNote;  // physical key → MIDI note sent
     std::unordered_map<SDL_Keycode, int> m_keyMap;
 };
 
