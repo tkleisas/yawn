@@ -446,6 +446,34 @@ TEST(Arpeggiator, PassesThroughCC) {
     EXPECT_TRUE(foundCC);
 }
 
+TEST(Arpeggiator, FreeRunsWhenTransportStopped) {
+    Arpeggiator arp;
+    arp.init(kSR);
+    // 1/8 note rate at 120 BPM = 0.5 beat per step
+    arp.setParameter(Arpeggiator::kRate, 2.0f);
+
+    // Hold C4
+    MidiBuffer buf;
+    buf.addMessage(MidiMessage::noteOn16(0, 60, 32000, 0));
+    auto ti = makeTransport(120.0, 0.0, false);  // transport NOT playing
+    arp.process(buf, 256, ti);
+
+    // Pump several buffers and collect NoteOn events
+    int noteOns = 0;
+    for (int i = 0; i < buf.count(); ++i)
+        if (buf[i].isNoteOn()) ++noteOns;
+
+    for (int pump = 0; pump < 200; ++pump) {
+        MidiBuffer b2;
+        arp.process(b2, 256, ti);
+        for (int i = 0; i < b2.count(); ++i)
+            if (b2[i].isNoteOn()) ++noteOns;
+    }
+
+    // Should have generated arp steps even though transport is stopped
+    EXPECT_GT(noteOns, 0);
+}
+
 // ---------- Integration: Chain ordering ----------
 
 TEST(MidiEffectChain, PitchThenScale) {

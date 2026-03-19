@@ -75,7 +75,10 @@ void App::setupMenuBar() {
         {"Session View",    "",    nullptr},
         {"Arrangement View","",    nullptr, false, false},
         {"Toggle Mixer",    "M",   [this]() { m_showMixer = !m_showMixer; }},
-        {"Detail Panel",    "D",   [this]() { m_showDetailPanel = !m_showDetailPanel; }},
+        {"Detail Panel",    "D",   [this]() {
+            m_showDetailPanel = !m_showDetailPanel;
+            if (m_showDetailPanel) m_detailPanel.setOpen(true);
+        }},
     });
 
     // Track menu
@@ -474,7 +477,10 @@ void App::processEvents() {
                         break;
 
                     case SDLK_D:
-                        if (!shift) m_showDetailPanel = !m_showDetailPanel;
+                        if (!shift) {
+                            m_showDetailPanel = !m_showDetailPanel;
+                            if (m_showDetailPanel) m_detailPanel.setOpen(true);
+                        }
                         break;
 
                     default:

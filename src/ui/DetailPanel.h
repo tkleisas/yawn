@@ -125,6 +125,9 @@ public:
         m_dragging     = false;
         m_activeDevice = -1;
         m_activeParam  = -1;
+
+        // Auto-open when devices are populated
+        if (!m_devices.empty()) m_open = true;
     }
 
     void clear() {
