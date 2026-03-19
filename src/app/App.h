@@ -42,6 +42,7 @@ private:
     bool loadFont();
     void setupMenuBar();
     void showTrackContextMenu(int trackIndex, float mx, float my);
+    void updateDetailForSelectedTrack();
 
     ui::Window m_mainWindow;
     ui::Renderer2D m_renderer;

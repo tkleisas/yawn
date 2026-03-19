@@ -225,6 +225,31 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     m_contextMenu.open(mx, my, std::move(items));
 }
 
+void App::updateDetailForSelectedTrack() {
+    if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) {
+        m_detailPanel.clear();
+        return;
+    }
+
+    // Show instrument if available (for MIDI tracks)
+    auto* inst = m_audioEngine.instrument(m_selectedTrack);
+    if (inst) {
+        m_detailPanel.showInstrument(inst);
+        return;
+    }
+
+    // Show first audio effect if available
+    auto& chain = m_audioEngine.mixer().trackEffects(m_selectedTrack);
+    for (int i = 0; i < chain.count(); ++i) {
+        if (chain.effectAt(i)) {
+            m_detailPanel.showEffect(chain.effectAt(i));
+            return;
+        }
+    }
+
+    m_detailPanel.clear();
+}
+
 bool App::init() {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         std::fprintf(stderr, "Failed to initialize SDL: %s\n", SDL_GetError());
@@ -563,15 +588,26 @@ void App::processEvents() {
             case SDL_EVENT_DROP_FILE: {
                 const char* file = event.drop.data;
                 if (file) {
-                    loadClipToSlot(file, m_nextDropTrack, m_nextDropScene);
-                    m_nextDropTrack++;
-                    if (m_nextDropTrack >= m_project.numTracks()) {
-                        m_nextDropTrack = 0;
-                        m_nextDropScene++;
-                        if (m_nextDropScene >= m_project.numScenes()) {
-                            m_nextDropScene = 0;
-                        }
+                    // Try to determine target track/scene from mouse position
+                    float menuH = m_menuBar.height();
+                    float headerY = menuH + ui::Theme::kTransportBarHeight + ui::Theme::kTrackHeaderHeight;
+                    float gridX = ui::Theme::kSceneLabelWidth;
+                    int targetTrack = m_selectedTrack;
+                    int targetScene = m_nextDropScene;
+
+                    if (m_lastMouseY >= headerY && m_lastMouseX >= gridX) {
+                        float contentMX = m_lastMouseX + m_sessionView.scrollX();
+                        float contentMY = m_lastMouseY + m_sessionView.scrollY();
+                        int t = static_cast<int>((contentMX - gridX) / ui::Theme::kTrackWidth);
+                        int s = static_cast<int>((contentMY - headerY) / ui::Theme::kClipSlotHeight);
+                        if (t >= 0 && t < m_project.numTracks()) targetTrack = t;
+                        if (s >= 0 && s < m_project.numScenes()) targetScene = s;
                     }
+
+                    loadClipToSlot(file, targetTrack, targetScene);
+                    // Advance scene for next drop on same track
+                    m_nextDropScene = targetScene + 1;
+                    if (m_nextDropScene >= m_project.numScenes()) m_nextDropScene = 0;
                 }
                 break;
             }
@@ -603,6 +639,11 @@ void App::update() {
 
     m_sessionView.setTransportState(m_displayPlaying, m_displayBeats,
                                      m_audioEngine.transport().bpm());
+
+    // Keep detail panel synced with selected track
+    if (m_showDetailPanel) {
+        updateDetailForSelectedTrack();
+    }
 }
 
 void App::render() {
