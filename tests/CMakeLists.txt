@@ -13,6 +13,8 @@ target_include_directories(yawn_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
 
+target_compile_definitions(yawn_tests PRIVATE YAWN_TEST_BUILD)
+
 target_link_libraries(yawn_tests PRIVATE
     GTest::gtest
     GTest::gtest_main

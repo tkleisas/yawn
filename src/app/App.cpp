@@ -11,7 +11,6 @@ App::~App() {
 }
 
 bool App::loadFont() {
-    // Try common system font paths
     const char* fontPaths[] = {
 #ifdef _WIN32
         "C:\\Windows\\Fonts\\segoeui.ttf",
@@ -30,6 +29,54 @@ bool App::loadFont() {
 
     std::fprintf(stderr, "Warning: Could not find a system font. Text will not render.\n");
     return false;
+}
+
+void App::setupMenuBar() {
+    // File menu
+    m_menuBar.addMenu("File", {
+        {"New Project",   "Ctrl+N",       [this]() { std::printf("New Project\n"); }},
+        {"Open Project",  "Ctrl+O",       [this]() { std::printf("Open Project\n"); }},
+        {"Save Project",  "Ctrl+S",       [this]() { std::printf("Save Project\n"); }},
+        {"Save As...",    "Ctrl+Shift+S", nullptr},
+        {"Export Audio",  "",             nullptr, true},
+        {"Quit",          "Ctrl+Q",       [this]() { m_running = false; }, true},
+    });
+
+    // Edit menu
+    m_menuBar.addMenu("Edit", {
+        {"Undo",        "Ctrl+Z", nullptr},
+        {"Redo",        "Ctrl+Y", nullptr},
+        {"Preferences", "",       nullptr, true},
+    });
+
+    // View menu
+    m_menuBar.addMenu("View", {
+        {"Session View",    "",    nullptr},
+        {"Arrangement View","",    nullptr, false, false},
+        {"Toggle Mixer",    "M",   [this]() { m_showMixer = !m_showMixer; }},
+        {"Detail Panel",    "D",   nullptr, false, false},
+    });
+
+    // Track menu
+    m_menuBar.addMenu("Track", {
+        {"Add Audio Track",  "",  [this]() { std::printf("Add Audio Track\n"); }},
+        {"Add MIDI Track",   "",  [this]() { std::printf("Add MIDI Track\n"); }},
+        {"Delete Track",     "",  nullptr, true},
+        {"Rename Track",     "",  nullptr},
+    });
+
+    // MIDI menu
+    m_menuBar.addMenu("MIDI", {
+        {"MIDI Devices",    "",  nullptr},
+        {"MIDI Sync",       "",  nullptr},
+        {"Link Settings",   "",  nullptr, true, false},
+    });
+
+    // Help menu
+    m_menuBar.addMenu("Help", {
+        {"About Y.A.W.N",     "",  [this]() { std::printf("Y.A.W.N v0.1.0\n"); }},
+        {"Keyboard Shortcuts", "",  nullptr},
+    });
 }
 
 bool App::init() {
@@ -53,25 +100,18 @@ bool App::init() {
 
     if (!m_mainWindow.create(winConfig)) return false;
 
-    // Init 2D renderer
     if (!m_renderer.init()) {
         std::fprintf(stderr, "Failed to initialize 2D renderer\n");
         return false;
     }
 
-    // Load font
     loadFont();
 
-    // Init project
     m_project.init(8, 8);
-
-    // Init session view
     m_sessionView.init(&m_project, &m_audioEngine);
-
-    // Init mixer view
     m_mixerView.init(&m_project, &m_audioEngine);
+    setupMenuBar();
 
-    // Init audio engine
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = 44100.0;
     audioConfig.framesPerBuffer = 256;
@@ -126,11 +166,9 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
         if (!buffer) return false;
     }
 
-    // Extract just the filename for display
     std::string name = path;
     auto pos = name.find_last_of("/\\");
     if (pos != std::string::npos) name = name.substr(pos + 1);
-    // Remove extension
     auto dot = name.find_last_of('.');
     if (dot != std::string::npos) name = name.substr(0, dot);
 
@@ -145,7 +183,6 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     std::printf("Loaded '%s' -> Track %d, Scene %d\n",
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
-    // Auto-launch
     m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, clipPtr});
     return true;
 }
@@ -161,10 +198,29 @@ void App::processEvents() {
             case SDL_EVENT_KEY_DOWN: {
                 if (event.key.repeat) break;
                 bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+                bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
+
+                // Keyboard shortcuts for menus
+                if (ctrl) {
+                    switch (event.key.key) {
+                        case SDLK_Q: m_running = false; break;
+                        default: break;
+                    }
+                }
+
+                // InputState keyboard forwarding (for focused widgets)
+                if (m_inputState.focused()) {
+                    if (m_inputState.onKeyDown(static_cast<int>(event.key.key), ctrl, shift))
+                        break;
+                }
 
                 switch (event.key.key) {
                     case SDLK_ESCAPE:
-                        m_running = false;
+                        if (m_menuBar.isOpen()) {
+                            m_menuBar.close();
+                        } else {
+                            m_running = false;
+                        }
                         break;
 
                     case SDLK_SPACE:
@@ -198,19 +254,19 @@ void App::processEvents() {
                         break;
 
                     case SDLK_Q: {
-                        static int qMode = 2;
-                        qMode = (qMode + 1) % 3;
-                        m_audioEngine.sendCommand(
-                            audio::SetQuantizeMsg{static_cast<audio::QuantizeMode>(qMode)});
-                        const char* names[] = {"None", "Beat", "Bar"};
-                        std::printf("Quantize: %s\n", names[qMode]);
+                        if (!ctrl) {
+                            static int qMode = 2;
+                            qMode = (qMode + 1) % 3;
+                            m_audioEngine.sendCommand(
+                                audio::SetQuantizeMsg{static_cast<audio::QuantizeMode>(qMode)});
+                            const char* names[] = {"None", "Beat", "Bar"};
+                            std::printf("Quantize: %s\n", names[qMode]);
+                        }
                         break;
                     }
 
                     case SDLK_M:
-                        if (!shift) {
-                            m_showMixer = !m_showMixer;
-                        }
+                        if (!shift) m_showMixer = !m_showMixer;
                         break;
 
                     default:
@@ -219,14 +275,62 @@ void App::processEvents() {
                 break;
             }
 
+            case SDL_EVENT_TEXT_INPUT: {
+                if (m_inputState.focused()) {
+                    m_inputState.onTextInput(event.text.text);
+                }
+                break;
+            }
+
+            case SDL_EVENT_MOUSE_MOTION: {
+                float mx = event.motion.x;
+                float my = event.motion.y;
+                m_lastMouseX = mx;
+                m_lastMouseY = my;
+
+                // Menu bar hover
+                m_menuBar.handleMouseMove(mx, my);
+
+                // InputState hover + drag (computes dx/dy internally)
+                m_inputState.onMouseMove(mx, my);
+                break;
+            }
+
             case SDL_EVENT_MOUSE_BUTTON_DOWN: {
                 float mx = event.button.x;
                 float my = event.button.y;
-                bool rightClick = (event.button.button == SDL_BUTTON_RIGHT);
-                // Try mixer first (it's at the bottom), then session view
+                int btn = event.button.button;
+
+                // Priority: menu bar → input state widgets → mixer → session
+                if (m_menuBar.contains(mx, my) || (my < m_menuBar.height() && !m_menuBar.isOpen())) {
+                    m_menuBar.handleClick(mx, my);
+                    break;
+                }
+
+                // Close menu if open and clicked elsewhere
+                if (m_menuBar.isOpen()) {
+                    m_menuBar.close();
+                    break;
+                }
+
+                // InputState widgets
+                if (m_inputState.onMouseDown(mx, my, btn))
+                    break;
+
+                // Existing view handlers
+                bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
                     m_sessionView.handleClick(mx, my, rightClick);
                 }
+                break;
+            }
+
+            case SDL_EVENT_MOUSE_BUTTON_UP: {
+                float mx = event.button.x;
+                float my = event.button.y;
+                int btn = event.button.button;
+                m_inputState.onMouseUp(mx, my, btn);
+                m_mixerView.handleRelease();
                 break;
             }
 
@@ -240,7 +344,6 @@ void App::processEvents() {
                 const char* file = event.drop.data;
                 if (file) {
                     loadClipToSlot(file, m_nextDropTrack, m_nextDropScene);
-                    // Advance to next slot
                     m_nextDropTrack++;
                     if (m_nextDropTrack >= m_project.numTracks()) {
                         m_nextDropTrack = 0;
@@ -294,16 +397,22 @@ void App::render() {
 
     m_renderer.beginFrame(w, h);
 
+    float menuH = m_menuBar.height();
     float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
-    float sessionH = static_cast<float>(h) - mixerH;
+    float sessionH = static_cast<float>(h) - menuH - mixerH;
 
-    m_sessionView.render(m_renderer, m_font, 0, 0,
+    // Session view (below menu bar)
+    m_sessionView.render(m_renderer, m_font, 0, menuH,
                           static_cast<float>(w), sessionH);
 
+    // Mixer at the bottom
     if (m_showMixer) {
-        m_mixerView.render(m_renderer, m_font, 0, sessionH,
+        m_mixerView.render(m_renderer, m_font, 0, menuH + sessionH,
                             static_cast<float>(w), mixerH);
     }
+
+    // Menu bar (drawn last, on top of everything)
+    m_menuBar.render(m_renderer, m_font, static_cast<float>(w));
 
     m_renderer.endFrame();
 

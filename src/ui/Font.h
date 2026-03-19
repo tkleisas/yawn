@@ -8,6 +8,7 @@ namespace yawn {
 namespace ui {
 
 struct Color;
+class Renderer2D;
 
 class Font {
 public:
@@ -35,6 +36,10 @@ public:
     GlyphQuad getGlyph(char c, float x, float y, float scale) const;
     float textWidth(const std::string& text, float scale) const;
     float lineHeight(float scale) const;
+
+    // Render text using the given renderer
+    void drawText(Renderer2D& renderer, const char* text,
+                  float x, float y, float scale, Color color);
 
 private:
     GLuint m_textureId = 0;

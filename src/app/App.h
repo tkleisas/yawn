@@ -5,6 +5,8 @@
 #include "ui/Font.h"
 #include "ui/SessionView.h"
 #include "ui/MixerView.h"
+#include "ui/Widget.h"
+#include "ui/MenuBar.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -35,17 +37,24 @@ private:
 
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
     bool loadFont();
+    void setupMenuBar();
 
     ui::Window m_mainWindow;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
     ui::SessionView m_sessionView;
     ui::MixerView m_mixerView;
+    ui::MenuBar m_menuBar;
+    ui::InputState m_inputState;
 
     audio::AudioEngine m_audioEngine;
     Project m_project;
     bool m_running = false;
     bool m_showMixer = true;
+
+    // Mouse tracking for drag
+    float m_lastMouseX = 0;
+    float m_lastMouseY = 0;
 
     // Track which scene/track to assign next dropped file to
     int m_nextDropTrack = 0;

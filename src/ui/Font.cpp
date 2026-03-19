@@ -4,6 +4,7 @@
 #undef STB_TRUETYPE_IMPLEMENTATION
 #include "ui/Font.h"
 #include "ui/Theme.h"
+#include "ui/Renderer.h"
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -109,6 +110,19 @@ float Font::textWidth(const std::string& text, float scale) const {
 
 float Font::lineHeight(float scale) const {
     return m_pixelHeight * scale;
+}
+
+void Font::drawText(Renderer2D& renderer, const char* text,
+                    float x, float y, float scale, Color color) {
+    if (!isLoaded() || !text) return;
+    float tx = x;
+    for (const char* p = text; *p; ++p) {
+        auto g = getGlyph(*p, tx, y, scale);
+        renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                   g.u0, g.v0, g.u1, g.v1,
+                                   color, m_textureId);
+        tx += g.xAdvance;
+    }
 }
 
 } // namespace ui
