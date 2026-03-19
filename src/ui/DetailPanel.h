@@ -9,6 +9,7 @@
 #include <vector>
 #include <functional>
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include <cmath>
 
@@ -99,16 +100,46 @@ public:
         float bodyH = h - kHeaderHeight;
         renderer.drawRect(x, bodyY, width, bodyH, Color{32, 32, 36, 255});
 
-        if (m_params.empty()) {
+        if (m_params.empty() && !m_effect) {
             font.drawText(renderer, "No parameters", x + 20, bodyY + 20, headerScale,
                           Theme::textDim);
             return;
         }
 
-        // Multi-row knob layout
+        // Visualizer effects get a display area + knobs side by side
+        float knobAreaX = x;
+        if (m_effect && m_effect->isVisualizer()) {
+            float vizW = std::min(width * 0.65f, 600.0f);
+            float vizH = bodyH - 8;
+            float vizX = x + 8;
+            float vizY = bodyY + 4;
+
+            // Visualization background
+            renderer.drawRect(vizX, vizY, vizW, vizH, Color{18, 18, 22, 255});
+            renderer.drawRectOutline(vizX, vizY, vizW, vizH, Color{50, 50, 60, 255});
+
+            const float* data = m_effect->displayData();
+            int dataSize = m_effect->displaySize();
+
+            if (data && dataSize > 0) {
+                const char* vizType = m_effect->visualizerType();
+                if (std::strcmp(vizType, "oscilloscope") == 0) {
+                    renderOscilloscope(renderer, data, dataSize, vizX, vizY, vizW, vizH);
+                } else if (std::strcmp(vizType, "spectrum") == 0) {
+                    renderSpectrum(renderer, data, dataSize, vizX, vizY, vizW, vizH);
+                }
+            }
+
+            knobAreaX = vizX + vizW + 12;
+        }
+
+        if (m_params.empty()) return;
+
+        // Multi-row knob layout (to the right of viz if present)
+        float knobAreaW = (x + width) - knobAreaX;
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((width - 24.0f) / cellW)));
-        float startX = x + 12;
+        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((knobAreaW - 24.0f) / cellW)));
+        float startX = knobAreaX + 12;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
             auto& p = m_params[i];
@@ -354,6 +385,78 @@ private:
             float px = cx + std::cos(a) * r - 2.0f;
             float py = cy + std::sin(a) * r - 2.0f;
             renderer.drawRect(px, py, 4, 4, color);
+        }
+#endif
+    }
+
+    void renderOscilloscope([[maybe_unused]] Renderer2D& renderer,
+                            [[maybe_unused]] const float* data,
+                            [[maybe_unused]] int dataSize,
+                            [[maybe_unused]] float x, [[maybe_unused]] float y,
+                            [[maybe_unused]] float w, [[maybe_unused]] float h) {
+#ifndef YAWN_TEST_BUILD
+        float midY = y + h * 0.5f;
+
+        // Center line
+        renderer.drawRect(x, midY, w, 1, Color{40, 40, 50, 255});
+
+        // Grid lines at +/- 0.5
+        renderer.drawRect(x, midY - h * 0.25f, w, 1, Color{30, 30, 38, 255});
+        renderer.drawRect(x, midY + h * 0.25f, w, 1, Color{30, 30, 38, 255});
+
+        // Waveform
+        Color waveColor{80, 220, 120, 255};
+        float xStep = w / (float)dataSize;
+
+        for (int i = 0; i < dataSize; ++i) {
+            float sample = std::clamp(data[i], -1.0f, 1.0f);
+            float px = x + i * xStep;
+            float py = midY - sample * (h * 0.45f);
+
+            // Draw a 2px wide dot for each sample
+            renderer.drawRect(px, py - 1, std::max(xStep, 1.0f), 2, waveColor);
+        }
+#endif
+    }
+
+    void renderSpectrum([[maybe_unused]] Renderer2D& renderer,
+                        [[maybe_unused]] const float* data,
+                        [[maybe_unused]] int dataSize,
+                        [[maybe_unused]] float x, [[maybe_unused]] float y,
+                        [[maybe_unused]] float w, [[maybe_unused]] float h) {
+#ifndef YAWN_TEST_BUILD
+        // Grid lines at -24, -48, -72 dB
+        for (int db = 1; db <= 3; ++db) {
+            float gy = y + h * (1.0f - (float)(96 - db * 24) / 96.0f);
+            renderer.drawRect(x, gy, w, 1, Color{30, 30, 38, 255});
+        }
+
+        // Use logarithmic frequency scaling for more useful display
+        // Map display bins (linear freq) to log-spaced pixel columns
+        int numBars = std::min((int)w, dataSize);
+        float barW = std::max(w / (float)numBars, 1.0f);
+
+        // Gradient from cyan to magenta based on frequency
+        for (int i = 0; i < numBars; ++i) {
+            // Log-scale index mapping: map pixel position to FFT bin
+            float t = (float)i / (float)numBars;
+            // Map log scale: low frequencies get more pixels
+            float logIdx = std::pow(t, 2.0f) * (dataSize - 1);
+            int idx = std::clamp((int)logIdx, 0, dataSize - 1);
+
+            float mag = data[idx];
+            float barH = mag * (h - 4);
+            if (barH < 1.0f) continue;
+
+            float bx = x + i * barW;
+            float by = y + h - barH - 2;
+
+            // Color gradient: cyan → blue → magenta
+            uint8_t r = (uint8_t)(60 + t * 180);
+            uint8_t g = (uint8_t)(200 - t * 160);
+            uint8_t b = (uint8_t)(220);
+            renderer.drawRect(bx, by, std::max(barW - 1.0f, 1.0f), barH,
+                              Color{r, g, b, 230});
         }
 #endif
     }

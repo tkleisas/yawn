@@ -11,6 +11,8 @@
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
+#include "effects/Oscilloscope.h"
+#include "effects/SpectrumAnalyzer.h"
 #include "midi/Arpeggiator.h"
 #include "midi/Chord.h"
 #include "midi/Scale.h"
@@ -187,6 +189,14 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     fxItems.push_back({"Distortion", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Distortion>());
         std::printf("Track %d: Distortion added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Oscilloscope", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Oscilloscope>());
+        std::printf("Track %d: Oscilloscope added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Spectrum", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::SpectrumAnalyzer>());
+        std::printf("Track %d: Spectrum Analyzer added\n", trackIndex + 1);
     }});
     items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
 

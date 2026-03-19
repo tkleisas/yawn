@@ -9,6 +9,8 @@
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
+#include "effects/Oscilloscope.h"
+#include "effects/SpectrumAnalyzer.h"
 #include <cmath>
 #include <memory>
 #include <numeric>
@@ -486,4 +488,135 @@ TEST(EffectParams, SetAndGet) {
 
     del.setParameter(Delay::kFeedback, 0.7f);
     EXPECT_FLOAT_EQ(del.getParameter(Delay::kFeedback), 0.7f);
+}
+
+// ===========================================================================
+// Oscilloscope Tests
+// ===========================================================================
+
+TEST(Oscilloscope, Init) {
+    Oscilloscope scope;
+    scope.init(kSampleRate, kBlockSize);
+    EXPECT_STREQ(scope.name(), "Oscilloscope");
+    EXPECT_EQ(scope.parameterCount(), 3);
+    EXPECT_TRUE(scope.isVisualizer());
+    EXPECT_STREQ(scope.visualizerType(), "oscilloscope");
+}
+
+TEST(Oscilloscope, PassesThrough) {
+    Oscilloscope scope;
+    scope.init(kSampleRate, kBlockSize);
+
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    auto original = buf;
+
+    scope.process(buf.data(), kBlockSize, 2);
+    EXPECT_EQ(buf, original); // Should not alter audio
+}
+
+TEST(Oscilloscope, CapturesDisplayData) {
+    Oscilloscope scope;
+    scope.init(kSampleRate, kBlockSize);
+
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+
+    scope.process(buf.data(), kBlockSize, 2);
+    EXPECT_TRUE(scope.hasNewData());
+
+    const float* display = scope.displayData();
+    EXPECT_NE(display, nullptr);
+    EXPECT_EQ(scope.displaySize(), Oscilloscope::kDisplaySize);
+
+    // Display should contain non-zero data
+    bool hasSignalInDisplay = false;
+    for (int i = 0; i < scope.displaySize(); ++i) {
+        if (std::abs(display[i]) > 1e-6f) { hasSignalInDisplay = true; break; }
+    }
+    EXPECT_TRUE(hasSignalInDisplay);
+}
+
+TEST(Oscilloscope, FreezeStopsCapture) {
+    Oscilloscope scope;
+    scope.init(kSampleRate, kBlockSize);
+
+    // Process some audio
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    scope.process(buf.data(), kBlockSize, 2);
+
+    // Freeze and process silence
+    scope.setParameter(Oscilloscope::kFreeze, 1.0f);
+    scope.clearNewData();
+    std::fill(buf.begin(), buf.end(), 0.0f);
+    scope.process(buf.data(), kBlockSize, 2);
+
+    // Display should still have old data (frozen)
+    const float* display = scope.displayData();
+    bool hasSignalInDisplay = false;
+    for (int i = 0; i < scope.displaySize(); ++i) {
+        if (std::abs(display[i]) > 1e-6f) { hasSignalInDisplay = true; break; }
+    }
+    EXPECT_TRUE(hasSignalInDisplay);
+}
+
+// ===========================================================================
+// SpectrumAnalyzer Tests
+// ===========================================================================
+
+TEST(SpectrumAnalyzer, Init) {
+    SpectrumAnalyzer spec;
+    spec.init(kSampleRate, kBlockSize);
+    EXPECT_STREQ(spec.name(), "Spectrum");
+    EXPECT_EQ(spec.parameterCount(), 3);
+    EXPECT_TRUE(spec.isVisualizer());
+    EXPECT_STREQ(spec.visualizerType(), "spectrum");
+}
+
+TEST(SpectrumAnalyzer, PassesThrough) {
+    SpectrumAnalyzer spec;
+    spec.init(kSampleRate, kBlockSize);
+
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    auto original = buf;
+
+    spec.process(buf.data(), kBlockSize, 2);
+    EXPECT_EQ(buf, original); // Should not alter audio
+}
+
+TEST(SpectrumAnalyzer, CapturesFFTData) {
+    SpectrumAnalyzer spec;
+    spec.init(kSampleRate, kBlockSize);
+    spec.setParameter(SpectrumAnalyzer::kSmoothing, 0.0f); // no smoothing for test
+
+    // Feed enough data to trigger at least one FFT (1024 samples)
+    std::vector<float> buf(2048 * 2);
+    fillSine(buf.data(), 2048, 2, 1000.0f, 0.8f, kSampleRate);
+
+    spec.process(buf.data(), 2048, 2);
+
+    EXPECT_TRUE(spec.hasNewData());
+    const float* display = spec.displayData();
+    EXPECT_NE(display, nullptr);
+    EXPECT_EQ(spec.displaySize(), SpectrumAnalyzer::kDisplayBins);
+
+    // Should have non-zero magnitude bins for a strong 1kHz signal
+    bool hasEnergy = false;
+    for (int i = 0; i < spec.displaySize(); ++i) {
+        if (display[i] > 0.1f) { hasEnergy = true; break; }
+    }
+    EXPECT_TRUE(hasEnergy);
+}
+
+TEST(SpectrumAnalyzer, Parameters) {
+    SpectrumAnalyzer spec;
+    spec.init(kSampleRate, kBlockSize);
+
+    spec.setParameter(SpectrumAnalyzer::kSmoothing, 0.9f);
+    EXPECT_FLOAT_EQ(spec.getParameter(SpectrumAnalyzer::kSmoothing), 0.9f);
+
+    spec.setParameter(SpectrumAnalyzer::kGain, 5.0f);
+    EXPECT_FLOAT_EQ(spec.getParameter(SpectrumAnalyzer::kGain), 5.0f);
 }

@@ -47,6 +47,14 @@ public:
     float mix() const { return m_mix; }
     void setMix(float m) { m_mix = (m < 0.0f) ? 0.0f : (m > 1.0f) ? 1.0f : m; }
 
+    // Visualization support (override in visualizer effects)
+    virtual bool isVisualizer() const { return false; }
+    virtual const char* visualizerType() const { return ""; }
+    virtual const float* displayData() const { return nullptr; }
+    virtual int displaySize() const { return 0; }
+    virtual bool hasNewData() const { return false; }
+    virtual void clearNewData() {}
+
 protected:
     double m_sampleRate = 44100.0;
     int    m_maxBlockSize = 4096;
