@@ -28,7 +28,7 @@ public:
     void setOctave(int oct) { m_octave = (oct < 0) ? 0 : (oct > 8) ? 8 : oct; }
     int octave() const { return m_octave; }
 
-    void setVelocity(uint16_t vel) { m_velocity = vel; }
+    void setVelocity(uint8_t vel7) { m_velocity = midi::Convert::vel7to16(vel7); }
     uint16_t velocity() const { return m_velocity; }
 
     bool isEnabled() const { return m_enabled; }
@@ -138,7 +138,7 @@ private:
     audio::AudioEngine* m_engine = nullptr;
     int m_targetTrack = 0;
     int m_octave = 3;  // C3 = MIDI note 36
-    uint16_t m_velocity = 100;
+    uint16_t m_velocity = midi::Convert::vel7to16(100); // ~80% velocity
     bool m_enabled = true;
     bool m_heldNotes[128] = {};
     std::unordered_map<SDL_Keycode, int> m_keyMap;
