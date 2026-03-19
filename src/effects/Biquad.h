@@ -4,6 +4,7 @@
 // Used by EQ, Filter, and other effects that need frequency-selective processing.
 // Transposed Direct Form II for numerical stability.
 
+#include <algorithm>
 #include <cmath>
 
 namespace yawn {
@@ -19,6 +20,9 @@ public:
         float y = b0 * x + z1;
         z1 = b1 * x - a1 * y + z2;
         z2 = b2 * x - a2 * y;
+        // Clamp state to prevent blowup from rapid coefficient changes
+        z1 = std::clamp(z1, -10.0f, 10.0f);
+        z2 = std::clamp(z2, -10.0f, 10.0f);
         return y;
     }
 

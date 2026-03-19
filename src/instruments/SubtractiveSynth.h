@@ -106,16 +106,24 @@ public:
                                    lfo * m_lfoDepth);
                 modCutoff = std::clamp(modCutoff, 20.0f, 20000.0f);
 
-                float f = std::min(2.0f * modCutoff / (float)m_sampleRate, 0.99f);
+                // SVF coefficient: use sin() for stability at high cutoffs
+                float w = (float)(M_PI * modCutoff / m_sampleRate);
+                float f = 2.0f * std::sin(std::min(w, 1.5f));
                 float q = 1.0f - m_filterResonance * 0.98f;
 
-                float high = mix - voice.filterLow - q * voice.filterBand;
-                voice.filterBand += f * high;
-                voice.filterLow  += f * voice.filterBand;
+                // Run SVF with 2x oversampling for stability
+                for (int os = 0; os < 2; ++os) {
+                    float high = mix - voice.filterLow - q * voice.filterBand;
+                    voice.filterBand += 0.5f * f * high;
+                    voice.filterLow  += 0.5f * f * voice.filterBand;
+                }
+                // Clamp state to prevent blowup from rapid parameter changes
+                voice.filterBand = std::clamp(voice.filterBand, -10.0f, 10.0f);
+                voice.filterLow  = std::clamp(voice.filterLow,  -10.0f, 10.0f);
 
                 float filtered;
                 switch ((int)m_filterType) {
-                    case 1:  filtered = high; break;
+                    case 1:  filtered = mix - voice.filterLow - q * voice.filterBand; break;
                     case 2:  filtered = voice.filterBand; break;
                     default: filtered = voice.filterLow; break;
                 }
