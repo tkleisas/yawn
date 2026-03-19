@@ -374,11 +374,11 @@ void App::processEvents() {
             case SDL_EVENT_MOUSE_WHEEL: {
                 float dx = event.wheel.x;
                 float dy = event.wheel.y;
-                // Forward scroll to session view when mouse is over it
                 float menuH = m_menuBar.height();
                 float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
                 float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
-                float sessionH = std::max(100.0f, static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH);
+                float avail = static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH;
+                float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, avail));
                 if (m_lastMouseY >= menuH && m_lastMouseY < menuH + sessionH) {
                     m_sessionView.handleScroll(dx, dy);
                 }
@@ -446,7 +446,8 @@ void App::render() {
     float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
     float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
     float bottomPanels = mixerH + detailH;
-    float sessionH = std::max(100.0f, static_cast<float>(h) - menuH - bottomPanels);
+    float available = static_cast<float>(h) - menuH - bottomPanels;
+    float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, available));
 
     // Layout top-to-bottom: menu → session → mixer → detail panel
     float sessionY = menuH;
