@@ -27,10 +27,10 @@ public:
         std::vector<MenuItem> items;
     };
 
-    static constexpr float kMenuBarHeight = 24.0f;
+    static constexpr float kMenuBarHeight = 26.0f;
     static constexpr float kMenuItemHeight = 24.0f;
-    static constexpr float kMenuPadding = 12.0f;
-    static constexpr float kMenuMinWidth = 180.0f;
+    static constexpr float kMenuPadding = 10.0f;
+    static constexpr float kMenuMinWidth = 220.0f;
 
     void addMenu(const std::string& title, std::vector<MenuItem> items) {
         int idx = (int)m_menus.size();
@@ -44,7 +44,7 @@ public:
     void recalcBounds() {
         float x = 8.0f;
         for (int i = 0; i < (int)m_menus.size() && i < kMaxMenus; ++i) {
-            float padW = (float)m_menus[i].title.size() * 8.0f + kMenuPadding * 2;
+            float padW = (float)m_menus[i].title.size() * 6.0f + kMenuPadding * 2;
             m_menuBounds[i] = {x, 0, padW, kMenuBarHeight};
             x += padW;
         }
@@ -60,7 +60,7 @@ public:
 
         // Menu titles
         float x = 8.0f;
-        float scale = 16.0f / Theme::kFontSize;
+        float scale = 12.0f / Theme::kFontSize;
         for (int i = 0; i < (int)m_menus.size(); ++i) {
             float tw = font.textWidth(m_menus[i].title.c_str(), scale);
             float padW = tw + kMenuPadding * 2;
@@ -74,8 +74,9 @@ public:
                 renderer.drawRect(x, 0, padW, kMenuBarHeight, bg);
             }
 
+            float ty = (kMenuBarHeight - font.lineHeight(scale)) * 0.5f;
             font.drawText(renderer, m_menus[i].title.c_str(),
-                          x + kMenuPadding, 4.0f, scale, Theme::textPrimary);
+                          x + kMenuPadding, ty, scale, Theme::textPrimary);
             x += padW;
         }
 
@@ -88,7 +89,7 @@ public:
         // Still compute bounds for tests
         float x = 8.0f;
         for (int i = 0; i < (int)m_menus.size() && i < kMaxMenus; ++i) {
-            float padW = (float)m_menus[i].title.size() * 8.0f + kMenuPadding * 2;
+            float padW = (float)m_menus[i].title.size() * 6.0f + kMenuPadding * 2;
             m_menuBounds[i] = {x, 0, padW, kMenuBarHeight};
             x += padW;
         }
@@ -219,11 +220,12 @@ private:
         renderer.drawRectOutline(x, y, w, h, Color{65, 65, 70, 255});
 
         float iy = y;
-        float scale = 15.0f / Theme::kFontSize;
+        float scale = 12.0f / Theme::kFontSize;
+        float textYOff = (kMenuItemHeight - font.lineHeight(scale)) * 0.5f;
         for (int i = 0; i < (int)menu.items.size(); ++i) {
             const auto& item = menu.items[i];
             if (item.separator) {
-                renderer.drawRect(x + 4, iy, w - 8, 1, Color{60, 60, 65, 255});
+                renderer.drawRect(x + 4, iy + 2, w - 8, 1, Color{60, 60, 65, 255});
                 iy += 6;
             }
 
@@ -233,12 +235,12 @@ private:
             }
 
             Color tc = item.enabled ? Theme::textPrimary : Theme::textDim;
-            font.drawText(renderer, item.label.c_str(), x + 8, iy + 4, scale, tc);
+            font.drawText(renderer, item.label.c_str(), x + 8, iy + textYOff, scale, tc);
 
             if (!item.shortcut.empty()) {
                 float sw = font.textWidth(item.shortcut.c_str(), scale);
                 font.drawText(renderer, item.shortcut.c_str(),
-                              x + w - sw - 8, iy + 4, scale, Theme::textDim);
+                              x + w - sw - 10, iy + textYOff, scale, Theme::textDim);
             }
 
             if (item.checked) {
