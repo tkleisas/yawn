@@ -28,7 +28,7 @@ public:
     static constexpr float kPanelHeight    = 220.0f;
     static constexpr float kCollapsedHeight = 28.0f;
     static constexpr float kKnobSize       = 56.0f;
-    static constexpr float kKnobSpacing    = 14.0f;
+    static constexpr float kKnobSpacing    = 28.0f;
     static constexpr float kRowHeight      = 90.0f;
     static constexpr float kHeaderHeight   = 28.0f;
     static constexpr float kLabelHeight    = 16.0f;
