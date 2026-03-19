@@ -7,10 +7,18 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Mixer · Instruments · Effects · MIDI · Clip Launching
+  Session View · Mixer · Instruments · Effects · MIDI · Clip Launching<br/><br/>
+  <em>Made with AI-Sloptronic™ technology</em><br/>
+  <sub>Where "it compiles" is the new "it works" and every bug is a ✨feature request✨</sub>
 </p>
 
 ---
+
+> **⚠️ Disclaimer:** No human engineers were mass-employed in the making of this software.
+> The entire codebase was produced through the ancient art of describing what you want to a machine
+> and then spending twice as long explaining why that's not what you meant.
+> Side effects may include: spontaneous filter resonance, existential questions about who actually wrote this,
+> and an unshakeable feeling that the AI is just gaslighting you into thinking the bug is fixed.
 
 ## Features
 
@@ -66,9 +74,10 @@
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 293 unit tests via Google Test
+- **Test-Driven Development** — 293 unit tests via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
+- **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
 
 ### Planned
 
@@ -351,6 +360,15 @@ Final polish to make Y.A.W.N a usable production tool:
 - **Audio export** — Offline render to WAV/FLAC
 - **Drag & drop** — Audio files, MIDI files, plugins between tracks
 - **Preferences** — Audio device selection, buffer size, sample rate, MIDI device config
+
+## The Team
+
+| Role | Entity | Responsibilities |
+|---|---|---|
+| **Project Manager** | Tasos Kleisas | Vision, QA, yelling "it still doesn't work", changing requirements mid-sentence, clicking things really fast to find bugs |
+| **Chief Engineer** | Claude (Anthropic) | Writing code, rewriting code, explaining why the code was wrong, rewriting it again, apologizing |
+
+*This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. Ship it.*
 
 ## License
 
