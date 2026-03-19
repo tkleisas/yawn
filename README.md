@@ -50,13 +50,20 @@
 - **7 MIDI Effects** — Arpeggiator, Chord, Scale, Note Length, Velocity, Random, Pitch
 
 ### UI
-- **Session View** — Ableton-style clip grid with 8 visible tracks × 8 scenes
-- **Mixer View** — Channel strips aligned to session grid columns
+- **Session View** — Ableton-style clip grid with 8 visible tracks × 8 scenes, scrollable
+- **Mixer View** — Channel strips with interactive faders, pan knobs, mute/solo buttons
+- **Detail Panel** — Collapsible device parameter panel with knob UI for instruments/effects
+- **Menu Bar** — File, Edit, View, Track, MIDI, Help menus with keyboard accelerators
+- **Context Menus** — Right-click track headers to set type, add instruments/effects
+- **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching
+- **Track Selection** — Click to select tracks, highlight in session & mixer views
+- **Track Types** — Audio/MIDI type badges, auto-assign SubSynth for new MIDI tracks
+- **Targeted Drag & Drop** — Drop audio files onto specific clip slots
 - **Custom 2D Renderer** — Batched OpenGL 3.3 rendering with font atlas (stb_truetype)
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 251 unit tests via Google Test
+- **Test-Driven Development** — 282 unit tests via Google Test
 - **Zero audio-thread allocations** — All memory preallocated at startup
 
 ### Planned
@@ -134,13 +141,21 @@ cd build && ctest --output-on-failure -C Release
 | Key | Action |
 |---|---|
 | `Space` | Play / Stop |
-| `T` | Toggle test tone (440 Hz) |
 | `Up` / `Down` | BPM +/- 1 |
 | `Home` | Reset position to 0 |
-| `Q` | Cycle quantize: None → Beat → Bar |
-| `Esc` | Quit |
-| **Mouse click** | Launch/stop clips in the session grid |
-| **Drag & drop** | Load audio files into clip slots |
+| `M` | Toggle mixer view |
+| `D` | Toggle detail panel |
+| `Q` `2` `W` `3` `E` `R` ... `P` | Virtual keyboard (MIDI notes) |
+| `Z` / `X` | Octave down / up |
+| `Esc` | Close menu / Quit |
+| **Left click clip** | Launch clip |
+| **Right click clip** | Stop track |
+| **Click track header** | Select track |
+| **Right-click header** | Context menu (type, instruments, effects) |
+| **Mouse drag on fader** | Adjust volume |
+| **Mouse drag on pan** | Adjust panning |
+| **Right-click fader/pan** | Reset to default |
+| **Drag & drop audio file** | Load clip into slot under cursor |
 
 ## Architecture
 
@@ -243,18 +258,24 @@ yawn/
 │   │   ├── Font.h/cpp          # stb_truetype font atlas
 │   │   ├── Renderer.h/cpp      # Batched 2D OpenGL renderer
 │   │   ├── SessionView.h/cpp   # Clip grid, transport bar, waveforms
-│   │   ├── MixerView.h/cpp     # Mixer channel strips
+│   │   ├── MixerView.h/cpp     # Interactive mixer channel strips
+│   │   ├── DetailPanel.h       # Device parameter knob panel
+│   │   ├── MenuBar.h           # Application menu bar
+│   │   ├── ContextMenu.h       # Right-click popup menus with submenus
+│   │   ├── VirtualKeyboard.h   # QWERTY-to-MIDI keyboard
+│   │   ├── Widget.h            # Base widget with input state tracking
 │   │   ├── Theme.h             # Ableton-dark color scheme
 │   │   └── Window.h/cpp        # SDL3 + OpenGL window wrapper
 │   └── util/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 251 unit tests (Google Test)
+├── tests/                      # 282 unit tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
 │   ├── test_ClipEngine.cpp
+│   ├── test_DetailPanel.cpp    # Detail panel tests (8 tests)
 │   ├── test_Effects.cpp        # Audio effect tests (29 tests)
 │   ├── test_FileIO.cpp
 │   ├── test_Instruments.cpp    # Instrument tests (32 tests)
@@ -282,11 +303,12 @@ yawn/
 | 8. Audio Effects | ✅ Done | 7 built-in effects, effect chains, 3-point insert |
 | 9. Native Instruments | ✅ Done | 5 instruments (SubSynth, FM, Sampler, InstrumentRack, DrumRack) |
 | 10. MIDI Effects | ✅ Done | 7 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch) |
-| 11. Arrangement View | 🔲 Next | Timeline, clip placement, piano roll editor |
-| 12. VST3 Hosting | 🔲 Planned | VST3 SDK, plugin scanning, editor windows |
-| 13. Save/Load & Polish | 🔲 Planned | JSON project files, undo/redo, keyboard shortcuts |
+| 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
+| 12. Arrangement View | 🔲 Next | Timeline, clip placement, piano roll editor |
+| 13. VST3 Hosting | 🔲 Planned | VST3 SDK, plugin scanning, editor windows |
+| 14. Save/Load & Polish | 🔲 Planned | JSON project files, undo/redo, keyboard shortcuts |
 
-### Phase 11: Arrangement View (Next)
+### Phase 12: Arrangement View (Next)
 
 The Arrangement View provides a linear timeline for composing full tracks:
 
@@ -297,7 +319,7 @@ The Arrangement View provides a linear timeline for composing full tracks:
 - **Recording** — Record from Session View clips to Arrangement
 - **Automation lanes** — Per-track parameter automation (volume, pan, effect params)
 
-### Phase 12: VST3 Plugin Hosting
+### Phase 13: VST3 Plugin Hosting
 
 Full VST3 plugin support for third-party effects and instruments:
 
@@ -309,7 +331,7 @@ Full VST3 plugin support for third-party effects and instruments:
 - **Parameter mapping** — Generic knob grid for plugins without custom GUIs
 - **Preset management** — Save/load plugin state with project
 
-### Phase 13: Project Save/Load & Polish
+### Phase 14: Project Save/Load & Polish
 
 Final polish to make Y.A.W.N a usable production tool:
 
