@@ -1,4 +1,23 @@
 #include "app/App.h"
+#include "instruments/SubtractiveSynth.h"
+#include "instruments/FMSynth.h"
+#include "instruments/Sampler.h"
+#include "instruments/DrumRack.h"
+#include "instruments/InstrumentRack.h"
+#include "effects/Reverb.h"
+#include "effects/Delay.h"
+#include "effects/EQ.h"
+#include "effects/Compressor.h"
+#include "effects/Filter.h"
+#include "effects/Chorus.h"
+#include "effects/Distortion.h"
+#include "midi/Arpeggiator.h"
+#include "midi/Chord.h"
+#include "midi/Scale.h"
+#include "midi/NoteLength.h"
+#include "midi/VelocityEffect.h"
+#include "midi/MidiRandom.h"
+#include "midi/MidiPitch.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -59,8 +78,17 @@ void App::setupMenuBar() {
 
     // Track menu
     m_menuBar.addMenu("Track", {
-        {"Add Audio Track",  "",  [this]() { std::printf("Add Audio Track\n"); }},
-        {"Add MIDI Track",   "",  [this]() { std::printf("Add MIDI Track\n"); }},
+        {"Add Audio Track",  "",  [this]() {
+            m_project.addTrack("Audio " + std::to_string(m_project.numTracks() + 1), Track::Type::Audio);
+            std::printf("Added Audio track %d\n", m_project.numTracks());
+        }},
+        {"Add MIDI Track",   "",  [this]() {
+            int idx = m_project.numTracks();
+            m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
+            // Auto-assign a SubSynth to new MIDI tracks
+            m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
+            std::printf("Added MIDI track %d (with SubSynth)\n", m_project.numTracks());
+        }},
         {"Delete Track",     "",  nullptr, true},
         {"Rename Track",     "",  nullptr},
     });
@@ -77,6 +105,124 @@ void App::setupMenuBar() {
         {"About Y.A.W.N",     "",  [this]() { std::printf("Y.A.W.N v0.1.0\n"); }},
         {"Keyboard Shortcuts", "",  nullptr},
     });
+}
+
+void App::showTrackContextMenu(int trackIndex, float mx, float my) {
+    if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
+    auto& track = m_project.track(trackIndex);
+
+    std::vector<ui::ContextMenu::Item> items;
+
+    // Track type selection
+    items.push_back({"Set as Audio Track", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Audio;
+        std::printf("Track %d set to Audio\n", trackIndex + 1);
+    }, false, track.type != Track::Type::Audio});
+
+    items.push_back({"Set as MIDI Track", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        if (!m_audioEngine.instrument(trackIndex)) {
+            m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::SubtractiveSynth>());
+            std::printf("Track %d set to MIDI (auto-assigned SubSynth)\n", trackIndex + 1);
+        } else {
+            std::printf("Track %d set to MIDI\n", trackIndex + 1);
+        }
+    }, false, track.type != Track::Type::Midi});
+
+    // Separator + Instruments submenu
+    std::vector<ui::ContextMenu::Item> instrItems;
+    instrItems.push_back({"SubSynth", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::SubtractiveSynth>());
+        std::printf("Track %d: SubSynth assigned\n", trackIndex + 1);
+    }});
+    instrItems.push_back({"FM Synth", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::FMSynth>());
+        std::printf("Track %d: FM Synth assigned\n", trackIndex + 1);
+    }});
+    instrItems.push_back({"Sampler", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Sampler>());
+        std::printf("Track %d: Sampler assigned\n", trackIndex + 1);
+    }});
+    instrItems.push_back({"Drum Rack", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::DrumRack>());
+        std::printf("Track %d: Drum Rack assigned\n", trackIndex + 1);
+    }});
+    instrItems.push_back({"Instrument Rack", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::InstrumentRack>());
+        std::printf("Track %d: Instrument Rack assigned\n", trackIndex + 1);
+    }});
+    items.push_back({"Add Instrument", nullptr, true, true, std::move(instrItems)});
+
+    // Audio effects submenu
+    std::vector<ui::ContextMenu::Item> fxItems;
+    fxItems.push_back({"Reverb", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Reverb>());
+        std::printf("Track %d: Reverb added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Delay", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Delay>());
+        std::printf("Track %d: Delay added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"EQ", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::EQ>());
+        std::printf("Track %d: EQ added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Compressor", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Compressor>());
+        std::printf("Track %d: Compressor added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Filter", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Filter>());
+        std::printf("Track %d: Filter added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Chorus", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Chorus>());
+        std::printf("Track %d: Chorus added\n", trackIndex + 1);
+    }});
+    fxItems.push_back({"Distortion", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Distortion>());
+        std::printf("Track %d: Distortion added\n", trackIndex + 1);
+    }});
+    items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
+
+    // MIDI effects submenu
+    std::vector<ui::ContextMenu::Item> midiItems;
+    midiItems.push_back({"Arpeggiator", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Arpeggiator>());
+        std::printf("Track %d: Arpeggiator added\n", trackIndex + 1);
+    }});
+    midiItems.push_back({"Chord", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Chord>());
+        std::printf("Track %d: Chord added\n", trackIndex + 1);
+    }});
+    midiItems.push_back({"Scale", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Scale>());
+        std::printf("Track %d: Scale added\n", trackIndex + 1);
+    }});
+    midiItems.push_back({"Note Length", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::NoteLength>());
+        std::printf("Track %d: Note Length added\n", trackIndex + 1);
+    }});
+    midiItems.push_back({"Velocity", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::VelocityEffect>());
+        std::printf("Track %d: Velocity added\n", trackIndex + 1);
+    }});
+    midiItems.push_back({"Random", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiRandom>());
+        std::printf("Track %d: Random added\n", trackIndex + 1);
+    }});
+    midiItems.push_back({"Pitch", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiPitch>());
+        std::printf("Track %d: Pitch added\n", trackIndex + 1);
+    }});
+    items.push_back({"Add MIDI Effect", nullptr, false, true, std::move(midiItems)});
+
+    m_contextMenu.open(mx, my, std::move(items));
 }
 
 bool App::init() {
@@ -110,6 +256,7 @@ bool App::init() {
     m_project.init(8, 8);
     m_sessionView.init(&m_project, &m_audioEngine);
     m_mixerView.init(&m_project, &m_audioEngine);
+    m_virtualKeyboard.init(&m_audioEngine);
     setupMenuBar();
 
     audio::AudioEngineConfig audioConfig;
@@ -127,11 +274,10 @@ bool App::init() {
 
     m_running = true;
     std::printf("\nY.A.W.N initialized successfully\n");
-    std::printf("  [Space] Play/Stop        [T] Toggle test tone\n");
-    std::printf("  [Up/Down] BPM +/-        [Home] Reset position\n");
-    std::printf("  [Q] Quantize: None/Beat/Bar\n");
-    std::printf("  [M] Toggle mixer panel\n");
+    std::printf("  [Space] Play/Stop        [Up/Down] BPM +/-\n");
+    std::printf("  [Home] Reset position    [M] Toggle mixer\n");
     std::printf("  [D] Toggle detail panel\n");
+    std::printf("  Virtual keyboard: Q2W3ER5T6Y7UI9O0P  [Z/X] Octave down/up\n");
     std::printf("  Click clip slots to launch/stop\n");
     std::printf("  Drag & drop audio files to load clips\n");
     std::printf("  [Esc] Quit\n\n");
@@ -201,12 +347,13 @@ void App::processEvents() {
                 bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
                 bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
 
-                // Keyboard shortcuts for menus
+                // Keyboard shortcuts for menus (Ctrl combos always take priority)
                 if (ctrl) {
                     switch (event.key.key) {
                         case SDLK_Q: m_running = false; break;
                         default: break;
                     }
+                    break;
                 }
 
                 // InputState keyboard forwarding (for focused widgets)
@@ -215,9 +362,15 @@ void App::processEvents() {
                         break;
                 }
 
+                // Virtual keyboard (intercepts musical keys before shortcuts)
+                if (m_virtualKeyboard.onKeyDown(event.key.key))
+                    break;
+
                 switch (event.key.key) {
                     case SDLK_ESCAPE:
-                        if (m_menuBar.isOpen()) {
+                        if (m_contextMenu.isOpen()) {
+                            m_contextMenu.close();
+                        } else if (m_menuBar.isOpen()) {
                             m_menuBar.close();
                         } else {
                             m_running = false;
@@ -229,14 +382,6 @@ void App::processEvents() {
                             m_audioEngine.sendCommand(audio::TransportStopMsg{});
                         } else {
                             m_audioEngine.sendCommand(audio::TransportPlayMsg{});
-                        }
-                        break;
-
-                    case SDLK_T:
-                        if (!shift) {
-                            static bool toneOn = false;
-                            toneOn = !toneOn;
-                            m_audioEngine.sendCommand(audio::TestToneMsg{toneOn, 440.0f});
                         }
                         break;
 
@@ -254,29 +399,23 @@ void App::processEvents() {
                         m_audioEngine.sendCommand(audio::TransportSetPositionMsg{0});
                         break;
 
-                    case SDLK_Q: {
-                        if (!ctrl) {
-                            static int qMode = 2;
-                            qMode = (qMode + 1) % 3;
-                            m_audioEngine.sendCommand(
-                                audio::SetQuantizeMsg{static_cast<audio::QuantizeMode>(qMode)});
-                            const char* names[] = {"None", "Beat", "Bar"};
-                            std::printf("Quantize: %s\n", names[qMode]);
-                        }
-                        break;
-                    }
-
                     case SDLK_M:
                         if (!shift) m_showMixer = !m_showMixer;
                         break;
 
                     case SDLK_D:
-                        if (!shift && !ctrl) m_showDetailPanel = !m_showDetailPanel;
+                        if (!shift) m_showDetailPanel = !m_showDetailPanel;
                         break;
 
                     default:
                         break;
                 }
+                break;
+            }
+
+            case SDL_EVENT_KEY_UP: {
+                // Virtual keyboard note-off
+                m_virtualKeyboard.onKeyUp(event.key.key);
                 break;
             }
 
@@ -292,6 +431,9 @@ void App::processEvents() {
                 float my = event.motion.y;
                 m_lastMouseX = mx;
                 m_lastMouseY = my;
+
+                // Context menu hover
+                m_contextMenu.handleMouseMove(mx, my);
 
                 // Menu bar hover
                 m_menuBar.handleMouseMove(mx, my);
@@ -315,6 +457,12 @@ void App::processEvents() {
                 float mx = event.button.x;
                 float my = event.button.y;
                 int btn = event.button.button;
+
+                // Context menu takes priority when open
+                if (m_contextMenu.isOpen()) {
+                    m_contextMenu.handleClick(mx, my);
+                    break;
+                }
 
                 // Priority: menu bar → input state widgets → mixer → session
                 if (m_menuBar.contains(mx, my) || (my < m_menuBar.height() && !m_menuBar.isOpen())) {
@@ -348,9 +496,36 @@ void App::processEvents() {
                     }
                 }
 
+                // Right-click on track headers → open context menu
+                if (rightClick) {
+                    float menuH = m_menuBar.height();
+                    float headerY = menuH + ui::Theme::kTransportBarHeight;
+                    float headerEnd = headerY + ui::Theme::kTrackHeaderHeight;
+                    float gridX = ui::Theme::kSceneLabelWidth;
+                    if (my >= headerY && my < headerEnd && mx >= gridX) {
+                        float contentMX = mx + m_sessionView.scrollX();
+                        int trackIdx = static_cast<int>((contentMX - gridX) / ui::Theme::kTrackWidth);
+                        if (trackIdx >= 0 && trackIdx < m_project.numTracks()) {
+                            m_selectedTrack = trackIdx;
+                            m_virtualKeyboard.setTargetTrack(trackIdx);
+                            m_sessionView.setSelectedTrack(trackIdx);
+                            m_mixerView.setSelectedTrack(trackIdx);
+                            showTrackContextMenu(trackIdx, mx, my);
+                            break;
+                        }
+                    }
+                }
+
                 // Existing view handlers: mixer → session
                 if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
-                    m_sessionView.handleClick(mx, my, rightClick);
+                    int selTrack = -1;
+                    if (m_sessionView.handleClick(mx, my, rightClick, &selTrack)) {
+                        if (selTrack >= 0) {
+                            m_selectedTrack = selTrack;
+                            m_virtualKeyboard.setTargetTrack(selTrack);
+                            m_mixerView.setSelectedTrack(selTrack);
+                        }
+                    }
                 }
                 break;
             }
@@ -472,6 +647,9 @@ void App::render() {
 
     // Menu bar (drawn last, on top of everything)
     m_menuBar.render(m_renderer, m_font, static_cast<float>(w));
+
+    // Context menu (very top layer)
+    m_contextMenu.render(m_renderer, m_font);
 
     m_renderer.endFrame();
 

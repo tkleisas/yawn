@@ -37,6 +37,9 @@ public:
 
     float preferredHeight() const { return kMixerHeight; }
 
+    void setSelectedTrack(int track) { m_selectedTrack = track; }
+    int selectedTrack() const { return m_selectedTrack; }
+
 private:
     void renderChannelStrip(Renderer2D& renderer, Font& font,
                             int trackIndex, float x, float y, float w, float h);
@@ -75,6 +78,7 @@ private:
 
     // Layout cache
     float m_viewX = 0, m_viewY = 0, m_viewW = 0, m_viewH = 0;
+    int m_selectedTrack = 0;
 
     // Layout constants
     static constexpr float kMixerHeight = 280.0f;

@@ -31,7 +31,8 @@ public:
                 float x, float y, float width, float height);
 
     // Handle mouse input. Returns true if the click was consumed.
-    bool handleClick(float mx, float my, bool isRightClick);
+    // selectedTrack: output — set to track index if header was clicked
+    bool handleClick(float mx, float my, bool isRightClick, int* selectedTrack = nullptr);
 
     // Handle scroll wheel. dx = horizontal, dy = vertical.
     void handleScroll(float dx, float dy);
@@ -41,6 +42,12 @@ public:
 
     // Preferred height showing up to kVisibleScenes scenes
     float preferredHeight() const;
+
+    void setSelectedTrack(int track) { m_selectedTrack = track; }
+    int selectedTrack() const { return m_selectedTrack; }
+
+    float scrollX() const { return m_scrollX; }
+    float scrollY() const { return m_scrollY; }
 
     static constexpr int kVisibleScenes = 8;
 
@@ -77,6 +84,7 @@ private:
 
     // Currently playing scene (-1 = none)
     int m_activeScene = -1;
+    int m_selectedTrack = 0;
 
     // Animation timer
     float m_animTimer = 0.0f;

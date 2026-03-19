@@ -95,6 +95,11 @@ void MixerView::renderChannelStrip(Renderer2D& renderer, Font& font,
     // Strip background
     renderer.drawRect(ix, y, iw, h, Theme::background);
 
+    // Selected track highlight
+    if (trackIndex == m_selectedTrack) {
+        renderer.drawRect(ix, y, iw, h, Color{50, 55, 65, 255});
+    }
+
     Color trackCol = Theme::trackColors[m_project->track(trackIndex).colorIndex % Theme::kNumTrackColors];
     const auto& ch = m_engine->mixer().trackChannel(trackIndex);
 

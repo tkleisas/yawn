@@ -85,6 +85,17 @@ public:
         m_clipSlots.back().resize(numScenes());
     }
 
+    void addTrack(const std::string& name, Track::Type type) {
+        Track t;
+        t.name = name;
+        t.type = type;
+        t.colorIndex = static_cast<int>(m_tracks.size());
+        m_tracks.push_back(t);
+
+        m_clipSlots.emplace_back();
+        m_clipSlots.back().resize(numScenes());
+    }
+
     void addScene() {
         Scene s;
         s.name = std::to_string(m_scenes.size() + 1);

@@ -8,6 +8,8 @@
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
 #include "ui/DetailPanel.h"
+#include "ui/VirtualKeyboard.h"
+#include "ui/ContextMenu.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -39,6 +41,7 @@ private:
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
     bool loadFont();
     void setupMenuBar();
+    void showTrackContextMenu(int trackIndex, float mx, float my);
 
     ui::Window m_mainWindow;
     ui::Renderer2D m_renderer;
@@ -47,6 +50,8 @@ private:
     ui::MixerView m_mixerView;
     ui::MenuBar m_menuBar;
     ui::DetailPanel m_detailPanel;
+    ui::VirtualKeyboard m_virtualKeyboard;
+    ui::ContextMenu m_contextMenu;
     ui::InputState m_inputState;
 
     audio::AudioEngine m_audioEngine;

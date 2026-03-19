@@ -127,12 +127,18 @@ void SessionView::renderTrackHeaders(Renderer2D& renderer, Font& font,
 
     renderer.pushClip(x, y, w, h);
     float scale = Theme::kSmallFontSize / font.pixelHeight();
+    float smallScale = scale * 0.7f;
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
         float tx = x + t * Theme::kTrackWidth - m_scrollX;
         float tw = Theme::kTrackWidth;
 
         if (tx + tw < x || tx > x + w) continue; // off-screen
+
+        // Selected track highlight
+        if (t == m_selectedTrack) {
+            renderer.drawRect(tx + 1, y + 1, tw - 2, h - 2, Color{50, 55, 65, 255});
+        }
 
         // Track color indicator bar
         Color trackCol = Theme::trackColors[m_project->track(t).colorIndex % Theme::kNumTrackColors];
@@ -141,7 +147,7 @@ void SessionView::renderTrackHeaders(Renderer2D& renderer, Font& font,
         // Track name
         if (font.isLoaded()) {
             float textX = tx + 6;
-            float textY = y + 10;
+            float textY = y + 8;
             for (char c : m_project->track(t).name) {
                 auto g = font.getGlyph(c, textX, textY, scale);
                 renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
@@ -150,6 +156,14 @@ void SessionView::renderTrackHeaders(Renderer2D& renderer, Font& font,
                 textX += g.xAdvance;
                 if (textX > tx + tw - 6) break;
             }
+        }
+
+        // Track type badge (Audio / MIDI)
+        if (font.isLoaded()) {
+            bool isMidi = (m_project->track(t).type == Track::Type::Midi);
+            const char* typeLabel = isMidi ? "MIDI" : "Audio";
+            Color typeCol = isMidi ? Color{180, 130, 255} : Color{130, 200, 130};
+            font.drawText(renderer, typeLabel, tx + 6, y + 22, smallScale, typeCol);
         }
 
         // Separator
@@ -295,15 +309,29 @@ void SessionView::renderClipSlot(Renderer2D& renderer, Font& font,
     renderer.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
 }
 
-bool SessionView::handleClick(float mx, float my, bool isRightClick) {
+bool SessionView::handleClick(float mx, float my, bool isRightClick, int* selectedTrack) {
     if (!m_project || !m_engine) return false;
 
     float gridX = m_viewX + Theme::kSceneLabelWidth;
-    float gridY = m_viewY + Theme::kTransportBarHeight + Theme::kTrackHeaderHeight;
+    float headerY = m_viewY + Theme::kTransportBarHeight;
+    float gridY = headerY + Theme::kTrackHeaderHeight;
 
     // Not in our area
     if (my < m_viewY || my > m_viewY + m_viewH) return false;
     if (mx < m_viewX || mx > m_viewX + m_viewW) return false;
+
+    // Click in track header area — select track
+    if (my >= headerY && my < gridY && mx >= gridX) {
+        float contentMX = mx + m_scrollX;
+        int trackIndex = static_cast<int>((contentMX - gridX) / Theme::kTrackWidth);
+        if (trackIndex >= 0 && trackIndex < m_project->numTracks()) {
+            m_selectedTrack = trackIndex;
+            if (selectedTrack) *selectedTrack = trackIndex;
+            std::printf("Selected track %d: %s\n", trackIndex + 1,
+                        m_project->track(trackIndex).name.c_str());
+            return true;
+        }
+    }
 
     // Not in grid area (above headers/transport)
     if (my < gridY) return false;
@@ -337,6 +365,10 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick) {
 
         if (trackIndex >= 0 && trackIndex < m_project->numTracks() &&
             sceneIndex >= 0 && sceneIndex < m_project->numScenes()) {
+
+            // Also select this track
+            m_selectedTrack = trackIndex;
+            if (selectedTrack) *selectedTrack = trackIndex;
 
             auto* clip = m_project->getClip(trackIndex, sceneIndex);
 
