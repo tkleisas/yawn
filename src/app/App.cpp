@@ -54,7 +54,7 @@ void App::setupMenuBar() {
         {"Session View",    "",    nullptr},
         {"Arrangement View","",    nullptr, false, false},
         {"Toggle Mixer",    "M",   [this]() { m_showMixer = !m_showMixer; }},
-        {"Detail Panel",    "D",   nullptr, false, false},
+        {"Detail Panel",    "D",   [this]() { m_showDetailPanel = !m_showDetailPanel; }},
     });
 
     // Track menu
@@ -131,6 +131,7 @@ bool App::init() {
     std::printf("  [Up/Down] BPM +/-        [Home] Reset position\n");
     std::printf("  [Q] Quantize: None/Beat/Bar\n");
     std::printf("  [M] Toggle mixer panel\n");
+    std::printf("  [D] Toggle detail panel\n");
     std::printf("  Click clip slots to launch/stop\n");
     std::printf("  Drag & drop audio files to load clips\n");
     std::printf("  [Esc] Quit\n\n");
@@ -269,6 +270,10 @@ void App::processEvents() {
                         if (!shift) m_showMixer = !m_showMixer;
                         break;
 
+                    case SDLK_D:
+                        if (!shift && !ctrl) m_showDetailPanel = !m_showDetailPanel;
+                        break;
+
                     default:
                         break;
                 }
@@ -298,6 +303,11 @@ void App::processEvents() {
                 if (m_showMixer) {
                     m_mixerView.handleDrag(mx, my);
                 }
+
+                // Forward drag to detail panel if it's dragging
+                if (m_showDetailPanel) {
+                    m_detailPanel.handleDrag(mx, my);
+                }
                 break;
             }
 
@@ -322,8 +332,25 @@ void App::processEvents() {
                 if (m_inputState.onMouseDown(mx, my, btn))
                     break;
 
-                // Existing view handlers
+                // Detail panel
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
+                if (m_showDetailPanel) {
+                    float menuH = m_menuBar.height();
+                    float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
+                    float detailH = m_detailPanel.height();
+                    int wh = m_mainWindow.getHeight();
+                    float detailY = static_cast<float>(wh) - mixerH - detailH;
+
+                    if (rightClick) {
+                        if (m_detailPanel.handleRightClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth())))
+                            break;
+                    } else {
+                        if (m_detailPanel.handleClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth())))
+                            break;
+                    }
+                }
+
+                // Existing view handlers: mixer → session
                 if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
                     m_sessionView.handleClick(mx, my, rightClick);
                 }
@@ -336,6 +363,7 @@ void App::processEvents() {
                 int btn = event.button.button;
                 m_inputState.onMouseUp(mx, my, btn);
                 m_mixerView.handleRelease();
+                m_detailPanel.handleRelease();
                 break;
             }
 
@@ -404,15 +432,22 @@ void App::render() {
 
     float menuH = m_menuBar.height();
     float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
-    float sessionH = static_cast<float>(h) - menuH - mixerH;
+    float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
+    float sessionH = static_cast<float>(h) - menuH - mixerH - detailH;
 
     // Session view (below menu bar)
     m_sessionView.render(m_renderer, m_font, 0, menuH,
                           static_cast<float>(w), sessionH);
 
+    // Detail panel (between session and mixer)
+    if (m_showDetailPanel) {
+        m_detailPanel.render(m_renderer, m_font, 0, menuH + sessionH,
+                              static_cast<float>(w));
+    }
+
     // Mixer at the bottom
     if (m_showMixer) {
-        m_mixerView.render(m_renderer, m_font, 0, menuH + sessionH,
+        m_mixerView.render(m_renderer, m_font, 0, menuH + sessionH + detailH,
                             static_cast<float>(w), mixerH);
     }
 

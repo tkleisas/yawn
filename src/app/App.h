@@ -7,6 +7,7 @@
 #include "ui/MixerView.h"
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
+#include "ui/DetailPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -45,12 +46,15 @@ private:
     ui::SessionView m_sessionView;
     ui::MixerView m_mixerView;
     ui::MenuBar m_menuBar;
+    ui::DetailPanel m_detailPanel;
     ui::InputState m_inputState;
 
     audio::AudioEngine m_audioEngine;
     Project m_project;
     bool m_running = false;
     bool m_showMixer = true;
+    bool m_showDetailPanel = false;
+    int m_selectedTrack = 0;
 
     // Mouse tracking for drag
     float m_lastMouseX = 0;
