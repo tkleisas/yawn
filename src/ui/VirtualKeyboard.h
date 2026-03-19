@@ -5,6 +5,7 @@
 // Z = octave down, X = octave up. Default octave = 3 (middle C region).
 
 #include "audio/AudioEngine.h"
+#include "midi/MidiTypes.h"
 #include <cstdint>
 #include <unordered_map>
 
@@ -60,7 +61,7 @@ public:
 
         m_engine->sendCommand(audio::SendMidiToTrackMsg{
             m_targetTrack,
-            static_cast<uint8_t>(0x90), // Note On
+            static_cast<uint8_t>(midi::MidiMessage::Type::NoteOn),
             0,                           // channel
             static_cast<uint8_t>(note),
             m_velocity,
@@ -85,7 +86,7 @@ public:
 
         m_engine->sendCommand(audio::SendMidiToTrackMsg{
             m_targetTrack,
-            static_cast<uint8_t>(0x80), // Note Off
+            static_cast<uint8_t>(midi::MidiMessage::Type::NoteOff),
             0,
             static_cast<uint8_t>(note),
             0,
@@ -102,7 +103,7 @@ public:
                 m_heldNotes[n] = false;
                 m_engine->sendCommand(audio::SendMidiToTrackMsg{
                     m_targetTrack,
-                    static_cast<uint8_t>(0x80),
+                    static_cast<uint8_t>(midi::MidiMessage::Type::NoteOff),
                     0,
                     static_cast<uint8_t>(n),
                     0, 0
