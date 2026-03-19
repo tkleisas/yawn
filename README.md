@@ -32,9 +32,11 @@
 - **Delay** — Stereo delay with tempo sync, feedback, and ping-pong mode
 - **EQ** — 3-band parametric EQ (low shelf, mid peak, high shelf)
 - **Compressor** — Dynamics compressor with threshold, ratio, attack, release, makeup gain
-- **Filter** — Multi-mode SVF filter (lowpass, highpass, bandpass, notch)
+- **Filter** — Multi-mode SVF filter (lowpass, highpass, bandpass, notch) with 2x oversampled stability
 - **Chorus** — Modulated delay with multiple voices
 - **Distortion** — Waveshaper with soft clip, hard clip, and tube saturation modes
+- **Oscilloscope** — Real-time waveform visualizer (non-destructive analysis effect)
+- **Spectrum Analyzer** — FFT-based frequency spectrum display (non-destructive analysis effect)
 
 ### Native Instruments
 - **Subtractive Synth** — 2-oscillator analog-style synth with SVF filter, 23 parameters, 16-voice polyphony
@@ -47,15 +49,16 @@
 - **MIDI Engine** — Internal 16-bit velocity, 32-bit CC resolution (MIDI 2.0 ready)
 - **MIDI I/O** — Hardware MIDI via RtMidi (WinMM/ALSA)
 - **MPE Support** — Per-note pitch bend, slide, pressure via zone management
-- **7 MIDI Effects** — Arpeggiator, Chord, Scale, Note Length, Velocity, Random, Pitch
+- **7 MIDI Effects** — Arpeggiator (free-running & transport-synced), Chord, Scale, Note Length, Velocity, Random, Pitch
 
 ### UI
 - **Session View** — Ableton-style clip grid with 8 visible tracks × 8 scenes, scrollable
 - **Mixer View** — Channel strips with interactive faders, pan knobs, mute/solo buttons
-- **Detail Panel** — Collapsible device parameter panel with knob UI for instruments/effects
+- **Device Chain Panel** — Full signal-flow device chain (MIDI FX → Instrument → Audio FX) with expandable panels, bypass/remove buttons, horizontal scrolling, color-coded headers
 - **Menu Bar** — File, Edit, View, Track, MIDI, Help menus with keyboard accelerators
 - **Context Menus** — Right-click track headers to set type, add instruments/effects
-- **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching
+- **Confirmation Dialogs** — Modal confirmation when changing track type (Audio ↔ MIDI)
+- **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking
 - **Track Selection** — Click to select tracks, highlight in session & mixer views
 - **Track Types** — Audio/MIDI type badges, auto-assign SubSynth for new MIDI tracks
 - **Targeted Drag & Drop** — Drop audio files onto specific clip slots
@@ -63,8 +66,9 @@
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 282 unit tests via Google Test
+- **Test-Driven Development** — 293 unit tests via Google Test
 - **Zero audio-thread allocations** — All memory preallocated at startup
+- **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 
 ### Planned
 
@@ -74,7 +78,8 @@
 
 ## Screenshots
 
-*Coming soon — the Session View shows a dark Ableton-style grid with transport bar, track headers, scene labels, mixer strips, and waveform thumbnails.*
+![Y.A.W.N v0.1 — Session View with device chain panel](images/yawn_v.0.1.png)
+*Session View showing the clip grid, mixer, and device chain panel with Arpeggiator → Subtractive Synth → Filter → Oscilloscope → EQ → Spectrum Analyzer.*
 
 ## Tech Stack
 
@@ -230,7 +235,9 @@ yawn/
 │   │   ├── Compressor.h        # Dynamics compressor
 │   │   ├── Filter.h            # Multi-mode SVF filter
 │   │   ├── Chorus.h            # Modulated delay chorus
-│   │   └── Distortion.h        # Waveshaper distortion
+│   │   ├── Distortion.h        # Waveshaper distortion
+│   │   ├── Oscilloscope.h      # Real-time waveform visualizer
+│   │   └── SpectrumAnalyzer.h  # FFT-based spectrum display
 │   ├── instruments/
 │   │   ├── Instrument.h        # Instrument base class
 │   │   ├── Envelope.h          # ADSR envelope generator
@@ -259,7 +266,8 @@ yawn/
 │   │   ├── Renderer.h/cpp      # Batched 2D OpenGL renderer
 │   │   ├── SessionView.h/cpp   # Clip grid, transport bar, waveforms
 │   │   ├── MixerView.h/cpp     # Interactive mixer channel strips
-│   │   ├── DetailPanel.h       # Device parameter knob panel
+│   │   ├── DetailPanel.h       # Device chain panel (signal-flow order)
+│   │   ├── ConfirmDialog.h    # Modal confirmation dialog
 │   │   ├── MenuBar.h           # Application menu bar
 │   │   ├── ContextMenu.h       # Right-click popup menus with submenus
 │   │   ├── VirtualKeyboard.h   # QWERTY-to-MIDI keyboard
@@ -270,18 +278,18 @@ yawn/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 282 unit tests (Google Test)
+├── tests/                      # 293 unit tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
 │   ├── test_ClipEngine.cpp
-│   ├── test_DetailPanel.cpp    # Detail panel tests (8 tests)
+│   ├── test_DetailPanel.cpp    # Device chain panel tests (10 tests)
 │   ├── test_Effects.cpp        # Audio effect tests (29 tests)
 │   ├── test_FileIO.cpp
 │   ├── test_Instruments.cpp    # Instrument tests (32 tests)
 │   ├── test_MessageQueue.cpp
 │   ├── test_Metronome.cpp      # Metronome tests (9 tests)
-│   ├── test_MidiEffects.cpp    # MIDI effect tests (26 tests)
+│   ├── test_MidiEffects.cpp    # MIDI effect tests (27 tests)
 │   ├── test_MidiEngine.cpp
 │   ├── test_Project.cpp
 │   ├── test_RingBuffer.cpp
@@ -300,7 +308,7 @@ yawn/
 | 5. Mixer & Routing | ✅ Done | 64-track mixer, 8 send/return buses, master, metering |
 | 6. MIDI Engine | ✅ Done | MIDI 2.0-res internals, RtMidi I/O, MPE zones, MIDI clips |
 | 7. Metronome | ✅ Done | Synthesized click track, beat-synced, configurable |
-| 8. Audio Effects | ✅ Done | 7 built-in effects, effect chains, 3-point insert |
+| 8. Audio Effects | ✅ Done | 9 built-in effects (+ 2 visualizers), effect chains, 3-point insert |
 | 9. Native Instruments | ✅ Done | 5 instruments (SubSynth, FM, Sampler, InstrumentRack, DrumRack) |
 | 10. MIDI Effects | ✅ Done | 7 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
