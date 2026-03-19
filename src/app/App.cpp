@@ -293,6 +293,11 @@ void App::processEvents() {
 
                 // InputState hover + drag (computes dx/dy internally)
                 m_inputState.onMouseMove(mx, my);
+
+                // Forward drag to mixer if it's dragging
+                if (m_showMixer) {
+                    m_mixerView.handleDrag(mx, my);
+                }
                 break;
             }
 

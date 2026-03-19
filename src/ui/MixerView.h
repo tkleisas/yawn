@@ -66,7 +66,9 @@ private:
     MeterData m_masterMeter = {};
 
     // Dragging state
+    enum class DragType { None, Fader, Pan };
     bool m_dragging = false;
+    DragType m_dragType = DragType::None;
     int m_dragTarget = -1;   // track index, or special values for returns/master
     float m_dragStartY = 0;
     float m_dragStartValue = 0;

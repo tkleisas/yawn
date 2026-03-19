@@ -319,38 +319,181 @@ bool MixerView::handleClick(float mx, float my, bool isRightClick) {
     if (my < m_viewY || my > m_viewY + m_viewH) return false;
 
     float gridX = m_viewX + Theme::kSceneLabelWidth;
-    float btnY = m_viewY + 2 + 24;
 
-    // Check track strips — aligned to session grid columns
+    // --- Track channel strips ---
     for (int t = 0; t < m_project->numTracks(); ++t) {
         float sx = gridX + t * Theme::kTrackWidth;
-        if (mx >= sx && mx < sx + Theme::kTrackWidth) {
-            // Mute button
-            if (my >= btnY && my < btnY + kButtonHeight) {
-                if (mx < sx + 4 + kButtonWidth) {
-                    bool cur = m_engine->mixer().trackChannel(t).muted;
-                    m_engine->sendCommand(audio::SetTrackMuteMsg{t, !cur});
-                    return true;
-                }
-                if (mx < sx + 4 + kButtonWidth * 2 + 2) {
-                    bool cur = m_engine->mixer().trackChannel(t).soloed;
-                    m_engine->sendCommand(audio::SetTrackSoloMsg{t, !cur});
-                    return true;
-                }
+        if (mx < sx || mx >= sx + Theme::kTrackWidth) continue;
+
+        float ix = sx + Theme::kSlotPadding;
+        float iw = Theme::kTrackWidth - Theme::kSlotPadding * 2;
+
+        // Mute / Solo buttons: y = m_viewY + 2 + 30
+        float btnY = m_viewY + 2 + 30;
+        float btnW = (iw - 12) * 0.5f;
+        if (btnW > kButtonWidth) btnW = kButtonWidth;
+
+        if (my >= btnY && my < btnY + kButtonHeight) {
+            if (mx >= ix + 4 && mx < ix + 4 + btnW) {
+                bool cur = m_engine->mixer().trackChannel(t).muted;
+                m_engine->sendCommand(audio::SetTrackMuteMsg{t, !cur});
+                return true;
+            }
+            if (mx >= ix + 4 + btnW + 2 && mx < ix + 4 + 2 * btnW + 2) {
+                bool cur = m_engine->mixer().trackChannel(t).soloed;
+                m_engine->sendCommand(audio::SetTrackSoloMsg{t, !cur});
+                return true;
             }
         }
+
+        // Pan bar: y = m_viewY + 60, h = 8
+        float panY = m_viewY + 60;
+        float panW = iw - 8;
+        if (my >= panY && my < panY + 8 && mx >= ix + 4 && mx < ix + 4 + panW) {
+            if (isRightClick) {
+                m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f});
+                return true;
+            }
+            m_dragging = true;
+            m_dragType = DragType::Pan;
+            m_dragTarget = t;
+            m_dragStartY = mx;
+            m_dragStartValue = m_engine->mixer().trackChannel(t).pan;
+            return true;
+        }
+
+        // Fader area: y = m_viewY + 84, extends to m_viewY + m_viewH - 2 - 22
+        float faderY = m_viewY + 84;
+        float faderBottom = m_viewY + m_viewH - 2 - 22;
+        if (my >= faderY && my < faderBottom && mx >= ix + 4 && mx < ix + 4 + kFaderWidth) {
+            if (isRightClick) {
+                m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
+                return true;
+            }
+            m_dragging = true;
+            m_dragType = DragType::Fader;
+            m_dragTarget = t;
+            m_dragStartY = my;
+            m_dragStartValue = m_engine->mixer().trackChannel(t).volume;
+            return true;
+        }
+    }
+
+    // --- Return bus strips ---
+    float afterTracks = gridX + m_project->numTracks() * Theme::kTrackWidth;
+    float retX = afterTracks + kSeparatorWidth + 4;
+    float retStripW = 70.0f;
+
+    for (int r = 0; r < kMaxReturnBuses; ++r) {
+        float rx = retX + r * (retStripW + kStripPadding);
+        if (mx < rx || mx >= rx + retStripW) continue;
+
+        const auto& rb = m_engine->mixer().returnBus(r);
+
+        // Mute button: y = m_viewY + 2 + 26
+        float muteY = m_viewY + 2 + 26;
+        if (my >= muteY && my < muteY + kButtonHeight && mx >= rx + 4 && mx < rx + 4 + kButtonWidth) {
+            m_engine->sendCommand(audio::SetReturnMuteMsg{r, !rb.muted});
+            return true;
+        }
+
+        // Pan bar: y = m_viewY + 56, h = 8
+        float panY = m_viewY + 56;
+        float panW = retStripW - 8;
+        if (my >= panY && my < panY + 8 && mx >= rx + 4 && mx < rx + 4 + panW) {
+            if (isRightClick) {
+                m_engine->sendCommand(audio::SetReturnPanMsg{r, 0.0f});
+                return true;
+            }
+            m_dragging = true;
+            m_dragType = DragType::Pan;
+            m_dragTarget = kDragReturn0 + r;
+            m_dragStartY = mx;
+            m_dragStartValue = rb.pan;
+            return true;
+        }
+
+        // Fader: y = m_viewY + 74
+        float faderY = m_viewY + 74;
+        float faderBottom = m_viewY + m_viewH - 2 - 22;
+        if (my >= faderY && my < faderBottom && mx >= rx + 4 && mx < rx + 4 + kFaderWidth) {
+            if (isRightClick) {
+                m_engine->sendCommand(audio::SetReturnVolumeMsg{r, 1.0f});
+                return true;
+            }
+            m_dragging = true;
+            m_dragType = DragType::Fader;
+            m_dragTarget = kDragReturn0 + r;
+            m_dragStartY = my;
+            m_dragStartValue = rb.volume;
+            return true;
+        }
+    }
+
+    // --- Master strip ---
+    float masterX = retX + kMaxReturnBuses * (retStripW + kStripPadding) + kSeparatorWidth + 4;
+    float masterFaderY = m_viewY + 2 + 30;
+    float masterFaderBottom = m_viewY + m_viewH - 2 - 22;
+
+    if (mx >= masterX + 4 && mx < masterX + 4 + kFaderWidth + 2 &&
+        my >= masterFaderY && my < masterFaderBottom) {
+        if (isRightClick) {
+            m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
+            return true;
+        }
+        m_dragging = true;
+        m_dragType = DragType::Fader;
+        m_dragTarget = kDragMaster;
+        m_dragStartY = my;
+        m_dragStartValue = m_engine->mixer().master().volume;
+        return true;
     }
 
     return false;
 }
 
 bool MixerView::handleDrag(float mx, float my) {
-    (void)mx; (void)my;
+    if (!m_dragging || !m_engine) return false;
+
+    if (m_dragType == DragType::Fader) {
+        float faderH = m_viewH - 4 - 84 - 22;
+        if (faderH < 20) faderH = 20;
+        float deltaY = m_dragStartY - my;  // up = increase volume
+        float deltaVol = (deltaY / faderH) * 2.0f;
+        float newVol = std::clamp(m_dragStartValue + deltaVol, 0.0f, 2.0f);
+
+        if (m_dragTarget >= 0) {
+            m_engine->sendCommand(audio::SetTrackVolumeMsg{m_dragTarget, newVol});
+        } else if (m_dragTarget == kDragMaster) {
+            m_engine->sendCommand(audio::SetMasterVolumeMsg{newVol});
+        } else if (m_dragTarget <= kDragReturn0) {
+            int bus = m_dragTarget - kDragReturn0;
+            m_engine->sendCommand(audio::SetReturnVolumeMsg{bus, newVol});
+        }
+        return true;
+    }
+
+    if (m_dragType == DragType::Pan) {
+        float panW = 100.0f;
+        float deltaX = mx - m_dragStartY;  // m_dragStartY stores start X for pan
+        float deltaPan = (deltaX / panW) * 2.0f;
+        float newPan = std::clamp(m_dragStartValue + deltaPan, -1.0f, 1.0f);
+
+        if (m_dragTarget >= 0) {
+            m_engine->sendCommand(audio::SetTrackPanMsg{m_dragTarget, newPan});
+        } else if (m_dragTarget <= kDragReturn0) {
+            int bus = m_dragTarget - kDragReturn0;
+            m_engine->sendCommand(audio::SetReturnPanMsg{bus, newPan});
+        }
+        return true;
+    }
+
     return false;
 }
 
 void MixerView::handleRelease() {
     m_dragging = false;
+    m_dragType = DragType::None;
     m_dragTarget = -1;
 }
 
