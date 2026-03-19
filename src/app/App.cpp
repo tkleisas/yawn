@@ -505,12 +505,15 @@ void App::processEvents() {
                 if (m_inputState.onMouseDown(mx, my, btn))
                     break;
 
-                // Detail panel (at the very bottom)
+                // Detail panel — use same layout math as render()
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 if (m_showDetailPanel) {
-                    int wh = m_mainWindow.getHeight();
-                    float detailH = m_detailPanel.height();
-                    float detailY = static_cast<float>(wh) - detailH;
+                    float menuH2 = m_menuBar.height();
+                    float mixerH2 = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
+                    float detailH2 = m_detailPanel.height();
+                    float avail2 = static_cast<float>(m_mainWindow.getHeight()) - menuH2 - mixerH2 - detailH2;
+                    float sessionH2 = std::min(m_sessionView.preferredHeight(), std::max(100.0f, avail2));
+                    float detailY = menuH2 + sessionH2 + mixerH2;
 
                     if (rightClick) {
                         if (m_detailPanel.handleRightClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth())))

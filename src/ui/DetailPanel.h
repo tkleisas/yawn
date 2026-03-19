@@ -25,13 +25,14 @@ namespace ui {
 
 class DetailPanel {
 public:
-    static constexpr float kPanelHeight    = 160.0f;
-    static constexpr float kCollapsedHeight = 24.0f;
-    static constexpr float kKnobSize       = 48.0f;
-    static constexpr float kKnobSpacing    = 8.0f;
-    static constexpr float kRowHeight      = 80.0f;
-    static constexpr float kHeaderHeight   = 24.0f;
-    static constexpr float kLabelHeight    = 14.0f;
+    static constexpr float kPanelHeight    = 220.0f;
+    static constexpr float kCollapsedHeight = 28.0f;
+    static constexpr float kKnobSize       = 56.0f;
+    static constexpr float kKnobSpacing    = 14.0f;
+    static constexpr float kRowHeight      = 90.0f;
+    static constexpr float kHeaderHeight   = 28.0f;
+    static constexpr float kLabelHeight    = 16.0f;
+    static constexpr float kRowPadding     = 6.0f;
 
     bool isOpen() const { return m_open; }
     void setOpen(bool open) { m_open = open; }
@@ -79,14 +80,14 @@ public:
         renderer.drawRect(x, y, width, kHeaderHeight, Color{35, 35, 40, 255});
         renderer.drawRect(x, y, width, 1, Color{55, 55, 60, 255});
 
-        float scale = 12.0f / Theme::kFontSize;
+        float headerScale = 14.0f / Theme::kFontSize;
 
         // Toggle arrow
         const char* arrow = m_open ? "▼" : "▶";
-        font.drawText(renderer, arrow, x + 6, y + 4, scale, Theme::textSecondary);
+        font.drawText(renderer, arrow, x + 8, y + 6, headerScale, Theme::textSecondary);
 
         // Title
-        font.drawText(renderer, title(), x + 22, y + 4, scale, Theme::textPrimary);
+        font.drawText(renderer, title(), x + 26, y + 6, headerScale, Theme::textPrimary);
 
         if (!m_open) return;
 
@@ -96,21 +97,30 @@ public:
         renderer.drawRect(x, bodyY, width, bodyH, Color{32, 32, 36, 255});
 
         if (m_params.empty()) {
-            font.drawText(renderer, "No parameters", x + 20, bodyY + 20, scale,
+            font.drawText(renderer, "No parameters", x + 20, bodyY + 20, headerScale,
                           Theme::textDim);
             return;
         }
 
-        // Render parameter knobs in a row
-        float knobX = x + 12 - m_scrollX;
-        float knobY = bodyY + 8;
+        // Multi-row knob layout
+        float cellW = kKnobSize + kKnobSpacing;
+        int knobsPerRow = std::max(1, (int)((width - 24.0f) / cellW));
+        float startX = x + 12;
 
-        for (auto& p : m_params) {
-            // Skip if off-screen
-            if (knobX + kKnobSize + kKnobSpacing < x || knobX > x + width) {
-                knobX += kKnobSize + kKnobSpacing;
+        for (int i = 0; i < (int)m_params.size(); ++i) {
+            auto& p = m_params[i];
+            int row = i / knobsPerRow;
+            int col = i % knobsPerRow;
+
+            float knobX = startX + col * cellW - m_scrollX;
+            float knobY = bodyY + kRowPadding + row * kRowHeight;
+
+            // Skip if off-screen vertically
+            if (knobY + kRowHeight < bodyY || knobY > y + h)
                 continue;
-            }
+            // Skip if off-screen horizontally
+            if (knobX + kKnobSize < x || knobX > x + width)
+                continue;
 
             float value = currentValue(p.index);
             float norm = (value - p.minVal) / (p.maxVal - p.minVal);
@@ -122,7 +132,7 @@ public:
             float r = kKnobSize * 0.35f;
 
             // Background arc
-            renderArc(renderer, cx, cy, r, 0.0f, 1.0f, Color{40, 40, 45, 255});
+            renderArc(renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
 
             // Value arc
             Color arcCol = (p.index == m_activeParam)
@@ -136,28 +146,26 @@ public:
 
             // Indicator dot
             float angle = (float)(-M_PI * 0.75 + norm * M_PI * 1.5);
-            float dotX = cx + std::cos(angle) * r * 0.65f - 1.5f;
-            float dotY = cy + std::sin(angle) * r * 0.65f - 1.5f;
-            renderer.drawRect(dotX, dotY, 3, 3, Theme::textPrimary);
+            float dotX = cx + std::cos(angle) * r * 0.65f - 2.0f;
+            float dotY = cy + std::sin(angle) * r * 0.65f - 2.0f;
+            renderer.drawRect(dotX, dotY, 4, 4, Theme::textPrimary);
 
             // Value text
             char valBuf[32];
             formatValue(p, value, valBuf, sizeof(valBuf));
-            float valScale = 10.0f / Theme::kFontSize;
+            float valScale = 12.0f / Theme::kFontSize;
             float valW = font.textWidth(valBuf, valScale);
             font.drawText(renderer, valBuf,
                           knobX + (kKnobSize - valW) * 0.5f,
-                          knobY + kKnobSize * 0.75f, valScale, Theme::textSecondary);
+                          knobY + kKnobSize * 0.72f, valScale, Theme::textSecondary);
 
             // Parameter name below
-            float nameScale = 10.0f / Theme::kFontSize;
+            float nameScale = 12.0f / Theme::kFontSize;
             float nameW = font.textWidth(p.name.c_str(), nameScale);
             float maxLabelW = kKnobSize + kKnobSpacing - 2;
             float tx = knobX + (kKnobSize - std::min(nameW, maxLabelW)) * 0.5f;
             font.drawText(renderer, p.name.c_str(), tx,
-                          knobY + kKnobSize + 2, nameScale, Theme::textDim);
-
-            knobX += kKnobSize + kKnobSpacing;
+                          knobY + kKnobSize + 4, nameScale, Theme::textDim);
         }
 #endif
     }
@@ -175,21 +183,27 @@ public:
 
         if (!m_open || m_params.empty()) return false;
 
-        // Find which knob was clicked
+        // Multi-row hit test
         float bodyY = panelY + kHeaderHeight;
-        float knobX = panelX + 12 - m_scrollX;
-        float knobY = bodyY + 8;
+        float cellW = kKnobSize + kKnobSpacing;
+        int knobsPerRow = std::max(1, (int)((panelW - 24.0f) / cellW));
+        float startX = panelX + 12;
 
-        for (auto& p : m_params) {
+        for (int i = 0; i < (int)m_params.size(); ++i) {
+            auto& p = m_params[i];
+            int row = i / knobsPerRow;
+            int col = i % knobsPerRow;
+
+            float knobX = startX + col * cellW - m_scrollX;
+            float knobY = bodyY + kRowPadding + row * kRowHeight;
+
             if (mx >= knobX && mx < knobX + kKnobSize &&
                 my >= knobY && my < knobY + kKnobSize + kLabelHeight) {
 
                 if (p.isBoolean) {
-                    // Toggle boolean parameters
                     float cur = currentValue(p.index);
                     setParamValue(p.index, cur > 0.5f ? 0.0f : 1.0f);
                 } else {
-                    // Start drag
                     m_dragging = true;
                     m_activeParam = p.index;
                     m_dragStartY = my;
@@ -197,7 +211,6 @@ public:
                 }
                 return true;
             }
-            knobX += kKnobSize + kKnobSpacing;
         }
 
         return true; // consume click in panel body
@@ -232,16 +245,23 @@ public:
         if (mx < panelX || mx > panelX + panelW) return false;
 
         float bodyY = panelY + kHeaderHeight;
-        float knobX = panelX + 12 - m_scrollX;
-        float knobY = bodyY + 8;
+        float cellW = kKnobSize + kKnobSpacing;
+        int knobsPerRow = std::max(1, (int)((panelW - 24.0f) / cellW));
+        float startX = panelX + 12;
 
-        for (auto& p : m_params) {
+        for (int i = 0; i < (int)m_params.size(); ++i) {
+            auto& p = m_params[i];
+            int row = i / knobsPerRow;
+            int col = i % knobsPerRow;
+
+            float knobX = startX + col * cellW - m_scrollX;
+            float knobY = bodyY + kRowPadding + row * kRowHeight;
+
             if (mx >= knobX && mx < knobX + kKnobSize &&
                 my >= knobY && my < knobY + kKnobSize + kLabelHeight) {
                 setParamValue(p.index, p.defaultVal);
                 return true;
             }
-            knobX += kKnobSize + kKnobSpacing;
         }
         return false;
     }
@@ -322,15 +342,15 @@ private:
                    [[maybe_unused]] float startNorm, [[maybe_unused]] float endNorm,
                    [[maybe_unused]] Color color) {
 #ifndef YAWN_TEST_BUILD
-        const int segs = 16;
+        const int segs = 24;
         float startAngle = (float)(-M_PI * 0.75 + startNorm * M_PI * 1.5);
         float endAngle   = (float)(-M_PI * 0.75 + endNorm   * M_PI * 1.5);
         float step = (endAngle - startAngle) / segs;
         for (int i = 0; i < segs; ++i) {
             float a = startAngle + step * (i + 0.5f);
-            float px = cx + std::cos(a) * r - 1.5f;
-            float py = cy + std::sin(a) * r - 1.5f;
-            renderer.drawRect(px, py, 3, 3, color);
+            float px = cx + std::cos(a) * r - 2.0f;
+            float py = cy + std::sin(a) * r - 2.0f;
+            renderer.drawRect(px, py, 4, 4, color);
         }
 #endif
     }
