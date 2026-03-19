@@ -34,7 +34,6 @@ public:
     static constexpr float kHeaderHeight   = 28.0f;
     static constexpr float kLabelHeight    = 16.0f;
     static constexpr float kRowPadding     = 6.0f;
-    static constexpr int   kMaxKnobsPerRow = 12;
 
     bool isOpen() const { return m_open; }
     void setOpen(bool open) { m_open = open; }
@@ -60,9 +59,15 @@ public:
         rebuildParams();
     }
 
+    // Set a visualizer effect to render alongside instrument/effect params
+    void setVisualizer(effects::AudioEffect* viz) {
+        m_visualizer = viz;
+    }
+
     void clear() {
         m_instrument = nullptr;
         m_effect = nullptr;
+        m_visualizer = nullptr;
         m_params.clear();
     }
 
@@ -100,75 +105,77 @@ public:
         float bodyH = h - kHeaderHeight;
         renderer.drawRect(x, bodyY, width, bodyH, Color{32, 32, 36, 255});
 
-        if (m_params.empty() && !m_effect) {
+        if (m_params.empty() && !m_effect && !m_visualizer) {
             font.drawText(renderer, "No parameters", x + 20, bodyY + 20, headerScale,
                           Theme::textDim);
             return;
         }
 
-        // Visualizer effects get a display area + knobs side by side
+        // Determine which visualizer to render
+        effects::AudioEffect* viz = m_visualizer;
+        if (!viz && m_effect && m_effect->isVisualizer()) viz = m_effect;
+
+        // Visualizer display on the left side
         float knobAreaX = x;
-        if (m_effect && m_effect->isVisualizer()) {
-            float vizW = std::min(width * 0.65f, 600.0f);
+        float knobAreaW = width;
+        if (viz) {
+            float vizW = std::min(width * 0.5f, 500.0f);
             float vizH = bodyH - 8;
-            float vizX = x + 8;
+            float vizX = x + 4;
             float vizY = bodyY + 4;
 
-            // Visualization background
             renderer.drawRect(vizX, vizY, vizW, vizH, Color{18, 18, 22, 255});
             renderer.drawRectOutline(vizX, vizY, vizW, vizH, Color{50, 50, 60, 255});
 
-            const float* data = m_effect->displayData();
-            int dataSize = m_effect->displaySize();
+            const float* data = viz->displayData();
+            int dataSize = viz->displaySize();
 
             if (data && dataSize > 0) {
-                const char* vizType = m_effect->visualizerType();
+                const char* vizType = viz->visualizerType();
                 if (std::strcmp(vizType, "oscilloscope") == 0) {
-                    renderOscilloscope(renderer, data, dataSize, vizX, vizY, vizW, vizH);
+                    renderOscilloscope(renderer, data, dataSize,
+                                       vizX + 2, vizY + 2, vizW - 4, vizH - 4);
                 } else if (std::strcmp(vizType, "spectrum") == 0) {
-                    renderSpectrum(renderer, data, dataSize, vizX, vizY, vizW, vizH);
+                    renderSpectrum(renderer, data, dataSize,
+                                   vizX + 2, vizY + 2, vizW - 4, vizH - 4);
                 }
             }
 
-            knobAreaX = vizX + vizW + 12;
+            knobAreaX = vizX + vizW + 8;
+            knobAreaW = (x + width) - knobAreaX;
         }
 
         if (m_params.empty()) return;
 
-        // Multi-row knob layout (to the right of viz if present)
-        float knobAreaW = (x + width) - knobAreaX;
+        // Clip knob area so knobs don't bleed outside
+        renderer.pushClip(knobAreaX, bodyY, knobAreaW, bodyH);
+
+        // Single-row horizontally scrollable knob layout
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((knobAreaW - 24.0f) / cellW)));
-        float startX = knobAreaX + 12;
+        float totalW = (int)m_params.size() * cellW;
+        float maxScroll = std::max(0.0f, totalW - knobAreaW + 12);
+        m_scrollX = std::clamp(m_scrollX, 0.0f, maxScroll);
+
+        float startX = knobAreaX + 6 - m_scrollX;
+        float knobY = bodyY + kRowPadding;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
             auto& p = m_params[i];
-            int row = i / knobsPerRow;
-            int col = i % knobsPerRow;
+            float knobX = startX + i * cellW;
 
-            float knobX = startX + col * cellW - m_scrollX;
-            float knobY = bodyY + kRowPadding + row * kRowHeight;
-
-            // Skip if off-screen vertically
-            if (knobY + kRowHeight < bodyY || knobY > y + h)
-                continue;
-            // Skip if off-screen horizontally
-            if (knobX + kKnobSize < x || knobX > x + width)
-                continue;
+            // Only render if visible
+            if (knobX + kKnobSize < knobAreaX || knobX > knobAreaX + knobAreaW) continue;
 
             float value = currentValue(p.index);
             float norm = (value - p.minVal) / (p.maxVal - p.minVal);
             norm = std::clamp(norm, 0.0f, 1.0f);
 
-            // Knob background
             float cx = knobX + kKnobSize * 0.5f;
             float cy = knobY + kKnobSize * 0.4f;
             float r = kKnobSize * 0.35f;
 
-            // Background arc
             renderArc(renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
 
-            // Value arc
             Color arcCol = (p.index == m_activeParam)
                 ? Color{120, 200, 255, 255}
                 : Color{80, 160, 210, 255};
@@ -178,13 +185,11 @@ public:
             }
             renderArc(renderer, cx, cy, r, 0.0f, norm, arcCol);
 
-            // Indicator dot
             float angle = (float)(-M_PI * 0.75 + norm * M_PI * 1.5);
             float dotX = cx + std::cos(angle) * r * 0.65f - 2.0f;
             float dotY = cy + std::sin(angle) * r * 0.65f - 2.0f;
             renderer.drawRect(dotX, dotY, 4, 4, Theme::textPrimary);
 
-            // Value text
             char valBuf[32];
             formatValue(p, value, valBuf, sizeof(valBuf));
             float valScale = 12.0f / Theme::kFontSize;
@@ -193,7 +198,6 @@ public:
                           knobX + (kKnobSize - valW) * 0.5f,
                           knobY + kKnobSize * 0.72f, valScale, Theme::textSecondary);
 
-            // Parameter name below
             float nameScale = 12.0f / Theme::kFontSize;
             float nameW = font.textWidth(p.name.c_str(), nameScale);
             float maxLabelW = kKnobSize + kKnobSpacing - 2;
@@ -201,6 +205,22 @@ public:
             font.drawText(renderer, p.name.c_str(), tx,
                           knobY + kKnobSize + 4, nameScale, Theme::textDim);
         }
+
+        // Scroll indicators
+        if (m_scrollX > 0) {
+            // Left fade indicator
+            renderer.drawRect(knobAreaX, bodyY, 8, bodyH, Color{32, 32, 36, 200});
+            font.drawText(renderer, "<", knobAreaX + 1, bodyY + bodyH * 0.4f,
+                          headerScale, Theme::textDim);
+        }
+        if (m_scrollX < maxScroll) {
+            float rightX = knobAreaX + knobAreaW - 8;
+            renderer.drawRect(rightX, bodyY, 8, bodyH, Color{32, 32, 36, 200});
+            font.drawText(renderer, ">", rightX + 1, bodyY + bodyH * 0.4f,
+                          headerScale, Theme::textDim);
+        }
+
+        renderer.popClip();
 #endif
     }
 
@@ -217,19 +237,21 @@ public:
 
         if (!m_open || m_params.empty()) return false;
 
-        // Multi-row hit test
+        // Compute knob area (same logic as render)
+        float knobAreaX = panelX;
+        if (m_visualizer || (m_effect && m_effect->isVisualizer())) {
+            float vizW = std::min(panelW * 0.5f, 500.0f);
+            knobAreaX = panelX + 4 + vizW + 8;
+        }
+
         float bodyY = panelY + kHeaderHeight;
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((panelW - 24.0f) / cellW)));
-        float startX = panelX + 12;
+        float startX = knobAreaX + 6 - m_scrollX;
+        float knobY = bodyY + kRowPadding;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
             auto& p = m_params[i];
-            int row = i / knobsPerRow;
-            int col = i % knobsPerRow;
-
-            float knobX = startX + col * cellW - m_scrollX;
-            float knobY = bodyY + kRowPadding + row * kRowHeight;
+            float knobX = startX + i * cellW;
 
             if (mx >= knobX && mx < knobX + kKnobSize &&
                 my >= knobY && my < knobY + kKnobSize + kLabelHeight) {
@@ -278,18 +300,20 @@ public:
         if (!m_open || my < panelY + kHeaderHeight) return false;
         if (mx < panelX || mx > panelX + panelW) return false;
 
+        float knobAreaX = panelX;
+        if (m_visualizer || (m_effect && m_effect->isVisualizer())) {
+            float vizW = std::min(panelW * 0.5f, 500.0f);
+            knobAreaX = panelX + 4 + vizW + 8;
+        }
+
         float bodyY = panelY + kHeaderHeight;
         float cellW = kKnobSize + kKnobSpacing;
-        int knobsPerRow = std::min(kMaxKnobsPerRow, std::max(1, (int)((panelW - 24.0f) / cellW)));
-        float startX = panelX + 12;
+        float startX = knobAreaX + 6 - m_scrollX;
+        float knobY = bodyY + kRowPadding;
 
         for (int i = 0; i < (int)m_params.size(); ++i) {
             auto& p = m_params[i];
-            int row = i / knobsPerRow;
-            int col = i % knobsPerRow;
-
-            float knobX = startX + col * cellW - m_scrollX;
-            float knobY = bodyY + kRowPadding + row * kRowHeight;
+            float knobX = startX + i * cellW;
 
             if (mx >= knobX && mx < knobX + kKnobSize &&
                 my >= knobY && my < knobY + kKnobSize + kLabelHeight) {
@@ -298,6 +322,15 @@ public:
             }
         }
         return false;
+    }
+
+    // Horizontal scroll for knob area
+    void handleScroll(float dx, [[maybe_unused]] float dy) {
+        m_scrollX -= dx * 30.0f;
+        // Also support vertical scroll wheel for horizontal scrolling
+        if (std::abs(dx) < 0.01f)
+            m_scrollX -= dy * 30.0f;
+        m_scrollX = std::max(0.0f, m_scrollX);
     }
 
 private:
@@ -463,6 +496,7 @@ private:
 
     instruments::Instrument* m_instrument = nullptr;
     effects::AudioEffect*    m_effect = nullptr;
+    effects::AudioEffect*    m_visualizer = nullptr;
 
     std::vector<ParamEntry> m_params;
     float m_scrollX = 0;

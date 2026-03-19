@@ -241,6 +241,23 @@ void App::updateDetailForSelectedTrack() {
         return;
     }
 
+    // Scan effect chain for visualizer effects
+    auto& chain = m_audioEngine.mixer().trackEffects(m_selectedTrack);
+    effects::AudioEffect* vizEffect = nullptr;
+    effects::AudioEffect* firstNonVizEffect = nullptr;
+    for (int i = 0; i < chain.count(); ++i) {
+        auto* fx = chain.effectAt(i);
+        if (!fx) continue;
+        if (fx->isVisualizer() && !vizEffect) {
+            vizEffect = fx;
+        } else if (!fx->isVisualizer() && !firstNonVizEffect) {
+            firstNonVizEffect = fx;
+        }
+    }
+
+    // Always set visualizer if found
+    m_detailPanel.setVisualizer(vizEffect);
+
     // Show instrument if available (for MIDI tracks)
     auto* inst = m_audioEngine.instrument(m_selectedTrack);
     if (inst) {
@@ -248,13 +265,16 @@ void App::updateDetailForSelectedTrack() {
         return;
     }
 
-    // Show first audio effect if available
-    auto& chain = m_audioEngine.mixer().trackEffects(m_selectedTrack);
-    for (int i = 0; i < chain.count(); ++i) {
-        if (chain.effectAt(i)) {
-            m_detailPanel.showEffect(chain.effectAt(i));
-            return;
-        }
+    // Show first non-visualizer audio effect if available
+    if (firstNonVizEffect) {
+        m_detailPanel.showEffect(firstNonVizEffect);
+        return;
+    }
+
+    // Show the visualizer effect itself if nothing else
+    if (vizEffect) {
+        m_detailPanel.showEffect(vizEffect);
+        return;
     }
 
     m_detailPanel.clear();
@@ -592,7 +612,11 @@ void App::processEvents() {
                 float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
                 float avail = static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH;
                 float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, avail));
-                if (m_lastMouseY >= menuH && m_lastMouseY < menuH + sessionH) {
+                float detailY = menuH + sessionH + mixerH;
+
+                if (m_showDetailPanel && m_lastMouseY >= detailY) {
+                    m_detailPanel.handleScroll(dx, dy);
+                } else if (m_lastMouseY >= menuH && m_lastMouseY < menuH + sessionH) {
                     m_sessionView.handleScroll(dx, dy);
                 }
                 break;
