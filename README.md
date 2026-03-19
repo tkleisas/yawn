@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Y.A.W.N</h1>
-<h3 align="center">Yet Another Audio Workstation New</h3>
+<h3 align="center">Yetanother Audio Workstation New</h3>
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
