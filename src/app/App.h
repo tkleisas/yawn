@@ -9,7 +9,8 @@
 #include "ui/panels/PianoRollPanel.h"
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
-#include "ui/ConfirmDialog.h"
+#include "ui/framework/AboutDialog.h"
+#include "ui/framework/ConfirmDialogWidget.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
 #include "ui/panels/MixerPanel.h"
@@ -73,8 +74,6 @@ private:
     ui::MenuBar m_menuBar;
     ui::VirtualKeyboard m_virtualKeyboard;
     ui::ContextMenu m_contextMenu;
-    ui::ConfirmDialog m_confirmDialog;
-    bool m_showAbout = false;
     ui::InputState m_inputState;
 
     // Widget tree for layout (replaces manual layout math in render/events)
@@ -84,6 +83,8 @@ private:
     ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
     ui::fw::MixerPanel*   m_mixerPanel   = nullptr;  // owned by unique_ptr below
     ui::fw::SessionPanel* m_sessionPanel = nullptr;  // owned by unique_ptr below
+    ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
+    ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
     ui::fw::UIContext m_uiContext;
 

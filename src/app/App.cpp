@@ -22,7 +22,6 @@
 #include "midi/MidiRandom.h"
 #include "midi/MidiPitch.h"
 #include "util/ProjectSerializer.h"
-#include "Version.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -113,7 +112,7 @@ void App::setupMenuBar() {
 
     // Help menu
     m_menuBar.addMenu("Help", {
-        {"About Y.A.W.N",     "",  [this]() { m_showAbout = true; }},
+        {"About Y.A.W.N",     "",  [this]() { m_aboutDialog->setVisible(true); }},
         {"Keyboard Shortcuts", "",  nullptr},
     });
 }
@@ -129,6 +128,8 @@ void App::buildWidgetTree() {
     auto mixerP   = std::make_unique<MixerPanel>();
     auto detailP  = std::make_unique<DetailPanelWidget>();
     auto pianoP   = std::make_unique<PianoRollPanel>();
+    auto aboutDlg = std::make_unique<AboutDialog>();
+    auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
 
     // Session view fills remaining space, min 100px
     sessionP->setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
@@ -139,6 +140,8 @@ void App::buildWidgetTree() {
     m_mixerPanel    = mixerP.get();
     m_detailPanel   = detailP.get();
     m_pianoRoll     = pianoP.get();
+    m_aboutDialog   = aboutDlg.get();
+    m_confirmDialog = confirmDlg.get();
 
     m_rootLayout->addChild(m_menuBarW);
     m_rootLayout->addChild(m_sessionPanel);
@@ -152,6 +155,8 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(mixerP));
     m_wrappers.push_back(std::move(detailP));
     m_wrappers.push_back(std::move(pianoP));
+    m_wrappers.push_back(std::move(aboutDlg));
+    m_wrappers.push_back(std::move(confirmDlg));
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
@@ -188,7 +193,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     items.push_back({"Set as Audio Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Audio) return;
-        m_confirmDialog.show(
+        m_confirmDialog->prompt(
             "Change track type? All devices will be removed.",
             [this, trackIndex]() {
                 m_audioEngine.midiEffectChain(trackIndex).clear();
@@ -203,7 +208,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     items.push_back({"Set as MIDI Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Midi) return;
-        m_confirmDialog.show(
+        m_confirmDialog->prompt(
             "Change track type? All devices will be removed.",
             [this, trackIndex]() {
                 m_audioEngine.midiEffectChain(trackIndex).clear();
@@ -488,13 +493,17 @@ void App::processEvents() {
                 bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
 
                 // Block keys when confirm dialog or about is open
-                if (m_confirmDialog.isOpen()) {
-                    if (event.key.key == SDLK_ESCAPE) m_confirmDialog.close();
+                if (m_confirmDialog->isOpen()) {
+                    if (event.key.key == SDLK_ESCAPE) m_confirmDialog->dismiss();
+                    if (event.key.key == SDLK_RETURN) {
+                        ui::fw::KeyEvent ke; ke.keyCode = 13;
+                        m_confirmDialog->onKeyDown(ke);
+                    }
                     break;
                 }
-                if (m_showAbout) {
+                if (m_aboutDialog->isVisible()) {
                     if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN)
-                        m_showAbout = false;
+                        m_aboutDialog->setVisible(false);
                     break;
                 }
 
@@ -654,26 +663,21 @@ void App::processEvents() {
                 int btn = event.button.button;
 
                 // Confirm dialog takes top priority (modal)
-                if (m_confirmDialog.isOpen()) {
-                    float sw = static_cast<float>(m_mainWindow.getWidth());
-                    float sh = static_cast<float>(m_mainWindow.getHeight());
-                    m_confirmDialog.handleClick(mx, my, sw, sh);
+                if (m_confirmDialog->isOpen()) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = ui::fw::MouseButton::Left;
+                    m_confirmDialog->onMouseDown(me);
                     break;
                 }
 
                 // About dialog (modal)
-                if (m_showAbout) {
-                    float sw = static_cast<float>(m_mainWindow.getWidth());
-                    float sh = static_cast<float>(m_mainWindow.getHeight());
-                    float dw = 480, dh = 220;
-                    float dx = (sw - dw) * 0.5f, dy = (sh - dh) * 0.5f;
-                    float btnH = 36;
-                    float btnHitW = 100;
-                    float btnX = dx + (dw - btnHitW) * 0.5f;
-                    float btnY = dy + dh - btnH - 14;
-                    if (mx >= btnX && mx < btnX + btnHitW && my >= btnY && my < btnY + btnH)
-                        m_showAbout = false;
-                    break;  // modal — consume click
+                if (m_aboutDialog->isVisible()) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = ui::fw::MouseButton::Left;
+                    m_aboutDialog->onMouseDown(me);
+                    break;
                 }
 
                 // Context menu takes priority when open
@@ -958,63 +962,21 @@ void App::render() {
     // Context menu (very top layer)
     m_contextMenu.render(m_renderer, m_font);
 
-    // Confirm dialog (topmost modal overlay)
-    m_confirmDialog.render(m_renderer, m_font,
-                           static_cast<float>(w), static_cast<float>(h));
-
-    // About dialog
-#ifndef YAWN_TEST_BUILD
-    if (m_showAbout) {
+    // Modal dialogs (rendered on top of everything)
+    {
         float sw = static_cast<float>(w);
         float sh = static_cast<float>(h);
-        float dw = 480, dh = 220;
-        float dx = (sw - dw) * 0.5f, dy = (sh - dh) * 0.5f;
+        ui::fw::Rect screenBounds{0, 0, sw, sh};
 
-        // Dimmed overlay
-        m_renderer.drawRect(0, 0, sw, sh, ui::Color{0, 0, 0, 140});
-        // Dialog
-        m_renderer.drawRect(dx, dy, dw, dh, ui::Color{45, 45, 52, 255});
-        m_renderer.drawRectOutline(dx, dy, dw, dh, ui::Color{75, 75, 85, 255});
-
-        float ts = 14.0f / ui::Theme::kFontSize;
-        float tsSmall = 11.0f / ui::Theme::kFontSize;
-        float lineH = 20.0f;
-        float textX = dx + 20;
-        float textY = dy + 24;
-
-        m_font.drawText(m_renderer, "Y.A.W.N", textX, textY, 18.0f / ui::Theme::kFontSize,
-                        ui::Color{100, 180, 255, 255});
-        textY += lineH + 4;
-        m_font.drawText(m_renderer, "Yet Another Audio Workstation New", textX, textY, tsSmall,
-                        ui::Theme::textSecondary);
-        textY += lineH;
-        m_font.drawText(m_renderer, "Version " YAWN_VERSION_STRING, textX, textY, ts,
-                        ui::Theme::textPrimary);
-        textY += lineH + 4;
-        m_font.drawText(m_renderer, "Made with AI-Sloptronic(TM) technology", textX, textY,
-                        tsSmall, ui::Color{180, 140, 255, 255});
-        textY += lineH;
-        m_font.drawText(m_renderer, "PM: Tasos Kleisas", textX, textY, tsSmall,
-                        ui::Theme::textSecondary);
-        textY += lineH;
-        m_font.drawText(m_renderer, "Chief Engineer: Claude (Anthropic)", textX, textY, tsSmall,
-                        ui::Theme::textSecondary);
-
-        // OK button
-        float btnScale = 13.0f / ui::Theme::kFontSize;
-        float textH = m_font.lineHeight(btnScale);
-        float okW = m_font.textWidth("OK", btnScale);
-        float btnPadX = 24.0f;
-        float btnW = okW + btnPadX * 2;
-        float btnH = 36;
-        float btnX = dx + (dw - btnW) * 0.5f;
-        float btnY = dy + dh - btnH - 14;
-        m_renderer.drawRect(btnX, btnY, btnW, btnH, ui::Color{60, 120, 200, 255});
-        float textOffY = (btnH - textH) * 0.5f;
-        m_font.drawText(m_renderer, "OK", btnX + (btnW - okW) * 0.5f, btnY + textOffY,
-                        btnScale, ui::Theme::textPrimary);
+        if (m_confirmDialog->isOpen()) {
+            m_confirmDialog->layout(screenBounds, m_uiContext);
+            m_confirmDialog->paint(m_uiContext);
+        }
+        if (m_aboutDialog->isVisible()) {
+            m_aboutDialog->layout(screenBounds, m_uiContext);
+            m_aboutDialog->paint(m_uiContext);
+        }
     }
-#endif
 
     m_renderer.endFrame();
 
@@ -1063,7 +1025,7 @@ void App::newProject() {
     };
 
     if (m_projectDirty) {
-        m_confirmDialog.show("Save changes before creating a new project?",
+        m_confirmDialog->prompt("Save changes before creating a new project?",
             [this, doNew]() {
                 if (!m_projectPath.empty()) {
                     doSaveProject(m_projectPath);
@@ -1084,7 +1046,7 @@ void App::openProject() {
     };
 
     if (m_projectDirty) {
-        m_confirmDialog.show("Save changes before opening another project?",
+        m_confirmDialog->prompt("Save changes before opening another project?",
             [this, doOpen]() {
                 if (!m_projectPath.empty()) {
                     doSaveProject(m_projectPath);
