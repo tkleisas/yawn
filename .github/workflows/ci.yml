@@ -25,6 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -39,13 +44,13 @@ jobs:
             libxcursor-dev \
             libxi-dev \
             libxinerama-dev \
+            libxss-dev \
             libwayland-dev \
             libxkbcommon-dev \
             libdbus-1-dev \
             python3-jinja2
 
-      - name: Install Python dependencies (Windows)
-        if: runner.os == 'Windows'
+      - name: Install Python dependencies
         run: pip install jinja2
 
       - name: Configure
