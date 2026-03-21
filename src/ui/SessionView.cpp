@@ -563,6 +563,26 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick, int* select
     return false;
 }
 
+bool SessionView::getSlotAt(float mx, float my, int& trackOut, int& sceneOut) const {
+    if (!m_project) return false;
+    float gridX = m_viewX + Theme::kSceneLabelWidth;
+    float gridY = m_viewY + Theme::kTransportBarHeight + Theme::kTrackHeaderHeight;
+
+    if (mx < gridX || my < gridY) return false;
+
+    float contentMX = mx + m_scrollX;
+    float contentMY = my + m_scrollY;
+    int track = static_cast<int>((contentMX - gridX) / Theme::kTrackWidth);
+    int scene = static_cast<int>((contentMY - gridY) / Theme::kClipSlotHeight);
+
+    if (track < 0 || track >= m_project->numTracks()) return false;
+    if (scene < 0 || scene >= m_project->numScenes()) return false;
+
+    trackOut = track;
+    sceneOut = scene;
+    return true;
+}
+
 void SessionView::handleScroll(float dx, float dy) {
     if (!m_project) return;
 

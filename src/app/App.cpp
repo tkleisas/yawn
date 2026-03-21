@@ -304,6 +304,7 @@ bool App::init() {
     m_sessionView.init(&m_project, &m_audioEngine);
     m_mixerView.init(&m_project, &m_audioEngine);
     m_virtualKeyboard.init(&m_audioEngine);
+    m_pianoRoll.setTransport(&m_audioEngine.transport());
     setupMenuBar();
 
     audio::AudioEngineConfig audioConfig;
@@ -469,6 +470,16 @@ void App::processEvents() {
                         break;
                 }
 
+                // Piano roll keyboard shortcuts
+                if (m_pianoRoll.isOpen()) {
+                    if (m_pianoRoll.handleKeyDown(static_cast<int>(event.key.key))) {
+                        if (!m_pianoRoll.isOpen()) {
+                            // Piano roll was closed (Escape)
+                        }
+                        break;
+                    }
+                }
+
                 // Virtual keyboard (intercepts musical keys before shortcuts)
                 if (m_virtualKeyboard.onKeyDown(event.key.key))
                     break;
@@ -573,6 +584,11 @@ void App::processEvents() {
                 if (m_showDetailPanel) {
                     m_detailPanel.handleDrag(mx, my);
                 }
+
+                // Forward drag to piano roll
+                if (m_pianoRoll.isOpen()) {
+                    m_pianoRoll.handleDrag(mx, my);
+                }
                 break;
             }
 
@@ -652,6 +668,18 @@ void App::processEvents() {
                 // Clicking outside detail panel clears focus
                 m_detailPanel.setFocused(false);
 
+                // Piano roll click handling
+                if (m_pianoRoll.isOpen()) {
+                    if (rightClick) {
+                        if (m_pianoRoll.handleRightClick(mx, my)) break;
+                    } else {
+                        if (m_pianoRoll.handleClick(mx, my)) {
+                            markDirty();
+                            break;
+                        }
+                    }
+                }
+
                 // Right-click on track headers → open context menu
                 if (rightClick) {
                     float menuH = m_menuBar.height();
@@ -679,6 +707,32 @@ void App::processEvents() {
                         SDL_StartTextInput(m_mainWindow.getHandle());
                         break;
                     }
+                    // Double-click on a MIDI clip slot → open piano roll
+                    int dblTrack = -1, dblScene = -1;
+                    if (m_sessionView.getSlotAt(mx, my, dblTrack, dblScene)) {
+                        auto* slot = m_project.getSlot(dblTrack, dblScene);
+                        if (slot && slot->midiClip) {
+                            m_pianoRoll.setClip(slot->midiClip.get(), dblTrack);
+                            m_pianoRoll.setOpen(true);
+                            m_selectedTrack = dblTrack;
+                            break;
+                        }
+                        // Double-click empty slot on MIDI track → create new clip
+                        if (m_project.track(dblTrack).type == Track::Type::Midi &&
+                            (!slot || slot->empty())) {
+                            auto newClip = std::make_unique<midi::MidiClip>(
+                                m_audioEngine.transport().numerator() * 4.0);
+                            newClip->setName("MIDI Clip");
+                            newClip->setLoop(true);
+                            auto* clipPtr = newClip.get();
+                            m_project.setMidiClip(dblTrack, dblScene, std::move(newClip));
+                            m_pianoRoll.setClip(clipPtr, dblTrack);
+                            m_pianoRoll.setOpen(true);
+                            m_selectedTrack = dblTrack;
+                            markDirty();
+                            break;
+                        }
+                    }
                 }
                 // Stop text input if editing was cancelled by clicking elsewhere
                 bool wasEditing = m_sessionView.isEditing();
@@ -704,6 +758,7 @@ void App::processEvents() {
                 m_inputState.onMouseUp(mx, my, btn);
                 m_mixerView.handleRelease();
                 m_detailPanel.handleRelease();
+                m_pianoRoll.handleRelease();
                 break;
             }
 
@@ -719,11 +774,18 @@ void App::processEvents() {
                 float menuH = m_menuBar.height();
                 float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
                 float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
-                float avail = static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH;
+                float pianoH = m_pianoRoll.isOpen() ? m_pianoRoll.height() : 0.0f;
+                float avail = static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH - pianoH;
                 float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, avail));
                 float detailY = menuH + sessionH + mixerH;
+                float pianoY = detailY + detailH;
 
-                if (m_showDetailPanel && m_lastMouseY >= detailY) {
+                if (m_pianoRoll.isOpen() && m_lastMouseY >= pianoY) {
+                    auto mod = SDL_GetModState();
+                    bool ctrl  = (mod & SDL_KMOD_CTRL) != 0;
+                    bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+                    m_pianoRoll.handleScroll(dx, dy, ctrl, shift);
+                } else if (m_showDetailPanel && m_lastMouseY >= detailY) {
                     m_detailPanel.handleScroll(dx, dy);
                 } else if (m_lastMouseY >= menuH && m_lastMouseY < menuH + sessionH) {
                     m_sessionView.handleScroll(dx, dy);
@@ -824,14 +886,16 @@ void App::render() {
     float menuH = m_menuBar.height();
     float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
     float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
-    float bottomPanels = mixerH + detailH;
+    float pianoH = m_pianoRoll.isOpen() ? m_pianoRoll.height() : 0.0f;
+    float bottomPanels = mixerH + detailH + pianoH;
     float available = static_cast<float>(h) - menuH - bottomPanels;
     float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, available));
 
-    // Layout top-to-bottom: menu → session → mixer → detail panel
+    // Layout top-to-bottom: menu → session → mixer → detail panel → piano roll
     float sessionY = menuH;
     float mixerY   = sessionY + sessionH;
     float detailY  = mixerY + mixerH;
+    float pianoY   = detailY + detailH;
 
     // Session view (transport + track headers + clip grid)
     m_sessionView.render(m_renderer, m_font, 0, sessionY,
@@ -847,6 +911,12 @@ void App::render() {
     if (m_showDetailPanel) {
         m_detailPanel.render(m_renderer, m_font, 0, detailY,
                               static_cast<float>(w));
+    }
+
+    // Piano roll (below detail panel)
+    if (m_pianoRoll.isOpen()) {
+        m_pianoRoll.render(m_renderer, m_font, 0, pianoY,
+                            static_cast<float>(w));
     }
 
     // Menu bar (drawn last, on top of everything)
@@ -951,6 +1021,7 @@ void App::newProject() {
         m_projectDirty = false;
         m_selectedTrack = 0;
         m_showDetailPanel = false;
+        m_pianoRoll.close();
         updateWindowTitle();
         std::printf("[Project] New project created\n");
     };
@@ -1049,6 +1120,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
         m_projectDirty = false;
         m_selectedTrack = 0;
         m_showDetailPanel = false;
+        m_pianoRoll.close();
         updateWindowTitle();
         std::printf("[Project] Loaded: %s\n", projectDir.string().c_str());
     } else {

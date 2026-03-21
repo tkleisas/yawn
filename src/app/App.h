@@ -8,6 +8,7 @@
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
 #include "ui/DetailPanel.h"
+#include "ui/PianoRoll.h"
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
 #include "ui/ConfirmDialog.h"
@@ -69,6 +70,7 @@ private:
     ui::MixerView m_mixerView;
     ui::MenuBar m_menuBar;
     ui::DetailPanel m_detailPanel;
+    ui::PianoRoll m_pianoRoll;
     ui::VirtualKeyboard m_virtualKeyboard;
     ui::ContextMenu m_contextMenu;
     ui::ConfirmDialog m_confirmDialog;

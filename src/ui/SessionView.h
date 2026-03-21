@@ -66,6 +66,9 @@ public:
     float scrollX() const { return m_scrollX; }
     float scrollY() const { return m_scrollY; }
 
+    // Get the clip slot at a screen coordinate. Returns true if valid slot found.
+    bool getSlotAt(float mx, float my, int& trackOut, int& sceneOut) const;
+
     static constexpr int kVisibleScenes = 8;
 
 private:
