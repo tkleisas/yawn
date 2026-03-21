@@ -113,7 +113,8 @@ private:
     EditMode m_editMode = EditMode::None;
     std::string m_editBuffer;
     float m_bpmBoxX = 0, m_bpmBoxY = 0, m_bpmBoxW = 0, m_bpmBoxH = 0;
-    float m_tsBoxX = 0, m_tsBoxY = 0, m_tsBoxW = 0, m_tsBoxH = 0;
+    float m_tsNumBoxX = 0, m_tsNumBoxY = 0, m_tsNumBoxW = 0, m_tsNumBoxH = 0;
+    float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
 
     // Tap tempo state
     static constexpr int kTapHistorySize = 4;

@@ -498,12 +498,14 @@ void App::processEvents() {
                         }
                         break;
 
-                    case SDLK_UP: {
+                    case SDLK_KP_PLUS:
+                    case SDLK_EQUALS: {
                         double newBpm = m_audioEngine.transport().bpm() + 1.0;
                         m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::min(newBpm, 999.0)});
                         break;
                     }
-                    case SDLK_DOWN: {
+                    case SDLK_KP_MINUS:
+                    case SDLK_MINUS: {
                         double newBpm = m_audioEngine.transport().bpm() - 1.0;
                         m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::max(newBpm, 20.0)});
                         break;

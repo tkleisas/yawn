@@ -132,38 +132,75 @@ void SessionView::renderTransportBar(Renderer2D& renderer, Font& font,
         }
     }
 
-    // --- Time signature box (clickable/editable) ---
+    // --- Time signature: two separate boxes with / between ---
     float tsX = bpmX + bpmW + 50;
-    float tsW = 56;
-    m_tsBoxX = tsX; m_tsBoxY = boxY; m_tsBoxW = tsW; m_tsBoxH = boxH;
+    float tsBoxW = 30;
+    float slashGap = 4;
 
-    bool editingTs = (m_editMode == EditMode::TimeSigNum || m_editMode == EditMode::TimeSigDen);
-    Color tsBg = editingTs ? Color{60, 60, 80, 255} : Color{40, 40, 50, 255};
-    renderer.drawRect(tsX, boxY, tsW, boxH, tsBg);
-    renderer.drawRectOutline(tsX, boxY, tsW, boxH,
-                              editingTs ? Theme::transportAccent : Theme::clipSlotBorder);
+    // Numerator box
+    bool editingNum = (m_editMode == EditMode::TimeSigNum);
+    m_tsNumBoxX = tsX; m_tsNumBoxY = boxY; m_tsNumBoxW = tsBoxW; m_tsNumBoxH = boxH;
+    Color numBg = editingNum ? Color{60, 60, 80, 255} : Color{40, 40, 50, 255};
+    renderer.drawRect(tsX, boxY, tsBoxW, boxH, numBg);
+    renderer.drawRectOutline(tsX, boxY, tsBoxW, boxH,
+                              editingNum ? Theme::transportAccent : Theme::clipSlotBorder);
 
-    char tsText[16];
-    if (m_editMode == EditMode::TimeSigNum)
-        std::snprintf(tsText, sizeof(tsText), "%s_/%d", m_editBuffer.c_str(), m_transportDenominator);
-    else if (m_editMode == EditMode::TimeSigDen)
-        std::snprintf(tsText, sizeof(tsText), "%d/%s_", m_transportNumerator, m_editBuffer.c_str());
+    char numText[8];
+    if (editingNum)
+        std::snprintf(numText, sizeof(numText), "%s_", m_editBuffer.c_str());
     else
-        std::snprintf(tsText, sizeof(tsText), "%d/%d", m_transportNumerator, m_transportDenominator);
+        std::snprintf(numText, sizeof(numText), "%d", m_transportNumerator);
     tx = tsX + 6;
     if (font.isLoaded()) {
-        for (const char* p = tsText; *p; ++p) {
+        for (const char* p = numText; *p; ++p) {
             auto g = font.getGlyph(*p, tx, textY, scale);
             renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
-                                       editingTs ? Theme::transportAccent : Theme::transportText,
+                                       editingNum ? Theme::transportAccent : Theme::transportText,
+                                       font.textureId());
+            tx += g.xAdvance;
+        }
+    }
+
+    // "/" separator
+    float slashX = tsX + tsBoxW + slashGap;
+    if (font.isLoaded()) {
+        tx = slashX;
+        auto g = font.getGlyph('/', tx, textY, scale);
+        renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                   g.u0, g.v0, g.u1, g.v1,
+                                   Theme::textSecondary, font.textureId());
+        slashX = tx + g.xAdvance;
+    }
+
+    // Denominator box
+    float denX = slashX + slashGap;
+    bool editingDen = (m_editMode == EditMode::TimeSigDen);
+    m_tsDenBoxX = denX; m_tsDenBoxY = boxY; m_tsDenBoxW = tsBoxW; m_tsDenBoxH = boxH;
+    Color denBg = editingDen ? Color{60, 60, 80, 255} : Color{40, 40, 50, 255};
+    renderer.drawRect(denX, boxY, tsBoxW, boxH, denBg);
+    renderer.drawRectOutline(denX, boxY, tsBoxW, boxH,
+                              editingDen ? Theme::transportAccent : Theme::clipSlotBorder);
+
+    char denText[8];
+    if (editingDen)
+        std::snprintf(denText, sizeof(denText), "%s_", m_editBuffer.c_str());
+    else
+        std::snprintf(denText, sizeof(denText), "%d", m_transportDenominator);
+    tx = denX + 6;
+    if (font.isLoaded()) {
+        for (const char* p = denText; *p; ++p) {
+            auto g = font.getGlyph(*p, tx, textY, scale);
+            renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       editingDen ? Theme::transportAccent : Theme::transportText,
                                        font.textureId());
             tx += g.xAdvance;
         }
     }
 
     // --- Tap tempo button ---
-    float tapX = tsX + tsW + 16;
+    float tapX = denX + tsBoxW + 16;
     float tapW = 48;
     m_tapButtonX = tapX; m_tapButtonY = boxY; m_tapButtonW = tapW; m_tapButtonH = boxH;
 
@@ -511,11 +548,18 @@ bool SessionView::handleDoubleClick(float mx, float my) {
         m_editBuffer = buf;
         return true;
     }
-    // Time signature box double-click → edit numerator first
-    if (mx >= m_tsBoxX && mx <= m_tsBoxX + m_tsBoxW &&
-        my >= m_tsBoxY && my <= m_tsBoxY + m_tsBoxH) {
+    // Numerator box double-click
+    if (mx >= m_tsNumBoxX && mx <= m_tsNumBoxX + m_tsNumBoxW &&
+        my >= m_tsNumBoxY && my <= m_tsNumBoxY + m_tsNumBoxH) {
         m_editMode = EditMode::TimeSigNum;
         m_editBuffer = std::to_string(m_transportNumerator);
+        return true;
+    }
+    // Denominator box double-click
+    if (mx >= m_tsDenBoxX && mx <= m_tsDenBoxX + m_tsDenBoxW &&
+        my >= m_tsDenBoxY && my <= m_tsDenBoxY + m_tsDenBoxH) {
+        m_editMode = EditMode::TimeSigDen;
+        m_editBuffer = std::to_string(m_transportDenominator);
         return true;
     }
     return false;
