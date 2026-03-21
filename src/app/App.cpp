@@ -440,7 +440,11 @@ void App::processEvents() {
                     else if (event.key.key == SDLK_ESCAPE) kc = 27;
                     else if (event.key.key == SDLK_BACKSPACE) kc = 8;
                     else if (event.key.key == SDLK_TAB) kc = 9;
-                    if (kc) m_sessionView.handleKeyDown(kc);
+                    if (kc) {
+                        m_sessionView.handleKeyDown(kc);
+                        if (!m_sessionView.isEditing())
+                            SDL_StopTextInput(m_mainWindow.getHandle());
+                    }
                     break;
                 }
 
@@ -669,9 +673,13 @@ void App::processEvents() {
                 // Existing view handlers: mixer → session
                 // Handle double-click for BPM/time sig editing
                 if (event.button.clicks >= 2 && btn == SDL_BUTTON_LEFT) {
-                    if (m_sessionView.handleDoubleClick(mx, my))
+                    if (m_sessionView.handleDoubleClick(mx, my)) {
+                        SDL_StartTextInput(m_mainWindow.getHandle());
                         break;
+                    }
                 }
+                // Stop text input if editing was cancelled by clicking elsewhere
+                bool wasEditing = m_sessionView.isEditing();
                 if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
                     int selTrack = -1;
                     if (m_sessionView.handleClick(mx, my, rightClick, &selTrack)) {
@@ -682,6 +690,8 @@ void App::processEvents() {
                         }
                     }
                 }
+                if (wasEditing && !m_sessionView.isEditing())
+                    SDL_StopTextInput(m_mainWindow.getHandle());
                 break;
             }
 
