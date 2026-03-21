@@ -363,9 +363,9 @@ bool App::init() {
 
     m_project.init(8, 8);
     m_virtualKeyboard.init(&m_audioEngine);
-    m_pianoRoll->setTransport(&m_audioEngine.transport());
     setupMenuBar();
     buildWidgetTree();
+    m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine);
     m_mixerPanel->init(&m_project, &m_audioEngine);
 
