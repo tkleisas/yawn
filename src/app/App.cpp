@@ -33,7 +33,9 @@ App::~App() {
 }
 
 bool App::loadFont() {
+    // Bundled font first (same on all platforms), then system fallbacks
     const char* fontPaths[] = {
+        "assets/fonts/JetBrainsMono-Regular.ttf",
 #ifdef _WIN32
         "C:\\Windows\\Fonts\\segoeui.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
