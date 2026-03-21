@@ -90,10 +90,15 @@ public:
     // ─── Click ──────────────────────────────────────────────────────────
 
     bool handleClick(float mx, float my) {
-        if (!m_open || !m_clip || !inPanel(mx, my)) return false;
+        if (!m_open || !m_clip) return false;
+        if (!inPanel(mx, my)) return false;
 
-        // Toolbar
-        if (my < m_gy) return handleToolbarClick(mx, my);
+        // Toolbar area — check Y bounds precisely
+        if (my >= m_py && my < m_py + kToolbarH) {
+            std::printf("[PianoRoll] Toolbar click at (%.0f, %.0f) py=%.0f toolbarH=%.0f\n",
+                        mx, my, m_py, kToolbarH);
+            return handleToolbarClick(mx, my);
+        }
 
         // Piano key area
         if (mx < m_gx) return true;
@@ -261,8 +266,8 @@ private:
             bool active = static_cast<int>(m_tool) == i;
             Color bg = active ? Color{100, 180, 255} : Color{55, 55, 60};
             Color fg = active ? Color{10, 10, 15}    : Theme::textSecondary;
-            r.drawRect(x, m_py + 2, m_toolBtnW, kToolbarH - 4, bg);
             m_toolBtnX[i] = x;
+            r.drawRect(x, m_py + 2, m_toolBtnW, kToolbarH - 4, bg);
             f.drawText(r, toolNames[i], x + 4, ty, sc, fg);
             x += m_toolBtnW + 3;
         }
@@ -277,10 +282,22 @@ private:
             bool active = static_cast<int>(m_snap) == i;
             Color bg = active ? Color{100, 180, 255} : Color{55, 55, 60};
             Color fg = active ? Color{10, 10, 15}    : Theme::textSecondary;
-            r.drawRect(x, m_py + 2, m_snapBtnW, kToolbarH - 4, bg);
             m_snapBtnX[i] = x;
+            r.drawRect(x, m_py + 2, m_snapBtnW, kToolbarH - 4, bg);
             f.drawText(r, snapNames[i], x + 3, ty, sc, fg);
             x += m_snapBtnW + 3;
+        }
+
+        // Loop toggle
+        x += 12;
+        {
+            bool loopOn = m_clip && m_clip->loop();
+            Color bg = loopOn ? Color{80, 220, 100} : Color{55, 55, 60};
+            Color fg = loopOn ? Color{10, 10, 15}   : Theme::textSecondary;
+            m_loopBtnX = x;
+            r.drawRect(x, m_py + 2, m_loopBtnW, kToolbarH - 4, bg);
+            f.drawText(r, "Loop", x + 4, ty, sc, fg);
+            x += m_loopBtnW + 6;
         }
 
         // Clip name (right-aligned)
@@ -395,30 +412,72 @@ private:
 
     void renderClipBound(Renderer2D& r) {
         if (!m_clip) return;
-        float x = beatToX(m_clip->lengthBeats());
-        if (x >= m_gx && x <= m_gx + m_gw) {
-            r.drawRect(x, m_gy, 2, m_gh, Color{255, 100, 50}.withAlpha(120));
-            // Shade past the end
-            float pastW = m_gx + m_gw - x - 2;
+
+        // Loop region markers
+        bool loopOn = m_clip->loop();
+        float loopStartX = beatToX(0.0);
+        float loopEndX   = beatToX(m_clip->lengthBeats());
+
+        // Clip/loop end boundary
+        if (loopEndX >= m_gx && loopEndX <= m_gx + m_gw) {
+            Color boundCol = loopOn ? Color{80, 220, 100}.withAlpha(180)
+                                    : Color{255, 100, 50}.withAlpha(120);
+            r.drawRect(loopEndX, m_gy, 2, m_gh, boundCol);
+
+            // Shade area past the loop/clip end
+            float pastW = m_gx + m_gw - loopEndX - 2;
             if (pastW > 0)
-                r.drawRect(x + 2, m_gy, pastW, m_gh, Color{15, 15, 18}.withAlpha(140));
+                r.drawRect(loopEndX + 2, m_gy, pastW, m_gh,
+                           Color{15, 15, 18}.withAlpha(140));
+        }
+
+        // Loop start marker (at beat 0)
+        if (loopOn && loopStartX >= m_gx && loopStartX <= m_gx + m_gw) {
+            r.drawRect(loopStartX, m_gy, 2, m_gh,
+                       Color{80, 220, 100}.withAlpha(180));
+        }
+
+        // Loop region indicator bar at top of grid
+        if (loopOn) {
+            float barH = 4.0f;
+            float x0 = std::max(m_gx, loopStartX);
+            float x1 = std::min(m_gx + m_gw, loopEndX);
+            if (x1 > x0) {
+                r.drawRect(x0, m_gy, x1 - x0, barH,
+                           Color{80, 220, 100}.withAlpha(120));
+            }
         }
     }
 
     // ─── Toolbar click ──────────────────────────────────────────────────
 
     bool handleToolbarClick(float mx, float /*my*/) {
+        std::printf("[PianoRoll] toolbarClick mx=%.1f tools=[%.1f,%.1f,%.1f] w=%.0f snaps=[%.1f,%.1f,%.1f,%.1f] w=%.0f loop=%.1f\n",
+                    mx, m_toolBtnX[0], m_toolBtnX[1], m_toolBtnX[2], m_toolBtnW,
+                    m_snapBtnX[0], m_snapBtnX[1], m_snapBtnX[2], m_snapBtnX[3], m_snapBtnW,
+                    m_loopBtnX);
+
+        // Tool buttons
         for (int i = 0; i < 3; ++i) {
             if (mx >= m_toolBtnX[i] && mx < m_toolBtnX[i] + m_toolBtnW) {
                 m_tool = static_cast<Tool>(i);
+                std::printf("[PianoRoll] Tool → %d\n", i);
                 return true;
             }
         }
+        // Snap buttons
         for (int i = 0; i < 4; ++i) {
             if (mx >= m_snapBtnX[i] && mx < m_snapBtnX[i] + m_snapBtnW) {
                 m_snap = static_cast<Snap>(i);
+                std::printf("[PianoRoll] Snap → %d\n", i);
                 return true;
             }
+        }
+        // Loop toggle
+        if (m_clip && mx >= m_loopBtnX && mx < m_loopBtnX + m_loopBtnW) {
+            m_clip->setLoop(!m_clip->loop());
+            std::printf("[PianoRoll] Loop → %d\n", m_clip->loop());
+            return true;
         }
         return true;
     }
@@ -588,8 +647,10 @@ private:
     // Toolbar button positions
     static constexpr float m_toolBtnW = 50.0f;
     static constexpr float m_snapBtnW = 36.0f;
+    static constexpr float m_loopBtnW = 44.0f;
     float m_toolBtnX[3] = {};
     float m_snapBtnX[4] = {};
+    float m_loopBtnX = 0;
 };
 
 } // namespace ui
