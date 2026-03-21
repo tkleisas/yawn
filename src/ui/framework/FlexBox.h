@@ -46,7 +46,15 @@ public:
         float crossMax  = 0;
         int visibleCount = 0;
 
-        Constraints childConstraints = constraints.deflate(m_padding);
+        // Loosen the main-axis constraint so children report natural size.
+        // The FlexBox itself will distribute space during layout().
+        Constraints inner = constraints.deflate(m_padding);
+        Constraints childConstraints;
+        if (m_direction == Direction::Row) {
+            childConstraints = {0, inner.minH, inner.maxW, inner.maxH};
+        } else {
+            childConstraints = {inner.minW, 0, inner.maxW, inner.maxH};
+        }
         m_childSizes.resize(m_children.size());
 
         for (size_t i = 0; i < m_children.size(); ++i) {
