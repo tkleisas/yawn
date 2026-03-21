@@ -528,14 +528,17 @@ public:
         }
         root["scenes"] = scenes;
 
-        // Clips (sparse: only non-null)
+        // Clips (sparse: only non-empty slots)
         json clips = json::object();
         for (int t = 0; t < project.numTracks(); ++t) {
             for (int s = 0; s < project.numScenes(); ++s) {
-                auto* clip = project.getClip(t, s);
-                if (!clip) continue;
+                auto* slot = project.getSlot(t, s);
+                if (!slot || slot->empty()) continue;
                 std::string key = std::to_string(t) + ":" + std::to_string(s);
-                clips[key] = serializeAudioClip(*clip, samplesDir, sampleCounter);
+                if (slot->audioClip)
+                    clips[key] = serializeAudioClip(*slot->audioClip, samplesDir, sampleCounter);
+                else if (slot->midiClip)
+                    clips[key] = serializeMidiClip(*slot->midiClip);
             }
         }
         root["clips"] = clips;
@@ -661,8 +664,11 @@ public:
                     auto clip = deserializeAudioClip(val, folderPath);
                     if (clip)
                         project.setClip(trackIdx, sceneIdx, std::move(clip));
+                } else if (clipType == "midi") {
+                    auto clip = deserializeMidiClip(val);
+                    if (clip)
+                        project.setMidiClip(trackIdx, sceneIdx, std::move(clip));
                 }
-                // Future: "midi" type clips
             }
         }
 

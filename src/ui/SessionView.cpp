@@ -370,25 +370,30 @@ void SessionView::renderClipSlot(Renderer2D& renderer, Font& font,
     float iw = w - pad * 2;
     float ih = h - pad * 2;
 
-    const audio::Clip* clip = m_project->getClip(trackIndex, sceneIndex);
-    bool isPlaying = m_trackStates[trackIndex].playing && clip != nullptr;
+    const auto* slot = m_project->getSlot(trackIndex, sceneIndex);
+    bool hasClip = slot && !slot->empty();
+    const audio::Clip* audioClip = slot ? slot->audioClip.get() : nullptr;
+    const midi::MidiClip* midiClip = slot ? slot->midiClip.get() : nullptr;
+    bool isPlaying = m_trackStates[trackIndex].playing && hasClip;
 
     // Slot background
-    Color bgColor = clip ? Theme::panelBg : Theme::clipSlotEmpty;
+    Color bgColor = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
     renderer.drawRect(ix, iy, iw, ih, bgColor);
 
-    if (clip) {
+    if (hasClip) {
         // Track color bar on left
         Color trackCol = Theme::trackColors[m_project->track(trackIndex).colorIndex % Theme::kNumTrackColors];
         renderer.drawRect(ix, iy, 3, ih, trackCol);
 
         // Clip name
+        const std::string& clipName = audioClip ? audioClip->name
+                                                : (midiClip ? midiClip->name() : std::string());
         float scale = Theme::kSmallFontSize / font.pixelHeight();
-        if (font.isLoaded()) {
+        if (font.isLoaded() && !clipName.empty()) {
             float textX = ix + 7;
             float textY = iy + 2;
-            for (char c : clip->name) {
-                if (c == '/' || c == '\\') { textX = ix + 7; continue; }  // show only filename
+            for (char c : clipName) {
+                if (c == '/' || c == '\\') { textX = ix + 7; continue; }
                 auto g = font.getGlyph(c, textX, textY, scale);
                 renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                            g.u0, g.v0, g.u1, g.v1,
@@ -398,23 +403,50 @@ void SessionView::renderClipSlot(Renderer2D& renderer, Font& font,
             }
         }
 
-        // Mini waveform
-        if (clip->buffer && clip->buffer->numFrames() > 0) {
+        // Mini waveform for audio clips
+        if (audioClip && audioClip->buffer && audioClip->buffer->numFrames() > 0) {
             float wfY = iy + 18;
             float wfH = ih - 22;
             Color wfColor = trackCol.withAlpha(160);
 
-            renderer.drawWaveform(clip->buffer->channelData(0),
-                                  clip->buffer->numFrames(),
+            renderer.drawWaveform(audioClip->buffer->channelData(0),
+                                  audioClip->buffer->numFrames(),
                                   ix + 4, wfY, iw - 8, wfH, wfColor);
 
             // Playhead indicator
             if (isPlaying) {
                 int64_t pos = m_trackStates[trackIndex].playPosition;
-                float frac = static_cast<float>(pos) / clip->buffer->numFrames();
+                float frac = static_cast<float>(pos) / audioClip->buffer->numFrames();
                 frac = std::fmod(frac, 1.0f);
                 float phX = ix + 4 + frac * (iw - 8);
                 renderer.drawRect(phX, wfY, 2, wfH, Theme::playing);
+            }
+        }
+
+        // Mini note view for MIDI clips
+        if (midiClip && midiClip->noteCount() > 0) {
+            float nY = iy + 18;
+            float nH = ih - 22;
+            Color noteCol = trackCol.withAlpha(180);
+
+            // Find pitch range for scaling
+            int minPitch = 127, maxPitch = 0;
+            for (int i = 0; i < midiClip->noteCount(); ++i) {
+                int p = midiClip->note(i).pitch;
+                if (p < minPitch) minPitch = p;
+                if (p > maxPitch) maxPitch = p;
+            }
+            int pitchRange = std::max(1, maxPitch - minPitch + 1);
+            double lenBeats = midiClip->lengthBeats();
+
+            for (int i = 0; i < midiClip->noteCount(); ++i) {
+                const auto& n = midiClip->note(i);
+                float nx = ix + 4 + static_cast<float>(n.startBeat / lenBeats) * (iw - 8);
+                float nw = static_cast<float>(n.duration / lenBeats) * (iw - 8);
+                nw = std::max(1.0f, nw);
+                float ny = nY + nH - (static_cast<float>(n.pitch - minPitch + 1) / pitchRange) * nH;
+                float nh = std::max(1.0f, nH / pitchRange);
+                renderer.drawRect(nx, ny, nw, nh, noteCol);
             }
         }
 
@@ -483,11 +515,14 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick, int* select
         int sceneIndex = static_cast<int>((contentMY - gridY) / Theme::kClipSlotHeight);
         if (sceneIndex >= 0 && sceneIndex < m_project->numScenes()) {
             for (int t = 0; t < m_project->numTracks(); ++t) {
-                auto* clip = m_project->getClip(t, sceneIndex);
-                if (clip) {
-                    m_engine->sendCommand(audio::LaunchClipMsg{t, clip});
+                auto* slot = m_project->getSlot(t, sceneIndex);
+                if (slot && slot->audioClip) {
+                    m_engine->sendCommand(audio::LaunchClipMsg{t, slot->audioClip.get()});
+                } else if (slot && slot->midiClip) {
+                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, slot->midiClip.get()});
                 } else {
                     m_engine->sendCommand(audio::StopClipMsg{t});
+                    m_engine->sendCommand(audio::StopMidiClipMsg{t});
                 }
             }
             m_activeScene = sceneIndex;
@@ -508,14 +543,18 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick, int* select
             m_selectedTrack = trackIndex;
             if (selectedTrack) *selectedTrack = trackIndex;
 
-            auto* clip = m_project->getClip(trackIndex, sceneIndex);
+            auto* slot = m_project->getSlot(trackIndex, sceneIndex);
 
             if (isRightClick) {
                 m_engine->sendCommand(audio::StopClipMsg{trackIndex});
+                m_engine->sendCommand(audio::StopMidiClipMsg{trackIndex});
                 std::printf("Stop track %d\n", trackIndex + 1);
-            } else if (clip) {
-                m_engine->sendCommand(audio::LaunchClipMsg{trackIndex, clip});
-                std::printf("Launch clip [%d, %d]\n", trackIndex + 1, sceneIndex + 1);
+            } else if (slot && slot->audioClip) {
+                m_engine->sendCommand(audio::LaunchClipMsg{trackIndex, slot->audioClip.get()});
+                std::printf("Launch audio clip [%d, %d]\n", trackIndex + 1, sceneIndex + 1);
+            } else if (slot && slot->midiClip) {
+                m_engine->sendCommand(audio::LaunchMidiClipMsg{trackIndex, slot->midiClip.get()});
+                std::printf("Launch MIDI clip [%d, %d]\n", trackIndex + 1, sceneIndex + 1);
             }
             return true;
         }

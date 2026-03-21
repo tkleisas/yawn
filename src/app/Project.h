@@ -2,6 +2,7 @@
 
 #include "core/Constants.h"
 #include "audio/Clip.h"
+#include "midi/MidiClip.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -24,6 +25,24 @@ struct Track {
 
 struct Scene {
     std::string name;
+};
+
+// A clip slot can hold either an audio clip or a MIDI clip (or be empty)
+struct ClipSlot {
+    enum class Type { Empty, Audio, Midi };
+
+    Type type() const {
+        if (audioClip) return Type::Audio;
+        if (midiClip) return Type::Midi;
+        return Type::Empty;
+    }
+
+    bool empty() const { return !audioClip && !midiClip; }
+
+    void clear() { audioClip.reset(); midiClip.reset(); }
+
+    std::unique_ptr<audio::Clip> audioClip;
+    std::unique_ptr<midi::MidiClip> midiClip;
 };
 
 // Project model: holds tracks, scenes, and the 2D clip grid.
@@ -55,24 +74,54 @@ public:
     Scene& scene(int index) { return m_scenes[index]; }
     const Scene& scene(int index) const { return m_scenes[index]; }
 
+    // Access the full clip slot (audio + midi)
+    ClipSlot* getSlot(int trackIndex, int sceneIndex) {
+        if (trackIndex < 0 || trackIndex >= numTracks()) return nullptr;
+        if (sceneIndex < 0 || sceneIndex >= numScenes()) return nullptr;
+        return &m_clipSlots[trackIndex][sceneIndex];
+    }
+    const ClipSlot* getSlot(int trackIndex, int sceneIndex) const {
+        if (trackIndex < 0 || trackIndex >= numTracks()) return nullptr;
+        if (sceneIndex < 0 || sceneIndex >= numScenes()) return nullptr;
+        return &m_clipSlots[trackIndex][sceneIndex];
+    }
+
+    // Convenience: get audio clip (returns nullptr if slot is empty or MIDI)
     audio::Clip* getClip(int trackIndex, int sceneIndex) {
-        if (trackIndex < 0 || trackIndex >= numTracks()) return nullptr;
-        if (sceneIndex < 0 || sceneIndex >= numScenes()) return nullptr;
-        return m_clipSlots[trackIndex][sceneIndex].get();
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        return slot ? slot->audioClip.get() : nullptr;
     }
-
     const audio::Clip* getClip(int trackIndex, int sceneIndex) const {
-        if (trackIndex < 0 || trackIndex >= numTracks()) return nullptr;
-        if (sceneIndex < 0 || sceneIndex >= numScenes()) return nullptr;
-        return m_clipSlots[trackIndex][sceneIndex].get();
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        return slot ? slot->audioClip.get() : nullptr;
     }
 
-    // Set a clip. Returns the raw pointer (for passing to audio engine).
+    // Convenience: get MIDI clip
+    midi::MidiClip* getMidiClip(int trackIndex, int sceneIndex) {
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        return slot ? slot->midiClip.get() : nullptr;
+    }
+    const midi::MidiClip* getMidiClip(int trackIndex, int sceneIndex) const {
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        return slot ? slot->midiClip.get() : nullptr;
+    }
+
+    // Set audio clip
     audio::Clip* setClip(int trackIndex, int sceneIndex, std::unique_ptr<audio::Clip> clip) {
-        if (trackIndex < 0 || trackIndex >= numTracks()) return nullptr;
-        if (sceneIndex < 0 || sceneIndex >= numScenes()) return nullptr;
-        m_clipSlots[trackIndex][sceneIndex] = std::move(clip);
-        return m_clipSlots[trackIndex][sceneIndex].get();
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        if (!slot) return nullptr;
+        slot->midiClip.reset(); // Clear any existing MIDI clip
+        slot->audioClip = std::move(clip);
+        return slot->audioClip.get();
+    }
+
+    // Set MIDI clip
+    midi::MidiClip* setMidiClip(int trackIndex, int sceneIndex, std::unique_ptr<midi::MidiClip> clip) {
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        if (!slot) return nullptr;
+        slot->audioClip.reset(); // Clear any existing audio clip
+        slot->midiClip = std::move(clip);
+        return slot->midiClip.get();
     }
 
     void addTrack() {
@@ -110,7 +159,7 @@ private:
     std::vector<Track> m_tracks;
     std::vector<Scene> m_scenes;
     // m_clipSlots[trackIndex][sceneIndex]
-    std::vector<std::vector<std::unique_ptr<audio::Clip>>> m_clipSlots;
+    std::vector<std::vector<ClipSlot>> m_clipSlots;
 };
 
 } // namespace yawn
