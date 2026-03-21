@@ -12,14 +12,14 @@ using namespace yawn;
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
-// Helpers
-static fs::path testProjectDir() {
-    auto p = fs::temp_directory_path() / "yawn_test_project.yawn";
+// Helpers — each test gets its own temp dir to avoid CTest parallel races
+static fs::path testProjectDir(const std::string& suffix = "default") {
+    auto p = fs::temp_directory_path() / ("yawn_test_" + suffix + ".yawn");
     return p;
 }
 
-static void cleanupTestProject() {
-    auto p = testProjectDir();
+static void cleanupTestProject(const std::string& suffix = "default") {
+    auto p = testProjectDir(suffix);
     if (fs::exists(p)) fs::remove_all(p);
 }
 
@@ -215,11 +215,17 @@ TEST(MidiClipSerializer, RoundTrip) {
 
 class ProjectSerializerTest : public ::testing::Test {
 protected:
+    fs::path projDir() const { return testProjectDir(testSuffix()); }
+
     void SetUp() override {
-        cleanupTestProject();
+        cleanupTestProject(testSuffix());
     }
     void TearDown() override {
-        cleanupTestProject();
+        cleanupTestProject(testSuffix());
+    }
+private:
+    std::string testSuffix() const {
+        return ::testing::UnitTest::GetInstance()->current_test_info()->name();
     }
 };
 
@@ -228,12 +234,12 @@ TEST_F(ProjectSerializerTest, SaveAndLoadEmptyProject) {
     project.init(4, 4);
     audio::AudioEngine engine;
 
-    ASSERT_TRUE(ProjectSerializer::saveToFolder(testProjectDir(), project, engine));
-    EXPECT_TRUE(fs::exists(testProjectDir() / "project.json"));
-    EXPECT_TRUE(fs::is_directory(testProjectDir() / "samples"));
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(projDir(), project, engine));
+    EXPECT_TRUE(fs::exists(projDir() / "project.json"));
+    EXPECT_TRUE(fs::is_directory(projDir() / "samples"));
 
     // Verify JSON is valid
-    std::ifstream in(testProjectDir() / "project.json");
+    std::ifstream in(projDir() / "project.json");
     json root = json::parse(in);
     EXPECT_EQ(root["formatVersion"], 1);
     EXPECT_EQ(root["tracks"].size(), 4u);
@@ -257,11 +263,11 @@ TEST_F(ProjectSerializerTest, RoundTripTrackMetadata) {
 
     audio::AudioEngine engine;
 
-    ASSERT_TRUE(ProjectSerializer::saveToFolder(testProjectDir(), project, engine));
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(projDir(), project, engine));
 
     Project project2;
     audio::AudioEngine engine2;
-    ASSERT_TRUE(ProjectSerializer::loadFromFolder(testProjectDir(), project2, engine2));
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(projDir(), project2, engine2));
 
     EXPECT_EQ(project2.numTracks(), 2);
     EXPECT_EQ(project2.numScenes(), 2);
@@ -304,11 +310,11 @@ TEST_F(ProjectSerializerTest, RoundTripInstrumentAndEffects) {
     rev->setMix(0.4f);
     engine.mixer().trackEffects(0).append(std::move(rev));
 
-    ASSERT_TRUE(ProjectSerializer::saveToFolder(testProjectDir(), project, engine));
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(projDir(), project, engine));
 
     Project project2;
     audio::AudioEngine engine2;
-    ASSERT_TRUE(ProjectSerializer::loadFromFolder(testProjectDir(), project2, engine2));
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(projDir(), project2, engine2));
 
     // Verify instrument
     auto* inst = engine2.instrument(0);
@@ -347,11 +353,11 @@ TEST_F(ProjectSerializerTest, RoundTripMixerState) {
     engine.mixer().setReturnVolume(0, 0.8f);
     engine.mixer().setMasterVolume(0.9f);
 
-    ASSERT_TRUE(ProjectSerializer::saveToFolder(testProjectDir(), project, engine));
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(projDir(), project, engine));
 
     Project project2;
     audio::AudioEngine engine2;
-    ASSERT_TRUE(ProjectSerializer::loadFromFolder(testProjectDir(), project2, engine2));
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(projDir(), project2, engine2));
 
     EXPECT_NEAR(engine2.mixer().trackChannel(0).volume, 0.6f, 0.001f);
     EXPECT_NEAR(engine2.mixer().trackChannel(0).pan, -0.3f, 0.001f);
@@ -369,11 +375,11 @@ TEST_F(ProjectSerializerTest, RoundTripBPM) {
     audio::AudioEngine engine;
     engine.transport().setBPM(140.0);
 
-    ASSERT_TRUE(ProjectSerializer::saveToFolder(testProjectDir(), project, engine));
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(projDir(), project, engine));
 
     Project project2;
     audio::AudioEngine engine2;
-    ASSERT_TRUE(ProjectSerializer::loadFromFolder(testProjectDir(), project2, engine2));
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(projDir(), project2, engine2));
 
     EXPECT_NEAR(engine2.transport().bpm(), 140.0, 0.1);
 }
@@ -386,7 +392,7 @@ TEST_F(ProjectSerializerTest, LoadNonexistentFails) {
 
 TEST_F(ProjectSerializerTest, SchemaVersioningIgnoresUnknownFields) {
     // Create a project.json with extra fields that shouldn't break loading
-    auto dir = testProjectDir();
+    auto dir = projDir();
     fs::create_directories(dir / "samples");
 
     json root;
