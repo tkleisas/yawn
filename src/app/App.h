@@ -5,8 +5,8 @@
 #include "ui/Font.h"
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
-#include "ui/DetailPanel.h"
-#include "ui/PianoRoll.h"
+#include "ui/panels/DetailPanelWidget.h"
+#include "ui/panels/PianoRollPanel.h"
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
 #include "ui/ConfirmDialog.h"
@@ -71,8 +71,6 @@ private:
     ui::Renderer2D m_renderer;
     ui::Font m_font;
     ui::MenuBar m_menuBar;
-    ui::DetailPanel m_detailPanel;
-    ui::PianoRoll m_pianoRoll;
     ui::VirtualKeyboard m_virtualKeyboard;
     ui::ContextMenu m_contextMenu;
     ui::ConfirmDialog m_confirmDialog;
@@ -82,8 +80,8 @@ private:
     // Widget tree for layout (replaces manual layout math in render/events)
     std::unique_ptr<ui::fw::FlexBox> m_rootLayout;
     ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
-    ui::fw::Widget* m_detailW     = nullptr;
-    ui::fw::Widget* m_pianoW      = nullptr;
+    ui::fw::DetailPanelWidget* m_detailPanel = nullptr;
+    ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
     ui::fw::MixerPanel*   m_mixerPanel   = nullptr;  // owned by unique_ptr below
     ui::fw::SessionPanel* m_sessionPanel = nullptr;  // owned by unique_ptr below
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;

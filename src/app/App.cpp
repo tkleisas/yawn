@@ -82,7 +82,7 @@ void App::setupMenuBar() {
         {"Toggle Mixer",    "M",   [this]() { m_showMixer = !m_showMixer; }},
         {"Detail Panel",    "D",   [this]() {
             m_showDetailPanel = !m_showDetailPanel;
-            if (m_showDetailPanel) m_detailPanel.setOpen(true);
+            if (m_showDetailPanel) m_detailPanel->setOpen(true);
         }},
     });
 
@@ -127,8 +127,8 @@ void App::buildWidgetTree() {
     auto menuW    = std::make_unique<MenuBarWrapper>(m_menuBar);
     auto sessionP = std::make_unique<SessionPanel>();
     auto mixerP   = std::make_unique<MixerPanel>();
-    auto detailW  = std::make_unique<DetailPanelWrapper>(m_detailPanel);
-    auto pianoW   = std::make_unique<PianoRollWrapper>(m_pianoRoll);
+    auto detailP  = std::make_unique<DetailPanelWidget>();
+    auto pianoP   = std::make_unique<PianoRollPanel>();
 
     // Session view fills remaining space, min 100px
     sessionP->setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
@@ -137,21 +137,21 @@ void App::buildWidgetTree() {
     m_menuBarW      = menuW.get();
     m_sessionPanel  = sessionP.get();
     m_mixerPanel    = mixerP.get();
-    m_detailW       = detailW.get();
-    m_pianoW        = pianoW.get();
+    m_detailPanel   = detailP.get();
+    m_pianoRoll     = pianoP.get();
 
     m_rootLayout->addChild(m_menuBarW);
     m_rootLayout->addChild(m_sessionPanel);
     m_rootLayout->addChild(m_mixerPanel);
-    m_rootLayout->addChild(m_detailW);
-    m_rootLayout->addChild(m_pianoW);
+    m_rootLayout->addChild(m_detailPanel);
+    m_rootLayout->addChild(m_pianoRoll);
 
     // Transfer ownership
     m_wrappers.push_back(std::move(menuW));
     m_wrappers.push_back(std::move(sessionP));
     m_wrappers.push_back(std::move(mixerP));
-    m_wrappers.push_back(std::move(detailW));
-    m_wrappers.push_back(std::move(pianoW));
+    m_wrappers.push_back(std::move(detailP));
+    m_wrappers.push_back(std::move(pianoP));
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
@@ -165,8 +165,8 @@ void App::computeLayout() {
 
     // Update panel visibility
     m_mixerPanel->setVisible(m_showMixer);
-    m_detailW->setVisible(m_showDetailPanel);
-    m_pianoW->setVisible(m_pianoRoll.isOpen());
+    m_detailPanel->setVisible(m_showDetailPanel);
+    m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
     // Cap session view height to its preferred size
     auto sp = SizePolicy::flexMin(1.0f, 100.0f);
@@ -195,7 +195,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_audioEngine.mixer().trackEffects(trackIndex).clear();
                 m_audioEngine.setInstrument(trackIndex, nullptr);
                 m_project.track(trackIndex).type = Track::Type::Audio;
-                m_detailPanel.clear();
+                m_detailPanel->clear();
                 markDirty();
             });
     }, false, track.type != Track::Type::Audio});
@@ -211,7 +211,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_project.track(trackIndex).type = Track::Type::Midi;
                 m_audioEngine.setInstrument(trackIndex,
                     std::make_unique<instruments::SubtractiveSynth>());
-                m_detailPanel.clear();
+                m_detailPanel->clear();
                 markDirty();
             });
     }, false, track.type != Track::Type::Midi});
@@ -322,7 +322,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 
 void App::updateDetailForSelectedTrack() {
     if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) {
-        m_detailPanel.clear();
+        m_detailPanel->clear();
         return;
     }
 
@@ -330,7 +330,7 @@ void App::updateDetailForSelectedTrack() {
     auto* inst = m_audioEngine.instrument(m_selectedTrack);
     auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
 
-    m_detailPanel.setDeviceChain(midiChain, inst, fxChain);
+    m_detailPanel->setDeviceChain(midiChain, inst, fxChain);
 }
 
 bool App::init() {
@@ -363,7 +363,7 @@ bool App::init() {
 
     m_project.init(8, 8);
     m_virtualKeyboard.init(&m_audioEngine);
-    m_pianoRoll.setTransport(&m_audioEngine.transport());
+    m_pianoRoll->setTransport(&m_audioEngine.transport());
     setupMenuBar();
     buildWidgetTree();
     m_sessionPanel->init(&m_project, &m_audioEngine);
@@ -385,10 +385,10 @@ bool App::init() {
     m_running = true;
 
     // Wire up detail panel remove device callback
-    m_detailPanel.setOnRemoveDevice([this](ui::DetailPanel::DeviceType type, int chainIndex) {
+    m_detailPanel->setOnRemoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int chainIndex) {
         if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
         switch (type) {
-            case ui::DetailPanel::DeviceType::MidiFx:
+            case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
                 m_audioEngine.midiEffectChain(m_selectedTrack).removeEffect(chainIndex);
                 // Send all-notes-off (CC 123) to clear any stuck notes
                 m_audioEngine.sendCommand(audio::SendMidiToTrackMsg{
@@ -397,14 +397,14 @@ bool App::init() {
                     0, 0, 0, 0, 123});
                 std::printf("Removed MIDI effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
                 break;
-            case ui::DetailPanel::DeviceType::AudioFx:
+            case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
                 m_audioEngine.mixer().trackEffects(m_selectedTrack).remove(chainIndex);
                 std::printf("Removed audio effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
                 break;
             default:
                 break;
         }
-        m_detailPanel.clear();  // Force rebuild on next frame
+        m_detailPanel->clear();  // Force rebuild on next frame
         markDirty();
     });
 
@@ -535,9 +535,9 @@ void App::processEvents() {
                 }
 
                 // Piano roll keyboard shortcuts
-                if (m_pianoRoll.isOpen()) {
-                    if (m_pianoRoll.handleKeyDown(static_cast<int>(event.key.key))) {
-                        if (!m_pianoRoll.isOpen()) {
+                if (m_pianoRoll->isOpen()) {
+                    if (m_pianoRoll->handleKeyDown(static_cast<int>(event.key.key))) {
+                        if (!m_pianoRoll->isOpen()) {
                             // Piano roll was closed (Escape)
                         }
                         break;
@@ -549,9 +549,9 @@ void App::processEvents() {
                     break;
 
                 // Detail panel arrow key navigation
-                if (m_showDetailPanel && m_detailPanel.isFocused()) {
-                    if (event.key.key == SDLK_LEFT) { m_detailPanel.scrollLeft(); break; }
-                    if (event.key.key == SDLK_RIGHT) { m_detailPanel.scrollRight(); break; }
+                if (m_showDetailPanel && m_detailPanel->isFocused()) {
+                    if (event.key.key == SDLK_LEFT) { m_detailPanel->scrollLeft(); break; }
+                    if (event.key.key == SDLK_RIGHT) { m_detailPanel->scrollRight(); break; }
                 }
 
                 switch (event.key.key) {
@@ -596,7 +596,7 @@ void App::processEvents() {
                     case SDLK_D:
                         if (!shift) {
                             m_showDetailPanel = !m_showDetailPanel;
-                            if (m_showDetailPanel) m_detailPanel.setOpen(true);
+                            if (m_showDetailPanel) m_detailPanel->setOpen(true);
                         }
                         break;
 
@@ -644,16 +644,6 @@ void App::processEvents() {
                     ui::fw::MouseMoveEvent me;
                     me.x = mx; me.y = my;
                     m_rootLayout->dispatchMouseMove(me);
-                }
-
-                // Forward drag to detail panel if it's dragging
-                if (m_showDetailPanel) {
-                    m_detailPanel.handleDrag(mx, my);
-                }
-
-                // Forward drag to piano roll
-                if (m_pianoRoll.isOpen()) {
-                    m_pianoRoll.handleDrag(mx, my);
                 }
                 break;
             }
@@ -708,33 +698,36 @@ void App::processEvents() {
                 if (m_inputState.onMouseDown(mx, my, btn))
                     break;
 
-                // Detail panel — use widget tree bounds
+                // Detail panel — dispatch via widget tree
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 if (m_showDetailPanel) {
-                    auto db = m_detailW->bounds();
-
                     if (rightClick) {
-                        if (m_detailPanel.handleRightClick(mx, my, db.x, db.y, db.w)) {
-                            m_detailPanel.setFocused(true);
+                        if (m_detailPanel->handleRightClick(mx, my)) {
+                            m_detailPanel->setFocused(true);
                             break;
                         }
                     } else {
-                        if (m_detailPanel.handleClick(mx, my, db.x, db.y, db.w)) {
-                            // Focus is set inside handleClick
+                        ui::fw::MouseEvent me;
+                        me.x = mx; me.y = my;
+                        me.button = ui::fw::MouseButton::Left;
+                        if (m_detailPanel->onMouseDown(me)) {
                             break;
                         }
                     }
                 }
 
                 // Clicking outside detail panel clears focus
-                m_detailPanel.setFocused(false);
+                m_detailPanel->setFocused(false);
 
                 // Piano roll click handling
-                if (m_pianoRoll.isOpen()) {
+                if (m_pianoRoll->isOpen()) {
                     if (rightClick) {
-                        if (m_pianoRoll.handleRightClick(mx, my)) break;
+                        if (m_pianoRoll->handleRightClick(mx, my)) break;
                     } else {
-                        if (m_pianoRoll.handleClick(mx, my)) {
+                        ui::fw::MouseEvent me;
+                        me.x = mx; me.y = my;
+                        me.button = ui::fw::MouseButton::Left;
+                        if (m_pianoRoll->onMouseDown(me)) {
                             markDirty();
                             break;
                         }
@@ -773,8 +766,8 @@ void App::processEvents() {
                     if (m_sessionPanel->getSlotAt(mx, my, dblTrack, dblScene)) {
                         auto* slot = m_project.getSlot(dblTrack, dblScene);
                         if (slot && slot->midiClip) {
-                            m_pianoRoll.setClip(slot->midiClip.get(), dblTrack);
-                            m_pianoRoll.setOpen(true);
+                            m_pianoRoll->setClip(slot->midiClip.get(), dblTrack);
+                            m_pianoRoll->setOpen(true);
                             m_selectedTrack = dblTrack;
                             break;
                         }
@@ -787,8 +780,8 @@ void App::processEvents() {
                             newClip->setLoop(true);
                             auto* clipPtr = newClip.get();
                             m_project.setMidiClip(dblTrack, dblScene, std::move(newClip));
-                            m_pianoRoll.setClip(clipPtr, dblTrack);
-                            m_pianoRoll.setOpen(true);
+                            m_pianoRoll->setClip(clipPtr, dblTrack);
+                            m_pianoRoll->setOpen(true);
                             m_selectedTrack = dblTrack;
                             markDirty();
                             break;
@@ -836,8 +829,6 @@ void App::processEvents() {
                     me.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
                     m_rootLayout->dispatchMouseUp(me);
                 }
-                m_detailPanel.handleRelease();
-                m_pianoRoll.handleRelease();
                 break;
             }
 
@@ -851,16 +842,16 @@ void App::processEvents() {
                 float dx = event.wheel.x;
                 float dy = event.wheel.y;
                 auto sb = m_sessionPanel->bounds();
-                auto db = m_detailW->bounds();
-                auto pb = m_pianoW->bounds();
+                auto db = m_detailPanel->bounds();
+                auto pb = m_pianoRoll->bounds();
 
-                if (m_pianoRoll.isOpen() && m_lastMouseY >= pb.y) {
+                if (m_pianoRoll->isOpen() && m_lastMouseY >= pb.y) {
                     auto mod = SDL_GetModState();
                     bool ctrl  = (mod & SDL_KMOD_CTRL) != 0;
                     bool shift = (mod & SDL_KMOD_SHIFT) != 0;
-                    m_pianoRoll.handleScroll(dx, dy, ctrl, shift);
+                    m_pianoRoll->handleScroll(dx, dy, ctrl, shift);
                 } else if (m_showDetailPanel && m_lastMouseY >= db.y) {
-                    m_detailPanel.handleScroll(dx, dy);
+                    m_detailPanel->handleScroll(dx, dy);
                 } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {
                     m_sessionPanel->handleScroll(dx, dy);
                 }
@@ -1063,7 +1054,7 @@ void App::newProject() {
         m_projectDirty = false;
         m_selectedTrack = 0;
         m_showDetailPanel = false;
-        m_pianoRoll.close();
+        m_pianoRoll->close();
         updateWindowTitle();
         std::printf("[Project] New project created\n");
     };
@@ -1162,7 +1153,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
         m_projectDirty = false;
         m_selectedTrack = 0;
         m_showDetailPanel = false;
-        m_pianoRoll.close();
+        m_pianoRoll->close();
         updateWindowTitle();
         std::printf("[Project] Loaded: %s\n", projectDir.string().c_str());
     } else {

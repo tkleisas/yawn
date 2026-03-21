@@ -1,13 +1,9 @@
 #pragma once
 // Panel wrapper widgets — thin Widget subclasses that delegate to existing
-// panel classes for rendering and events.  This allows the old panels to
-// participate in the framework's measure/layout/render cycle without being
-// rewritten.  Only included from App.cpp (never in test builds).
+// panel classes for rendering and events.  Only MenuBarWrapper remains;
+// other panels have been migrated to full fw::Widget subclasses.
 
 #include "Widget.h"
-#include "FlexBox.h"
-#include "../DetailPanel.h"
-#include "../PianoRoll.h"
 #include "../MenuBar.h"
 
 namespace yawn {
@@ -35,52 +31,6 @@ public:
 
 private:
     MenuBar& m_bar;
-};
-
-// ─── DetailPanelWrapper ────────────────────────────────────────────────
-
-class DetailPanelWrapper : public Widget {
-public:
-    explicit DetailPanelWrapper(DetailPanel& panel) : m_panel(panel) {}
-
-    Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, m_panel.height()});
-    }
-
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
-    }
-
-    void paint(UIContext& ctx) override {
-        m_panel.render(*ctx.renderer, *ctx.font,
-                       m_bounds.x, m_bounds.y, m_bounds.w);
-    }
-
-private:
-    DetailPanel& m_panel;
-};
-
-// ─── PianoRollWrapper ──────────────────────────────────────────────────
-
-class PianoRollWrapper : public Widget {
-public:
-    explicit PianoRollWrapper(PianoRoll& roll) : m_roll(roll) {}
-
-    Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, m_roll.height()});
-    }
-
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
-    }
-
-    void paint(UIContext& ctx) override {
-        m_roll.render(*ctx.renderer, *ctx.font,
-                      m_bounds.x, m_bounds.y, m_bounds.w);
-    }
-
-private:
-    PianoRoll& m_roll;
 };
 
 } // namespace fw
