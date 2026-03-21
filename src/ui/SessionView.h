@@ -6,6 +6,7 @@
 #include "ui/Theme.h"
 #include "app/Project.h"
 #include "audio/AudioEngine.h"
+#include <string>
 
 namespace yawn {
 namespace ui {
@@ -34,11 +35,27 @@ public:
     // selectedTrack: output — set to track index if header was clicked
     bool handleClick(float mx, float my, bool isRightClick, int* selectedTrack = nullptr);
 
+    // Handle double-click (for BPM/time sig editing)
+    bool handleDoubleClick(float mx, float my);
+
+    // Handle text input for active edit fields
+    bool handleTextInput(const char* text);
+
+    // Handle key input for edit fields (Enter to confirm, Escape to cancel)
+    bool handleKeyDown(int keycode);
+
     // Handle scroll wheel. dx = horizontal, dy = vertical.
     void handleScroll(float dx, float dy);
 
+    // Tap tempo — call each time the tap button is pressed
+    void tapTempo();
+
+    // Whether the session view has an active text edit
+    bool isEditing() const { return m_editMode != EditMode::None; }
+
     // Transport info for rendering
-    void setTransportState(bool playing, double beats, double bpm);
+    void setTransportState(bool playing, double beats, double bpm,
+                           int numerator = 4, int denominator = 4);
 
     // Preferred height showing up to kVisibleScenes scenes
     float preferredHeight() const;
@@ -74,6 +91,8 @@ private:
     bool m_transportPlaying = false;
     double m_transportBeats = 0.0;
     double m_transportBPM = 120.0;
+    int m_transportNumerator = 4;
+    int m_transportDenominator = 4;
 
     // Scroll state
     float m_scrollX = 0.0f;
@@ -88,6 +107,20 @@ private:
 
     // Animation timer
     float m_animTimer = 0.0f;
+
+    // BPM/Time signature editing
+    enum class EditMode { None, BPM, TimeSigNum, TimeSigDen };
+    EditMode m_editMode = EditMode::None;
+    std::string m_editBuffer;
+    float m_bpmBoxX = 0, m_bpmBoxY = 0, m_bpmBoxW = 0, m_bpmBoxH = 0;
+    float m_tsBoxX = 0, m_tsBoxY = 0, m_tsBoxW = 0, m_tsBoxH = 0;
+
+    // Tap tempo state
+    static constexpr int kTapHistorySize = 4;
+    double m_tapTimes[kTapHistorySize] = {};
+    int m_tapCount = 0;
+    float m_tapButtonX = 0, m_tapButtonY = 0, m_tapButtonW = 0, m_tapButtonH = 0;
+    float m_tapFlash = 0.0f;
 };
 
 } // namespace ui

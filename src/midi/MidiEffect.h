@@ -15,6 +15,7 @@ struct TransportInfo {
     double samplesPerBeat   = 22050.0;
     bool   playing          = false;
     int    beatsPerBar      = 4;
+    int    beatDenominator  = 4;
 };
 
 struct MidiEffectParameterInfo {

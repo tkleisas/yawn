@@ -13,7 +13,7 @@ namespace audio {
 enum class QuantizeMode {
     None,       // Launch immediately
     NextBeat,   // Quantize to next beat
-    NextBar     // Quantize to next bar (4 beats in 4/4)
+    NextBar     // Quantize to next bar
 };
 
 // A pending clip launch waiting for quantization

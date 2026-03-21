@@ -433,6 +433,17 @@ void App::processEvents() {
                     break;
                 }
 
+                // Session view editing (BPM / time signature) takes priority
+                if (m_sessionView.isEditing()) {
+                    int kc = 0;
+                    if (event.key.key == SDLK_RETURN) kc = 13;
+                    else if (event.key.key == SDLK_ESCAPE) kc = 27;
+                    else if (event.key.key == SDLK_BACKSPACE) kc = 8;
+                    else if (event.key.key == SDLK_TAB) kc = 9;
+                    if (kc) m_sessionView.handleKeyDown(kc);
+                    break;
+                }
+
                 // Keyboard shortcuts for menus (Ctrl combos always take priority)
                 if (ctrl) {
                     switch (event.key.key) {
@@ -485,7 +496,7 @@ void App::processEvents() {
 
                     case SDLK_UP: {
                         double newBpm = m_audioEngine.transport().bpm() + 1.0;
-                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::min(newBpm, 300.0)});
+                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::min(newBpm, 999.0)});
                         break;
                     }
                     case SDLK_DOWN: {
@@ -521,6 +532,11 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
+                // Session view editing (BPM / time sig)
+                if (m_sessionView.isEditing()) {
+                    m_sessionView.handleTextInput(event.text.text);
+                    break;
+                }
                 if (m_inputState.focused()) {
                     m_inputState.onTextInput(event.text.text);
                 }
@@ -651,6 +667,11 @@ void App::processEvents() {
                 }
 
                 // Existing view handlers: mixer → session
+                // Handle double-click for BPM/time sig editing
+                if (event.button.clicks >= 2 && btn == SDL_BUTTON_LEFT) {
+                    if (m_sessionView.handleDoubleClick(mx, my))
+                        break;
+                }
                 if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
                     int selTrack = -1;
                     if (m_sessionView.handleClick(mx, my, rightClick, &selTrack)) {
@@ -766,7 +787,9 @@ void App::update() {
     }
 
     m_sessionView.setTransportState(m_displayPlaying, m_displayBeats,
-                                     m_audioEngine.transport().bpm());
+                                     m_audioEngine.transport().bpm(),
+                                     m_audioEngine.transport().numerator(),
+                                     m_audioEngine.transport().denominator());
 
     // Keep detail panel synced with selected track
     if (m_showDetailPanel) {

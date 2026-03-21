@@ -16,6 +16,11 @@ struct TransportSetBPMMsg {
     double bpm;
 };
 
+struct TransportSetTimeSignatureMsg {
+    int numerator;
+    int denominator;
+};
+
 struct TransportSetPositionMsg {
     int64_t positionInSamples;
 };
@@ -122,6 +127,7 @@ using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
     TransportSetBPMMsg,
+    TransportSetTimeSignatureMsg,
     TransportSetPositionMsg,
     TestToneMsg,
     LaunchClipMsg,

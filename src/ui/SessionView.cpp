@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <cstdlib>
+#include <SDL3/SDL_timer.h>
 
 namespace yawn {
 namespace ui {
@@ -18,10 +20,13 @@ void SessionView::updateClipState(int trackIndex, bool playing, int64_t playPosi
     }
 }
 
-void SessionView::setTransportState(bool playing, double beats, double bpm) {
+void SessionView::setTransportState(bool playing, double beats, double bpm,
+                                    int numerator, int denominator) {
     m_transportPlaying = playing;
     m_transportBeats = beats;
     m_transportBPM = bpm;
+    m_transportNumerator = numerator;
+    m_transportDenominator = denominator;
     m_animTimer += 1.0f / 60.0f; // approximate
 }
 
@@ -86,13 +91,92 @@ void SessionView::renderTransportBar(Renderer2D& renderer, Font& font,
         }
     }
 
-    // BPM
+    // --- BPM box (clickable/editable) ---
+    float bpmX = x + 160;
+    float boxH = h - 8;
+    float boxY = y + 4;
+    float bpmW = 100;
+    m_bpmBoxX = bpmX; m_bpmBoxY = boxY; m_bpmBoxW = bpmW; m_bpmBoxH = boxH;
+
+    bool editingBpm = (m_editMode == EditMode::BPM);
+    Color bpmBg = editingBpm ? Color{60, 60, 80, 255} : Color{40, 40, 50, 255};
+    renderer.drawRect(bpmX, boxY, bpmW, boxH, bpmBg);
+    renderer.drawRectOutline(bpmX, boxY, bpmW, boxH,
+                              editingBpm ? Theme::transportAccent : Theme::clipSlotBorder);
+
     char bpmText[32];
-    std::snprintf(bpmText, sizeof(bpmText), "%.0f BPM", m_transportBPM);
-    tx = x + 160;
+    if (editingBpm)
+        std::snprintf(bpmText, sizeof(bpmText), "%s_", m_editBuffer.c_str());
+    else
+        std::snprintf(bpmText, sizeof(bpmText), "%.2f", m_transportBPM);
+    tx = bpmX + 6;
     if (font.isLoaded()) {
         for (const char* p = bpmText; *p; ++p) {
             auto g = font.getGlyph(*p, tx, textY, scale);
+            renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       editingBpm ? Theme::transportAccent : Theme::transportText,
+                                       font.textureId());
+            tx += g.xAdvance;
+        }
+    }
+    // "BPM" label
+    tx = bpmX + bpmW + 4;
+    if (font.isLoaded()) {
+        for (const char* p = "BPM"; *p; ++p) {
+            auto g = font.getGlyph(*p, tx, textY, scale * 0.85f);
+            renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       Theme::textSecondary, font.textureId());
+            tx += g.xAdvance;
+        }
+    }
+
+    // --- Time signature box (clickable/editable) ---
+    float tsX = bpmX + bpmW + 50;
+    float tsW = 56;
+    m_tsBoxX = tsX; m_tsBoxY = boxY; m_tsBoxW = tsW; m_tsBoxH = boxH;
+
+    bool editingTs = (m_editMode == EditMode::TimeSigNum || m_editMode == EditMode::TimeSigDen);
+    Color tsBg = editingTs ? Color{60, 60, 80, 255} : Color{40, 40, 50, 255};
+    renderer.drawRect(tsX, boxY, tsW, boxH, tsBg);
+    renderer.drawRectOutline(tsX, boxY, tsW, boxH,
+                              editingTs ? Theme::transportAccent : Theme::clipSlotBorder);
+
+    char tsText[16];
+    if (m_editMode == EditMode::TimeSigNum)
+        std::snprintf(tsText, sizeof(tsText), "%s_/%d", m_editBuffer.c_str(), m_transportDenominator);
+    else if (m_editMode == EditMode::TimeSigDen)
+        std::snprintf(tsText, sizeof(tsText), "%d/%s_", m_transportNumerator, m_editBuffer.c_str());
+    else
+        std::snprintf(tsText, sizeof(tsText), "%d/%d", m_transportNumerator, m_transportDenominator);
+    tx = tsX + 6;
+    if (font.isLoaded()) {
+        for (const char* p = tsText; *p; ++p) {
+            auto g = font.getGlyph(*p, tx, textY, scale);
+            renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       editingTs ? Theme::transportAccent : Theme::transportText,
+                                       font.textureId());
+            tx += g.xAdvance;
+        }
+    }
+
+    // --- Tap tempo button ---
+    float tapX = tsX + tsW + 16;
+    float tapW = 48;
+    m_tapButtonX = tapX; m_tapButtonY = boxY; m_tapButtonW = tapW; m_tapButtonH = boxH;
+
+    m_tapFlash = std::max(0.0f, m_tapFlash - 1.0f / 15.0f);
+    uint8_t flashR = static_cast<uint8_t>(40 + m_tapFlash * 60);
+    uint8_t flashG = static_cast<uint8_t>(40 + m_tapFlash * 80);
+    Color tapBg = {flashR, flashG, 50, 255};
+    renderer.drawRect(tapX, boxY, tapW, boxH, tapBg);
+    renderer.drawRectOutline(tapX, boxY, tapW, boxH, Theme::clipSlotBorder);
+    tx = tapX + 6;
+    if (font.isLoaded()) {
+        for (const char* p = "TAP"; *p; ++p) {
+            auto g = font.getGlyph(*p, tx, textY, scale * 0.85f);
             renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
                                        Theme::transportText, font.textureId());
@@ -100,12 +184,13 @@ void SessionView::renderTransportBar(Renderer2D& renderer, Font& font,
         }
     }
 
-    // Bar.Beat position
-    int bar = static_cast<int>(m_transportBeats / 4.0) + 1;
-    int beat = static_cast<int>(std::fmod(m_transportBeats, 4.0)) + 1;
+    // --- Bar.Beat position ---
+    int bpb = std::max(1, m_transportNumerator);
+    int bar = static_cast<int>(m_transportBeats / bpb) + 1;
+    int beat = static_cast<int>(std::fmod(m_transportBeats, static_cast<double>(bpb))) + 1;
     char posText[32];
     std::snprintf(posText, sizeof(posText), "%d . %d", bar, beat);
-    tx = x + 280;
+    tx = tapX + tapW + 20;
     if (font.isLoaded()) {
         for (const char* p = posText; *p; ++p) {
             auto g = font.getGlyph(*p, tx, textY, scale);
@@ -320,6 +405,22 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick, int* select
     if (my < m_viewY || my > m_viewY + m_viewH) return false;
     if (mx < m_viewX || mx > m_viewX + m_viewW) return false;
 
+    // Transport bar area clicks
+    if (my < headerY) {
+        // Tap tempo button
+        if (mx >= m_tapButtonX && mx <= m_tapButtonX + m_tapButtonW &&
+            my >= m_tapButtonY && my <= m_tapButtonY + m_tapButtonH) {
+            tapTempo();
+            return true;
+        }
+        // Single click on BPM or time sig just cancels any edit
+        if (m_editMode != EditMode::None) {
+            m_editMode = EditMode::None;
+            m_editBuffer.clear();
+        }
+        return true;
+    }
+
     // Click in track header area — select track
     if (my >= headerY && my < gridY && mx >= gridX) {
         float contentMX = mx + m_scrollX;
@@ -398,6 +499,132 @@ void SessionView::handleScroll(float dx, float dy) {
     float contentW = m_project->numTracks() * Theme::kTrackWidth;
     float maxScrollX = std::max(0.0f, contentW - gridW);
     m_scrollX = std::clamp(m_scrollX - dx * 30.0f, 0.0f, maxScrollX);
+}
+
+bool SessionView::handleDoubleClick(float mx, float my) {
+    // BPM box double-click → enter edit mode
+    if (mx >= m_bpmBoxX && mx <= m_bpmBoxX + m_bpmBoxW &&
+        my >= m_bpmBoxY && my <= m_bpmBoxY + m_bpmBoxH) {
+        m_editMode = EditMode::BPM;
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%.2f", m_transportBPM);
+        m_editBuffer = buf;
+        return true;
+    }
+    // Time signature box double-click → edit numerator first
+    if (mx >= m_tsBoxX && mx <= m_tsBoxX + m_tsBoxW &&
+        my >= m_tsBoxY && my <= m_tsBoxY + m_tsBoxH) {
+        m_editMode = EditMode::TimeSigNum;
+        m_editBuffer = std::to_string(m_transportNumerator);
+        return true;
+    }
+    return false;
+}
+
+bool SessionView::handleTextInput(const char* text) {
+    if (m_editMode == EditMode::None) return false;
+    for (const char* p = text; *p; ++p) {
+        char c = *p;
+        if (m_editMode == EditMode::BPM) {
+            if ((c >= '0' && c <= '9') || (c == '.' && m_editBuffer.find('.') == std::string::npos))
+                m_editBuffer += c;
+        } else {
+            // Time signature: digits only
+            if (c >= '0' && c <= '9')
+                m_editBuffer += c;
+        }
+    }
+    return true;
+}
+
+bool SessionView::handleKeyDown(int keycode) {
+    if (m_editMode == EditMode::None) return false;
+
+    // SDL_SCANCODE / SDLK constants:  Enter=13, Escape=27, Backspace=8, Tab=9
+    if (keycode == 13 || keycode == 9) { // Enter or Tab
+        if (m_editMode == EditMode::BPM) {
+            double val = std::atof(m_editBuffer.c_str());
+            val = std::clamp(val, 20.0, 999.0);
+            if (m_engine)
+                m_engine->sendCommand(audio::TransportSetBPMMsg{val});
+            if (keycode == 9) {
+                // Tab from BPM → jump to time sig numerator
+                m_editMode = EditMode::TimeSigNum;
+                m_editBuffer = std::to_string(m_transportNumerator);
+                return true;
+            }
+        } else if (m_editMode == EditMode::TimeSigNum) {
+            int val = std::atoi(m_editBuffer.c_str());
+            val = std::clamp(val, 1, 32);
+            if (m_engine)
+                m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{val, m_transportDenominator});
+            if (keycode == 9) {
+                // Tab from numerator → jump to denominator
+                m_editMode = EditMode::TimeSigDen;
+                m_editBuffer = std::to_string(m_transportDenominator);
+                return true;
+            }
+        } else if (m_editMode == EditMode::TimeSigDen) {
+            int val = std::atoi(m_editBuffer.c_str());
+            // Denominator must be a power of 2 (1,2,4,8,16,32)
+            if (val < 1) val = 1;
+            else if (val <= 1) val = 1;
+            else if (val <= 2) val = 2;
+            else if (val <= 4) val = 4;
+            else if (val <= 8) val = 8;
+            else if (val <= 16) val = 16;
+            else val = 32;
+            if (m_engine)
+                m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{m_transportNumerator, val});
+        }
+        m_editMode = EditMode::None;
+        m_editBuffer.clear();
+        return true;
+    }
+
+    if (keycode == 27) { // Escape — cancel
+        m_editMode = EditMode::None;
+        m_editBuffer.clear();
+        return true;
+    }
+
+    if (keycode == 8) { // Backspace
+        if (!m_editBuffer.empty())
+            m_editBuffer.pop_back();
+        return true;
+    }
+
+    return true; // consume all keys while editing
+}
+
+void SessionView::tapTempo() {
+    double now = static_cast<double>(SDL_GetTicksNS()) / 1e9;
+    m_tapFlash = 1.0f;
+
+    if (m_tapCount > 0) {
+        double lastTap = m_tapTimes[(m_tapCount - 1) % kTapHistorySize];
+        if (now - lastTap > 2.0) {
+            // Too long since last tap — reset
+            m_tapCount = 0;
+        }
+    }
+
+    m_tapTimes[m_tapCount % kTapHistorySize] = now;
+    m_tapCount++;
+
+    if (m_tapCount >= 2) {
+        int numIntervals = std::min(m_tapCount - 1, kTapHistorySize - 1);
+        int startIdx = m_tapCount - numIntervals - 1;
+        double totalInterval = m_tapTimes[(m_tapCount - 1) % kTapHistorySize]
+                             - m_tapTimes[startIdx % kTapHistorySize];
+        double avgInterval = totalInterval / numIntervals;
+        double bpm = 60.0 / avgInterval;
+        bpm = std::clamp(bpm, 20.0, 999.0);
+        // Round to 2 decimal places
+        bpm = std::round(bpm * 100.0) / 100.0;
+        if (m_engine)
+            m_engine->sendCommand(audio::TransportSetBPMMsg{bpm});
+    }
 }
 
 } // namespace ui

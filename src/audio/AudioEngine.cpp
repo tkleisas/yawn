@@ -179,6 +179,8 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
             ti.sampleRate = m_config.sampleRate;
             ti.samplesPerBeat = ti.sampleRate * 60.0 / ti.bpm;
             ti.playing = m_transport.isPlaying();
+            ti.beatsPerBar = m_transport.beatsPerBar();
+            ti.beatDenominator = m_transport.denominator();
             m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
         }
         // Render instrument into track buffer (adds to existing audio)
@@ -240,6 +242,10 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, TransportSetBPMMsg>) {
                 m_transport.setBPM(msg.bpm);
+            }
+            else if constexpr (std::is_same_v<T, TransportSetTimeSignatureMsg>) {
+                m_transport.setTimeSignature(msg.numerator, msg.denominator);
+                m_metronome.setBeatsPerBar(msg.numerator);
             }
             else if constexpr (std::is_same_v<T, TransportSetPositionMsg>) {
                 m_transport.setPositionInSamples(msg.positionInSamples);

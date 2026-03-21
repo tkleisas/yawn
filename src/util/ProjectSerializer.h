@@ -484,6 +484,8 @@ public:
         json proj;
         proj["bpm"] = engine.transport().bpm();
         proj["sampleRate"] = sr;
+        proj["timeSignatureNumerator"] = engine.transport().numerator();
+        proj["timeSignatureDenominator"] = engine.transport().denominator();
         root["project"] = proj;
 
         // Tracks
@@ -576,6 +578,9 @@ public:
         if (root.contains("project")) {
             const auto& proj = root["project"];
             engine.transport().setBPM(proj.value("bpm", 120.0));
+            engine.transport().setTimeSignature(
+                proj.value("timeSignatureNumerator", 4),
+                proj.value("timeSignatureDenominator", 4));
         }
 
         // Tracks & Scenes
