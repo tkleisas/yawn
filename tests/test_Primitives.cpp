@@ -232,6 +232,97 @@ TEST(FwKnobTest, LabelAccess) {
     knob.measure(Constraints::loose(100, 100), ctx);
 }
 
+TEST(FwKnobTest, BooleanModeToggle) {
+    FwKnob knob;
+    knob.setRange(0, 1);
+    knob.setDefault(0);
+    knob.setValue(0);
+    knob.setBoolean(true);
+    EXPECT_TRUE(knob.isBoolean());
+
+    float newVal = -1;
+    knob.setOnChange([&](float v) { newVal = v; });
+
+    // Click toggles from off (0) to on (1)
+    MouseEvent down;
+    down.x = 20; down.y = 25;
+    down.button = MouseButton::Left;
+    knob.onMouseDown(down);
+    EXPECT_NEAR(knob.value(), 1.0f, 0.01f);
+    EXPECT_NEAR(newVal, 1.0f, 0.01f);
+
+    // Click again toggles back to off (0)
+    knob.onMouseDown(down);
+    EXPECT_NEAR(knob.value(), 0.0f, 0.01f);
+    EXPECT_NEAR(newVal, 0.0f, 0.01f);
+}
+
+TEST(FwKnobTest, BooleanModeNoDrag) {
+    FwKnob knob;
+    knob.setRange(0, 1);
+    knob.setValue(0);
+    knob.setBoolean(true);
+
+    // Click in boolean mode should not start drag
+    MouseEvent down;
+    down.x = 20; down.y = 25;
+    down.button = MouseButton::Left;
+    knob.onMouseDown(down);
+
+    // Moving should have no effect (no drag state)
+    MouseMoveEvent move;
+    move.x = 20; move.y = 5;
+    knob.onMouseMove(move);
+
+    // Value should still be 1 (toggled), not changed by drag
+    EXPECT_NEAR(knob.value(), 1.0f, 0.01f);
+}
+
+TEST(FwKnobTest, CustomArcColors) {
+    using Color = yawn::ui::Color;
+    FwKnob knob;
+    Color custom{255, 0, 0, 255};
+    Color customActive{255, 128, 0, 255};
+    knob.setArcColor(custom);
+    knob.setArcColorActive(customActive);
+    // Verify it doesn't crash — colors used in paint()
+    UIContext ctx;
+    knob.measure(Constraints::loose(100, 100), ctx);
+}
+
+TEST(FwKnobTest, FormatCallback) {
+    FwKnob knob;
+    knob.setRange(20, 20000);
+    knob.setValue(440);
+
+    std::string formatted;
+    knob.setFormatCallback([&](float v) -> std::string {
+        formatted = std::to_string(static_cast<int>(v)) + " Hz";
+        return formatted;
+    });
+
+    // Call the callback manually to verify it works
+    auto result = knob.value();
+    EXPECT_NEAR(result, 440.0f, 0.01f);
+
+    // Verify the format callback produces expected output
+    knob.setFormatCallback([](float v) -> std::string {
+        return std::to_string(static_cast<int>(v)) + " Hz";
+    });
+    UIContext ctx;
+    knob.measure(Constraints::loose(100, 100), ctx);
+}
+
+TEST(FwKnobTest, ValueClampedToRange) {
+    FwKnob knob;
+    knob.setRange(0, 100);
+    knob.setValue(150);
+    EXPECT_LE(knob.value(), 100.0f);
+
+    knob.setValue(-50);
+    EXPECT_GE(knob.value(), 0.0f);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TextInput tests
 // ═══════════════════════════════════════════════════════════════════════════

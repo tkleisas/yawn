@@ -672,10 +672,10 @@ private:
             renderArc(renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
 
             bool isActive = (deviceIdx == m_activeDevice && p.index == m_activeParam);
-            Color arcCol = isActive ? Color{120, 200, 255, 255}
-                                    : Color{80, 160, 210, 255};
+            Color arcCol = isActive ? Color{0, 255, 255, 255}
+                                    : Color{0, 200, 255, 255};
             if (p.isBoolean) {
-                arcCol = value > 0.5f ? Color{80, 200, 80, 255}
+                arcCol = value > 0.5f ? Color{57, 255, 20, 255}
                                       : Color{80, 80, 85, 255};
                 norm = value > 0.5f ? 1.0f : 0.0f;
             }
