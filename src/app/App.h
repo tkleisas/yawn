@@ -55,6 +55,7 @@ private:
     ui::VirtualKeyboard m_virtualKeyboard;
     ui::ContextMenu m_contextMenu;
     ui::ConfirmDialog m_confirmDialog;
+    bool m_showAbout = false;
     ui::InputState m_inputState;
 
     audio::AudioEngine m_audioEngine;

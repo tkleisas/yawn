@@ -20,6 +20,7 @@
 #include "midi/VelocityEffect.h"
 #include "midi/MidiRandom.h"
 #include "midi/MidiPitch.h"
+#include "Version.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -107,7 +108,7 @@ void App::setupMenuBar() {
 
     // Help menu
     m_menuBar.addMenu("Help", {
-        {"About Y.A.W.N",     "",  [this]() { std::printf("Y.A.W.N v0.1.0\n"); }},
+        {"About Y.A.W.N",     "",  [this]() { m_showAbout = true; }},
         {"Keyboard Shortcuts", "",  nullptr},
     });
 }
@@ -413,9 +414,14 @@ void App::processEvents() {
                 bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
                 bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
 
-                // Block keys when confirm dialog is open
+                // Block keys when confirm dialog or about is open
                 if (m_confirmDialog.isOpen()) {
                     if (event.key.key == SDLK_ESCAPE) m_confirmDialog.close();
+                    break;
+                }
+                if (m_showAbout) {
+                    if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN)
+                        m_showAbout = false;
                     break;
                 }
 
@@ -545,6 +551,21 @@ void App::processEvents() {
                     float sh = static_cast<float>(m_mainWindow.getHeight());
                     m_confirmDialog.handleClick(mx, my, sw, sh);
                     break;
+                }
+
+                // About dialog (modal)
+                if (m_showAbout) {
+                    float sw = static_cast<float>(m_mainWindow.getWidth());
+                    float sh = static_cast<float>(m_mainWindow.getHeight());
+                    float dw = 420, dh = 200;
+                    float dx = (sw - dw) * 0.5f, dy = (sh - dh) * 0.5f;
+                    float btnH = 36;
+                    float btnHitW = 100;
+                    float btnX = dx + (dw - btnHitW) * 0.5f;
+                    float btnY = dy + dh - btnH - 14;
+                    if (mx >= btnX && mx < btnX + btnHitW && my >= btnY && my < btnY + btnH)
+                        m_showAbout = false;
+                    break;  // modal — consume click
                 }
 
                 // Context menu takes priority when open
@@ -773,6 +794,57 @@ void App::render() {
     // Confirm dialog (topmost modal overlay)
     m_confirmDialog.render(m_renderer, m_font,
                            static_cast<float>(w), static_cast<float>(h));
+
+    // About dialog
+#ifndef YAWN_TEST_BUILD
+    if (m_showAbout) {
+        float sw = static_cast<float>(w);
+        float sh = static_cast<float>(h);
+        float dw = 420, dh = 200;
+        float dx = (sw - dw) * 0.5f, dy = (sh - dh) * 0.5f;
+
+        // Dimmed overlay
+        m_renderer.drawRect(0, 0, sw, sh, ui::Color{0, 0, 0, 140});
+        // Dialog
+        m_renderer.drawRect(dx, dy, dw, dh, ui::Color{45, 45, 52, 255});
+        m_renderer.drawRectOutline(dx, dy, dw, dh, ui::Color{75, 75, 85, 255});
+
+        float ts = 14.0f / ui::Theme::kFontSize;
+        float tsSmall = 11.0f / ui::Theme::kFontSize;
+        float lineH = 20.0f;
+        float textX = dx + 20;
+        float textY = dy + 24;
+
+        m_font.drawText(m_renderer, "Y.A.W.N", textX, textY, 18.0f / ui::Theme::kFontSize,
+                        ui::Color{100, 180, 255, 255});
+        textY += lineH + 4;
+        m_font.drawText(m_renderer, "Yetanother Audio Workstation New", textX, textY, tsSmall,
+                        ui::Theme::textSecondary);
+        textY += lineH;
+        m_font.drawText(m_renderer, "Version " YAWN_VERSION_STRING, textX, textY, ts,
+                        ui::Theme::textPrimary);
+        textY += lineH + 4;
+        m_font.drawText(m_renderer, "Made with AI-Sloptronic(TM) technology", textX, textY,
+                        tsSmall, ui::Color{180, 140, 255, 255});
+        textY += lineH;
+        m_font.drawText(m_renderer, "PM: Tasos Kleisas  |  Chief Engineer: Claude (Anthropic)",
+                        textX, textY, tsSmall, ui::Theme::textSecondary);
+
+        // OK button
+        float btnScale = 13.0f / ui::Theme::kFontSize;
+        float textH = m_font.lineHeight(btnScale);
+        float okW = m_font.textWidth("OK", btnScale);
+        float btnPadX = 24.0f;
+        float btnW = okW + btnPadX * 2;
+        float btnH = 36;
+        float btnX = dx + (dw - btnW) * 0.5f;
+        float btnY = dy + dh - btnH - 14;
+        m_renderer.drawRect(btnX, btnY, btnW, btnH, ui::Color{60, 120, 200, 255});
+        float textOffY = (btnH - textH) * 0.5f;
+        m_font.drawText(m_renderer, "OK", btnX + (btnW - okW) * 0.5f, btnY + textOffY,
+                        btnScale, ui::Theme::textPrimary);
+    }
+#endif
 
     m_renderer.endFrame();
 

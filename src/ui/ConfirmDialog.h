@@ -35,15 +35,16 @@ public:
         float dy = (screenH - dh) * 0.5f;
 
         float btnY = dy + dh - kBtnH - 14;
-        float yesX = dx + dw * 0.5f - kBtnW - 8;
+        // Use generous hit zones that cover dynamic button widths
+        float yesX = dx + dw * 0.5f - kBtnHitW - 8;
         float noX  = dx + dw * 0.5f + 8;
 
-        if (mx >= yesX && mx < yesX + kBtnW && my >= btnY && my < btnY + kBtnH) {
+        if (mx >= yesX && mx < yesX + kBtnHitW && my >= btnY && my < btnY + kBtnH) {
             if (m_onConfirm) m_onConfirm();
             close();
             return true;
         }
-        if (mx >= noX && mx < noX + kBtnW && my >= btnY && my < btnY + kBtnH) {
+        if (mx >= noX && mx < noX + kBtnHitW && my >= btnY && my < btnY + kBtnH) {
             close();
             return true;
         }
@@ -75,28 +76,34 @@ public:
                       Theme::textPrimary);
 
         // Buttons
-        float btnY = dy + dh - kBtnH - 14;
-        float yesX = dx + dw * 0.5f - kBtnW - 8;
-        float noX  = dx + dw * 0.5f + 8;
-
-        renderer.drawRect(yesX, btnY, kBtnW, kBtnH, Color{50, 130, 50, 255});
-        renderer.drawRect(noX,  btnY, kBtnW, kBtnH, Color{130, 50, 50, 255});
-
         float btnScale = 13.0f / Theme::kFontSize;
+        float textH = font.lineHeight(btnScale);
         float yW = font.textWidth("Yes", btnScale);
         float nW = font.textWidth("No", btnScale);
-        font.drawText(renderer, "Yes", yesX + (kBtnW - yW) * 0.5f, btnY + 8,
+        float btnPadX = 24.0f;
+        float bwYes = yW + btnPadX * 2;
+        float bwNo  = nW + btnPadX * 2;
+
+        float btnY = dy + dh - kBtnH - 14;
+        float yesX = dx + dw * 0.5f - bwYes - 8;
+        float noX  = dx + dw * 0.5f + 8;
+
+        renderer.drawRect(yesX, btnY, bwYes, kBtnH, Color{50, 130, 50, 255});
+        renderer.drawRect(noX,  btnY, bwNo,  kBtnH, Color{130, 50, 50, 255});
+
+        float textOffY = (kBtnH - textH) * 0.5f;
+        font.drawText(renderer, "Yes", yesX + (bwYes - yW) * 0.5f, btnY + textOffY,
                       btnScale, Theme::textPrimary);
-        font.drawText(renderer, "No",  noX  + (kBtnW - nW) * 0.5f, btnY + 8,
+        font.drawText(renderer, "No",  noX  + (bwNo  - nW) * 0.5f, btnY + textOffY,
                       btnScale, Theme::textPrimary);
 #endif
     }
 
 private:
-    static constexpr float kDialogW = 500.0f;
-    static constexpr float kDialogH = 120.0f;
-    static constexpr float kBtnW    = 80.0f;
-    static constexpr float kBtnH    = 32.0f;
+    static constexpr float kDialogW  = 500.0f;
+    static constexpr float kDialogH  = 120.0f;
+    static constexpr float kBtnH     = 36.0f;
+    static constexpr float kBtnHitW  = 100.0f;  // generous hit area for click detection
 
     bool m_open = false;
     std::string m_message;

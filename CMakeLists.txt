@@ -21,6 +21,20 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Fetch dependencies
 include(cmake/Dependencies.cmake)
 
+# Generate Version.h at build time (embeds git hash)
+set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${GENERATED_DIR}")
+add_custom_target(generate_version ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DVERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        -DVERSION_MINOR=${PROJECT_VERSION_MINOR}
+        -DVERSION_PATCH=${PROJECT_VERSION_PATCH}
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DOUTPUT_DIR=${GENERATED_DIR}
+        -P ${CMAKE_SOURCE_DIR}/cmake/GenerateVersion.cmake
+    COMMENT "Generating Version.h"
+)
+
 # Collect sources
 file(GLOB_RECURSE YAWN_SOURCES
     src/*.cpp
@@ -32,7 +46,10 @@ add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${stb_SOURCE_DIR}
+    ${GENERATED_DIR}
 )
+
+add_dependencies(${PROJECT_NAME} generate_version)
 
 # Link dependencies
 target_link_libraries(${PROJECT_NAME} PRIVATE
