@@ -17,6 +17,9 @@
 #include "util/FileIO.h"
 #include <vector>
 #include <memory>
+#include <string>
+#include <mutex>
+#include <filesystem>
 
 namespace yawn {
 
@@ -45,6 +48,20 @@ private:
     void showTrackContextMenu(int trackIndex, float mx, float my);
     void updateDetailForSelectedTrack();
 
+    // Project file operations
+    void newProject();
+    void openProject();
+    void saveProject();
+    void saveProjectAs();
+    void doSaveProject(const std::filesystem::path& path);
+    void doOpenProject(const std::filesystem::path& path);
+    void updateWindowTitle();
+    void markDirty() { m_projectDirty = true; updateWindowTitle(); }
+
+    // SDL3 async file dialog callbacks
+    static void SDLCALL onOpenFolderResult(void* userdata, const char* const* filelist, int filter);
+    static void SDLCALL onSaveFolderResult(void* userdata, const char* const* filelist, int filter);
+
     ui::Window m_mainWindow;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
@@ -64,6 +81,15 @@ private:
     bool m_showMixer = true;
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
+
+    // Project persistence state
+    std::filesystem::path m_projectPath;   // Empty = untitled
+    bool m_projectDirty = false;
+
+    // Pending file dialog results (set from SDL callbacks, processed on main thread)
+    std::mutex m_dialogMutex;
+    std::string m_pendingOpenPath;
+    std::string m_pendingSavePath;
 
     // Mouse tracking for drag
     float m_lastMouseX = 0;

@@ -106,5 +106,46 @@ std::shared_ptr<audio::AudioBuffer> resampleBuffer(
     return dst;
 }
 
+bool saveAudioFile(const std::string& path,
+                   const float* interleavedData, int numFrames, int numChannels,
+                   int sampleRate) {
+    SF_INFO sfInfo{};
+    sfInfo.samplerate = sampleRate;
+    sfInfo.channels = numChannels;
+    sfInfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+    sfInfo.frames = numFrames;
+
+    SNDFILE* file = sf_open(path.c_str(), SFM_WRITE, &sfInfo);
+    if (!file) {
+        std::fprintf(stderr, "Failed to create audio file '%s': %s\n",
+            path.c_str(), sf_strerror(nullptr));
+        return false;
+    }
+
+    sf_writef_float(file, interleavedData, numFrames);
+    sf_close(file);
+    return true;
+}
+
+bool saveAudioBuffer(const std::string& path,
+                     const audio::AudioBuffer& buffer,
+                     int sampleRate) {
+    if (buffer.isEmpty()) return false;
+
+    int nc = buffer.numChannels();
+    int nf = buffer.numFrames();
+
+    // Convert non-interleaved → interleaved for libsndfile
+    std::vector<float> interleaved(static_cast<size_t>(nf) * nc);
+    for (int ch = 0; ch < nc; ++ch) {
+        const float* src = buffer.channelData(ch);
+        for (int i = 0; i < nf; ++i) {
+            interleaved[static_cast<size_t>(i) * nc + ch] = src[i];
+        }
+    }
+
+    return saveAudioFile(path, interleaved.data(), nf, nc, sampleRate);
+}
+
 } // namespace util
 } // namespace yawn

@@ -29,5 +29,16 @@ std::shared_ptr<audio::AudioBuffer> resampleBuffer(
     double dstRate
 );
 
+// Save interleaved audio data to a WAV file.
+// Returns true on success.
+bool saveAudioFile(const std::string& path,
+                   const float* interleavedData, int numFrames, int numChannels,
+                   int sampleRate);
+
+// Save a non-interleaved AudioBuffer to a WAV file.
+bool saveAudioBuffer(const std::string& path,
+                     const audio::AudioBuffer& buffer,
+                     int sampleRate);
+
 } // namespace util
 } // namespace yawn

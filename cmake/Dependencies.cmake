@@ -103,3 +103,15 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(BUILD_GMOCK ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+
+# ──────────────────────────────────────────────
+# nlohmann/json (header-only JSON library)
+# ──────────────────────────────────────────────
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(nlohmann_json)

@@ -20,6 +20,7 @@
 #include "midi/VelocityEffect.h"
 #include "midi/MidiRandom.h"
 #include "midi/MidiPitch.h"
+#include "util/ProjectSerializer.h"
 #include "Version.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
@@ -58,10 +59,10 @@ bool App::loadFont() {
 void App::setupMenuBar() {
     // File menu
     m_menuBar.addMenu("File", {
-        {"New Project",   "Ctrl+N",       [this]() { std::printf("New Project\n"); }},
-        {"Open Project",  "Ctrl+O",       [this]() { std::printf("Open Project\n"); }},
-        {"Save Project",  "Ctrl+S",       [this]() { std::printf("Save Project\n"); }},
-        {"Save As...",    "Ctrl+Shift+S", nullptr},
+        {"New Project",   "Ctrl+N",       [this]() { newProject(); }},
+        {"Open Project",  "Ctrl+O",       [this]() { openProject(); }},
+        {"Save Project",  "Ctrl+S",       [this]() { saveProject(); }},
+        {"Save As...",    "Ctrl+Shift+S", [this]() { saveProjectAs(); }},
         {"Export Audio",  "",             nullptr, true},
         {"Quit",          "Ctrl+Q",       [this]() { m_running = false; }, true},
     });
@@ -88,13 +89,14 @@ void App::setupMenuBar() {
     m_menuBar.addMenu("Track", {
         {"Add Audio Track",  "",  [this]() {
             m_project.addTrack("Audio " + std::to_string(m_project.numTracks() + 1), Track::Type::Audio);
+            markDirty();
             std::printf("Added Audio track %d\n", m_project.numTracks());
         }},
         {"Add MIDI Track",   "",  [this]() {
             int idx = m_project.numTracks();
             m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
-            // Auto-assign a SubSynth to new MIDI tracks
             m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
+            markDirty();
             std::printf("Added MIDI track %d (with SubSynth)\n", m_project.numTracks());
         }},
         {"Delete Track",     "",  nullptr, true},
@@ -133,7 +135,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_audioEngine.setInstrument(trackIndex, nullptr);
                 m_project.track(trackIndex).type = Track::Type::Audio;
                 m_detailPanel.clear();
-                std::printf("Track %d changed to Audio\n", trackIndex + 1);
+                markDirty();
             });
     }, false, track.type != Track::Type::Audio});
 
@@ -149,7 +151,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_audioEngine.setInstrument(trackIndex,
                     std::make_unique<instruments::SubtractiveSynth>());
                 m_detailPanel.clear();
-                std::printf("Track %d changed to MIDI (SubSynth assigned)\n", trackIndex + 1);
+                markDirty();
             });
     }, false, track.type != Track::Type::Midi});
 
@@ -158,27 +160,27 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     instrItems.push_back({"SubSynth", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::SubtractiveSynth>());
-        std::printf("Track %d: SubSynth assigned\n", trackIndex + 1);
+        markDirty();
     }});
     instrItems.push_back({"FM Synth", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::FMSynth>());
-        std::printf("Track %d: FM Synth assigned\n", trackIndex + 1);
+        markDirty();
     }});
     instrItems.push_back({"Sampler", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Sampler>());
-        std::printf("Track %d: Sampler assigned\n", trackIndex + 1);
+        markDirty();
     }});
     instrItems.push_back({"Drum Rack", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::DrumRack>());
-        std::printf("Track %d: Drum Rack assigned\n", trackIndex + 1);
+        markDirty();
     }});
     instrItems.push_back({"Instrument Rack", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::InstrumentRack>());
-        std::printf("Track %d: Instrument Rack assigned\n", trackIndex + 1);
+        markDirty();
     }});
     items.push_back({"Add Instrument", nullptr, true, true, std::move(instrItems)});
 
@@ -186,39 +188,39 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     std::vector<ui::ContextMenu::Item> fxItems;
     fxItems.push_back({"Reverb", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Reverb>());
-        std::printf("Track %d: Reverb added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Delay", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Delay>());
-        std::printf("Track %d: Delay added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"EQ", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::EQ>());
-        std::printf("Track %d: EQ added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Compressor", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Compressor>());
-        std::printf("Track %d: Compressor added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Filter", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Filter>());
-        std::printf("Track %d: Filter added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Chorus", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Chorus>());
-        std::printf("Track %d: Chorus added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Distortion", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Distortion>());
-        std::printf("Track %d: Distortion added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Oscilloscope", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Oscilloscope>());
-        std::printf("Track %d: Oscilloscope added\n", trackIndex + 1);
+        markDirty();
     }});
     fxItems.push_back({"Spectrum", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::SpectrumAnalyzer>());
-        std::printf("Track %d: Spectrum Analyzer added\n", trackIndex + 1);
+        markDirty();
     }});
     items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
 
@@ -226,31 +228,31 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     std::vector<ui::ContextMenu::Item> midiItems;
     midiItems.push_back({"Arpeggiator", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Arpeggiator>());
-        std::printf("Track %d: Arpeggiator added\n", trackIndex + 1);
+        markDirty();
     }});
     midiItems.push_back({"Chord", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Chord>());
-        std::printf("Track %d: Chord added\n", trackIndex + 1);
+        markDirty();
     }});
     midiItems.push_back({"Scale", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Scale>());
-        std::printf("Track %d: Scale added\n", trackIndex + 1);
+        markDirty();
     }});
     midiItems.push_back({"Note Length", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::NoteLength>());
-        std::printf("Track %d: Note Length added\n", trackIndex + 1);
+        markDirty();
     }});
     midiItems.push_back({"Velocity", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::VelocityEffect>());
-        std::printf("Track %d: Velocity added\n", trackIndex + 1);
+        markDirty();
     }});
     midiItems.push_back({"Random", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiRandom>());
-        std::printf("Track %d: Random added\n", trackIndex + 1);
+        markDirty();
     }});
     midiItems.push_back({"Pitch", [this, trackIndex]() {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiPitch>());
-        std::printf("Track %d: Pitch added\n", trackIndex + 1);
+        markDirty();
     }});
     items.push_back({"Add MIDI Effect", nullptr, false, true, std::move(midiItems)});
 
@@ -340,6 +342,7 @@ bool App::init() {
                 break;
         }
         m_detailPanel.clear();  // Force rebuild on next frame
+        markDirty();
     });
 
     std::printf("\nY.A.W.N initialized successfully\n");
@@ -350,6 +353,8 @@ bool App::init() {
     std::printf("  Click clip slots to launch/stop\n");
     std::printf("  Drag & drop audio files to load clips\n");
     std::printf("  [Esc] Quit\n\n");
+
+    updateWindowTitle();
     return true;
 }
 
@@ -400,6 +405,7 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
     m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, clipPtr});
+    markDirty();
     return true;
 }
 
@@ -431,6 +437,12 @@ void App::processEvents() {
                 if (ctrl) {
                     switch (event.key.key) {
                         case SDLK_Q: m_running = false; break;
+                        case SDLK_N: newProject(); break;
+                        case SDLK_O: openProject(); break;
+                        case SDLK_S:
+                            if (shift) saveProjectAs();
+                            else       saveProject();
+                            break;
                         default: break;
                     }
                     break;
@@ -720,6 +732,21 @@ void App::processEvents() {
 }
 
 void App::update() {
+    // Process pending file dialog results (from SDL async callbacks)
+    {
+        std::lock_guard<std::mutex> lock(m_dialogMutex);
+        if (!m_pendingOpenPath.empty()) {
+            std::string path = std::move(m_pendingOpenPath);
+            m_pendingOpenPath.clear();
+            doOpenProject(path);
+        }
+        if (!m_pendingSavePath.empty()) {
+            std::string path = std::move(m_pendingSavePath);
+            m_pendingSavePath.clear();
+            doSaveProject(path);
+        }
+    }
+
     audio::AudioEvent evt;
     while (m_audioEngine.pollEvent(evt)) {
         std::visit([this](auto&& msg) {
@@ -851,6 +878,175 @@ void App::render() {
     m_renderer.endFrame();
 
     m_mainWindow.swap();
+}
+
+// ---------------------------------------------------------------------------
+// Project file operations
+// ---------------------------------------------------------------------------
+
+void App::newProject() {
+    auto doNew = [this]() {
+        m_audioEngine.sendCommand(audio::TransportStopMsg{});
+
+        // Reset project to defaults
+        m_project = Project();
+        m_project.init(4, 4);
+
+        // Reset audio engine state (instruments, effects, mixer)
+        for (int i = 0; i < 16; ++i) {
+            m_audioEngine.setInstrument(i, nullptr);
+            m_audioEngine.midiEffectChain(i).clear();
+            m_audioEngine.mixer().trackEffects(i).clear();
+        }
+        for (int r = 0; r < 4; ++r)
+            m_audioEngine.mixer().returnEffects(r).clear();
+        m_audioEngine.mixer().masterEffects().clear();
+
+        // Reset mixer volumes/pans
+        for (int i = 0; i < 16; ++i) {
+            m_audioEngine.mixer().setTrackVolume(i, 1.0f);
+            m_audioEngine.mixer().setTrackPan(i, 0.0f);
+            m_audioEngine.mixer().setTrackMute(i, false);
+            m_audioEngine.mixer().setTrackSolo(i, false);
+        }
+        m_audioEngine.mixer().setMasterVolume(1.0f);
+        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{120.0});
+
+        m_projectPath.clear();
+        m_projectDirty = false;
+        m_selectedTrack = 0;
+        m_showDetailPanel = false;
+        updateWindowTitle();
+        std::printf("[Project] New project created\n");
+    };
+
+    if (m_projectDirty) {
+        m_confirmDialog.show("Save changes before creating a new project?",
+            [this, doNew]() {
+                if (!m_projectPath.empty()) {
+                    doSaveProject(m_projectPath);
+                } else {
+                    saveProjectAs();
+                }
+                doNew();
+            });
+    } else {
+        doNew();
+    }
+}
+
+void App::openProject() {
+    auto doOpen = [this]() {
+        SDL_ShowOpenFolderDialog(onOpenFolderResult, this,
+                                m_mainWindow.getHandle(), nullptr, false);
+    };
+
+    if (m_projectDirty) {
+        m_confirmDialog.show("Save changes before opening another project?",
+            [this, doOpen]() {
+                if (!m_projectPath.empty()) {
+                    doSaveProject(m_projectPath);
+                }
+                doOpen();
+            });
+    } else {
+        doOpen();
+    }
+}
+
+void App::saveProject() {
+    if (m_projectPath.empty()) {
+        saveProjectAs();
+        return;
+    }
+    doSaveProject(m_projectPath);
+}
+
+void App::saveProjectAs() {
+    SDL_ShowSaveFileDialog(onSaveFolderResult, this,
+                           m_mainWindow.getHandle(), nullptr, 0, "Untitled.yawn");
+}
+
+void App::doSaveProject(const std::filesystem::path& path) {
+    namespace fs = std::filesystem;
+    fs::path projectDir = path;
+    // Ensure .yawn extension
+    if (projectDir.extension() != ".yawn")
+        projectDir += ".yawn";
+
+    if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine)) {
+        m_projectPath = projectDir;
+        m_projectDirty = false;
+        updateWindowTitle();
+        std::printf("[Project] Saved to: %s\n", projectDir.string().c_str());
+    } else {
+        std::fprintf(stderr, "[Project] Failed to save: %s\n", projectDir.string().c_str());
+    }
+}
+
+void App::doOpenProject(const std::filesystem::path& path) {
+    namespace fs = std::filesystem;
+    fs::path projectDir = path;
+
+    // Check for project.json inside the folder
+    if (!fs::exists(projectDir / "project.json")) {
+        std::fprintf(stderr, "[Project] Not a valid project folder: %s\n",
+                     projectDir.string().c_str());
+        return;
+    }
+
+    m_audioEngine.sendCommand(audio::TransportStopMsg{});
+
+    // Clear current engine state before loading
+    for (int i = 0; i < 16; ++i) {
+        m_audioEngine.setInstrument(i, nullptr);
+        m_audioEngine.midiEffectChain(i).clear();
+        m_audioEngine.mixer().trackEffects(i).clear();
+    }
+    for (int r = 0; r < 4; ++r)
+        m_audioEngine.mixer().returnEffects(r).clear();
+    m_audioEngine.mixer().masterEffects().clear();
+
+    Project loadedProject;
+    if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine)) {
+        m_project = std::move(loadedProject);
+        m_projectPath = projectDir;
+        m_projectDirty = false;
+        m_selectedTrack = 0;
+        m_showDetailPanel = false;
+        updateWindowTitle();
+        std::printf("[Project] Loaded: %s\n", projectDir.string().c_str());
+    } else {
+        std::fprintf(stderr, "[Project] Failed to load: %s\n",
+                     projectDir.string().c_str());
+    }
+}
+
+void App::updateWindowTitle() {
+    std::string title = "Y.A.W.N";
+    if (!m_projectPath.empty()) {
+        title += " - " + m_projectPath.stem().string();
+    } else {
+        title += " - Untitled";
+    }
+    if (m_projectDirty) title += " *";
+    SDL_SetWindowTitle(m_mainWindow.getHandle(), title.c_str());
+}
+
+void SDLCALL App::onOpenFolderResult(void* userdata, const char* const* filelist, int /*filter*/) {
+    auto* app = static_cast<App*>(userdata);
+    if (!filelist || !filelist[0]) return;
+
+    std::lock_guard<std::mutex> lock(app->m_dialogMutex);
+    app->m_pendingOpenPath = filelist[0];
+}
+
+void SDLCALL App::onSaveFolderResult(void* userdata, const char* const* filelist, int /*filter*/) {
+    auto* app = static_cast<App*>(userdata);
+    if (!filelist || !filelist[0]) return;
+
+    std::lock_guard<std::mutex> lock(app->m_dialogMutex);
+    app->m_pendingSavePath = filelist[0];
 }
 
 } // namespace yawn

@@ -46,6 +46,9 @@ public:
     }
 
     bool hasSample() const { return m_sampleFrames > 0; }
+    const float* sampleData() const { return m_sampleData.data(); }
+    int sampleFrames() const { return m_sampleFrames; }
+    int sampleChannels() const { return m_sampleChannels; }
 
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override {

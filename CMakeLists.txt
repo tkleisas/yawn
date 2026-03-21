@@ -58,6 +58,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     PortAudio
     sndfile
     rtmidi
+    nlohmann_json::nlohmann_json
 )
 
 # Platform-specific
