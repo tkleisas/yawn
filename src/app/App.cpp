@@ -665,7 +665,7 @@ void App::processEvents() {
                 if (m_showAbout) {
                     float sw = static_cast<float>(m_mainWindow.getWidth());
                     float sh = static_cast<float>(m_mainWindow.getHeight());
-                    float dw = 420, dh = 200;
+                    float dw = 480, dh = 220;
                     float dx = (sw - dw) * 0.5f, dy = (sh - dh) * 0.5f;
                     float btnH = 36;
                     float btnHitW = 100;
@@ -967,7 +967,7 @@ void App::render() {
     if (m_showAbout) {
         float sw = static_cast<float>(w);
         float sh = static_cast<float>(h);
-        float dw = 420, dh = 200;
+        float dw = 480, dh = 220;
         float dx = (sw - dw) * 0.5f, dy = (sh - dh) * 0.5f;
 
         // Dimmed overlay
@@ -985,7 +985,7 @@ void App::render() {
         m_font.drawText(m_renderer, "Y.A.W.N", textX, textY, 18.0f / ui::Theme::kFontSize,
                         ui::Color{100, 180, 255, 255});
         textY += lineH + 4;
-        m_font.drawText(m_renderer, "Yetanother Audio Workstation New", textX, textY, tsSmall,
+        m_font.drawText(m_renderer, "Yet Another Audio Workstation New", textX, textY, tsSmall,
                         ui::Theme::textSecondary);
         textY += lineH;
         m_font.drawText(m_renderer, "Version " YAWN_VERSION_STRING, textX, textY, ts,
@@ -994,8 +994,11 @@ void App::render() {
         m_font.drawText(m_renderer, "Made with AI-Sloptronic(TM) technology", textX, textY,
                         tsSmall, ui::Color{180, 140, 255, 255});
         textY += lineH;
-        m_font.drawText(m_renderer, "PM: Tasos Kleisas  |  Chief Engineer: Claude (Anthropic)",
-                        textX, textY, tsSmall, ui::Theme::textSecondary);
+        m_font.drawText(m_renderer, "PM: Tasos Kleisas", textX, textY, tsSmall,
+                        ui::Theme::textSecondary);
+        textY += lineH;
+        m_font.drawText(m_renderer, "Chief Engineer: Claude (Anthropic)", textX, textY, tsSmall,
+                        ui::Theme::textSecondary);
 
         // OK button
         float btnScale = 13.0f / ui::Theme::kFontSize;
