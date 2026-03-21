@@ -156,6 +156,19 @@ public:
     void setFocused(bool f) { m_focused = f; }
     void setHovered(bool h) { m_hovered = h; }
 
+    // ─── Mouse capture ──────────────────────────────────────────────────
+    // When a widget captures the mouse, it receives all mouse move and
+    // mouse up events regardless of position (e.g. during fader drag).
+
+    static Widget*& capturedWidget() {
+        static Widget* s_captured = nullptr;
+        return s_captured;
+    }
+
+    void captureMouse() { capturedWidget() = this; }
+    void releaseMouse() { if (capturedWidget() == this) capturedWidget() = nullptr; }
+    bool hasMouseCapture() const { return capturedWidget() == this; }
+
     // Size policy for flex layout — how this widget participates when it's
     // a child of a FlexBox.
     SizePolicy sizePolicy() const { return m_sizePolicy; }
@@ -206,6 +219,19 @@ public:
 
     virtual Widget* dispatchMouseUp(MouseEvent& e) {
         if (!m_visible || !m_enabled) return nullptr;
+
+        // Root-level capture: forward directly to captured widget
+        if (!m_parent && capturedWidget()) {
+            Widget* cap = capturedWidget();
+            Point local = cap->toLocal(e.x, e.y);
+            e.lx = local.x;
+            e.ly = local.y;
+            e.phase = EventPhase::Target;
+            bool handled = cap->onMouseUp(e);
+            cap->releaseMouse();
+            return handled ? cap : nullptr;
+        }
+
         Point local = toLocal(e.x, e.y);
         e.lx = local.x;
         e.ly = local.y;
@@ -216,6 +242,16 @@ public:
 
     virtual Widget* dispatchMouseMove(MouseMoveEvent& e) {
         if (!m_visible || !m_enabled) return nullptr;
+
+        // Root-level capture: forward directly to captured widget
+        if (!m_parent && capturedWidget()) {
+            Widget* cap = capturedWidget();
+            Point local = cap->toLocal(e.x, e.y);
+            e.lx = local.x;
+            e.ly = local.y;
+            return cap->onMouseMove(e) ? cap : nullptr;
+        }
+
         Point local = toLocal(e.x, e.y);
         if (!hitTest(local.x, local.y)) return nullptr;
 

@@ -126,7 +126,7 @@ void App::buildWidgetTree() {
 
     auto menuW    = std::make_unique<MenuBarWrapper>(m_menuBar);
     auto sessionW = std::make_unique<SessionViewWrapper>(m_sessionView);
-    auto mixerW   = std::make_unique<MixerViewWrapper>(m_mixerView);
+    auto mixerP   = std::make_unique<MixerPanel>();
     auto detailW  = std::make_unique<DetailPanelWrapper>(m_detailPanel);
     auto pianoW   = std::make_unique<PianoRollWrapper>(m_pianoRoll);
 
@@ -134,22 +134,22 @@ void App::buildWidgetTree() {
     sessionW->setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
 
     // Store raw pointers for quick access
-    m_menuBarW  = menuW.get();
-    m_sessionW  = sessionW.get();
-    m_mixerW    = mixerW.get();
-    m_detailW   = detailW.get();
-    m_pianoW    = pianoW.get();
+    m_menuBarW    = menuW.get();
+    m_sessionW    = sessionW.get();
+    m_mixerPanel  = mixerP.get();
+    m_detailW     = detailW.get();
+    m_pianoW      = pianoW.get();
 
     m_rootLayout->addChild(m_menuBarW);
     m_rootLayout->addChild(m_sessionW);
-    m_rootLayout->addChild(m_mixerW);
+    m_rootLayout->addChild(m_mixerPanel);
     m_rootLayout->addChild(m_detailW);
     m_rootLayout->addChild(m_pianoW);
 
     // Transfer ownership
     m_wrappers.push_back(std::move(menuW));
     m_wrappers.push_back(std::move(sessionW));
-    m_wrappers.push_back(std::move(mixerW));
+    m_wrappers.push_back(std::move(mixerP));
     m_wrappers.push_back(std::move(detailW));
     m_wrappers.push_back(std::move(pianoW));
 
@@ -164,7 +164,7 @@ void App::computeLayout() {
     int h = m_mainWindow.getHeight();
 
     // Update panel visibility
-    m_mixerW->setVisible(m_showMixer);
+    m_mixerPanel->setVisible(m_showMixer);
     m_detailW->setVisible(m_showDetailPanel);
     m_pianoW->setVisible(m_pianoRoll.isOpen());
 
@@ -363,11 +363,11 @@ bool App::init() {
 
     m_project.init(8, 8);
     m_sessionView.init(&m_project, &m_audioEngine);
-    m_mixerView.init(&m_project, &m_audioEngine);
     m_virtualKeyboard.init(&m_audioEngine);
     m_pianoRoll.setTransport(&m_audioEngine.transport());
     setupMenuBar();
     buildWidgetTree();
+    m_mixerPanel->init(&m_project, &m_audioEngine);
 
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = 44100.0;
@@ -639,9 +639,11 @@ void App::processEvents() {
                 // InputState hover + drag (computes dx/dy internally)
                 m_inputState.onMouseMove(mx, my);
 
-                // Forward drag to mixer if it's dragging
-                if (m_showMixer) {
-                    m_mixerView.handleDrag(mx, my);
+                // Forward drag via widget tree mouse capture
+                if (ui::fw::Widget::capturedWidget()) {
+                    ui::fw::MouseMoveEvent me;
+                    me.x = mx; me.y = my;
+                    m_rootLayout->dispatchMouseMove(me);
                 }
 
                 // Forward drag to detail panel if it's dragging
@@ -752,7 +754,7 @@ void App::processEvents() {
                             m_selectedTrack = trackIdx;
                             m_virtualKeyboard.setTargetTrack(trackIdx);
                             m_sessionView.setSelectedTrack(trackIdx);
-                            m_mixerView.setSelectedTrack(trackIdx);
+                            m_mixerPanel->setSelectedTrack(trackIdx);
                             showTrackContextMenu(trackIdx, mx, my);
                             break;
                         }
@@ -795,13 +797,21 @@ void App::processEvents() {
                 }
                 // Stop text input if editing was cancelled by clicking elsewhere
                 bool wasEditing = m_sessionView.isEditing();
-                if (!m_showMixer || !m_mixerView.handleClick(mx, my, rightClick)) {
+                // Dispatch click to mixer via widget tree
+                bool mixerHandled = false;
+                if (m_showMixer) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
+                    mixerHandled = (m_mixerPanel->dispatchMouseDown(me) != nullptr);
+                }
+                if (!mixerHandled) {
                     int selTrack = -1;
                     if (m_sessionView.handleClick(mx, my, rightClick, &selTrack)) {
                         if (selTrack >= 0) {
                             m_selectedTrack = selTrack;
                             m_virtualKeyboard.setTargetTrack(selTrack);
-                            m_mixerView.setSelectedTrack(selTrack);
+                            m_mixerPanel->setSelectedTrack(selTrack);
                         }
                     }
                 }
@@ -815,7 +825,13 @@ void App::processEvents() {
                 float my = event.button.y;
                 int btn = event.button.button;
                 m_inputState.onMouseUp(mx, my, btn);
-                m_mixerView.handleRelease();
+                // Release mouse capture (mixer fader drag etc.)
+                if (ui::fw::Widget::capturedWidget()) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
+                    m_rootLayout->dispatchMouseUp(me);
+                }
                 m_detailPanel.handleRelease();
                 m_pianoRoll.handleRelease();
                 break;
@@ -909,7 +925,7 @@ void App::update() {
                 m_sessionView.updateClipState(msg.trackIndex, msg.playing, msg.playPosition);
             }
             else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {
-                m_mixerView.updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
+                m_mixerPanel->updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
             }
         }, evt);
     }
