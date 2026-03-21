@@ -6,17 +6,19 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
 
-// Forward declarations
+// Forward declarations for actual rendering classes (in yawn::ui namespace)
 class Renderer2D;
 class Font;
+
+namespace fw {
+
 class Animator;
 
 struct UIContext {
-    Renderer2D* renderer = nullptr;
-    Font*       font     = nullptr;
-    Animator*   animator = nullptr;
+    yawn::ui::Renderer2D* renderer = nullptr;
+    yawn::ui::Font*       font     = nullptr;
+    Animator*             animator = nullptr;
     ScaleContext scale;
 
     // Convenience: convert design pixels to physical pixels

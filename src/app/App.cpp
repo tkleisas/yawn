@@ -1,4 +1,5 @@
 #include "app/App.h"
+#include "ui/framework/PanelWrappers.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -115,6 +116,66 @@ void App::setupMenuBar() {
         {"About Y.A.W.N",     "",  [this]() { m_showAbout = true; }},
         {"Keyboard Shortcuts", "",  nullptr},
     });
+}
+
+void App::buildWidgetTree() {
+    using namespace ui::fw;
+
+    m_rootLayout = std::make_unique<FlexBox>(Direction::Column);
+    m_rootLayout->setAlign(Align::Stretch);
+
+    auto menuW    = std::make_unique<MenuBarWrapper>(m_menuBar);
+    auto sessionW = std::make_unique<SessionViewWrapper>(m_sessionView);
+    auto mixerW   = std::make_unique<MixerViewWrapper>(m_mixerView);
+    auto detailW  = std::make_unique<DetailPanelWrapper>(m_detailPanel);
+    auto pianoW   = std::make_unique<PianoRollWrapper>(m_pianoRoll);
+
+    // Session view fills remaining space, min 100px
+    sessionW->setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
+
+    // Store raw pointers for quick access
+    m_menuBarW  = menuW.get();
+    m_sessionW  = sessionW.get();
+    m_mixerW    = mixerW.get();
+    m_detailW   = detailW.get();
+    m_pianoW    = pianoW.get();
+
+    m_rootLayout->addChild(m_menuBarW);
+    m_rootLayout->addChild(m_sessionW);
+    m_rootLayout->addChild(m_mixerW);
+    m_rootLayout->addChild(m_detailW);
+    m_rootLayout->addChild(m_pianoW);
+
+    // Transfer ownership
+    m_wrappers.push_back(std::move(menuW));
+    m_wrappers.push_back(std::move(sessionW));
+    m_wrappers.push_back(std::move(mixerW));
+    m_wrappers.push_back(std::move(detailW));
+    m_wrappers.push_back(std::move(pianoW));
+
+    m_uiContext.renderer = &m_renderer;
+    m_uiContext.font     = &m_font;
+}
+
+void App::computeLayout() {
+    using namespace ui::fw;
+
+    int w = m_mainWindow.getWidth();
+    int h = m_mainWindow.getHeight();
+
+    // Update panel visibility
+    m_mixerW->setVisible(m_showMixer);
+    m_detailW->setVisible(m_showDetailPanel);
+    m_pianoW->setVisible(m_pianoRoll.isOpen());
+
+    // Cap session view height to its preferred size
+    auto sp = SizePolicy::flexMin(1.0f, 100.0f);
+    sp.maxSize = m_sessionView.preferredHeight();
+    m_sessionW->setSizePolicy(sp);
+
+    Constraints c = Constraints::tight(static_cast<float>(w), static_cast<float>(h));
+    m_rootLayout->measure(c, m_uiContext);
+    m_rootLayout->layout(Rect{0, 0, static_cast<float>(w), static_cast<float>(h)}, m_uiContext);
 }
 
 void App::showTrackContextMenu(int trackIndex, float mx, float my) {
@@ -306,6 +367,7 @@ bool App::init() {
     m_virtualKeyboard.init(&m_audioEngine);
     m_pianoRoll.setTransport(&m_audioEngine.transport());
     setupMenuBar();
+    buildWidgetTree();
 
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = 44100.0;
@@ -411,6 +473,8 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
 }
 
 void App::processEvents() {
+    computeLayout();  // ensure widget bounds are current for hit-testing
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -642,23 +706,18 @@ void App::processEvents() {
                 if (m_inputState.onMouseDown(mx, my, btn))
                     break;
 
-                // Detail panel — use same layout math as render()
+                // Detail panel — use widget tree bounds
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 if (m_showDetailPanel) {
-                    float menuH2 = m_menuBar.height();
-                    float mixerH2 = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
-                    float detailH2 = m_detailPanel.height();
-                    float avail2 = static_cast<float>(m_mainWindow.getHeight()) - menuH2 - mixerH2 - detailH2;
-                    float sessionH2 = std::min(m_sessionView.preferredHeight(), std::max(100.0f, avail2));
-                    float detailY = menuH2 + sessionH2 + mixerH2;
+                    auto db = m_detailW->bounds();
 
                     if (rightClick) {
-                        if (m_detailPanel.handleRightClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth()))) {
+                        if (m_detailPanel.handleRightClick(mx, my, db.x, db.y, db.w)) {
                             m_detailPanel.setFocused(true);
                             break;
                         }
                     } else {
-                        if (m_detailPanel.handleClick(mx, my, 0, detailY, static_cast<float>(m_mainWindow.getWidth()))) {
+                        if (m_detailPanel.handleClick(mx, my, db.x, db.y, db.w)) {
                             // Focus is set inside handleClick
                             break;
                         }
@@ -682,8 +741,8 @@ void App::processEvents() {
 
                 // Right-click on track headers → open context menu
                 if (rightClick) {
-                    float menuH = m_menuBar.height();
-                    float headerY = menuH + ui::Theme::kTransportBarHeight;
+                    auto sb = m_sessionW->bounds();
+                    float headerY = sb.y + ui::Theme::kTransportBarHeight;
                     float headerEnd = headerY + ui::Theme::kTrackHeaderHeight;
                     float gridX = ui::Theme::kSceneLabelWidth;
                     if (my >= headerY && my < headerEnd && mx >= gridX) {
@@ -771,23 +830,18 @@ void App::processEvents() {
             case SDL_EVENT_MOUSE_WHEEL: {
                 float dx = event.wheel.x;
                 float dy = event.wheel.y;
-                float menuH = m_menuBar.height();
-                float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
-                float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
-                float pianoH = m_pianoRoll.isOpen() ? m_pianoRoll.height() : 0.0f;
-                float avail = static_cast<float>(m_mainWindow.getHeight()) - menuH - mixerH - detailH - pianoH;
-                float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, avail));
-                float detailY = menuH + sessionH + mixerH;
-                float pianoY = detailY + detailH;
+                auto sb = m_sessionW->bounds();
+                auto db = m_detailW->bounds();
+                auto pb = m_pianoW->bounds();
 
-                if (m_pianoRoll.isOpen() && m_lastMouseY >= pianoY) {
+                if (m_pianoRoll.isOpen() && m_lastMouseY >= pb.y) {
                     auto mod = SDL_GetModState();
                     bool ctrl  = (mod & SDL_KMOD_CTRL) != 0;
                     bool shift = (mod & SDL_KMOD_SHIFT) != 0;
                     m_pianoRoll.handleScroll(dx, dy, ctrl, shift);
-                } else if (m_showDetailPanel && m_lastMouseY >= detailY) {
+                } else if (m_showDetailPanel && m_lastMouseY >= db.y) {
                     m_detailPanel.handleScroll(dx, dy);
-                } else if (m_lastMouseY >= menuH && m_lastMouseY < menuH + sessionH) {
+                } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {
                     m_sessionView.handleScroll(dx, dy);
                 }
                 break;
@@ -797,8 +851,8 @@ void App::processEvents() {
                 const char* file = event.drop.data;
                 if (file) {
                     // Try to determine target track/scene from mouse position
-                    float menuH = m_menuBar.height();
-                    float headerY = menuH + ui::Theme::kTransportBarHeight + ui::Theme::kTrackHeaderHeight;
+                    auto sb = m_sessionW->bounds();
+                    float headerY = sb.y + ui::Theme::kTransportBarHeight + ui::Theme::kTrackHeaderHeight;
                     float gridX = ui::Theme::kSceneLabelWidth;
                     int targetTrack = m_selectedTrack;
                     int targetScene = m_nextDropScene;
@@ -883,43 +937,11 @@ void App::render() {
 
     m_renderer.beginFrame(w, h);
 
-    float menuH = m_menuBar.height();
-    float mixerH = m_showMixer ? m_mixerView.preferredHeight() : 0.0f;
-    float detailH = m_showDetailPanel ? m_detailPanel.height() : 0.0f;
-    float pianoH = m_pianoRoll.isOpen() ? m_pianoRoll.height() : 0.0f;
-    float bottomPanels = mixerH + detailH + pianoH;
-    float available = static_cast<float>(h) - menuH - bottomPanels;
-    float sessionH = std::min(m_sessionView.preferredHeight(), std::max(100.0f, available));
+    // Compute widget tree layout and render all panels
+    computeLayout();
+    m_rootLayout->render(m_uiContext);
 
-    // Layout top-to-bottom: menu → session → mixer → detail panel → piano roll
-    float sessionY = menuH;
-    float mixerY   = sessionY + sessionH;
-    float detailY  = mixerY + mixerH;
-    float pianoY   = detailY + detailH;
-
-    // Session view (transport + track headers + clip grid)
-    m_sessionView.render(m_renderer, m_font, 0, sessionY,
-                          static_cast<float>(w), sessionH);
-
-    // Mixer section
-    if (m_showMixer) {
-        m_mixerView.render(m_renderer, m_font, 0, mixerY,
-                            static_cast<float>(w), mixerH);
-    }
-
-    // Detail panel / device strip (bottom)
-    if (m_showDetailPanel) {
-        m_detailPanel.render(m_renderer, m_font, 0, detailY,
-                              static_cast<float>(w));
-    }
-
-    // Piano roll (below detail panel)
-    if (m_pianoRoll.isOpen()) {
-        m_pianoRoll.render(m_renderer, m_font, 0, pianoY,
-                            static_cast<float>(w));
-    }
-
-    // Menu bar (drawn last, on top of everything)
+    // Menu bar rendered last so dropdown menus appear on top of panels
     m_menuBar.render(m_renderer, m_font, static_cast<float>(w));
 
     // Context menu (very top layer)

@@ -12,6 +12,8 @@
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
 #include "ui/ConfirmDialog.h"
+#include "ui/framework/FlexBox.h"
+#include "ui/framework/UIContext.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -42,6 +44,8 @@ private:
     void processEvents();
     void update();
     void render();
+    void computeLayout();
+    void buildWidgetTree();
 
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
     bool loadFont();
@@ -76,6 +80,16 @@ private:
     ui::ConfirmDialog m_confirmDialog;
     bool m_showAbout = false;
     ui::InputState m_inputState;
+
+    // Widget tree for layout (replaces manual layout math in render/events)
+    std::unique_ptr<ui::fw::FlexBox> m_rootLayout;
+    ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
+    ui::fw::Widget* m_sessionW    = nullptr;
+    ui::fw::Widget* m_mixerW      = nullptr;
+    ui::fw::Widget* m_detailW     = nullptr;
+    ui::fw::Widget* m_pianoW      = nullptr;
+    std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
+    ui::fw::UIContext m_uiContext;
 
     audio::AudioEngine m_audioEngine;
     Project m_project;
