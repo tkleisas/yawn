@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            build-type: Release
+          - os: ubuntu-latest
+            platform: linux
+            build-type: Release
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev \
+            python3-jinja2
+
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: pip install jinja2
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build-type }} --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --build-config ${{ matrix.build-type }} --output-on-failure --parallel
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package -Force
+          Copy-Item build/bin/Release/YAWN.exe package/
+          if (Test-Path build/bin/Release/assets) {
+            Copy-Item -Recurse build/bin/Release/assets package/
+          }
+          # Bundle any runtime DLLs
+          Get-ChildItem build/bin/Release/*.dll -ErrorAction SilentlyContinue |
+            Copy-Item -Destination package/
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p package
+          cp build/bin/YAWN package/
+          if [ -d build/bin/assets ]; then
+            cp -r build/bin/assets package/
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YAWN-${{ matrix.platform }}
+          path: package/

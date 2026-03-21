@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            build-type: Release
+            archive-ext: zip
+          - os: ubuntu-latest
+            platform: linux
+            build-type: Release
+            archive-ext: tar.gz
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for version tag
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev \
+            python3-jinja2
+
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: pip install jinja2
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build-type }} --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --build-config ${{ matrix.build-type }} --output-on-failure --parallel
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $dir = "YAWN-${version}-windows"
+          New-Item -ItemType Directory -Path $dir -Force
+          Copy-Item build/bin/Release/YAWN.exe $dir/
+          if (Test-Path build/bin/Release/assets) {
+            Copy-Item -Recurse build/bin/Release/assets $dir/
+          }
+          Get-ChildItem build/bin/Release/*.dll -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $dir/
+          Compress-Archive -Path $dir -DestinationPath "YAWN-${version}-windows.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir="YAWN-${version}-linux"
+          mkdir -p "$dir"
+          cp build/bin/YAWN "$dir/"
+          if [ -d build/bin/assets ]; then
+            cp -r build/bin/assets "$dir/"
+          fi
+          tar czf "YAWN-${version}-linux.tar.gz" "$dir"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YAWN-${{ matrix.platform }}
+          path: YAWN-*-${{ matrix.platform }}.${{ matrix.archive-ext }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Create Release
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            YAWN-windows/*.zip
+            YAWN-linux/*.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
