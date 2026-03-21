@@ -3,7 +3,6 @@
 #include "ui/Window.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
-#include "ui/SessionView.h"
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
 #include "ui/DetailPanel.h"
@@ -14,6 +13,7 @@
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
 #include "ui/panels/MixerPanel.h"
+#include "ui/panels/SessionPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -70,7 +70,6 @@ private:
     ui::Window m_mainWindow;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
-    ui::SessionView m_sessionView;
     ui::MenuBar m_menuBar;
     ui::DetailPanel m_detailPanel;
     ui::PianoRoll m_pianoRoll;
@@ -83,10 +82,10 @@ private:
     // Widget tree for layout (replaces manual layout math in render/events)
     std::unique_ptr<ui::fw::FlexBox> m_rootLayout;
     ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
-    ui::fw::Widget* m_sessionW    = nullptr;
     ui::fw::Widget* m_detailW     = nullptr;
     ui::fw::Widget* m_pianoW      = nullptr;
-    ui::fw::MixerPanel* m_mixerPanel = nullptr;  // owned by unique_ptr below
+    ui::fw::MixerPanel*   m_mixerPanel   = nullptr;  // owned by unique_ptr below
+    ui::fw::SessionPanel* m_sessionPanel = nullptr;  // owned by unique_ptr below
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
     ui::fw::UIContext m_uiContext;
 

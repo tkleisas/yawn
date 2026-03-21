@@ -6,7 +6,6 @@
 
 #include "Widget.h"
 #include "FlexBox.h"
-#include "../SessionView.h"
 #include "../DetailPanel.h"
 #include "../PianoRoll.h"
 #include "../MenuBar.h"
@@ -36,29 +35,6 @@ public:
 
 private:
     MenuBar& m_bar;
-};
-
-// ─── SessionViewWrapper ─────────────────────────────────────────────────
-
-class SessionViewWrapper : public Widget {
-public:
-    explicit SessionViewWrapper(SessionView& view) : m_view(view) {}
-
-    Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, m_view.preferredHeight()});
-    }
-
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
-    }
-
-    void paint(UIContext& ctx) override {
-        m_view.render(*ctx.renderer, *ctx.font,
-                      m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h);
-    }
-
-private:
-    SessionView& m_view;
 };
 
 // ─── DetailPanelWrapper ────────────────────────────────────────────────
