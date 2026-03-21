@@ -68,7 +68,7 @@ jobs:
         run: pip install jinja2
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DPython3_EXECUTABLE="${{ env.pythonLocation }}/python3${{ runner.os == 'Windows' && '.exe' || '' }}" -DPython_EXECUTABLE="${{ env.pythonLocation }}/python3${{ runner.os == 'Windows' && '.exe' || '' }}"
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe"', env.pythonLocation) || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
