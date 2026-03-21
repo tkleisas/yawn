@@ -6,6 +6,7 @@
 #include <variant>
 
 namespace yawn {
+namespace midi { class MidiClip; }
 namespace audio {
 
 // Messages sent from UI thread → audio thread (lock-free)
@@ -123,6 +124,17 @@ struct SendMidiToTrackMsg {
     uint16_t ccNumber = 0;
 };
 
+// Launch a MIDI clip on a track
+struct LaunchMidiClipMsg {
+    int trackIndex;
+    const midi::MidiClip* clip; // must remain valid while playing (owned by Project)
+};
+
+// Stop a MIDI clip on a track
+struct StopMidiClipMsg {
+    int trackIndex;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -147,7 +159,9 @@ using AudioCommand = std::variant<
     MetronomeToggleMsg,
     MetronomeSetVolumeMsg,
     MetronomeSetBeatsPerBarMsg,
-    SendMidiToTrackMsg
+    SendMidiToTrackMsg,
+    LaunchMidiClipMsg,
+    StopMidiClipMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

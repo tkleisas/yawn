@@ -3,6 +3,7 @@
 #include "core/Constants.h"
 #include "audio/Transport.h"
 #include "audio/ClipEngine.h"
+#include "audio/MidiClipEngine.h"
 #include "audio/Mixer.h"
 #include "audio/Metronome.h"
 #include "instruments/Instrument.h"
@@ -43,6 +44,7 @@ public:
     Transport& transport() { return m_transport; }
     const Transport& transport() const { return m_transport; }
     ClipEngine& clipEngine() { return m_clipEngine; }
+    MidiClipEngine& midiClipEngine() { return m_midiClipEngine; }
     Mixer& mixer() { return m_mixer; }
     const Mixer& mixer() const { return m_mixer; }
     Metronome& metronome() { return m_metronome; }
@@ -87,6 +89,7 @@ private:
     AudioEngineConfig m_config;
     Transport m_transport;
     ClipEngine m_clipEngine;
+    MidiClipEngine m_midiClipEngine;
     Mixer m_mixer;
     Metronome m_metronome;
     midi::MidiEffectChain m_midiEffectChains[kMaxMidiTracks];

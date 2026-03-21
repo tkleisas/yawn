@@ -32,6 +32,9 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_clipEngine.setTransport(&m_transport);
     m_clipEngine.setSampleRate(config.sampleRate);
 
+    m_midiClipEngine.setTransport(&m_transport);
+    m_midiClipEngine.setSampleRate(config.sampleRate);
+
     m_metronome.init(config.sampleRate, config.framesPerBuffer);
 
     // Preallocate per-track MIDI buffers on heap
@@ -160,9 +163,12 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
 
     // Render each track's clip into its own buffer
     m_clipEngine.checkAndFirePending();
+    m_midiClipEngine.checkAndFirePending();
     for (int t = 0; t < kMaxTracks; ++t) {
         m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
     }
+    // Generate MIDI from MIDI clips into track MIDI buffers
+    m_midiClipEngine.process(m_trackMidiBuffers.data(), nf);
 
     // Process instruments: MIDI effects → instrument → add to track buffer
     for (int t = 0; t < kMaxTracks; ++t) {
@@ -317,6 +323,21 @@ void AudioEngine::processCommands() {
                     m.value = msg.value;
                     m.ccNumber = msg.ccNumber;
                     m_trackMidiBuffers[msg.trackIndex].addMessage(m);
+                }
+            }
+            else if constexpr (std::is_same_v<T, LaunchMidiClipMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.clip);
+                }
+            }
+            else if constexpr (std::is_same_v<T, StopMidiClipMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_midiClipEngine.scheduleStop(msg.trackIndex);
+                    // Send all-notes-off to clean up any held notes
+                    for (uint8_t n = 0; n < 128; ++n) {
+                        m_trackMidiBuffers[msg.trackIndex].addMessage(
+                            midi::MidiMessage::noteOff(0, n, 0, 0));
+                    }
                 }
             }
         }, cmd);
