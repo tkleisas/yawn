@@ -77,36 +77,43 @@ public:
         r.drawRect(x, y, w, 1, Theme::clipSlotBorder);
 
         float stripY = y + 2;
-        float stripH = h - 4;
+        float stripH = h - 4 - kScrollbarH;
 
         // "MIX" label in scene gutter
         float scale = fontScale(f) * 0.85f;
         drawText(r, f, "MIX", x + 6, y + stripH * 0.5f - 8, scale, Theme::textDim);
 
-        // Track channel strips
-        float gridX = x + Theme::kSceneLabelWidth;
+        float gridX  = x + Theme::kSceneLabelWidth;
+        float gridW  = w - Theme::kSceneLabelWidth;
+        float fixedW = fixedAreaWidth();
+        float scrollAreaW = std::max(0.0f, gridW - fixedW);
+
+        // Track channel strips (scrollable, clipped)
+        r.pushClip(gridX, y, scrollAreaW, h - kScrollbarH);
         for (int t = 0; t < m_project->numTracks(); ++t) {
-            float sx = gridX + t * Theme::kTrackWidth;
+            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + scrollAreaW) continue;
             paintChannelStrip(r, f, t, sx, stripY, Theme::kTrackWidth, stripH);
         }
+        r.popClip();
 
-        // Separator after tracks
-        float afterTracks = gridX + m_project->numTracks() * Theme::kTrackWidth;
-        r.drawRect(afterTracks, y + 4, kSeparatorWidth, h - 8, Theme::clipSlotBorder);
-        float retX = afterTracks + kSeparatorWidth + 4;
+        // Fixed area: separator + returns + separator + master
+        float fixedX = gridX + scrollAreaW;
+        r.drawRect(fixedX, y + 4, kSeparatorWidth, h - kScrollbarH - 8, Theme::clipSlotBorder);
+        float retX = fixedX + kSeparatorWidth + 4;
 
-        // Return bus strips
         for (int b = 0; b < kMaxReturnBuses; ++b) {
             paintReturnStrip(r, f, b, retX, stripY, kRetStripW, stripH);
             retX += kRetStripW + kStripPadding;
         }
 
-        // Separator before master
-        r.drawRect(retX, y + 4, kSeparatorWidth, h - 8, Theme::clipSlotBorder);
+        r.drawRect(retX, y + 4, kSeparatorWidth, h - kScrollbarH - 8, Theme::clipSlotBorder);
         retX += kSeparatorWidth + 4;
 
-        // Master strip
         paintMasterStrip(r, f, retX, stripY, kRetStripW, stripH);
+
+        // Horizontal scrollbar
+        paintHScrollbar(r, gridX, y + h - kScrollbarH, scrollAreaW);
     }
 
     // ─── Events ─────────────────────────────────────────────────────────
@@ -117,11 +124,37 @@ public:
         float mx = e.x, my = e.y;
         bool rightClick = (e.button == MouseButton::Right);
         float x = m_bounds.x, y = m_bounds.y;
-        float gridX = x + Theme::kSceneLabelWidth;
+        float gridX  = x + Theme::kSceneLabelWidth;
+        float gridW  = m_bounds.w - Theme::kSceneLabelWidth;
+        float fixedW = fixedAreaWidth();
+        float scrollAreaW = std::max(0.0f, gridW - fixedW);
 
-        // --- Track channel strips ---
+        // --- Scrollbar ---
+        float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
+        if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + scrollAreaW) {
+            float contentW  = m_project->numTracks() * Theme::kTrackWidth;
+            float maxScroll = std::max(0.0f, contentW - scrollAreaW);
+            if (maxScroll > 0) {
+                float thumbW     = std::max(20.0f, scrollAreaW * (scrollAreaW / std::max(1.0f, contentW)));
+                float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
+                float thumbX     = gridX + scrollFrac * (scrollAreaW - thumbW);
+                if (mx >= thumbX && mx < thumbX + thumbW) {
+                    m_hsbDragging        = true;
+                    m_hsbDragStartX      = mx;
+                    m_hsbDragStartScroll = m_scrollX;
+                    captureMouse();
+                } else {
+                    float clickFrac = (mx - gridX) / scrollAreaW;
+                    m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
+                }
+                return true;
+            }
+        }
+
+        // --- Track channel strips (scroll-adjusted) ---
         for (int t = 0; t < m_project->numTracks(); ++t) {
-            float sx = gridX + t * Theme::kTrackWidth;
+            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + scrollAreaW) continue;
             float ix = sx + Theme::kSlotPadding;
             float iw = Theme::kTrackWidth - Theme::kSlotPadding * 2;
             if (mx < sx || mx >= sx + Theme::kTrackWidth) continue;
@@ -156,7 +189,7 @@ public:
 
             // Fader
             float faderY = y + 84;
-            float faderBottom = y + m_bounds.h - 2 - 22;
+            float faderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
             if (my >= faderY && my < faderBottom && mx >= ix + 4 && mx < ix + 4 + kFaderWidth) {
                 if (rightClick) {
                     m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
@@ -167,9 +200,9 @@ public:
             }
         }
 
-        // --- Return bus strips ---
-        float afterTracks = gridX + m_project->numTracks() * Theme::kTrackWidth;
-        float retX = afterTracks + kSeparatorWidth + 4;
+        // --- Return bus strips (fixed area) ---
+        float fixedX = gridX + scrollAreaW;
+        float retX   = fixedX + kSeparatorWidth + 4;
         for (int b = 0; b < kMaxReturnBuses; ++b) {
             float rx = retX + b * (kRetStripW + kStripPadding);
             if (mx < rx || mx >= rx + kRetStripW) continue;
@@ -191,7 +224,7 @@ public:
                 return true;
             }
             float faderY = y + 74;
-            float faderBottom = y + m_bounds.h - 2 - 22;
+            float faderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
             if (my >= faderY && my < faderBottom && mx >= rx + 4 && mx < rx + 4 + kFaderWidth) {
                 if (rightClick) {
                     m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
@@ -202,10 +235,10 @@ public:
             }
         }
 
-        // --- Master strip ---
+        // --- Master strip (fixed area) ---
         float masterX = retX + kMaxReturnBuses * (kRetStripW + kStripPadding) + kSeparatorWidth + 4;
         float masterFaderY = y + 2 + 30;
-        float masterFaderBottom = y + m_bounds.h - 2 - 22;
+        float masterFaderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
         if (mx >= masterX + 4 && mx < masterX + 4 + kFaderWidth + 2 &&
             my >= masterFaderY && my < masterFaderBottom) {
             if (rightClick) {
@@ -220,11 +253,35 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (!m_dragging || !m_engine) return false;
         float mx = e.x, my = e.y;
 
+        // Scrollbar drag
+        if (m_hsbDragging && m_project) {
+            float gridW       = m_bounds.w - Theme::kSceneLabelWidth;
+            float fixedW      = fixedAreaWidth();
+            float scrollAreaW = std::max(0.0f, gridW - fixedW);
+            float contentW    = m_project->numTracks() * Theme::kTrackWidth;
+            float maxScroll   = std::max(0.0f, contentW - scrollAreaW);
+            float delta       = mx - m_hsbDragStartX;
+            float scrollDelta = delta * (contentW / std::max(1.0f, scrollAreaW));
+            m_scrollX = std::clamp(m_hsbDragStartScroll + scrollDelta, 0.0f, maxScroll);
+            return true;
+        }
+
+        if (!m_dragging || !m_engine) {
+            // Scrollbar hover
+            float gridX2      = m_bounds.x + Theme::kSceneLabelWidth;
+            float gridW2      = m_bounds.w - Theme::kSceneLabelWidth;
+            float fixedW2     = fixedAreaWidth();
+            float scrollAreaW2= std::max(0.0f, gridW2 - fixedW2);
+            float sbY2        = m_bounds.y + m_bounds.h - kScrollbarH;
+            m_hsbHovered = (my >= sbY2 && my < sbY2 + kScrollbarH
+                            && mx >= gridX2 && mx < gridX2 + scrollAreaW2);
+            return false;
+        }
+
         if (m_dragType == DragType::Fader) {
-            float faderH = m_bounds.h - 4 - 84 - 22;
+            float faderH = m_bounds.h - 4 - kScrollbarH - 84 - 22;
             if (faderH < 20) faderH = 20;
             float deltaY = m_dragStartPos - my;
             float deltaVol = (deltaY / faderH) * 2.0f;
@@ -255,6 +312,11 @@ public:
     }
 
     bool onMouseUp(MouseEvent&) override {
+        if (m_hsbDragging) {
+            m_hsbDragging = false;
+            releaseMouse();
+            return true;
+        }
         if (m_dragging) {
             m_dragging = false;
             m_dragType = DragType::None;
@@ -263,6 +325,17 @@ public:
             return true;
         }
         return false;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        if (!m_project) return false;
+        float gridW       = m_bounds.w - Theme::kSceneLabelWidth;
+        float fixedW      = fixedAreaWidth();
+        float scrollAreaW = std::max(0.0f, gridW - fixedW);
+        float contentW    = m_project->numTracks() * Theme::kTrackWidth;
+        float maxScroll   = std::max(0.0f, contentW - scrollAreaW);
+        m_scrollX = std::clamp(m_scrollX - e.dx * 30.0f, 0.0f, maxScroll);
+        return true;
     }
 
 private:
@@ -297,6 +370,19 @@ private:
     }
 
     // ─── Strip Rendering ────────────────────────────────────────────────
+
+    void paintHScrollbar(Renderer2D& r, float x, float y, float w) {
+        r.drawRect(x, y, w, kScrollbarH, Color{40, 40, 45});
+        if (!m_project) return;
+        float contentW = m_project->numTracks() * Theme::kTrackWidth;
+        if (contentW <= w) return;
+        float thumbW     = std::max(20.0f, w * (w / std::max(1.0f, contentW)));
+        float maxScroll  = contentW - w;
+        float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
+        float thumbX     = x + scrollFrac * (w - thumbW);
+        Color thumbCol   = (m_hsbDragging || m_hsbHovered) ? Color{120, 120, 130} : Color{90, 90, 100};
+        r.drawRect(thumbX, y, thumbW, kScrollbarH, thumbCol);
+    }
 
     void paintChannelStrip(Renderer2D& r, Font& f,
                            int idx, float x, float y, float w, float h) {
@@ -501,9 +587,25 @@ private:
     static constexpr float kStripPadding = 2.0f;
     static constexpr float kSeparatorWidth = 2.0f;
     static constexpr float kRetStripW    = 70.0f;
+    static constexpr float kScrollbarH   = 12.0f;
 
     static constexpr int kDragMaster  = -1;
     static constexpr int kDragReturn0 = -100;
+
+    // Horizontal scrollbar state
+    float m_scrollX            = 0.0f;
+    bool  m_hsbDragging        = false;
+    bool  m_hsbHovered         = false;
+    float m_hsbDragStartX      = 0;
+    float m_hsbDragStartScroll = 0;
+
+    // Helper: width of the fixed (non-scrollable) area (separators + returns + master)
+    float fixedAreaWidth() const {
+        return kSeparatorWidth + 4
+             + kMaxReturnBuses * (kRetStripW + kStripPadding)
+             + kSeparatorWidth + 4
+             + kRetStripW;
+    }
 };
 
 } // namespace fw

@@ -182,7 +182,7 @@ public:
 
     void handleScroll(float dx, float dy) {
         if (!m_project) return;
-        float gridH = m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight;
+        float gridH = m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH;
         float contentH = m_project->numScenes() * Theme::kClipSlotHeight;
         float maxY = std::max(0.0f, contentH - gridH);
         m_scrollY = std::clamp(m_scrollY - dy * 30.0f, 0.0f, maxY);
@@ -239,7 +239,7 @@ public:
         float transportY = y;
         float headerY    = transportY + Theme::kTransportBarHeight;
         float gridY      = headerY + Theme::kTrackHeaderHeight;
-        float gridH      = h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight;
+        float gridH      = h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH;
         float gridX      = x + Theme::kSceneLabelWidth;
         float gridW      = w - Theme::kSceneLabelWidth;
 
@@ -247,6 +247,7 @@ public:
         paintTrackHeaders(r, f, gridX, headerY, gridW);
         paintSceneLabels(r, f, x, gridY, gridH);
         paintClipGrid(r, f, gridX, gridY, gridW, gridH);
+        paintHScrollbar(r, gridX, gridY + gridH, gridW);
     }
 
     // ─── Mouse events ───────────────────────────────────────────────────
@@ -271,6 +272,28 @@ public:
             if (m_editMode != EditMode::None) {
                 m_editMode = EditMode::None;
                 m_editBuffer.clear();
+            }
+            return true;
+        }
+
+        // Horizontal scrollbar
+        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+        float sbY = gridY + (m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH);
+        if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW) {
+            float contentW = m_project->numTracks() * Theme::kTrackWidth;
+            float maxScroll = std::max(0.0f, contentW - gridW);
+            if (maxScroll <= 0) return true;
+            float thumbW = std::max(20.0f, gridW * (gridW / std::max(1.0f, contentW)));
+            float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
+            float thumbX = gridX + scrollFrac * (gridW - thumbW);
+            if (mx >= thumbX && mx < thumbX + thumbW) {
+                m_hsbDragging = true;
+                m_hsbDragStartX = mx;
+                m_hsbDragStartScroll = m_scrollX;
+                captureMouse();
+            } else {
+                float clickFrac = (mx - gridX) / gridW;
+                m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
             }
             return true;
         }
@@ -337,6 +360,36 @@ public:
     // Track selected by last click (for App to sync selection)
     int lastClickTrack() const { int t = m_lastClickTrack; return t; }
     void clearLastClickTrack() { m_lastClickTrack = -1; }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        float mx = e.x, my = e.y;
+        if (m_hsbDragging && m_project) {
+            float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+            float contentW = m_project->numTracks() * Theme::kTrackWidth;
+            float maxScroll = std::max(0.0f, contentW - gridW);
+            float delta = mx - m_hsbDragStartX;
+            float scrollDelta = delta * (contentW / std::max(1.0f, gridW));
+            m_scrollX = std::clamp(m_hsbDragStartScroll + scrollDelta, 0.0f, maxScroll);
+            return true;
+        }
+        // Track scrollbar hover
+        float gridX = m_bounds.x + Theme::kSceneLabelWidth;
+        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+        float gridY = m_bounds.y + Theme::kTransportBarHeight + Theme::kTrackHeaderHeight;
+        float gridH = m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH;
+        float sbY = gridY + gridH;
+        m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW);
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_hsbDragging) {
+            m_hsbDragging = false;
+            releaseMouse();
+            return true;
+        }
+        return false;
+    }
 
 private:
     // ─── Text helper ────────────────────────────────────────────────────
@@ -554,6 +607,19 @@ private:
         r.popClip();
     }
 
+    void paintHScrollbar(Renderer2D& r, float x, float y, float w) {
+        r.drawRect(m_bounds.x, y, m_bounds.w, kScrollbarH, Color{40, 40, 45});
+        if (!m_project) return;
+        float contentW = m_project->numTracks() * Theme::kTrackWidth;
+        if (contentW <= w) return;
+        float thumbW = std::max(20.0f, w * (w / std::max(1.0f, contentW)));
+        float maxScroll = contentW - w;
+        float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
+        float thumbX = x + scrollFrac * (w - thumbW);
+        Color thumbCol = (m_hsbDragging || m_hsbHovered) ? Color{120, 120, 130} : Color{90, 90, 100};
+        r.drawRect(thumbX, y, thumbW, kScrollbarH, thumbCol);
+    }
+
     void paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
                        float x, float y, float w, float h) {
         float pad = Theme::kSlotPadding;
@@ -659,6 +725,11 @@ private:
     float m_scrollX = 0.0f;
     float m_scrollY = 0.0f;
 
+    bool  m_hsbDragging      = false;
+    bool  m_hsbHovered       = false;
+    float m_hsbDragStartX    = 0;
+    float m_hsbDragStartScroll = 0;
+
     int   m_activeScene    = -1;
     int   m_selectedTrack  = 0;
     int   m_lastClickTrack = -1;
@@ -673,6 +744,7 @@ private:
     float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
     float m_tapButtonX = 0, m_tapButtonY = 0, m_tapButtonW = 0, m_tapButtonH = 0;
 
+    static constexpr float kScrollbarH    = 12.0f;
     static constexpr int kVisibleScenes  = 8;
     static constexpr int kTapHistorySize = 4;
     double m_tapTimes[kTapHistorySize] = {};
