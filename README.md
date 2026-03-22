@@ -59,29 +59,33 @@
 - **MPE Support** — Per-note pitch bend, slide, pressure via zone management
 - **7 MIDI Effects** — Arpeggiator (free-running & transport-synced), Chord, Scale, Note Length, Velocity, Random, Pitch
 
-### UI
-- **Session View** — Ableton-style clip grid with 8 visible tracks × 8 scenes, scrollable
-- **Mixer View** — Channel strips with interactive faders, pan knobs, mute/solo buttons
-- **Device Chain Panel** — Full signal-flow device chain (MIDI FX → Instrument → Audio FX) with expandable panels, bypass/remove buttons, horizontal scrolling, color-coded headers
+### UI Framework
+- **Composable Widget Tree** — FlexBox layout engine with measure/layout two-pass system, stretch/flex/fixed size policies
+- **Session Panel** — Ableton-style clip grid with 8 visible tracks × 8 scenes, scrollable
+- **Mixer Panel** — Channel strips with interactive faders, pan knobs, mute/solo buttons, peak metering
+- **Device Chain Panel** — Composite widget architecture: DeviceWidget (header + grid + knobs + visualizer), SnapScrollContainer, neon arc knobs with 24-segment rendering
+- **Piano Roll Editor** — MIDI note editing with draw/select/erase tools, zoom/scroll, velocity, snap-to-grid
+- **Primitive Widgets** — FwButton, FwToggle, FwKnob, FwFader, Label, FwTextInput, FwNumberInput, FwDropDown with hover animations
+- **Dialog System** — fw::Dialog base class with title bar, OK/Cancel, drag-to-move, Escape/Enter handling; AboutDialog, ConfirmDialog
 - **Menu Bar** — File, Edit, View, Track, MIDI, Help menus with keyboard accelerators
 - **Context Menus** — Right-click track headers to set type, add instruments/effects
-- **Confirmation Dialogs** — Modal confirmation when changing track type (Audio ↔ MIDI)
+- **DPI Scaling** — Auto-detect display scale (SDL3), user override, scaled() helper for all layout constants
+- **Panel Animations** — Smooth exponential-lerp height transitions on panel collapse/expand
 - **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking
 - **Track Selection** — Click to select tracks, highlight in session & mixer views
-- **Track Types** — Audio/MIDI type badges, auto-assign SubSynth for new MIDI tracks
 - **Targeted Drag & Drop** — Drop audio files onto specific clip slots
 - **Custom 2D Renderer** — Batched OpenGL 3.3 rendering with font atlas (stb_truetype)
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 293 unit tests via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 619 unit & integration tests via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
 
 ### Planned
 
-- 🎹 Arrangement View (timeline + piano roll)
+- 🎹 Arrangement View (timeline recording)
 - 🔌 VST3 plugin hosting
 - 💾 Project save/load (JSON format)
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
@@ -89,7 +93,7 @@
 ## Screenshots
 
 ![Y.A.W.N v0.1 — Session View with device chain panel](images/yawn_v.0.1.png)
-*Session View showing the clip grid, mixer, and device chain panel with Arpeggiator → Subtractive Synth → Filter → Oscilloscope → EQ → Spectrum Analyzer.*
+*v0.1 — Session View showing the clip grid, mixer, and device chain panel with Arpeggiator → Subtractive Synth → Filter → Oscilloscope → EQ → Spectrum Analyzer.*
 
 ## Tech Stack
 
@@ -185,10 +189,14 @@ cd build && ctest --output-on-failure -C Release
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                   UI Layer (SDL3 + OpenGL)                   │
-│  ┌────────────┐ ┌────────────┐ ┌──────────┐ ┌─────────────┐  │
-│  │  Session   │ │   Mixer    │ │ Renderer │ │ Font/Theme  │  │
-│  │   View     │ │    View    │ │    2D    │ │             │  │
-│  └────────────┘ └────────────┘ └──────────┘ └─────────────┘  │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐  │
+│  │  Session    │ │   Mixer     │ │  Detail   │ │  Piano    │  │
+│  │   Panel     │ │   Panel     │ │  Panel    │ │  Roll     │  │
+│  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘  │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐  │
+│  │  FlexBox    │ │  Primitives │ │ Renderer │ │ Font/Theme│  │
+│  │  Layout     │ │  & Dialogs  │ │    2D    │ │  & DPI    │  │
+│  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘  │
 ├──────────────────────────────────────────────────────────────┤
 │                   Application Core                           │
 │  ┌──────────┐ ┌───────────┐ ┌──────────────────────────────┐ │
@@ -282,36 +290,68 @@ yawn/
 │   ├── ui/
 │   │   ├── Font.h/cpp          # stb_truetype font atlas
 │   │   ├── Renderer.h/cpp      # Batched 2D OpenGL renderer
-│   │   ├── SessionView.h/cpp   # Clip grid, transport bar, waveforms
-│   │   ├── MixerView.h/cpp     # Interactive mixer channel strips
-│   │   ├── DetailPanel.h       # Device chain panel (signal-flow order)
-│   │   ├── ConfirmDialog.h    # Modal confirmation dialog
 │   │   ├── MenuBar.h           # Application menu bar
 │   │   ├── ContextMenu.h       # Right-click popup menus with submenus
 │   │   ├── VirtualKeyboard.h   # QWERTY-to-MIDI keyboard
-│   │   ├── Widget.h            # Base widget with input state tracking
-│   │   ├── Theme.h             # Ableton-dark color scheme
-│   │   └── Window.h/cpp        # SDL3 + OpenGL window wrapper
+│   │   ├── Theme.h             # Ableton-dark color scheme + DPI scaling
+│   │   ├── Window.h/cpp        # SDL3 + OpenGL window wrapper
+│   │   ├── framework/
+│   │   │   ├── Widget.h        # Base widget class (measure/layout/paint/events)
+│   │   │   ├── FlexBox.h       # Flexbox layout container (row/column)
+│   │   │   ├── Primitives.h    # FwButton, FwToggle, FwKnob, FwFader, Label, TextInput, etc.
+│   │   │   ├── Dialog.h        # Modal dialog base class
+│   │   │   ├── AboutDialog.h   # About dialog widget
+│   │   │   ├── ConfirmDialog.h # Confirmation dialog widget
+│   │   │   ├── DeviceWidget.h  # Composite device panel (header + grid + knobs + viz)
+│   │   │   ├── DeviceHeaderWidget.h  # Color-coded device header with buttons
+│   │   │   ├── FwGrid.h        # Row-major grid layout container
+│   │   │   ├── VisualizerWidget.h    # Oscilloscope/spectrum display widget
+│   │   │   └── SnapScrollContainer.h # Horizontal snap-scroll with nav buttons
+│   │   └── panels/
+│   │       ├── SessionPanel.h      # Session view (clip grid, transport)
+│   │       ├── MixerPanel.h        # Mixer view (faders, metering)
+│   │       ├── DetailPanelWidget.h  # Device chain panel (composite widgets)
+│   │       └── PianoRollPanel.h     # MIDI piano roll editor
 │   └── util/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 293 unit tests (Google Test)
+├── tests/                      # 619 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
 │   ├── test_ClipEngine.cpp
-│   ├── test_DetailPanel.cpp    # Device chain panel tests (10 tests)
-│   ├── test_Effects.cpp        # Audio effect tests (29 tests)
+│   ├── test_DetailPanel.cpp    # Device chain panel tests
+│   ├── test_DeviceHeaderWidget.cpp
+│   ├── test_DeviceWidget.cpp   # Composite device widget tests
+│   ├── test_DialogFramework.cpp
+│   ├── test_Effects.cpp        # Audio effect tests
 │   ├── test_FileIO.cpp
-│   ├── test_Instruments.cpp    # Instrument tests (32 tests)
+│   ├── test_FlexBox.cpp        # Flexbox layout tests
+│   ├── test_FrameworkComponents.cpp
+│   ├── test_FrameworkTypes.cpp
+│   ├── test_FwGrid.cpp
+│   ├── test_Instruments.cpp    # Instrument tests
+│   ├── test_Integration.cpp    # 43 cross-component integration tests
 │   ├── test_MessageQueue.cpp
-│   ├── test_Metronome.cpp      # Metronome tests (9 tests)
-│   ├── test_MidiEffects.cpp    # MIDI effect tests (27 tests)
-│   ├── test_MidiEngine.cpp
+│   ├── test_Metronome.cpp
+│   ├── test_MidiClip.cpp
+│   ├── test_MidiClipEngine.cpp
+│   ├── test_MidiEffects.cpp    # MIDI effect tests
+│   ├── test_MidiTypes.cpp
+│   ├── test_Mixer.cpp
+│   ├── test_PanelAnimation.cpp
+│   ├── test_PianoRoll.cpp
+│   ├── test_Primitives.cpp     # Widget primitive tests
 │   ├── test_Project.cpp
 │   ├── test_RingBuffer.cpp
-│   └── test_Transport.cpp
+│   ├── test_Serialization.cpp
+│   ├── test_SnapScrollContainer.cpp
+│   ├── test_Theme.cpp          # DPI scaling tests
+│   ├── test_Transport.cpp
+│   ├── test_VisualizerWidget.cpp
+│   ├── test_Widget.cpp         # Widget tree & event dispatch tests
+│   └── test_Widgets.cpp
 └── assets/                     # Runtime assets (copied to build dir)
 ```
 
@@ -332,11 +372,15 @@ yawn/
 | 9. Native Instruments | ✅ Done | 5 instruments (SubSynth, FM, Sampler, InstrumentRack, DrumRack) |
 | 10. MIDI Effects | ✅ Done | 7 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
-| 12. Arrangement View | 🔲 Next | Timeline, clip placement, piano roll editor |
-| 13. VST3 Hosting | 🔲 Planned | VST3 SDK, plugin scanning, editor windows |
-| 14. Save/Load & Polish | 🔲 Planned | JSON project files, undo/redo, keyboard shortcuts |
+| 12. UI Framework | ✅ Done | Widget tree, FlexBox layout, primitive widgets, dialog system, panel migration |
+| 13. Piano Roll | ✅ Done | MIDI note editor with draw/select/erase tools, zoom/scroll, clip integration |
+| 14. Composite Widgets | ✅ Done | DeviceWidget, DeviceHeader, FwGrid, VisualizerWidget, SnapScrollContainer, neon knobs |
+| 15. Animations & DPI | ✅ Done | Hover animations, panel collapse/expand animations, DPI auto-detection & scaling |
+| 16. Arrangement View | 🔲 Next | Timeline, clip placement, recording |
+| 17. VST3 Hosting | 🔲 Planned | VST3 SDK, plugin scanning, editor windows |
+| 18. Save/Load & Polish | 🔲 Planned | JSON project files, undo/redo, keyboard shortcuts |
 
-### Phase 12: Arrangement View (Next)
+### Phase 16: Arrangement View (Next)
 
 The Arrangement View provides a linear timeline for composing full tracks:
 
@@ -347,7 +391,7 @@ The Arrangement View provides a linear timeline for composing full tracks:
 - **Recording** — Record from Session View clips to Arrangement
 - **Automation lanes** — Per-track parameter automation (volume, pan, effect params)
 
-### Phase 13: VST3 Plugin Hosting
+### Phase 17: VST3 Plugin Hosting
 
 Full VST3 plugin support for third-party effects and instruments:
 
@@ -359,7 +403,7 @@ Full VST3 plugin support for third-party effects and instruments:
 - **Parameter mapping** — Generic knob grid for plugins without custom GUIs
 - **Preset management** — Save/load plugin state with project
 
-### Phase 14: Project Save/Load & Polish
+### Phase 18: Project Save/Load & Polish
 
 Final polish to make Y.A.W.N a usable production tool:
 
@@ -402,7 +446,7 @@ while (true) {
 2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
 3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
 4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
-5. **293 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
+5. **619 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
 6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
