@@ -46,6 +46,14 @@ namespace Theme {
     inline constexpr Color transportText    {200, 200, 200};
     inline constexpr Color transportAccent  {255, 165, 0};
 
+    // Controls
+    inline constexpr Color controlBg        {40, 40, 43};
+    inline constexpr Color controlHover     {65, 65, 75};
+    inline constexpr Color controlActive    {80, 80, 85};
+    inline constexpr Color controlBorder    {70, 70, 75};
+    inline constexpr Color toggleOffBg      {50, 50, 53};
+    inline constexpr Color toggleOffHover   {58, 58, 62};
+
     // Text
     inline constexpr Color textPrimary      {220, 220, 220};
     inline constexpr Color textSecondary    {140, 140, 145};
@@ -74,6 +82,16 @@ namespace Theme {
     inline constexpr float kSlotCornerRadius   = 3.0f;
     inline constexpr float kFontSize           = 26.0f;
     inline constexpr float kSmallFontSize      = 22.0f;
+
+    // DPI / HiDPI scaling
+    inline float scaleFactor = 1.0f;           // auto-detected from display
+    inline float userScaleOverride = 0.0f;     // 0 = auto-detect
+
+    inline float effectiveScale() {
+        return userScaleOverride > 0.0f ? userScaleOverride : scaleFactor;
+    }
+
+    inline float scaled(float v) { return v * effectiveScale(); }
 
 } // namespace Theme
 } // namespace ui

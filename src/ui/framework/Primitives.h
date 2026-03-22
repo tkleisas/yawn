@@ -106,24 +106,34 @@ public:
         return c.constrain({w, h});
     }
 
+    float hoverAlpha() const { return m_hoverAlpha; }
+
     void paint(UIContext& ctx) override {
+        // Frame-based hover interpolation (works at any frame rate)
+        constexpr float kHoverSpeed = 0.15f;
+        if (m_hovered) m_hoverAlpha = detail::cmin(1.0f, m_hoverAlpha + kHoverSpeed);
+        else           m_hoverAlpha = detail::cmax(0.0f, m_hoverAlpha - kHoverSpeed);
+
 #ifndef YAWN_TEST_BUILD
         if (!ctx.renderer || !ctx.font) return;
-        Color bg = m_customColor ? m_bgColor : Theme::panelBg;
+        Color bg = m_customColor ? m_bgColor : Theme::controlBg;
         if (!m_enabled) bg = Color{50, 50, 53, 255};
-        else if (m_pressed)  bg = Color{80, 80, 85, 255};
-        else if (m_hovered)  bg = Color{65, 65, 70, 255};
+        else if (m_pressed) bg = Theme::controlActive;
+        else if (m_hoverAlpha > 0.001f)
+            bg = Color::lerp(bg, Theme::controlHover, m_hoverAlpha);
         if (m_isToggle && m_toggleOn)
             bg = m_customColor ? m_bgColor : Color{200, 100, 40, 255};
 
         ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, bg);
         ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
-                                      Color{70, 70, 75, 255});
+                                      Theme::controlBorder);
         if (!m_label.empty()) {
             float scale = detail::cmin(m_bounds.h * 0.6f, 20.0f) / Theme::kFontSize;
             float tw = ctx.font->textWidth(m_label, scale);
             float tx = m_bounds.x + (m_bounds.w - tw) * 0.5f;
             float ty = m_bounds.y + m_bounds.h * 0.3f;
+            // Press effect: shift text down 1px when pressed
+            if (m_pressed) ty += 1.0f;
             Color tc = m_enabled ? Theme::textPrimary : Theme::textDim;
             ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, scale, tc);
         }
@@ -156,7 +166,7 @@ private:
     bool m_isToggle = false;
     bool m_toggleOn = false;
     bool m_pressed = false;
-    bool m_hovered = false;
+    float m_hoverAlpha = 0.0f;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -183,14 +193,21 @@ public:
         return c.constrain({w, h});
     }
 
+    float hoverAlpha() const { return m_hoverAlpha; }
+
     void paint(UIContext& ctx) override {
+        constexpr float kHoverSpeed = 0.15f;
+        if (m_hovered) m_hoverAlpha = detail::cmin(1.0f, m_hoverAlpha + kHoverSpeed);
+        else           m_hoverAlpha = detail::cmax(0.0f, m_hoverAlpha - kHoverSpeed);
+
 #ifndef YAWN_TEST_BUILD
         if (!ctx.renderer || !ctx.font) return;
-        Color bg = m_on ? m_onColor : Color{50, 50, 53, 255};
-        if (m_hovered && !m_on) bg = Color{58, 58, 62, 255};
+        Color bg = m_on ? m_onColor : Theme::toggleOffBg;
+        if (!m_on && m_hoverAlpha > 0.001f)
+            bg = Color::lerp(bg, Theme::toggleOffHover, m_hoverAlpha);
         ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, bg);
         ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
-                                      Color{70, 70, 75, 255});
+                                      Theme::controlBorder);
         // LED dot
         float dotR = 4.0f;
         float dotX = m_bounds.x + 8 - dotR;
@@ -225,7 +242,7 @@ public:
 private:
     std::string m_label;
     bool m_on = false;
-    bool m_hovered = false;
+    float m_hoverAlpha = 0.0f;
     ChangeCallback m_onChange;
     Color m_onColor{200, 100, 40, 255};
 };
@@ -346,7 +363,13 @@ public:
         return c.constrain({40.0f, 50.0f});
     }
 
+    float hoverAlpha() const { return m_hoverAlpha; }
+
     void paint(UIContext& ctx) override {
+        constexpr float kHoverSpeed = 0.15f;
+        if (m_hovered) m_hoverAlpha = detail::cmin(1.0f, m_hoverAlpha + kHoverSpeed);
+        else           m_hoverAlpha = detail::cmax(0.0f, m_hoverAlpha - kHoverSpeed);
+
 #ifndef YAWN_TEST_BUILD
         if (!ctx.renderer || !ctx.font) return;
         float cx = m_bounds.x + m_bounds.w * 0.5f;
@@ -369,6 +392,15 @@ public:
             arcCol = m_dragging ? m_arcColorActive : m_arcColor;
         } else {
             arcCol = m_dragging ? Color{0, 255, 255, 255} : Color{0, 200, 255, 255};
+        }
+        // Brighten arc on hover
+        if (m_hoverAlpha > 0.001f && !m_boolean) {
+            Color bright{
+                static_cast<uint8_t>(detail::cmin(255.0f, arcCol.r + 40.0f)),
+                static_cast<uint8_t>(detail::cmin(255.0f, arcCol.g + 40.0f)),
+                static_cast<uint8_t>(detail::cmin(255.0f, arcCol.b + 40.0f)),
+                arcCol.a};
+            arcCol = Color::lerp(arcCol, bright, m_hoverAlpha);
         }
         renderArc(*ctx.renderer, cx, cy, r, 0.0f, norm, arcCol);
 
@@ -466,6 +498,8 @@ private:
     ValueCallback m_onChange;
     FormatCallback m_formatCb;
     std::string m_label;
+
+    float m_hoverAlpha = 0.0f;
 
     // Boolean mode
     bool m_boolean = false;

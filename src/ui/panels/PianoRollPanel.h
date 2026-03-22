@@ -58,16 +58,19 @@ public:
     bool  hasClip()    const { return m_clip != nullptr; }
     midi::MidiClip* clip() const { return m_clip; }
     int   trackIndex() const { return m_trackIdx; }
-    float height()     const { return m_open ? kHeight : 0.0f; }
+    float height()     const { return m_animatedHeight; }
 
-    void setOpen(bool o) { m_open = o; }
-    void close() { m_open = false; m_clip = nullptr; m_selNote = -1; }
+    void setOpen(bool o) {
+        m_open = o;
+        m_targetHeight = o ? kHeight : 0.0f;
+    }
+    void close() { setOpen(false); m_clip = nullptr; m_selNote = -1; }
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
     Size measure(const Constraints& c, const UIContext&) override {
-        float h = m_open ? kHeight : 0.0f;
-        return c.constrain({c.maxW, h});
+        updateAnimation();
+        return c.constrain({c.maxW, m_animatedHeight});
     }
 
     void layout(const Rect& bounds, const UIContext&) override {
@@ -77,7 +80,7 @@ public:
     // ─── Rendering ──────────────────────────────────────────────────────
 
     void paint(UIContext& ctx) override {
-        if (!m_open || !m_clip) return;
+        if (m_animatedHeight < 1.0f || !m_clip) return;
         auto& r = *ctx.renderer;
         auto& f = *ctx.font;
 
@@ -86,6 +89,9 @@ public:
         m_gy = m_py + kToolbarH;
         m_gw = m_pw - kPianoW;
         m_gh = m_bounds.h - kToolbarH;
+
+        // Clip to animated bounds so content doesn't overflow during transition
+        r.pushClip(m_px, m_py, m_pw, m_animatedHeight);
 
         // Background
         r.drawRect(m_px, m_py, m_pw, m_bounds.h, Color{30, 30, 33});
@@ -104,6 +110,8 @@ public:
 
         // Top border
         r.drawRect(m_px, m_py, m_pw, 1, Color{60, 60, 65});
+
+        r.popClip();
     }
 
     // ─── Mouse events ───────────────────────────────────────────────────
@@ -652,6 +660,17 @@ private:
     const audio::Transport*  m_transport = nullptr;
     int   m_trackIdx  = 0;
     bool  m_open      = false;
+
+    // Animation state for smooth height transitions
+    mutable float m_animatedHeight = 0.0f;
+    float         m_targetHeight   = 0.0f;
+
+    void updateAnimation() const {
+        constexpr float kSpeed = 0.2f;
+        m_animatedHeight += (m_targetHeight - m_animatedHeight) * kSpeed;
+        if (std::abs(m_animatedHeight - m_targetHeight) < 0.5f)
+            m_animatedHeight = m_targetHeight;
+    }
 
     Tool  m_tool      = Tool::Draw;
     Snap  m_snap      = Snap::Sixteenth;

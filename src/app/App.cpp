@@ -359,6 +359,10 @@ bool App::init() {
 
     if (!m_mainWindow.create(winConfig)) return false;
 
+    // Query display DPI scale for HiDPI support
+    float displayScale = SDL_GetWindowDisplayScale(m_mainWindow.getHandle());
+    if (displayScale > 0.0f) ui::Theme::scaleFactor = displayScale;
+
     if (!m_renderer.init()) {
         std::fprintf(stderr, "Failed to initialize 2D renderer\n");
         return false;
@@ -835,6 +839,12 @@ void App::processEvents() {
                 }
                 break;
             }
+
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+                if (event.window.windowID == SDL_GetWindowID(m_mainWindow.getHandle())) {
+                    ui::Theme::scaleFactor = SDL_GetWindowDisplayScale(m_mainWindow.getHandle());
+                }
+                break;
 
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 if (event.window.windowID == SDL_GetWindowID(m_mainWindow.getHandle())) {

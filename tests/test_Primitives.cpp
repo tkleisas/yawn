@@ -555,3 +555,107 @@ TEST(FwDropDownTest, DefaultSelection) {
     EXPECT_EQ(dd.selected(), 0);
     EXPECT_EQ(dd.selectedText(), "X");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hover animation tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(FwButtonTest, HoverAlphaIncreasesOnHover) {
+    FwButton btn("Test");
+    UIContext ctx;
+    btn.measure(Constraints::loose(200, 200), ctx);
+    btn.layout(Rect{0, 0, 100, 30}, ctx);
+    EXPECT_FLOAT_EQ(btn.hoverAlpha(), 0.0f);
+
+    btn.setHovered(true);
+    // paint() drives the interpolation
+    btn.paint(ctx);
+    EXPECT_GT(btn.hoverAlpha(), 0.0f);
+}
+
+TEST(FwButtonTest, HoverAlphaDecreasesOnLeave) {
+    FwButton btn("Test");
+    UIContext ctx;
+    btn.measure(Constraints::loose(200, 200), ctx);
+    btn.layout(Rect{0, 0, 100, 30}, ctx);
+
+    btn.setHovered(true);
+    // Pump several frames to saturate
+    for (int i = 0; i < 20; ++i) btn.paint(ctx);
+    EXPECT_FLOAT_EQ(btn.hoverAlpha(), 1.0f);
+
+    btn.setHovered(false);
+    btn.paint(ctx);
+    EXPECT_LT(btn.hoverAlpha(), 1.0f);
+}
+
+TEST(FwButtonTest, HoverAlphaClampsToZeroOne) {
+    FwButton btn("Test");
+    UIContext ctx;
+    btn.measure(Constraints::loose(200, 200), ctx);
+    btn.layout(Rect{0, 0, 100, 30}, ctx);
+
+    // Pump many frames while hovered — should not exceed 1.0
+    btn.setHovered(true);
+    for (int i = 0; i < 100; ++i) btn.paint(ctx);
+    EXPECT_FLOAT_EQ(btn.hoverAlpha(), 1.0f);
+
+    // Pump many frames while not hovered — should not go below 0.0
+    btn.setHovered(false);
+    for (int i = 0; i < 100; ++i) btn.paint(ctx);
+    EXPECT_FLOAT_EQ(btn.hoverAlpha(), 0.0f);
+}
+
+TEST(FwToggleTest, HoverAlphaIncreasesOnHover) {
+    FwToggle toggle("Mute", false);
+    UIContext ctx;
+    toggle.measure(Constraints::loose(200, 200), ctx);
+    toggle.layout(Rect{0, 0, 60, 24}, ctx);
+    EXPECT_FLOAT_EQ(toggle.hoverAlpha(), 0.0f);
+
+    toggle.setHovered(true);
+    toggle.paint(ctx);
+    EXPECT_GT(toggle.hoverAlpha(), 0.0f);
+}
+
+TEST(FwToggleTest, HoverAlphaDecreasesOnLeave) {
+    FwToggle toggle("Mute", false);
+    UIContext ctx;
+    toggle.measure(Constraints::loose(200, 200), ctx);
+    toggle.layout(Rect{0, 0, 60, 24}, ctx);
+
+    toggle.setHovered(true);
+    for (int i = 0; i < 20; ++i) toggle.paint(ctx);
+    EXPECT_FLOAT_EQ(toggle.hoverAlpha(), 1.0f);
+
+    toggle.setHovered(false);
+    toggle.paint(ctx);
+    EXPECT_LT(toggle.hoverAlpha(), 1.0f);
+}
+
+TEST(FwKnobTest, HoverAlphaIncreasesOnHover) {
+    FwKnob knob;
+    UIContext ctx;
+    knob.measure(Constraints::loose(200, 200), ctx);
+    knob.layout(Rect{0, 0, 40, 50}, ctx);
+    EXPECT_FLOAT_EQ(knob.hoverAlpha(), 0.0f);
+
+    knob.setHovered(true);
+    knob.paint(ctx);
+    EXPECT_GT(knob.hoverAlpha(), 0.0f);
+}
+
+TEST(FwKnobTest, HoverAlphaDecreasesOnLeave) {
+    FwKnob knob;
+    UIContext ctx;
+    knob.measure(Constraints::loose(200, 200), ctx);
+    knob.layout(Rect{0, 0, 40, 50}, ctx);
+
+    knob.setHovered(true);
+    for (int i = 0; i < 20; ++i) knob.paint(ctx);
+    EXPECT_FLOAT_EQ(knob.hoverAlpha(), 1.0f);
+
+    knob.setHovered(false);
+    knob.paint(ctx);
+    EXPECT_LT(knob.hoverAlpha(), 1.0f);
+}

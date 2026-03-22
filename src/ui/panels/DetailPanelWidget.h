@@ -51,9 +51,12 @@ public:
     // --- Public API ---
 
     bool  isOpen() const { return m_open; }
-    void  setOpen(bool open) { m_open = open; }
-    void  toggle() { m_open = !m_open; }
-    float height() const { return m_open ? kPanelHeight : kCollapsedHeight; }
+    void  setOpen(bool open) {
+        m_open = open;
+        m_targetHeight = open ? kPanelHeight : kCollapsedHeight;
+    }
+    void  toggle() { setOpen(!m_open); }
+    float height() const { return m_animatedHeight; }
 
     bool isFocused() const { return m_panelFocused; }
     void setFocused(bool f) { m_panelFocused = f; }
@@ -176,7 +179,7 @@ public:
         m_lastFxCount   = fxCount;
 
         // Auto-open when devices are populated
-        if (!m_deviceWidgets.empty()) m_open = true;
+        if (!m_deviceWidgets.empty()) setOpen(true);
     }
 
     void clear() {
@@ -247,14 +250,16 @@ public:
     // ─── Measure / Layout ───────────────────────────────────────────────
 
     Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, height()});
+        updateAnimation();
+        return c.constrain({c.maxW, m_animatedHeight});
     }
 
     void layout(const Rect& bounds, const UIContext& ctx) override {
         m_bounds = bounds;
         if (!m_open) return;
         float bodyY = bounds.y + kHeaderHeight;
-        float bodyH = height() - kHeaderHeight;
+        float bodyH = m_animatedHeight - kHeaderHeight;
+        if (bodyH < 0) bodyH = 0;
         m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
         m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
     }
@@ -267,6 +272,9 @@ public:
         auto& font = *ctx.font;
         float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w;
 
+        // Clip to animated bounds so content doesn't overflow during transition
+        renderer.pushClip(x, y, w, m_animatedHeight);
+
         // Header bar
         renderer.drawRect(x, y, w, kHeaderHeight, Color{35, 35, 40, 255});
         renderer.drawRect(x, y, w, 1, Color{55, 55, 60, 255});
@@ -275,23 +283,23 @@ public:
         font.drawText(renderer, arrow, x + 8, y + 6, hScale, Theme::textSecondary);
         font.drawText(renderer, title(), x + 26, y + 6, hScale, Theme::textPrimary);
 
-        if (!m_open) return;
+        if (m_animatedHeight > kCollapsedHeight + 1.0f) {
+            float bodyY = y + kHeaderHeight;
+            float bodyH = m_animatedHeight - kHeaderHeight;
+            renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
 
-        float bodyY = y + kHeaderHeight;
-        float bodyH = height() - kHeaderHeight;
-        renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
-
-        if (m_deviceWidgets.empty()) {
-            font.drawText(renderer, "No devices on track",
-                          x + 20, bodyY + 20, hScale, Theme::textDim);
-            return;
+            if (m_deviceWidgets.empty()) {
+                font.drawText(renderer, "No devices on track",
+                              x + 20, bodyY + 20, hScale, Theme::textDim);
+            } else {
+                // Sync live data before painting
+                updateParamValues();
+                updateVisualizerData();
+                m_scroll.paint(ctx);
+            }
         }
 
-        // Sync live data before painting
-        updateParamValues();
-        updateVisualizerData();
-
-        m_scroll.paint(ctx);
+        renderer.popClip();
 #endif
     }
 
@@ -545,6 +553,17 @@ private:
 
     bool m_open         = false;
     bool m_panelFocused = false;
+
+    // Animation state for smooth height transitions
+    mutable float m_animatedHeight = kCollapsedHeight;
+    float         m_targetHeight   = kCollapsedHeight;
+
+    void updateAnimation() const {
+        constexpr float kSpeed = 0.2f;
+        m_animatedHeight += (m_targetHeight - m_animatedHeight) * kSpeed;
+        if (std::abs(m_animatedHeight - m_targetHeight) < 0.5f)
+            m_animatedHeight = m_targetHeight;
+    }
 
     std::function<void(DeviceType, int)> m_onRemoveDevice;
 
