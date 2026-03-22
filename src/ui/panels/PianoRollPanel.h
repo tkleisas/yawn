@@ -13,11 +13,17 @@
 #include "audio/Transport.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
+
+#ifndef YAWN_TEST_BUILD
+#include <SDL3/SDL_keyboard.h>
+#endif
 
 namespace yawn {
 namespace ui {
@@ -30,11 +36,15 @@ public:
     enum class Snap { Quarter, Eighth, Sixteenth, ThirtySecond };
 
     // ─── Constants ──────────────────────────────────────────────────────
-    static constexpr float kHeight      = 300.0f;
+    static constexpr float kHandleHeight = 8.0f;    // drag-resize handle
+    static constexpr float kMinPanelH    = 100.0f;
+    static constexpr float kMaxPanelH    = 600.0f;
+    static constexpr float kDefaultHeight = 300.0f;
     static constexpr float kToolbarH    = 24.0f;
     static constexpr float kPianoW      = 52.0f;
     static constexpr float kMinRowH     = 4.0f;
     static constexpr float kMaxRowH     = 24.0f;
+    static constexpr float kScrollbarH  = 12.0f;
     static constexpr float kMinPxBeat   = 15.0f;
     static constexpr float kMaxPxBeat   = 500.0f;
     static constexpr int   kNPitch      = 128;
@@ -47,7 +57,7 @@ public:
     void setClip(midi::MidiClip* clip, int trackIdx) {
         m_clip = clip;
         m_trackIdx = trackIdx;
-        m_selNote = -1;
+        m_selectedNotes.clear();
         m_dragMode = Drag::None;
         if (clip) centerOnContent();
     }
@@ -62,9 +72,9 @@ public:
 
     void setOpen(bool o) {
         m_open = o;
-        m_targetHeight = o ? kHeight : 0.0f;
+        m_targetHeight = o ? m_userHeight : 0.0f;
     }
-    void close() { setOpen(false); m_clip = nullptr; m_selNote = -1; }
+    void close() { setOpen(false); m_clip = nullptr; m_selectedNotes.clear(); }
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
@@ -86,9 +96,9 @@ public:
 
         m_px = m_bounds.x; m_py = m_bounds.y; m_pw = m_bounds.w;
         m_gx = m_px + kPianoW;
-        m_gy = m_py + kToolbarH;
+        m_gy = m_py + kHandleHeight + kToolbarH;
         m_gw = m_pw - kPianoW;
-        m_gh = m_bounds.h - kToolbarH;
+        m_gh = m_bounds.h - kHandleHeight - kToolbarH - kScrollbarH;
 
         // Clip to animated bounds so content doesn't overflow during transition
         r.pushClip(m_px, m_py, m_pw, m_animatedHeight);
@@ -96,17 +106,35 @@ public:
         // Background
         r.drawRect(m_px, m_py, m_pw, m_bounds.h, Color{30, 30, 33});
 
+        // Handle bar (8px drag strip with grip dots)
+        r.drawRect(m_px, m_py, m_pw, kHandleHeight, Color{55, 55, 60});
+        {
+            float cx = m_px + m_pw * 0.5f;
+            float cy = m_py + kHandleHeight * 0.5f;
+            Color dotCol{90, 90, 95};
+            float dotR = 1.0f;
+            float spacing = 6.0f;
+            r.drawRect(cx - spacing - dotR, cy - dotR, dotR * 2, dotR * 2, dotCol);
+            r.drawRect(cx - dotR,            cy - dotR, dotR * 2, dotR * 2, dotCol);
+            r.drawRect(cx + spacing - dotR, cy - dotR, dotR * 2, dotR * 2, dotCol);
+        }
+
         renderToolbar(r, f);
 
         r.pushClip(m_gx, m_gy, m_gw, m_gh);
         renderGrid(r);
         renderNotes(r);
         renderClipBound(r);
+        renderRubberBand(r);
         r.popClip();
 
         r.pushClip(m_px, m_gy, kPianoW, m_gh);
         renderPianoKeys(r, f);
         r.popClip();
+
+#ifndef YAWN_TEST_BUILD
+        renderScrollbar(r);
+#endif
 
         // Top border
         r.drawRect(m_px, m_py, m_pw, 1, Color{60, 60, 65});
@@ -121,8 +149,26 @@ public:
         float mx = e.x, my = e.y;
         if (!inPanel(mx, my)) return false;
 
-        // Toolbar area
-        if (my >= m_py && my < m_py + kToolbarH) {
+        // Handle area — start drag or detect double-click to toggle
+        if (my >= m_py && my < m_py + kHandleHeight) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - m_lastHandleClickTime).count();
+            if (elapsed < 300) {
+                setOpen(!m_open);
+                m_lastHandleClickTime = {};
+                return true;
+            }
+            m_lastHandleClickTime = now;
+            m_handleDragActive = true;
+            m_handleDragStartY = my;
+            m_handleDragStartH = m_userHeight;
+            captureMouse();
+            return true;
+        }
+
+        // Toolbar area (now offset by handle height)
+        if (my >= m_py + kHandleHeight && my < m_py + kHandleHeight + kToolbarH) {
             std::printf("[PianoRoll] Toolbar click at (%.0f, %.0f) py=%.0f toolbarH=%.0f\n",
                         mx, my, m_py, kToolbarH);
             return handleToolbarClick(mx, my);
@@ -130,6 +176,30 @@ public:
 
         // Piano key area
         if (mx < m_gx) return true;
+
+        // Scrollbar area
+        {
+            float sbY = m_gy + m_gh;
+            if (my >= sbY && my < sbY + kScrollbarH && mx >= m_gx && mx < m_gx + m_gw) {
+                float totalW = maxBeats() * m_pxBeat;
+                float maxScroll = std::max(0.0f, totalW - m_gw);
+                float thumbW = std::max(20.0f, m_gw * (m_gw / std::max(1.0f, totalW)));
+                float scrollFrac = m_scrollX / std::max(1.0f, totalW - m_gw);
+                float thumbX = m_gx + scrollFrac * (m_gw - thumbW);
+
+                if (mx >= thumbX && mx < thumbX + thumbW) {
+                    m_scrollbarDragging = true;
+                    m_scrollbarDragStartX = mx;
+                    m_scrollbarDragStartScroll = m_scrollX;
+                    captureMouse();
+                } else {
+                    float clickFrac = (mx - m_gx) / m_gw;
+                    m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
+                    clampScroll();
+                }
+                return true;
+            }
+        }
 
         if (!inGrid(mx, my)) return false;
 
@@ -143,7 +213,7 @@ public:
         if (m_tool == Tool::Draw) {
             int hit = noteAt(mx, my);
             if (hit >= 0) {
-                m_selNote = hit;
+                m_selectedNotes = {hit};
                 if (nearRightEdge(mx, hit)) {
                     startResize(hit);
                     captureMouse();
@@ -159,16 +229,34 @@ public:
         } else if (m_tool == Tool::Select) {
             int hit = noteAt(mx, my);
             if (hit >= 0) {
-                m_selNote = hit;
-                if (nearRightEdge(mx, hit)) {
+                bool shift = isShiftHeld();
+                if (shift) {
+                    // Toggle note in/out of selection
+                    if (m_selectedNotes.count(hit))
+                        m_selectedNotes.erase(hit);
+                    else
+                        m_selectedNotes.insert(hit);
+                } else {
+                    if (!m_selectedNotes.count(hit))
+                        m_selectedNotes = {hit};
+                }
+                if (nearRightEdge(mx, hit) && m_selectedNotes.size() == 1) {
                     startResize(hit);
                     captureMouse();
-                } else {
+                } else if (!m_selectedNotes.empty()) {
                     startMove(hit);
                     captureMouse();
                 }
             } else {
-                m_selNote = -1;
+                if (!isShiftHeld())
+                    m_selectedNotes.clear();
+                // Start rubber-band selection
+                m_rubberBanding = true;
+                m_rubberShiftHeld = isShiftHeld();
+                m_rubberStartX = mx; m_rubberStartY = my;
+                m_rubberEndX = mx;   m_rubberEndY = my;
+                m_dragMode = Drag::RubberBand;
+                captureMouse();
             }
         } else if (m_tool == Tool::Erase) {
             int hit = noteAt(mx, my);
@@ -186,28 +274,68 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (!m_open || !m_clip || m_dragMode == Drag::None) return false;
+        if (!m_open || !m_clip) return false;
         float mx = e.x, my = e.y;
 
-        if (m_dragMode == Drag::DrawLen && m_selNote >= 0) {
+        // Handle drag resize
+        if (m_handleDragActive) {
+            float delta = m_handleDragStartY - my; // drag up = taller
+            m_userHeight = std::clamp(
+                m_handleDragStartH + delta, kMinPanelH, kMaxPanelH);
+            m_targetHeight = m_userHeight;
+            return true;
+        }
+
+        // Scrollbar thumb drag
+        if (m_scrollbarDragging) {
+            float delta = mx - m_scrollbarDragStartX;
+            float totalW = maxBeats() * m_pxBeat;
+            float maxScroll = std::max(0.0f, totalW - m_gw);
+            float scrollDelta = delta * (totalW / std::max(1.0f, m_gw));
+            m_scrollX = std::clamp(m_scrollbarDragStartScroll + scrollDelta, 0.0f, maxScroll);
+            clampScroll();
+            return true;
+        }
+
+        // Track scrollbar hover for highlight
+        {
+            float sbY = m_gy + m_gh;
+            m_scrollbarHovered = (my >= sbY && my < sbY + kScrollbarH
+                                  && mx >= m_gx && mx < m_gx + m_gw);
+        }
+
+        if (m_dragMode == Drag::None) return false;
+
+        if (m_dragMode == Drag::DrawLen && !m_selectedNotes.empty()) {
+            int idx = *m_selectedNotes.begin();
             double curBeat = snapBeat(xToBeat(mx));
-            auto& n = m_clip->note(m_selNote);
+            auto& n = m_clip->note(idx);
             double newDur = curBeat - n.startBeat;
             n.duration = std::max(snapVal(), newDur);
             autoExtend(n);
-        } else if (m_dragMode == Drag::Move && m_selNote >= 0) {
+        } else if (m_dragMode == Drag::Move && !m_selectedNotes.empty()) {
             double beatDelta = xToBeat(mx) - xToBeat(m_dragStartX);
             int pitchDelta = yToPitch(my) - yToPitch(m_dragStartY);
-            auto& n = m_clip->note(m_selNote);
-            n.startBeat = snapBeat(std::max(0.0, m_origBeat + beatDelta));
-            int np = static_cast<int>(m_origPitch) + pitchDelta;
-            n.pitch = static_cast<uint8_t>(std::clamp(np, 0, 127));
-        } else if (m_dragMode == Drag::Resize && m_selNote >= 0) {
+            int i = 0;
+            for (int idx : m_selectedNotes) {
+                if (i < static_cast<int>(m_origPositions.size())) {
+                    auto& n = m_clip->note(idx);
+                    n.startBeat = snapBeat(std::max(0.0, m_origPositions[i].beat + beatDelta));
+                    int np = static_cast<int>(m_origPositions[i].pitch) + pitchDelta;
+                    n.pitch = static_cast<uint8_t>(std::clamp(np, 0, 127));
+                }
+                ++i;
+            }
+        } else if (m_dragMode == Drag::Resize && !m_selectedNotes.empty()) {
+            int idx = *m_selectedNotes.begin();
             double beatDelta = xToBeat(mx) - xToBeat(m_dragStartX);
-            auto& n = m_clip->note(m_selNote);
+            auto& n = m_clip->note(idx);
             double newEnd = snapBeat(n.startBeat + m_origDur + beatDelta);
             n.duration = std::max(snapVal(), newEnd - n.startBeat);
             autoExtend(n);
+        } else if (m_dragMode == Drag::RubberBand) {
+            m_rubberEndX = mx;
+            m_rubberEndY = my;
         }
 
         return true;
@@ -215,15 +343,37 @@ public:
 
     bool onMouseUp(MouseEvent& e) override {
         (void)e;
-        if (m_dragMode == Drag::Move && m_selNote >= 0 && m_clip) {
-            // Re-sort: remove and re-add to maintain sorted order
-            auto n = m_clip->note(m_selNote);
-            m_clip->removeNote(m_selNote);
-            m_clip->addNote(n);
-            m_selNote = findNote(n.startBeat, n.pitch);
-            autoExtend(n);
+        if (m_handleDragActive) {
+            m_handleDragActive = false;
+            releaseMouse();
+            return true;
+        }
+        if (m_scrollbarDragging) {
+            m_scrollbarDragging = false;
+            releaseMouse();
+            return true;
+        }
+        if (m_dragMode == Drag::Move && !m_selectedNotes.empty() && m_clip) {
+            // Re-sort: remove all selected and re-add to maintain sorted order
+            std::vector<midi::MidiNote> notes;
+            notes.reserve(m_selectedNotes.size());
+            std::vector<int> indices(m_selectedNotes.begin(), m_selectedNotes.end());
+            for (auto& n_idx : indices)
+                notes.push_back(m_clip->note(n_idx));
+            for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i)
+                m_clip->removeNote(indices[i]);
+            m_selectedNotes.clear();
+            for (auto& n : notes) {
+                m_clip->addNote(n);
+                int found = findNote(n.startBeat, n.pitch);
+                if (found >= 0) m_selectedNotes.insert(found);
+                autoExtend(n);
+            }
+        } else if (m_dragMode == Drag::RubberBand && m_clip) {
+            finalizeRubberBand();
         }
         m_dragMode = Drag::None;
+        m_rubberBanding = false;
         releaseMouse();
         return true;
     }
@@ -254,16 +404,60 @@ public:
         constexpr int kEscape    = 0x1B;
         constexpr int kDelete    = 0x7F;         // SDL3 SDLK_DELETE
         constexpr int kBackspace = 0x08;
+        constexpr int kLeft      = 0x40000050;   // SDL_SCANCODE_LEFT
+        constexpr int kRight     = 0x4000004F;   // SDL_SCANCODE_RIGHT
+        constexpr int kUp        = 0x40000052;   // SDL_SCANCODE_UP
+        constexpr int kDown      = 0x40000051;   // SDL_SCANCODE_DOWN
 
         if (key == kEscape) {
-            if (m_selNote >= 0) { m_selNote = -1; return true; }
+            if (!m_selectedNotes.empty()) { m_selectedNotes.clear(); return true; }
             close();
             return true;
         }
         if (key == kDelete || key == kBackspace) {
-            if (m_selNote >= 0 && m_clip) deleteNote(m_selNote);
+            if (!m_selectedNotes.empty() && m_clip) {
+                // Delete in reverse index order to keep earlier indices valid
+                std::vector<int> indices(m_selectedNotes.rbegin(), m_selectedNotes.rend());
+                m_selectedNotes.clear();
+                for (int idx : indices) {
+                    if (idx >= 0 && idx < m_clip->noteCount())
+                        m_clip->removeNote(idx);
+                }
+            }
             return true;
         }
+
+        // Arrow key nudging
+        if (key == kLeft && !m_selectedNotes.empty() && m_clip) {
+            for (int idx : m_selectedNotes) {
+                auto& n = m_clip->note(idx);
+                n.startBeat = std::max(0.0, n.startBeat - snapVal());
+            }
+            return true;
+        }
+        if (key == kRight && !m_selectedNotes.empty() && m_clip) {
+            for (int idx : m_selectedNotes) {
+                auto& n = m_clip->note(idx);
+                n.startBeat += snapVal();
+                autoExtend(n);
+            }
+            return true;
+        }
+        if (key == kUp && !m_selectedNotes.empty() && m_clip) {
+            for (int idx : m_selectedNotes) {
+                auto& n = m_clip->note(idx);
+                if (n.pitch < 127) n.pitch += 1;
+            }
+            return true;
+        }
+        if (key == kDown && !m_selectedNotes.empty() && m_clip) {
+            for (int idx : m_selectedNotes) {
+                auto& n = m_clip->note(idx);
+                if (n.pitch > 0) n.pitch -= 1;
+            }
+            return true;
+        }
+
         if (key == '1') { m_snap = Snap::Quarter;      return true; }
         if (key == '2') { m_snap = Snap::Eighth;        return true; }
         if (key == '3') { m_snap = Snap::Sixteenth;     return true; }
@@ -274,12 +468,15 @@ public:
 
 private:
     // ─── Drag state ─────────────────────────────────────────────────────
-    enum class Drag { None, Move, Resize, DrawLen };
+    enum class Drag { None, Move, Resize, DrawLen, RubberBand };
 
-    void startMove(int idx) {
+    void startMove(int /*idx*/) {
         m_dragMode = Drag::Move;
-        m_origBeat  = m_clip->note(idx).startBeat;
-        m_origPitch = m_clip->note(idx).pitch;
+        // Save original positions for all selected notes
+        m_origPositions.clear();
+        for (int i : m_selectedNotes) {
+            m_origPositions.push_back({m_clip->note(i).startBeat, m_clip->note(i).pitch});
+        }
     }
 
     void startResize(int idx) {
@@ -287,12 +484,49 @@ private:
         m_origDur = m_clip->note(idx).duration;
     }
 
+    void finalizeRubberBand() {
+        if (!m_clip) return;
+        float rx0 = std::min(m_rubberStartX, m_rubberEndX);
+        float rx1 = std::max(m_rubberStartX, m_rubberEndX);
+        float ry0 = std::min(m_rubberStartY, m_rubberEndY);
+        float ry1 = std::max(m_rubberStartY, m_rubberEndY);
+
+        double beatMin = xToBeat(rx0);
+        double beatMax = xToBeat(rx1);
+        int pitchMin = yToPitch(ry1);   // Y is inverted
+        int pitchMax = yToPitch(ry0);
+
+        if (!m_rubberShiftHeld)
+            m_selectedNotes.clear();
+
+        for (int i = 0; i < m_clip->noteCount(); ++i) {
+            const auto& n = m_clip->note(i);
+            double noteEnd = n.startBeat + n.duration;
+            int p = static_cast<int>(n.pitch);
+            // Note overlaps rubber band if ranges intersect
+            if (noteEnd > beatMin && n.startBeat < beatMax &&
+                p >= pitchMin && p <= pitchMax) {
+                m_selectedNotes.insert(i);
+            }
+        }
+    }
+
+    // Shift key detection — use SDL in real builds, stub in test builds
+#ifndef YAWN_TEST_BUILD
+    bool isShiftHeld() const {
+        return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    }
+#else
+    bool isShiftHeld() const { return false; }
+#endif
+
     // ─── Rendering helpers ──────────────────────────────────────────────
 
     void renderToolbar(Renderer2D& r, Font& f) {
-        r.drawRect(m_px, m_py, m_pw, kToolbarH, Color{35, 35, 38});
+        float tbY = m_py + kHandleHeight;
+        r.drawRect(m_px, tbY, m_pw, kToolbarH, Color{35, 35, 38});
         float sc = 16.0f / f.pixelHeight();
-        float ty = m_py + 3;
+        float ty = tbY + 3;
         float x = m_px + 6;
 
         // Tool buttons
@@ -302,7 +536,7 @@ private:
             Color bg = active ? Color{100, 180, 255} : Color{55, 55, 60};
             Color fg = active ? Color{10, 10, 15}    : Theme::textSecondary;
             m_toolBtnX[i] = x;
-            r.drawRect(x, m_py + 2, m_toolBtnW, kToolbarH - 4, bg);
+            r.drawRect(x, tbY + 2, m_toolBtnW, kToolbarH - 4, bg);
             f.drawText(r, toolNames[i], x + 4, ty, sc, fg);
             x += m_toolBtnW + 3;
         }
@@ -318,7 +552,7 @@ private:
             Color bg = active ? Color{100, 180, 255} : Color{55, 55, 60};
             Color fg = active ? Color{10, 10, 15}    : Theme::textSecondary;
             m_snapBtnX[i] = x;
-            r.drawRect(x, m_py + 2, m_snapBtnW, kToolbarH - 4, bg);
+            r.drawRect(x, tbY + 2, m_snapBtnW, kToolbarH - 4, bg);
             f.drawText(r, snapNames[i], x + 3, ty, sc, fg);
             x += m_snapBtnW + 3;
         }
@@ -330,7 +564,7 @@ private:
             Color bg = loopOn ? Color{80, 220, 100} : Color{55, 55, 60};
             Color fg = loopOn ? Color{10, 10, 15}   : Theme::textSecondary;
             m_loopBtnX = x;
-            r.drawRect(x, m_py + 2, m_loopBtnW, kToolbarH - 4, bg);
+            r.drawRect(x, tbY + 2, m_loopBtnW, kToolbarH - 4, bg);
             f.drawText(r, "Loop", x + 4, ty, sc, fg);
             x += m_loopBtnW + 6;
         }
@@ -438,7 +672,7 @@ private:
             r.drawRect(x, y + 1, std::max(2.0f, w), h - 2, noteCol);
 
             // Selection highlight
-            if (i == m_selNote) {
+            if (m_selectedNotes.count(i)) {
                 r.drawRectOutline(x, y + 1, std::max(2.0f, w), h - 2,
                                   Color{255, 255, 255}, 1.5f);
             }
@@ -482,6 +716,35 @@ private:
                            Color{80, 220, 100}.withAlpha(120));
             }
         }
+    }
+
+    void renderRubberBand(Renderer2D& r) {
+        if (m_dragMode != Drag::RubberBand) return;
+        float rx = std::min(m_rubberStartX, m_rubberEndX);
+        float ry = std::min(m_rubberStartY, m_rubberEndY);
+        float rw = std::abs(m_rubberEndX - m_rubberStartX);
+        float rh = std::abs(m_rubberEndY - m_rubberStartY);
+        r.drawRect(rx, ry, rw, rh, Color{100, 180, 255, 30});
+        r.drawRectOutline(rx, ry, rw, rh, Color{100, 180, 255, 180}, 1.0f);
+    }
+
+    void renderScrollbar(Renderer2D& r) {
+        float sbY = m_gy + m_gh;
+        // Track background
+        r.drawRect(m_gx, sbY, m_gw, kScrollbarH, Color{40, 40, 45});
+        // Also fill the piano-key column portion of the scrollbar row
+        r.drawRect(m_px, sbY, kPianoW, kScrollbarH, Color{40, 40, 45});
+
+        // Thumb
+        float totalW = maxBeats() * m_pxBeat;
+        float thumbW = std::max(20.0f, m_gw * (m_gw / std::max(1.0f, totalW)));
+        float scrollFrac = m_scrollX / std::max(1.0f, totalW - m_gw);
+        float thumbX = m_gx + scrollFrac * (m_gw - thumbW);
+
+        Color thumbCol = (m_scrollbarDragging || m_scrollbarHovered)
+                         ? Color{120, 120, 130}
+                         : Color{90, 90, 100};
+        r.drawRect(thumbX, sbY, thumbW, kScrollbarH, thumbCol);
     }
 
     // ─── Toolbar click ──────────────────────────────────────────────────
@@ -593,15 +856,22 @@ private:
         n.pitch     = static_cast<uint8_t>(pitch);
         n.velocity  = kDefVel;
         m_clip->addNote(n);
-        m_selNote = findNote(beat, pitch);
+        int found = findNote(beat, pitch);
+        m_selectedNotes.clear();
+        if (found >= 0) m_selectedNotes.insert(found);
         autoExtend(n);
     }
 
     void deleteNote(int idx) {
         if (!m_clip || idx < 0 || idx >= m_clip->noteCount()) return;
         m_clip->removeNote(idx);
-        if (m_selNote == idx) m_selNote = -1;
-        else if (m_selNote > idx) --m_selNote;
+        // Renumber selection: remove idx, shift down indices > idx
+        std::set<int> updated;
+        for (int s : m_selectedNotes) {
+            if (s == idx) continue;
+            updated.insert(s > idx ? s - 1 : s);
+        }
+        m_selectedNotes = std::move(updated);
     }
 
     int findNote(double beat, int pitch) const {
@@ -661,6 +931,15 @@ private:
     int   m_trackIdx  = 0;
     bool  m_open      = false;
 
+    // Resizable panel height (user-adjustable via handle drag)
+    float m_userHeight = kDefaultHeight;
+
+    // Handle drag state
+    bool  m_handleDragActive = false;
+    float m_handleDragStartY = 0;
+    float m_handleDragStartH = 0;
+    std::chrono::steady_clock::time_point m_lastHandleClickTime{};
+
     // Animation state for smooth height transitions
     mutable float m_animatedHeight = 0.0f;
     float         m_targetHeight   = 0.0f;
@@ -680,11 +959,26 @@ private:
     float m_pxBeat    = 80.0f;
     float m_rowH      = 10.0f;
 
-    int   m_selNote   = -1;
+    std::set<int> m_selectedNotes;
     Drag  m_dragMode  = Drag::None;
     float m_dragStartX = 0, m_dragStartY = 0;
-    double m_origBeat = 0, m_origDur = 0;
-    uint8_t m_origPitch = 0;
+    double m_origDur = 0;
+
+    // Multi-note move: original positions for all selected notes
+    struct OrigNote { double beat; uint8_t pitch; };
+    std::vector<OrigNote> m_origPositions;
+
+    // Rubber-band selection state
+    bool  m_rubberBanding = false;
+    bool  m_rubberShiftHeld = false;
+    float m_rubberStartX = 0, m_rubberStartY = 0;
+    float m_rubberEndX = 0,   m_rubberEndY = 0;
+
+    // Scrollbar drag state
+    bool  m_scrollbarDragging = false;
+    bool  m_scrollbarHovered  = false;
+    float m_scrollbarDragStartX = 0;
+    float m_scrollbarDragStartScroll = 0;
 
     // Cached layout
     float m_px = 0, m_py = 0, m_pw = 0;

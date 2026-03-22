@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace yawn {
@@ -32,9 +33,11 @@ namespace fw {
 class DetailPanelWidget : public Widget {
 public:
     // Layout constants (preserved for external users)
-    static constexpr float kPanelHeight      = 220.0f;
-    static constexpr float kCollapsedHeight  = 28.0f;
-    static constexpr float kHeaderHeight     = 28.0f;   // main panel header
+    static constexpr float kDefaultPanelHeight = 220.0f;
+    static constexpr float kCollapsedHeight  = 8.0f;    // just the handle
+    static constexpr float kHandleHeight     = 8.0f;    // drag-resize handle
+    static constexpr float kMinPanelH        = 80.0f;
+    static constexpr float kMaxPanelH        = 400.0f;
     static constexpr float kDeviceHeaderH    = 24.0f;   // per-device header
     static constexpr float kKnobSize         = 48.0f;
     static constexpr float kKnobSpacing      = 16.0f;
@@ -53,10 +56,11 @@ public:
     bool  isOpen() const { return m_open; }
     void  setOpen(bool open) {
         m_open = open;
-        m_targetHeight = open ? kPanelHeight : kCollapsedHeight;
+        m_targetHeight = open ? m_userPanelHeight : kCollapsedHeight;
     }
     void  toggle() { setOpen(!m_open); }
     float height() const { return m_animatedHeight; }
+    float panelHeight() const { return m_userPanelHeight; }
 
     bool isFocused() const { return m_panelFocused; }
     void setFocused(bool f) { m_panelFocused = f; }
@@ -218,7 +222,7 @@ public:
     }
 
     bool handleRightClick(float mx, float my) {
-        if (!m_open || my < m_bounds.y + kHeaderHeight) return false;
+        if (!m_open || my < m_bounds.y + kHandleHeight) return false;
         if (mx < m_bounds.x || mx > m_bounds.x + m_bounds.w) return false;
 
         for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
@@ -257,8 +261,8 @@ public:
     void layout(const Rect& bounds, const UIContext& ctx) override {
         m_bounds = bounds;
         if (!m_open) return;
-        float bodyY = bounds.y + kHeaderHeight;
-        float bodyH = m_animatedHeight - kHeaderHeight;
+        float bodyY = bounds.y + kHandleHeight;
+        float bodyH = m_animatedHeight - kHandleHeight;
         if (bodyH < 0) bodyH = 0;
         m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
         m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
@@ -275,19 +279,25 @@ public:
         // Clip to animated bounds so content doesn't overflow during transition
         renderer.pushClip(x, y, w, m_animatedHeight);
 
-        // Header bar
-        renderer.drawRect(x, y, w, kHeaderHeight, Color{35, 35, 40, 255});
-        renderer.drawRect(x, y, w, 1, Color{55, 55, 60, 255});
-        float hScale = 14.0f / Theme::kFontSize;
-        const char* arrow = m_open ? "\xe2\x96\xbc" : "\xe2\x96\xb6";
-        font.drawText(renderer, arrow, x + 8, y + 6, hScale, Theme::textSecondary);
-        font.drawText(renderer, title(), x + 26, y + 6, hScale, Theme::textPrimary);
+        // Handle bar (thin 8px drag strip with grip dots)
+        renderer.drawRect(x, y, w, kHandleHeight, Color{55, 55, 60, 255});
+        {
+            float cx = x + w * 0.5f;
+            float cy = y + kHandleHeight * 0.5f;
+            Color dotCol{90, 90, 95, 255};
+            float dotR = 1.0f;
+            float spacing = 6.0f;
+            renderer.drawRect(cx - spacing - dotR, cy - dotR, dotR * 2, dotR * 2, dotCol);
+            renderer.drawRect(cx - dotR,            cy - dotR, dotR * 2, dotR * 2, dotCol);
+            renderer.drawRect(cx + spacing - dotR, cy - dotR, dotR * 2, dotR * 2, dotCol);
+        }
 
         if (m_animatedHeight > kCollapsedHeight + 1.0f) {
-            float bodyY = y + kHeaderHeight;
-            float bodyH = m_animatedHeight - kHeaderHeight;
+            float bodyY = y + kHandleHeight;
+            float bodyH = m_animatedHeight - kHandleHeight;
             renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
 
+            float hScale = 14.0f / Theme::kFontSize;
             if (m_deviceWidgets.empty()) {
                 font.drawText(renderer, "No devices on track",
                               x + 20, bodyY + 20, hScale, Theme::textDim);
@@ -312,8 +322,24 @@ public:
 
         m_panelFocused = true;
 
-        // Header click toggles panel
-        if (my < m_bounds.y + kHeaderHeight) { toggle(); return true; }
+        // Handle area — start drag or detect double-click to toggle
+        if (my < m_bounds.y + kHandleHeight) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - m_lastHandleClickTime).count();
+            if (elapsed < 300) {
+                // Double-click: toggle open/close
+                toggle();
+                m_lastHandleClickTime = {};
+                return true;
+            }
+            m_lastHandleClickTime = now;
+            m_handleDragActive = true;
+            m_handleDragStartY = my;
+            m_handleDragStartH = m_userPanelHeight;
+            captureMouse();
+            return true;
+        }
 
         if (!m_open || m_deviceWidgets.empty()) return false;
 
@@ -331,6 +357,15 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        // Handle drag resize
+        if (m_handleDragActive) {
+            float delta = m_handleDragStartY - e.y; // drag up = taller
+            m_userPanelHeight = std::clamp(
+                m_handleDragStartH + delta, kMinPanelH, kMaxPanelH);
+            if (m_open)
+                m_targetHeight = m_userPanelHeight;
+            return true;
+        }
         // Captured widget receives moves regardless of position
         if (Widget::capturedWidget()) {
             return Widget::capturedWidget()->onMouseMove(e);
@@ -342,6 +377,11 @@ public:
     }
 
     bool onMouseUp(MouseEvent& e) override {
+        if (m_handleDragActive) {
+            m_handleDragActive = false;
+            releaseMouse();
+            return true;
+        }
         if (Widget::capturedWidget()) {
             bool handled = Widget::capturedWidget()->onMouseUp(e);
             return handled;
@@ -553,6 +593,15 @@ private:
 
     bool m_open         = false;
     bool m_panelFocused = false;
+
+    // Resizable panel height (user-adjustable via handle drag)
+    float m_userPanelHeight = kDefaultPanelHeight;
+
+    // Handle drag state
+    bool  m_handleDragActive = false;
+    float m_handleDragStartY = 0;
+    float m_handleDragStartH = 0;
+    std::chrono::steady_clock::time_point m_lastHandleClickTime{};
 
     // Animation state for smooth height transitions
     mutable float m_animatedHeight = kCollapsedHeight;

@@ -17,7 +17,7 @@ TEST(DetailPanelAnim, ToggleSetsTarget) {
     EXPECT_TRUE(panel.isOpen());
     // Immediately after toggle, height should still be near collapsed
     // (animation hasn't run yet)
-    EXPECT_LT(panel.height(), DetailPanelWidget::kPanelHeight);
+    EXPECT_LT(panel.height(), DetailPanelWidget::kDefaultPanelHeight);
 }
 
 TEST(DetailPanelAnim, AnimationConverges) {
@@ -31,7 +31,7 @@ TEST(DetailPanelAnim, AnimationConverges) {
     for (int i = 0; i < 60; ++i)
         panel.measure(c, ctx);
 
-    EXPECT_FLOAT_EQ(panel.height(), DetailPanelWidget::kPanelHeight);
+    EXPECT_FLOAT_EQ(panel.height(), DetailPanelWidget::kDefaultPanelHeight);
 }
 
 TEST(DetailPanelAnim, CloseAnimationConverges) {
@@ -44,7 +44,7 @@ TEST(DetailPanelAnim, CloseAnimationConverges) {
     // First converge to open
     for (int i = 0; i < 60; ++i)
         panel.measure(c, ctx);
-    EXPECT_FLOAT_EQ(panel.height(), DetailPanelWidget::kPanelHeight);
+    EXPECT_FLOAT_EQ(panel.height(), DetailPanelWidget::kDefaultPanelHeight);
 
     // Now close
     panel.setOpen(false);
@@ -65,7 +65,7 @@ TEST(DetailPanelAnim, HeightChangesGradually) {
     panel.measure(c, ctx);
     float h = panel.height();
     EXPECT_GT(h, DetailPanelWidget::kCollapsedHeight);
-    EXPECT_LT(h, DetailPanelWidget::kPanelHeight);
+    EXPECT_LT(h, DetailPanelWidget::kDefaultPanelHeight);
 }
 
 // Note: PianoRollPanel uses the identical animation pattern but

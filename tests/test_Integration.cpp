@@ -237,7 +237,7 @@ TEST(IntegrationDetailPanel, AnimationConvergesToOpen) {
     for (int i = 0; i < 100; ++i)
         detail.measure(c, ctx);
 
-    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kPanelHeight);
+    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kDefaultPanelHeight);
 }
 
 TEST(IntegrationDetailPanel, AnimationConvergesToClosed) {
@@ -250,7 +250,7 @@ TEST(IntegrationDetailPanel, AnimationConvergesToClosed) {
     // Converge to open
     for (int i = 0; i < 100; ++i)
         detail.measure(c, ctx);
-    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kPanelHeight);
+    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kDefaultPanelHeight);
 
     // Close and converge
     detail.setOpen(false);
@@ -269,7 +269,7 @@ TEST(IntegrationDetailPanel, HeightAnimatesGradually) {
     detail.measure(c, ctx);
     float h = detail.height();
     EXPECT_GT(h, DetailPanelWidget::kCollapsedHeight);
-    EXPECT_LT(h, DetailPanelWidget::kPanelHeight);
+    EXPECT_LT(h, DetailPanelWidget::kDefaultPanelHeight);
 }
 
 TEST(IntegrationDetailPanel, LayoutAssignsBounds) {
@@ -726,9 +726,9 @@ TEST(IntegrationCrossPanel, DetailPanelInFlexBoxLayout) {
 
     root.layout(Rect{0, 0, 800, 600}, ctx);
 
-    // Detail should take kPanelHeight, session gets the rest
+    // Detail should take kDefaultPanelHeight, session gets the rest
     float detailH = detail.height();
-    EXPECT_FLOAT_EQ(detailH, DetailPanelWidget::kPanelHeight);
+    EXPECT_FLOAT_EQ(detailH, DetailPanelWidget::kDefaultPanelHeight);
     EXPECT_GE(session.bounds().h, 100.0f);
     EXPECT_NEAR(session.bounds().h + detailH, 600.0f, 1.0f);
 }
