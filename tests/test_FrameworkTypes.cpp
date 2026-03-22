@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "ui/framework/Types.h"
 #include "ui/framework/EventSystem.h"
+#include <cstring>
 
 using namespace yawn::ui::fw;
 
