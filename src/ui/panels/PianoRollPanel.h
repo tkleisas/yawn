@@ -33,7 +33,8 @@ class PianoRollPanel : public Widget {
 public:
     // ─── Enums ──────────────────────────────────────────────────────────
     enum class Tool { Draw, Select, Erase };
-    enum class Snap { Quarter, Eighth, Sixteenth, ThirtySecond };
+    enum class Snap { Quarter, Eighth, Sixteenth, ThirtySecond,
+                      QuarterTriplet, EighthTriplet, SixteenthTriplet };
 
     // ─── Constants ──────────────────────────────────────────────────────
     static constexpr float kHandleHeight = 8.0f;    // drag-resize handle
@@ -47,6 +48,8 @@ public:
     static constexpr float kScrollbarH  = 12.0f;
     static constexpr float kMinPxBeat   = 15.0f;
     static constexpr float kMaxPxBeat   = 500.0f;
+    static constexpr float kRulerH      = 16.0f;
+    static constexpr float kClipOpsW    = 44.0f;
     static constexpr int   kNPitch      = 128;
     static constexpr uint16_t kDefVel   = 32512;
 
@@ -95,10 +98,11 @@ public:
         auto& f = *ctx.font;
 
         m_px = m_bounds.x; m_py = m_bounds.y; m_pw = m_bounds.w;
-        m_gx = m_px + kPianoW;
-        m_gy = m_py + kHandleHeight + kToolbarH;
-        m_gw = m_pw - kPianoW;
-        m_gh = m_bounds.h - kHandleHeight - kToolbarH - kScrollbarH;
+        m_pianoX = m_px + kClipOpsW;
+        m_gx = m_px + kClipOpsW + kPianoW;
+        m_gy = m_py + kHandleHeight + kToolbarH + kRulerH;
+        m_gw = m_pw - kClipOpsW - kPianoW;
+        m_gh = m_bounds.h - kHandleHeight - kToolbarH - kRulerH - kScrollbarH;
 
         // Clip to animated bounds so content doesn't overflow during transition
         r.pushClip(m_px, m_py, m_pw, m_animatedHeight);
@@ -121,6 +125,10 @@ public:
 
         renderToolbar(r, f);
 
+#ifndef YAWN_TEST_BUILD
+        renderRuler(r, f);
+#endif
+
         r.pushClip(m_gx, m_gy, m_gw, m_gh);
         renderGrid(r);
         renderNotes(r);
@@ -128,12 +136,13 @@ public:
         renderRubberBand(r);
         r.popClip();
 
-        r.pushClip(m_px, m_gy, kPianoW, m_gh);
+        r.pushClip(m_pianoX, m_gy, kPianoW, m_gh);
         renderPianoKeys(r, f);
         r.popClip();
 
 #ifndef YAWN_TEST_BUILD
         renderScrollbar(r);
+        renderClipOps(r, f);
 #endif
 
         // Top border
@@ -172,6 +181,19 @@ public:
             std::printf("[PianoRoll] Toolbar click at (%.0f, %.0f) py=%.0f toolbarH=%.0f\n",
                         mx, my, m_py, kToolbarH);
             return handleToolbarClick(mx, my);
+        }
+
+        // Ruler area — loop handle dragging
+        {
+            float rulerY = m_py + kHandleHeight + kToolbarH;
+            if (my >= rulerY && my < rulerY + kRulerH && mx >= m_gx && mx < m_gx + m_gw) {
+                return handleRulerClick(mx);
+            }
+        }
+
+        // Clip ops area
+        if (mx >= m_px && mx < m_px + kClipOpsW && my >= m_gy && my < m_gy + m_gh) {
+            return handleClipOpsClick(mx, my);
         }
 
         // Piano key area
@@ -286,6 +308,21 @@ public:
             return true;
         }
 
+        // Loop handle drag
+        if (m_dragMode == Drag::LoopStart || m_dragMode == Drag::LoopEnd) {
+            if (m_clip) {
+                double beat = snapBeat(std::max(0.0, xToBeat(mx)));
+                if (m_dragMode == Drag::LoopStart) {
+                    if (beat < m_clip->lengthBeats())
+                        m_clip->setLoopStartBeat(beat);
+                } else {
+                    double minEnd = m_clip->loopStartBeat() + snapVal();
+                    m_clip->setLengthBeats(std::max(minEnd, beat));
+                }
+            }
+            return true;
+        }
+
         // Scrollbar thumb drag
         if (m_scrollbarDragging) {
             float delta = mx - m_scrollbarDragStartX;
@@ -350,6 +387,11 @@ public:
         }
         if (m_scrollbarDragging) {
             m_scrollbarDragging = false;
+            releaseMouse();
+            return true;
+        }
+        if (m_dragMode == Drag::LoopStart || m_dragMode == Drag::LoopEnd) {
+            m_dragMode = Drag::None;
             releaseMouse();
             return true;
         }
@@ -458,17 +500,20 @@ public:
             return true;
         }
 
-        if (key == '1') { m_snap = Snap::Quarter;      return true; }
-        if (key == '2') { m_snap = Snap::Eighth;        return true; }
-        if (key == '3') { m_snap = Snap::Sixteenth;     return true; }
-        if (key == '4') { m_snap = Snap::ThirtySecond;  return true; }
+        if (key == '1') { m_snap = Snap::Quarter;          return true; }
+        if (key == '2') { m_snap = Snap::Eighth;            return true; }
+        if (key == '3') { m_snap = Snap::Sixteenth;         return true; }
+        if (key == '4') { m_snap = Snap::ThirtySecond;      return true; }
+        if (key == '5') { m_snap = Snap::QuarterTriplet;    return true; }
+        if (key == '6') { m_snap = Snap::EighthTriplet;     return true; }
+        if (key == '7') { m_snap = Snap::SixteenthTriplet;  return true; }
 
         return false;
     }
 
 private:
     // ─── Drag state ─────────────────────────────────────────────────────
-    enum class Drag { None, Move, Resize, DrawLen, RubberBand };
+    enum class Drag { None, Move, Resize, DrawLen, RubberBand, LoopStart, LoopEnd };
 
     void startMove(int /*idx*/) {
         m_dragMode = Drag::Move;
@@ -545,16 +590,20 @@ private:
         f.drawText(r, "Snap:", x, ty, sc, Theme::textSecondary);
         x += 42;
 
-        // Snap buttons
-        static const char* snapNames[] = {"1/4", "1/8", "1/16", "1/32"};
-        for (int i = 0; i < 4; ++i) {
+        // Snap buttons (4 straight + 3 triplet)
+        static const char* snapNames[] = {"1/4","1/8","1/16","1/32","4T","8T","16T"};
+        static constexpr float snapW[] = {m_snapBtnW, m_snapBtnW, m_snapBtnW, m_snapBtnW,
+                                           m_tripletBtnW, m_tripletBtnW, m_tripletBtnW};
+        for (int i = 0; i < 7; ++i) {
             bool active = static_cast<int>(m_snap) == i;
-            Color bg = active ? Color{100, 180, 255} : Color{55, 55, 60};
-            Color fg = active ? Color{10, 10, 15}    : Theme::textSecondary;
+            bool isTriplet = (i >= 4);
+            Color bg = active ? (isTriplet ? Color{255, 160, 60} : Color{100, 180, 255})
+                              : Color{55, 55, 60};
+            Color fg = active ? Color{10, 10, 15} : Theme::textSecondary;
             m_snapBtnX[i] = x;
-            r.drawRect(x, tbY + 2, m_snapBtnW, kToolbarH - 4, bg);
+            r.drawRect(x, tbY + 2, snapW[i], kToolbarH - 4, bg);
             f.drawText(r, snapNames[i], x + 3, ty, sc, fg);
-            x += m_snapBtnW + 3;
+            x += snapW[i] + 3;
         }
 
         // Loop toggle
@@ -586,19 +635,19 @@ private:
             Color bg = black ? Color{40, 40, 45} : Color{180, 180, 185};
             Color fg = black ? Color{180, 180, 180} : Color{30, 30, 30};
 
-            r.drawRect(m_px, y, kPianoW, m_rowH, bg);
-            r.drawRect(m_px, y + m_rowH - 1, kPianoW, 1, Color{60, 60, 65});
+            r.drawRect(m_pianoX, y, kPianoW, m_rowH, bg);
+            r.drawRect(m_pianoX, y + m_rowH - 1, kPianoW, 1, Color{60, 60, 65});
 
             // Label C notes
             if (p % 12 == 0 && m_rowH >= 8.0f) {
                 int oct = (p / 12) - 1;
                 char buf[8];
                 std::snprintf(buf, sizeof(buf), "C%d", oct);
-                f.drawText(r, buf, m_px + 2, y + 1, sc, fg);
+                f.drawText(r, buf, m_pianoX + 2, y + 1, sc, fg);
             }
         }
         // Separator between keys and grid
-        r.drawRect(m_px + kPianoW - 1, m_gy, 1, m_gh, Color{70, 70, 75});
+        r.drawRect(m_pianoX + kPianoW - 1, m_gy, 1, m_gh, Color{70, 70, 75});
     }
 
     void renderGrid(Renderer2D& r) {
@@ -682,28 +731,34 @@ private:
     void renderClipBound(Renderer2D& r) {
         if (!m_clip) return;
 
-        // Loop region markers
         bool loopOn = m_clip->loop();
-        float loopStartX = beatToX(0.0);
+        float loopStartX = beatToX(m_clip->loopStartBeat());
         float loopEndX   = beatToX(m_clip->lengthBeats());
+
+        // Shade area before loop start
+        if (loopOn && loopStartX > m_gx) {
+            float preW = std::min(loopStartX, m_gx + m_gw) - m_gx;
+            if (preW > 0)
+                r.drawRect(m_gx, m_gy, preW, m_gh, Color{15, 15, 18, 140});
+        }
 
         // Clip/loop end boundary
         if (loopEndX >= m_gx && loopEndX <= m_gx + m_gw) {
-            Color boundCol = loopOn ? Color{80, 220, 100}.withAlpha(180)
-                                    : Color{255, 100, 50}.withAlpha(120);
+            Color boundCol = loopOn ? Color{80, 220, 100, 180}
+                                    : Color{255, 100, 50, 120};
             r.drawRect(loopEndX, m_gy, 2, m_gh, boundCol);
 
             // Shade area past the loop/clip end
             float pastW = m_gx + m_gw - loopEndX - 2;
             if (pastW > 0)
-                r.drawRect(loopEndX + 2, m_gy, pastW, m_gh,
-                           Color{15, 15, 18}.withAlpha(140));
+                r.drawRect(loopEndX + 2, m_gy, pastW, m_gh, Color{15, 15, 18, 140});
         }
 
-        // Loop start marker (at beat 0)
-        if (loopOn && loopStartX >= m_gx && loopStartX <= m_gx + m_gw) {
-            r.drawRect(loopStartX, m_gy, 2, m_gh,
-                       Color{80, 220, 100}.withAlpha(180));
+        // Loop start marker
+        if (loopStartX >= m_gx && loopStartX <= m_gx + m_gw) {
+            Color markerCol = loopOn ? Color{80, 220, 100, 180}
+                                     : Color{255, 160, 50, 120};
+            r.drawRect(loopStartX, m_gy, 2, m_gh, markerCol);
         }
 
         // Loop region indicator bar at top of grid
@@ -712,8 +767,7 @@ private:
             float x0 = std::max(m_gx, loopStartX);
             float x1 = std::min(m_gx + m_gw, loopEndX);
             if (x1 > x0) {
-                r.drawRect(x0, m_gy, x1 - x0, barH,
-                           Color{80, 220, 100}.withAlpha(120));
+                r.drawRect(x0, m_gy, x1 - x0, barH, Color{80, 220, 100, 120});
             }
         }
     }
@@ -728,12 +782,107 @@ private:
         r.drawRectOutline(rx, ry, rw, rh, Color{100, 180, 255, 180}, 1.0f);
     }
 
+    void renderRuler(Renderer2D& r, Font& f) {
+        float rulerY = m_py + kHandleHeight + kToolbarH;
+        float sc = 11.0f / f.pixelHeight();
+
+        // Ruler background
+        r.drawRect(m_gx, rulerY, m_gw, kRulerH, Color{38, 38, 42});
+        r.drawRect(m_px, rulerY, kClipOpsW + kPianoW, kRulerH, Color{38, 38, 42});
+
+        // Beat/bar numbers
+        double bpb = beatsPerBar();
+        double visStart = std::max(0.0, xToBeat(m_gx));
+        double visEnd   = xToBeat(m_gx + m_gw);
+        double firstBar = std::floor(visStart / bpb) * bpb;
+        for (double b = firstBar; b <= visEnd; b += bpb) {
+            float x = beatToX(b);
+            if (x < m_gx || x > m_gx + m_gw) continue;
+            int barNum = static_cast<int>(b / bpb) + 1;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%d", barNum);
+            f.drawText(r, buf, x + 2, rulerY + 1, sc, Color{140, 140, 145});
+            r.drawRect(x, rulerY, 1, kRulerH, Color{60, 60, 65});
+        }
+
+        if (!m_clip) return;
+
+        // Loop region highlight
+        bool loopOn = m_clip->loop();
+        double loopStart = m_clip->loopStartBeat();
+        double loopEnd   = m_clip->lengthBeats();
+        float lsx = std::max(m_gx, beatToX(loopStart));
+        float lex = std::min(m_gx + m_gw, beatToX(loopEnd));
+        if (lex > lsx) {
+            Color regionCol = loopOn ? Color{80, 220, 100, 50} : Color{255, 140, 60, 40};
+            r.drawRect(lsx, rulerY, lex - lsx, kRulerH, regionCol);
+        }
+
+        // Loop start handle (flag)
+        {
+            float hx = beatToX(loopStart);
+            if (hx >= m_gx - 6 && hx <= m_gx + m_gw + 6) {
+                Color hc = loopOn ? Color{0, 255, 120} : Color{255, 160, 50};
+                r.drawRect(hx - 1, rulerY, 3, kRulerH, hc);
+                r.drawRect(hx, rulerY, 6, 6, hc);
+            }
+        }
+        // Loop end handle
+        {
+            float hx = beatToX(loopEnd);
+            if (hx >= m_gx - 6 && hx <= m_gx + m_gw + 6) {
+                Color hc = loopOn ? Color{0, 255, 120} : Color{255, 160, 50};
+                r.drawRect(hx - 1, rulerY, 3, kRulerH, hc);
+                r.drawRect(hx - 5, rulerY, 6, 6, hc);
+            }
+        }
+
+        // Bottom border
+        r.drawRect(m_gx, rulerY + kRulerH - 1, m_gw, 1, Color{55, 55, 60});
+    }
+
+    void renderClipOps(Renderer2D& r, Font& f) {
+        float sc = 11.0f / f.pixelHeight();
+        float x = m_px;
+        float y = m_gy;
+        float w = kClipOpsW;
+
+        // Background
+        r.drawRect(x, y, w, m_gh, Color{32, 32, 36});
+
+        // Buttons stacked vertically
+        static const char* labels[] = {"Dup", "x2", "/2", "Rev", "Clr"};
+        static const Color btnColors[] = {
+            Color{80, 180, 255},   // Dup - blue
+            Color{120, 230, 100},  // x2 - green
+            Color{255, 180, 60},   // /2 - orange
+            Color{200, 130, 255},  // Rev - purple
+            Color{255, 90, 90}     // Clr - red
+        };
+        float btnH = 20.0f;
+        float gap = 4.0f;
+        float startY = y + 6.0f;
+
+        for (int i = 0; i < 5; ++i) {
+            float by = startY + i * (btnH + gap);
+            if (by + btnH > y + m_gh) break;
+            m_clipOpsBtnY[i] = by;
+            r.drawRect(x + 3, by, w - 6, btnH, Color{50, 50, 55});
+            // Colored left accent
+            r.drawRect(x + 3, by, 3, btnH, btnColors[i]);
+            f.drawText(r, labels[i], x + 10, by + 3, sc, Theme::textPrimary);
+        }
+
+        // Right border separator
+        r.drawRect(x + w - 1, y, 1, m_gh, Color{55, 55, 60});
+    }
+
     void renderScrollbar(Renderer2D& r) {
         float sbY = m_gy + m_gh;
         // Track background
         r.drawRect(m_gx, sbY, m_gw, kScrollbarH, Color{40, 40, 45});
-        // Also fill the piano-key column portion of the scrollbar row
-        r.drawRect(m_px, sbY, kPianoW, kScrollbarH, Color{40, 40, 45});
+        // Fill clip-ops + piano-key portion of the scrollbar row
+        r.drawRect(m_px, sbY, kClipOpsW + kPianoW, kScrollbarH, Color{40, 40, 45});
 
         // Thumb
         float totalW = maxBeats() * m_pxBeat;
@@ -763,9 +912,11 @@ private:
                 return true;
             }
         }
-        // Snap buttons
-        for (int i = 0; i < 4; ++i) {
-            if (mx >= m_snapBtnX[i] && mx < m_snapBtnX[i] + m_snapBtnW) {
+        // Snap buttons (4 straight + 3 triplet)
+        static constexpr float snapClickW[] = {m_snapBtnW, m_snapBtnW, m_snapBtnW, m_snapBtnW,
+                                                m_tripletBtnW, m_tripletBtnW, m_tripletBtnW};
+        for (int i = 0; i < 7; ++i) {
+            if (mx >= m_snapBtnX[i] && mx < m_snapBtnX[i] + snapClickW[i]) {
                 m_snap = static_cast<Snap>(i);
                 std::printf("[PianoRoll] Snap → %d\n", i);
                 return true;
@@ -778,6 +929,121 @@ private:
             return true;
         }
         return true;
+    }
+
+    bool handleRulerClick(float mx) {
+        if (!m_clip) return true;
+        double loopStart = m_clip->loopStartBeat();
+        double loopEnd   = m_clip->lengthBeats();
+        float startX = beatToX(loopStart);
+        float endX   = beatToX(loopEnd);
+
+        // Near loop start handle? (within 8px)
+        if (std::abs(mx - startX) < 8.0f) {
+            m_dragMode = Drag::LoopStart;
+            captureMouse();
+            return true;
+        }
+        // Near loop end handle?
+        if (std::abs(mx - endX) < 8.0f) {
+            m_dragMode = Drag::LoopEnd;
+            captureMouse();
+            return true;
+        }
+        return true;
+    }
+
+    bool handleClipOpsClick(float /*mx*/, float my) {
+        if (!m_clip) return true;
+        float btnH = 20.0f;
+        float gap = 4.0f;
+        float startY = m_gy + 6.0f;
+
+        for (int i = 0; i < 5; ++i) {
+            float by = startY + i * (btnH + gap);
+            if (my >= by && my < by + btnH) {
+                executeClipOp(i);
+                return true;
+            }
+        }
+        return true;
+    }
+
+    void executeClipOp(int op) {
+        if (!m_clip) return;
+        double loopStart = m_clip->loopStartBeat();
+        double len = m_clip->lengthBeats();
+
+        switch (op) {
+        case 0: { // Dup — duplicate selected notes
+            if (m_selectedNotes.empty()) break;
+            std::vector<midi::MidiNote> copies;
+            double minBeat = 1e9, maxEndBeat = 0;
+            for (int idx : m_selectedNotes) {
+                auto n = m_clip->note(idx);
+                minBeat = std::min(minBeat, n.startBeat);
+                maxEndBeat = std::max(maxEndBeat, n.startBeat + n.duration);
+                copies.push_back(n);
+            }
+            double shift = maxEndBeat - minBeat;
+            if (shift <= 0) shift = snapVal();
+            m_selectedNotes.clear();
+            for (auto& n : copies) {
+                n.startBeat += shift;
+                m_clip->addNote(n);
+                autoExtend(n);
+                int found = findNote(n.startBeat, n.pitch);
+                if (found >= 0) m_selectedNotes.insert(found);
+            }
+            break;
+        }
+        case 1: { // x2 — double clip by repeating content
+            int count = m_clip->noteCount();
+            double regionLen = len - loopStart;
+            std::vector<midi::MidiNote> copies;
+            for (int i = 0; i < count; ++i) {
+                auto n = m_clip->note(i);
+                if (n.startBeat >= loopStart && n.startBeat < len) {
+                    n.startBeat += regionLen;
+                    copies.push_back(n);
+                }
+            }
+            for (auto& n : copies) m_clip->addNote(n);
+            m_clip->setLengthBeats(len + regionLen);
+            m_selectedNotes.clear();
+            break;
+        }
+        case 2: { // /2 — halve clip
+            double newLen = loopStart + (len - loopStart) * 0.5;
+            for (int i = m_clip->noteCount() - 1; i >= 0; --i) {
+                if (m_clip->note(i).startBeat >= newLen)
+                    m_clip->removeNote(i);
+            }
+            m_clip->setLengthBeats(newLen);
+            m_selectedNotes.clear();
+            break;
+        }
+        case 3: { // Rev — reverse note positions
+            int count = m_clip->noteCount();
+            std::vector<midi::MidiNote> notes;
+            for (int i = 0; i < count; ++i)
+                notes.push_back(m_clip->note(i));
+            while (m_clip->noteCount() > 0)
+                m_clip->removeNote(m_clip->noteCount() - 1);
+            for (auto& n : notes) {
+                n.startBeat = len - (n.startBeat + n.duration);
+                if (n.startBeat < 0) n.startBeat = 0;
+                m_clip->addNote(n);
+            }
+            m_selectedNotes.clear();
+            break;
+        }
+        case 4: // Clr — clear all notes
+            while (m_clip->noteCount() > 0)
+                m_clip->removeNote(m_clip->noteCount() - 1);
+            m_selectedNotes.clear();
+            break;
+        }
     }
 
     // ─── Coordinate conversion ──────────────────────────────────────────
@@ -808,10 +1074,13 @@ private:
 
     double snapVal() const {
         switch (m_snap) {
-            case Snap::Quarter:      return 1.0;
-            case Snap::Eighth:       return 0.5;
-            case Snap::Sixteenth:    return 0.25;
-            case Snap::ThirtySecond: return 0.125;
+            case Snap::Quarter:          return 1.0;
+            case Snap::Eighth:           return 0.5;
+            case Snap::Sixteenth:        return 0.25;
+            case Snap::ThirtySecond:     return 0.125;
+            case Snap::QuarterTriplet:   return 2.0 / 3.0;
+            case Snap::EighthTriplet:    return 1.0 / 3.0;
+            case Snap::SixteenthTriplet: return 1.0 / 6.0;
         }
         return 0.25;
     }
@@ -983,14 +1252,19 @@ private:
     // Cached layout
     float m_px = 0, m_py = 0, m_pw = 0;
     float m_gx = 0, m_gy = 0, m_gw = 0, m_gh = 0;
+    float m_pianoX = 0;
 
     // Toolbar button positions
-    static constexpr float m_toolBtnW = 50.0f;
-    static constexpr float m_snapBtnW = 36.0f;
-    static constexpr float m_loopBtnW = 44.0f;
+    static constexpr float m_toolBtnW    = 50.0f;
+    static constexpr float m_snapBtnW    = 36.0f;
+    static constexpr float m_tripletBtnW = 28.0f;
+    static constexpr float m_loopBtnW    = 44.0f;
     float m_toolBtnX[3] = {};
-    float m_snapBtnX[4] = {};
+    float m_snapBtnX[7] = {};
     float m_loopBtnX = 0;
+
+    // Clip ops button Y positions
+    float m_clipOpsBtnY[5] = {};
 };
 
 } // namespace fw

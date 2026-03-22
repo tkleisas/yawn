@@ -163,3 +163,117 @@ TEST_F(PianoRollDataTest, EmptyClipDefaultLength) {
     EXPECT_EQ(empty.noteCount(), 0);
     EXPECT_TRUE(empty.loop());
 }
+
+// ─── Loop Start Beat ────────────────────────────────────────────────────
+
+TEST_F(PianoRollDataTest, LoopStartBeatDefault) {
+    EXPECT_DOUBLE_EQ(m_clip.loopStartBeat(), 0.0);
+}
+
+TEST_F(PianoRollDataTest, SetLoopStartBeat) {
+    m_clip.setLoopStartBeat(2.0);
+    EXPECT_DOUBLE_EQ(m_clip.loopStartBeat(), 2.0);
+}
+
+TEST_F(PianoRollDataTest, LoopStartBeatClampNegative) {
+    m_clip.setLoopStartBeat(-5.0);
+    EXPECT_DOUBLE_EQ(m_clip.loopStartBeat(), 0.0);
+}
+
+// ─── Triplet Snap Values ────────────────────────────────────────────────
+
+TEST(TripletSnapValues, QuarterTriplet) {
+    double v = 2.0 / 3.0;
+    EXPECT_NEAR(v, 0.6667, 0.001);
+}
+
+TEST(TripletSnapValues, EighthTriplet) {
+    double v = 1.0 / 3.0;
+    EXPECT_NEAR(v, 0.3333, 0.001);
+}
+
+TEST(TripletSnapValues, SixteenthTriplet) {
+    double v = 1.0 / 6.0;
+    EXPECT_NEAR(v, 0.1667, 0.001);
+}
+
+// ─── Clip Operations ────────────────────────────────────────────────────
+
+class ClipOpsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        m_clip.setLengthBeats(4.0);
+        m_clip.setLoop(true);
+        // Add some notes: C4 at beat 0, E4 at beat 1, G4 at beat 2
+        MidiNote n{};
+        n.duration = 0.5; n.velocity = 32512;
+        n.pitch = 60; n.startBeat = 0.0; m_clip.addNote(n);
+        n.pitch = 64; n.startBeat = 1.0; m_clip.addNote(n);
+        n.pitch = 67; n.startBeat = 2.0; m_clip.addNote(n);
+    }
+    MidiClip m_clip;
+};
+
+TEST_F(ClipOpsTest, DoubleClipRepeatsContent) {
+    int origCount = m_clip.noteCount(); // 3
+    double origLen = m_clip.lengthBeats(); // 4.0
+
+    // Simulate x2: copy notes and extend
+    std::vector<MidiNote> copies;
+    for (int i = 0; i < origCount; ++i) {
+        auto n = m_clip.note(i);
+        n.startBeat += origLen;
+        copies.push_back(n);
+    }
+    for (auto& n : copies) m_clip.addNote(n);
+    m_clip.setLengthBeats(origLen * 2);
+
+    EXPECT_EQ(m_clip.noteCount(), 6);
+    EXPECT_DOUBLE_EQ(m_clip.lengthBeats(), 8.0);
+    // Original notes still at 0, 1, 2
+    EXPECT_DOUBLE_EQ(m_clip.note(0).startBeat, 0.0);
+    // Copied notes at 4, 5, 6
+    EXPECT_DOUBLE_EQ(m_clip.note(3).startBeat, 4.0);
+    EXPECT_EQ(m_clip.note(3).pitch, 60);
+}
+
+TEST_F(ClipOpsTest, HalveClipRemovesLateNotes) {
+    double newLen = m_clip.lengthBeats() * 0.5; // 2.0
+    for (int i = m_clip.noteCount() - 1; i >= 0; --i) {
+        if (m_clip.note(i).startBeat >= newLen)
+            m_clip.removeNote(i);
+    }
+    m_clip.setLengthBeats(newLen);
+
+    EXPECT_DOUBLE_EQ(m_clip.lengthBeats(), 2.0);
+    EXPECT_EQ(m_clip.noteCount(), 2); // only beats 0.0 and 1.0 remain
+}
+
+TEST_F(ClipOpsTest, ReverseNotes) {
+    double len = m_clip.lengthBeats();
+    std::vector<MidiNote> notes;
+    for (int i = 0; i < m_clip.noteCount(); ++i)
+        notes.push_back(m_clip.note(i));
+    while (m_clip.noteCount() > 0)
+        m_clip.removeNote(m_clip.noteCount() - 1);
+    for (auto& n : notes) {
+        n.startBeat = len - (n.startBeat + n.duration);
+        if (n.startBeat < 0) n.startBeat = 0;
+        m_clip.addNote(n);
+    }
+
+    EXPECT_EQ(m_clip.noteCount(), 3);
+    // Reversed: note at beat 2 (dur 0.5) → 4 - 2.5 = 1.5
+    // Note at beat 1 (dur 0.5) → 4 - 1.5 = 2.5
+    // Note at beat 0 (dur 0.5) → 4 - 0.5 = 3.5
+    EXPECT_NEAR(m_clip.note(0).startBeat, 1.5, 0.001);
+    EXPECT_NEAR(m_clip.note(1).startBeat, 2.5, 0.001);
+    EXPECT_NEAR(m_clip.note(2).startBeat, 3.5, 0.001);
+}
+
+TEST_F(ClipOpsTest, ClearAllNotes) {
+    while (m_clip.noteCount() > 0)
+        m_clip.removeNote(m_clip.noteCount() - 1);
+    EXPECT_EQ(m_clip.noteCount(), 0);
+    EXPECT_DOUBLE_EQ(m_clip.lengthBeats(), 4.0); // length unchanged
+}

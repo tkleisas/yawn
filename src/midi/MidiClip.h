@@ -134,6 +134,9 @@ public:
     bool loop() const { return m_loop; }
     void setLoop(bool l) { m_loop = l; }
 
+    double loopStartBeat() const { return m_loopStartBeat; }
+    void setLoopStartBeat(double b) { m_loopStartBeat = std::max(0.0, b); }
+
     const std::string& name() const { return m_name; }
     void setName(const std::string& n) { m_name = n; }
 
@@ -141,7 +144,8 @@ private:
     std::vector<MidiNote>    m_notes;       // Sorted by startBeat
     std::vector<MidiCCEvent> m_ccEvents;    // Sorted by beat
     double      m_lengthBeats = 4.0;
-    bool        m_loop        = true;
+    bool        m_loop           = true;
+    double      m_loopStartBeat  = 0.0;
     std::string m_name;
 };
 
