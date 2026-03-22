@@ -163,7 +163,6 @@ public:
         }
 
         // Hover detection
-        bool prevH = m_hoverH, prevV = m_hoverV;
         m_hoverH = std::abs(my - m_hDivY) < kDividerHitZone && mx >= m_bounds.x && mx < m_bounds.x + m_bounds.w;
         m_hoverV = std::abs(mx - m_vDivX) < kDividerHitZone && my >= m_bounds.y && my < m_bounds.y + m_bounds.h;
 
@@ -194,6 +193,11 @@ public:
         return false;
     }
 
+    // Cursor state — the host (App) queries this to set SDL cursor shape
+    bool wantsHorizontalResize() const { return m_hoverV || m_dragV; }
+    bool wantsVerticalResize()   const { return m_hoverH || m_dragH; }
+    bool isDraggingDivider()     const { return m_dragH || m_dragV; }
+
 private:
     Widget* m_tl = nullptr;
     Widget* m_tr = nullptr;
@@ -201,7 +205,7 @@ private:
     Widget* m_br = nullptr;
 
     float m_hRatio = 0.6f;   // horizontal divider position (top height fraction)
-    float m_vRatio = 0.75f;  // vertical divider position (left width fraction)
+    float m_vRatio = 0.70f;  // vertical divider position (left width fraction)
 
     float m_vDivX = 0;       // computed vertical divider X
     float m_hDivY = 0;       // computed horizontal divider Y

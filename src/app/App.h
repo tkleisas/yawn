@@ -103,6 +103,12 @@ private:
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
 
+    // Cached system cursors
+    SDL_Cursor* m_cursorDefault  = nullptr;
+    SDL_Cursor* m_cursorEWResize = nullptr;
+    SDL_Cursor* m_cursorNSResize = nullptr;
+    SDL_Cursor* m_cursorMove     = nullptr;
+
     // Project persistence state
     std::filesystem::path m_projectPath;   // Empty = untitled
     bool m_projectDirty = false;

@@ -416,6 +416,12 @@ bool App::init() {
 
     SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
 
+    // Cache system cursors
+    m_cursorDefault  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    m_cursorEWResize = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+    m_cursorNSResize = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+    m_cursorMove     = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
+
     m_running = true;
 
     // Wire up detail panel remove device callback
@@ -465,6 +471,11 @@ void App::run() {
 
 void App::shutdown() {
     m_audioEngine.shutdown();
+    // Destroy cached cursors
+    if (m_cursorDefault)  SDL_DestroyCursor(m_cursorDefault);
+    if (m_cursorEWResize) SDL_DestroyCursor(m_cursorEWResize);
+    if (m_cursorNSResize) SDL_DestroyCursor(m_cursorNSResize);
+    if (m_cursorMove)     SDL_DestroyCursor(m_cursorMove);
     m_renderer.shutdown();
     m_font.destroy();
     m_mainWindow.destroy();
@@ -683,6 +694,24 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     m_rootLayout->dispatchMouseMove(me);
                 }
+
+                // ContentGrid hover detection for divider cursor
+                {
+                    ui::fw::MouseMoveEvent me;
+                    me.x = mx; me.y = my;
+                    m_contentGrid->onMouseMove(me);
+                }
+
+                // Update cursor shape based on content grid divider hover
+                if (m_contentGrid->wantsHorizontalResize() && m_contentGrid->wantsVerticalResize()) {
+                    SDL_SetCursor(m_cursorMove);
+                } else if (m_contentGrid->wantsHorizontalResize()) {
+                    SDL_SetCursor(m_cursorEWResize);
+                } else if (m_contentGrid->wantsVerticalResize()) {
+                    SDL_SetCursor(m_cursorNSResize);
+                } else {
+                    SDL_SetCursor(m_cursorDefault);
+                }
                 break;
             }
 
@@ -830,21 +859,13 @@ void App::processEvents() {
                 }
                 // Stop text input if editing was cancelled by clicking elsewhere
                 bool wasEditing = m_transportPanel->isEditing();
-                // Dispatch click to mixer via widget tree
-                bool mixerHandled = false;
-                if (m_showMixer) {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
-                    mixerHandled = (m_mixerPanel->dispatchMouseDown(me) != nullptr);
-                }
-                if (!mixerHandled) {
-                    // Dispatch click to session panel via widget tree
+                // Dispatch click through content grid (handles dividers + children)
+                {
                     m_sessionPanel->clearLastClickTrack();
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
-                    m_sessionPanel->dispatchMouseDown(me);
+                    m_contentGrid->dispatchMouseDown(me);
                     int selTrack = m_sessionPanel->lastClickTrack();
                     if (selTrack >= 0) {
                         m_selectedTrack = selTrack;
