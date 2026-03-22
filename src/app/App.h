@@ -13,8 +13,12 @@
 #include "ui/framework/ConfirmDialogWidget.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
+#include "ui/framework/ContentGrid.h"
 #include "ui/panels/MixerPanel.h"
 #include "ui/panels/SessionPanel.h"
+#include "ui/panels/TransportPanel.h"
+#include "ui/panels/BrowserPanel.h"
+#include "ui/panels/ReturnMasterPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
@@ -83,6 +87,10 @@ private:
     ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
     ui::fw::MixerPanel*   m_mixerPanel   = nullptr;  // owned by unique_ptr below
     ui::fw::SessionPanel* m_sessionPanel = nullptr;  // owned by unique_ptr below
+    ui::fw::TransportPanel*      m_transportPanel  = nullptr;
+    ui::fw::ContentGrid*         m_contentGrid     = nullptr;
+    ui::fw::BrowserPanel*        m_browserPanel    = nullptr;
+    ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
     ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
     ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;

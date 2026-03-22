@@ -123,36 +123,60 @@ void App::buildWidgetTree() {
     m_rootLayout = std::make_unique<FlexBox>(Direction::Column);
     m_rootLayout->setAlign(Align::Stretch);
 
-    auto menuW    = std::make_unique<MenuBarWrapper>(m_menuBar);
-    auto sessionP = std::make_unique<SessionPanel>();
-    auto mixerP   = std::make_unique<MixerPanel>();
-    auto detailP  = std::make_unique<DetailPanelWidget>();
-    auto pianoP   = std::make_unique<PianoRollPanel>();
-    auto aboutDlg = std::make_unique<AboutDialog>();
+    auto menuW      = std::make_unique<MenuBarWrapper>(m_menuBar);
+    auto transportP = std::make_unique<TransportPanel>();
+    auto sessionP   = std::make_unique<SessionPanel>();
+    auto mixerP     = std::make_unique<MixerPanel>();
+    auto browserP   = std::make_unique<BrowserPanel>();
+    auto returnMstP = std::make_unique<ReturnMasterPanel>();
+    auto gridP      = std::make_unique<ContentGrid>();
+    auto detailP    = std::make_unique<DetailPanelWidget>();
+    auto pianoP     = std::make_unique<PianoRollPanel>();
+    auto aboutDlg   = std::make_unique<AboutDialog>();
     auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
 
-    // Session view fills remaining space, min 100px
-    sessionP->setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
+    // ContentGrid fills remaining space
+    gridP->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
 
     // Store raw pointers for quick access
-    m_menuBarW      = menuW.get();
-    m_sessionPanel  = sessionP.get();
-    m_mixerPanel    = mixerP.get();
-    m_detailPanel   = detailP.get();
-    m_pianoRoll     = pianoP.get();
-    m_aboutDialog   = aboutDlg.get();
-    m_confirmDialog = confirmDlg.get();
+    m_menuBarW          = menuW.get();
+    m_transportPanel    = transportP.get();
+    m_sessionPanel      = sessionP.get();
+    m_mixerPanel        = mixerP.get();
+    m_browserPanel      = browserP.get();
+    m_returnMasterPanel = returnMstP.get();
+    m_contentGrid       = gridP.get();
+    m_detailPanel       = detailP.get();
+    m_pianoRoll         = pianoP.get();
+    m_aboutDialog       = aboutDlg.get();
+    m_confirmDialog     = confirmDlg.get();
+
+    // Wire the 4-quadrant layout
+    m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
+                               m_mixerPanel, m_returnMasterPanel);
 
     m_rootLayout->addChild(m_menuBarW);
-    m_rootLayout->addChild(m_sessionPanel);
-    m_rootLayout->addChild(m_mixerPanel);
+    m_rootLayout->addChild(m_transportPanel);
+    m_rootLayout->addChild(m_contentGrid);
     m_rootLayout->addChild(m_detailPanel);
     m_rootLayout->addChild(m_pianoRoll);
 
+    // Synchronized horizontal scrolling between session clips and mixer strips
+    m_sessionPanel->setOnScrollChanged([this](float sx) {
+        m_mixerPanel->setScrollX(sx);
+    });
+    m_mixerPanel->setOnScrollChanged([this](float sx) {
+        m_sessionPanel->setScrollX(sx);
+    });
+
     // Transfer ownership
     m_wrappers.push_back(std::move(menuW));
+    m_wrappers.push_back(std::move(transportP));
     m_wrappers.push_back(std::move(sessionP));
     m_wrappers.push_back(std::move(mixerP));
+    m_wrappers.push_back(std::move(browserP));
+    m_wrappers.push_back(std::move(returnMstP));
+    m_wrappers.push_back(std::move(gridP));
     m_wrappers.push_back(std::move(detailP));
     m_wrappers.push_back(std::move(pianoP));
     m_wrappers.push_back(std::move(aboutDlg));
@@ -169,14 +193,13 @@ void App::computeLayout() {
     int h = m_mainWindow.getHeight();
 
     // Update panel visibility
-    m_mixerPanel->setVisible(m_showMixer);
     m_detailPanel->setVisible(m_showDetailPanel);
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
-    // Cap session view height to its preferred size
-    auto sp = SizePolicy::flexMin(1.0f, 100.0f);
-    sp.maxSize = m_sessionPanel->preferredHeight();
-    m_sessionPanel->setSizePolicy(sp);
+    // ContentGrid manages session + mixer + browser + returns visibility
+    // MixerPanel visibility is controlled via the content grid's bottom row
+    m_mixerPanel->setVisible(m_showMixer);
+    m_returnMasterPanel->setVisible(m_showMixer);
 
     Constraints c = Constraints::tight(static_cast<float>(w), static_cast<float>(h));
     m_rootLayout->measure(c, m_uiContext);
@@ -377,6 +400,8 @@ bool App::init() {
     m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine);
     m_mixerPanel->init(&m_project, &m_audioEngine);
+    m_transportPanel->init(&m_project, &m_audioEngine);
+    m_returnMasterPanel->init(&m_project, &m_audioEngine);
 
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = 44100.0;
@@ -511,16 +536,16 @@ void App::processEvents() {
                     break;
                 }
 
-                // Session view editing (BPM / time signature) takes priority
-                if (m_sessionPanel->isEditing()) {
+                // Transport editing (BPM / time signature) takes priority
+                if (m_transportPanel->isEditing()) {
                     int kc = 0;
                     if (event.key.key == SDLK_RETURN) kc = 13;
                     else if (event.key.key == SDLK_ESCAPE) kc = 27;
                     else if (event.key.key == SDLK_BACKSPACE) kc = 8;
                     else if (event.key.key == SDLK_TAB) kc = 9;
                     if (kc) {
-                        m_sessionPanel->handleKeyDown(kc);
-                        if (!m_sessionPanel->isEditing())
+                        m_transportPanel->handleKeyDown(kc);
+                        if (!m_transportPanel->isEditing())
                             SDL_StopTextInput(m_mainWindow.getHandle());
                     }
                     break;
@@ -626,9 +651,9 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
-                // Session view editing (BPM / time sig)
-                if (m_sessionPanel->isEditing()) {
-                    m_sessionPanel->handleTextInput(event.text.text);
+                // Transport editing (BPM / time sig)
+                if (m_transportPanel->isEditing()) {
+                    m_transportPanel->handleTextInput(event.text.text);
                     break;
                 }
                 if (m_inputState.focused()) {
@@ -745,7 +770,7 @@ void App::processEvents() {
                 // Right-click on track headers → open context menu
                 if (rightClick) {
                     auto sb = m_sessionPanel->bounds();
-                    float headerY = sb.y + ui::Theme::kTransportBarHeight;
+                    float headerY = sb.y;
                     float headerEnd = headerY + ui::Theme::kTrackHeaderHeight;
                     float gridX = ui::Theme::kSceneLabelWidth;
                     if (my >= headerY && my < headerEnd && mx >= gridX) {
@@ -763,9 +788,9 @@ void App::processEvents() {
                 }
 
                 // Existing view handlers: mixer → session
-                // Handle double-click for BPM/time sig editing
+                // Handle double-click for BPM/time sig editing (now on transport panel)
                 if (event.button.clicks >= 2 && btn == SDL_BUTTON_LEFT) {
-                    if (m_sessionPanel->handleDoubleClick(mx, my)) {
+                    if (m_transportPanel->handleDoubleClick(mx, my)) {
                         SDL_StartTextInput(m_mainWindow.getHandle());
                         break;
                     }
@@ -796,8 +821,15 @@ void App::processEvents() {
                         }
                     }
                 }
+                // Transport panel single-click (tap tempo button, dismiss editing)
+                {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = ui::fw::MouseButton::Left;
+                    m_transportPanel->onMouseDown(me);
+                }
                 // Stop text input if editing was cancelled by clicking elsewhere
-                bool wasEditing = m_sessionPanel->isEditing();
+                bool wasEditing = m_transportPanel->isEditing();
                 // Dispatch click to mixer via widget tree
                 bool mixerHandled = false;
                 if (m_showMixer) {
@@ -820,7 +852,7 @@ void App::processEvents() {
                         m_mixerPanel->setSelectedTrack(selTrack);
                     }
                 }
-                if (wasEditing && !m_sessionPanel->isEditing())
+                if (wasEditing && !m_transportPanel->isEditing())
                     SDL_StopTextInput(m_mainWindow.getHandle());
                 break;
             }
@@ -856,6 +888,7 @@ void App::processEvents() {
                 float dx = event.wheel.x;
                 float dy = event.wheel.y;
                 auto sb = m_sessionPanel->bounds();
+                auto mb = m_mixerPanel->bounds();
                 auto db = m_detailPanel->bounds();
                 auto pb = m_pianoRoll->bounds();
 
@@ -866,6 +899,10 @@ void App::processEvents() {
                     m_pianoRoll->handleScroll(dx, dy, ctrl, shift);
                 } else if (m_showDetailPanel && m_lastMouseY >= db.y) {
                     m_detailPanel->handleScroll(dx, dy);
+                } else if (m_showMixer && m_lastMouseY >= mb.y && m_lastMouseY < mb.y + mb.h) {
+                    ui::fw::ScrollEvent se;
+                    se.dx = dx; se.dy = dy;
+                    m_mixerPanel->onScroll(se);
                 } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {
                     m_sessionPanel->handleScroll(dx, dy);
                 }
@@ -877,7 +914,7 @@ void App::processEvents() {
                 if (file) {
                     // Try to determine target track/scene from mouse position
                     auto sb = m_sessionPanel->bounds();
-                    float headerY = sb.y + ui::Theme::kTransportBarHeight + ui::Theme::kTrackHeaderHeight;
+                    float headerY = sb.y + ui::Theme::kTrackHeaderHeight;
                     float gridX = ui::Theme::kSceneLabelWidth;
                     int targetTrack = m_selectedTrack;
                     int targetScene = m_nextDropScene;
@@ -934,12 +971,15 @@ void App::update() {
                 m_sessionPanel->updateClipState(msg.trackIndex, msg.playing, msg.playPosition);
             }
             else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {
-                m_mixerPanel->updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
+                if (msg.trackIndex >= 0)
+                    m_mixerPanel->updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
+                else
+                    m_returnMasterPanel->updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
             }
         }, evt);
     }
 
-    m_sessionPanel->setTransportState(m_displayPlaying, m_displayBeats,
+    m_transportPanel->setTransportState(m_displayPlaying, m_displayBeats,
                                      m_audioEngine.transport().bpm(),
                                      m_audioEngine.transport().numerator(),
                                      m_audioEngine.transport().denominator());

@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
-#include <SDL3/SDL_timer.h>
+#include <functional>
 
 namespace yawn {
 namespace ui {
@@ -49,35 +49,28 @@ public:
         }
     }
 
-    void setTransportState(bool playing, double beats, double bpm,
-                           int numerator = 4, int denominator = 4) {
-        m_transportPlaying     = playing;
-        m_transportBeats       = beats;
-        m_transportBPM         = bpm;
-        m_transportNumerator   = numerator;
-        m_transportDenominator = denominator;
-        m_animTimer += 1.0f / 60.0f;
-    }
-
     void setSelectedTrack(int t) { m_selectedTrack = t; }
     int  selectedTrack() const   { return m_selectedTrack; }
     float scrollX() const        { return m_scrollX; }
     float scrollY() const        { return m_scrollY; }
-    bool  isEditing() const      { return m_editMode != EditMode::None; }
+    void setScrollX(float sx)    { m_scrollX = sx; }
 
     float preferredHeight() const {
         int scenes = m_project
             ? std::min(m_project->numScenes(), kVisibleScenes) : kVisibleScenes;
-        return Theme::kTransportBarHeight + Theme::kTrackHeaderHeight
+        return Theme::kTrackHeaderHeight
              + scenes * Theme::kClipSlotHeight;
     }
+
+    // ─── Scroll callback ───────────────────────────────────────────────
+    void setOnScrollChanged(std::function<void(float)> cb) { m_onScrollChanged = std::move(cb); }
 
     // ─── Slot query (used by App for double-click → piano roll) ─────────
 
     bool getSlotAt(float mx, float my, int& trackOut, int& sceneOut) const {
         if (!m_project) return false;
         float gridX = m_bounds.x + Theme::kSceneLabelWidth;
-        float gridY = m_bounds.y + Theme::kTransportBarHeight + Theme::kTrackHeaderHeight;
+        float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
         if (mx < gridX || my < gridY) return false;
         float cmx = mx + m_scrollX;
         float cmy = my + m_scrollY;
@@ -90,99 +83,11 @@ public:
         return true;
     }
 
-    // ─── Text/Key events (widget tree doesn't dispatch these yet) ───────
-
-    bool handleDoubleClick(float mx, float my) {
-        if (mx >= m_bpmBoxX && mx <= m_bpmBoxX + m_bpmBoxW &&
-            my >= m_bpmBoxY && my <= m_bpmBoxY + m_bpmBoxH) {
-            m_editMode = EditMode::BPM;
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%.2f", m_transportBPM);
-            m_editBuffer = buf;
-            return true;
-        }
-        if (mx >= m_tsNumBoxX && mx <= m_tsNumBoxX + m_tsNumBoxW &&
-            my >= m_tsNumBoxY && my <= m_tsNumBoxY + m_tsNumBoxH) {
-            m_editMode = EditMode::TimeSigNum;
-            m_editBuffer = std::to_string(m_transportNumerator);
-            return true;
-        }
-        if (mx >= m_tsDenBoxX && mx <= m_tsDenBoxX + m_tsDenBoxW &&
-            my >= m_tsDenBoxY && my <= m_tsDenBoxY + m_tsDenBoxH) {
-            m_editMode = EditMode::TimeSigDen;
-            m_editBuffer = std::to_string(m_transportDenominator);
-            return true;
-        }
-        return false;
-    }
-
-    bool handleTextInput(const char* text) {
-        if (m_editMode == EditMode::None) return false;
-        for (const char* p = text; *p; ++p) {
-            char c = *p;
-            if (m_editMode == EditMode::BPM) {
-                if ((c >= '0' && c <= '9') ||
-                    (c == '.' && m_editBuffer.find('.') == std::string::npos))
-                    m_editBuffer += c;
-            } else {
-                if (c >= '0' && c <= '9')
-                    m_editBuffer += c;
-            }
-        }
-        return true;
-    }
-
-    bool handleKeyDown(int keycode) {
-        if (m_editMode == EditMode::None) return false;
-        if (keycode == 13 || keycode == 9) { // Enter or Tab
-            if (m_editMode == EditMode::BPM) {
-                double val = std::atof(m_editBuffer.c_str());
-                val = std::clamp(val, 20.0, 999.0);
-                if (m_engine)
-                    m_engine->sendCommand(audio::TransportSetBPMMsg{val});
-                if (keycode == 9) {
-                    m_editMode = EditMode::TimeSigNum;
-                    m_editBuffer = std::to_string(m_transportNumerator);
-                    return true;
-                }
-            } else if (m_editMode == EditMode::TimeSigNum) {
-                int val = std::atoi(m_editBuffer.c_str());
-                val = std::clamp(val, 1, 32);
-                if (m_engine)
-                    m_engine->sendCommand(
-                        audio::TransportSetTimeSignatureMsg{val, m_transportDenominator});
-                if (keycode == 9) {
-                    m_editMode = EditMode::TimeSigDen;
-                    m_editBuffer = std::to_string(m_transportDenominator);
-                    return true;
-                }
-            } else if (m_editMode == EditMode::TimeSigDen) {
-                int val = std::atoi(m_editBuffer.c_str());
-                if (val < 1) val = 1;
-                else if (val <= 1) val = 1;
-                else if (val <= 2) val = 2;
-                else if (val <= 4) val = 4;
-                else if (val <= 8) val = 8;
-                else if (val <= 16) val = 16;
-                else val = 32;
-                if (m_engine)
-                    m_engine->sendCommand(
-                        audio::TransportSetTimeSignatureMsg{m_transportNumerator, val});
-            }
-            m_editMode = EditMode::None;
-            m_editBuffer.clear();
-            return true;
-        }
-        if (keycode == 27) { m_editMode = EditMode::None; m_editBuffer.clear(); return true; }
-        if (keycode == 8)  { if (!m_editBuffer.empty()) m_editBuffer.pop_back(); return true; }
-        return true; // consume all keys while editing
-    }
-
     // ─── Scroll (forwarded from App) ────────────────────────────────────
 
     void handleScroll(float dx, float dy) {
         if (!m_project) return;
-        float gridH = m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH;
+        float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
         float contentH = m_project->numScenes() * Theme::kClipSlotHeight;
         float maxY = std::max(0.0f, contentH - gridH);
         m_scrollY = std::clamp(m_scrollY - dy * 30.0f, 0.0f, maxY);
@@ -191,27 +96,7 @@ public:
         float contentW = m_project->numTracks() * Theme::kTrackWidth;
         float maxX = std::max(0.0f, contentW - gridW);
         m_scrollX = std::clamp(m_scrollX - dx * 30.0f, 0.0f, maxX);
-    }
-
-    void tapTempo() {
-        double now = static_cast<double>(SDL_GetTicksNS()) / 1e9;
-        m_tapFlash = 1.0f;
-        if (m_tapCount > 0) {
-            double last = m_tapTimes[(m_tapCount - 1) % kTapHistorySize];
-            if (now - last > 2.0) m_tapCount = 0;
-        }
-        m_tapTimes[m_tapCount % kTapHistorySize] = now;
-        m_tapCount++;
-        if (m_tapCount >= 2) {
-            int n = std::min(m_tapCount - 1, kTapHistorySize - 1);
-            int si = m_tapCount - n - 1;
-            double total = m_tapTimes[(m_tapCount - 1) % kTapHistorySize]
-                         - m_tapTimes[si % kTapHistorySize];
-            double avg = total / n;
-            double bpm = std::clamp(std::round(60.0 / avg * 100.0) / 100.0, 20.0, 999.0);
-            if (m_engine)
-                m_engine->sendCommand(audio::TransportSetBPMMsg{bpm});
-        }
+        if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
     }
 
     // ─── Measure / Layout ───────────────────────────────────────────────
@@ -236,14 +121,12 @@ public:
 
         r.drawRect(x, y, w, h, Theme::background);
 
-        float transportY = y;
-        float headerY    = transportY + Theme::kTransportBarHeight;
-        float gridY      = headerY + Theme::kTrackHeaderHeight;
-        float gridH      = h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH;
-        float gridX      = x + Theme::kSceneLabelWidth;
-        float gridW      = w - Theme::kSceneLabelWidth;
+        float headerY = y;
+        float gridY   = headerY + Theme::kTrackHeaderHeight;
+        float gridH   = h - Theme::kTrackHeaderHeight - kScrollbarH;
+        float gridX   = x + Theme::kSceneLabelWidth;
+        float gridW   = w - Theme::kSceneLabelWidth;
 
-        paintTransportBar(r, f, x, transportY, w);
         paintTrackHeaders(r, f, gridX, headerY, gridW);
         paintSceneLabels(r, f, x, gridY, gridH);
         paintClipGrid(r, f, gridX, gridY, gridW, gridH);
@@ -259,26 +142,12 @@ public:
         bool rightClick = (e.button == MouseButton::Right);
         float x = m_bounds.x, y = m_bounds.y;
         float gridX   = x + Theme::kSceneLabelWidth;
-        float headerY = y + Theme::kTransportBarHeight;
+        float headerY = y;
         float gridY   = headerY + Theme::kTrackHeaderHeight;
-
-        // Transport bar clicks
-        if (my < headerY && my >= y) {
-            if (mx >= m_tapButtonX && mx <= m_tapButtonX + m_tapButtonW &&
-                my >= m_tapButtonY && my <= m_tapButtonY + m_tapButtonH) {
-                tapTempo();
-                return true;
-            }
-            if (m_editMode != EditMode::None) {
-                m_editMode = EditMode::None;
-                m_editBuffer.clear();
-            }
-            return true;
-        }
 
         // Horizontal scrollbar
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-        float sbY = gridY + (m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH);
+        float sbY = gridY + (m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH);
         if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW) {
             float contentW = m_project->numTracks() * Theme::kTrackWidth;
             float maxScroll = std::max(0.0f, contentW - gridW);
@@ -294,6 +163,7 @@ public:
             } else {
                 float clickFrac = (mx - gridX) / gridW;
                 m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
+                if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
             }
             return true;
         }
@@ -370,13 +240,14 @@ public:
             float delta = mx - m_hsbDragStartX;
             float scrollDelta = delta * (contentW / std::max(1.0f, gridW));
             m_scrollX = std::clamp(m_hsbDragStartScroll + scrollDelta, 0.0f, maxScroll);
+            if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
             return true;
         }
         // Track scrollbar hover
         float gridX = m_bounds.x + Theme::kSceneLabelWidth;
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-        float gridY = m_bounds.y + Theme::kTransportBarHeight + Theme::kTrackHeaderHeight;
-        float gridH = m_bounds.h - Theme::kTransportBarHeight - Theme::kTrackHeaderHeight - kScrollbarH;
+        float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
+        float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
         float sbY = gridY + gridH;
         m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW);
         return false;
@@ -417,92 +288,6 @@ private:
             tx += g.xAdvance;
         }
         return tx;
-    }
-
-    // ─── Transport Bar ──────────────────────────────────────────────────
-
-    void paintTransportBar(Renderer2D& r, Font& f, float x, float y, float w) {
-        float h = Theme::kTransportBarHeight;
-        r.drawRect(x, y, w, h, Theme::transportBg);
-        r.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
-
-        float textY = y + 6;
-        float scale = Theme::kFontSize / f.pixelHeight();
-
-        // Play/Stop indicator
-        Color stateCol = m_transportPlaying ? Theme::playing : Theme::stopped;
-        const char* stateTxt = m_transportPlaying ? "PLAYING" : "STOPPED";
-        float circX = x + 12, circY = y + h * 0.5f - 5;
-        r.drawRect(circX, circY, 10, 10, stateCol);
-        drawText(r, f, stateTxt, circX + 18, textY, scale, stateCol);
-
-        // BPM box
-        float bpmX = x + 160, boxH = h - 8, boxY = y + 4, bpmW = 100;
-        m_bpmBoxX = bpmX; m_bpmBoxY = boxY; m_bpmBoxW = bpmW; m_bpmBoxH = boxH;
-        bool editBpm = (m_editMode == EditMode::BPM);
-        Color bpmBg = editBpm ? Color{60,60,80,255} : Color{40,40,50,255};
-        r.drawRect(bpmX, boxY, bpmW, boxH, bpmBg);
-        r.drawRectOutline(bpmX, boxY, bpmW, boxH,
-                          editBpm ? Theme::transportAccent : Theme::clipSlotBorder);
-        char bpmBuf[32];
-        if (editBpm) std::snprintf(bpmBuf, sizeof(bpmBuf), "%s_", m_editBuffer.c_str());
-        else         std::snprintf(bpmBuf, sizeof(bpmBuf), "%.2f", m_transportBPM);
-        float tx = drawTextRet(r, f, bpmBuf, bpmX + 6, textY, scale,
-                               editBpm ? Theme::transportAccent : Theme::transportText);
-        drawText(r, f, "BPM", bpmX + bpmW + 4, textY, scale * 0.85f, Theme::textSecondary);
-
-        // Time signature boxes
-        float tsX = bpmX + bpmW + 50, tsBoxW = 30, slashGap = 4;
-
-        // Numerator
-        bool editNum = (m_editMode == EditMode::TimeSigNum);
-        m_tsNumBoxX = tsX; m_tsNumBoxY = boxY; m_tsNumBoxW = tsBoxW; m_tsNumBoxH = boxH;
-        Color numBg = editNum ? Color{60,60,80,255} : Color{40,40,50,255};
-        r.drawRect(tsX, boxY, tsBoxW, boxH, numBg);
-        r.drawRectOutline(tsX, boxY, tsBoxW, boxH,
-                          editNum ? Theme::transportAccent : Theme::clipSlotBorder);
-        char numBuf[8];
-        if (editNum) std::snprintf(numBuf, sizeof(numBuf), "%s_", m_editBuffer.c_str());
-        else         std::snprintf(numBuf, sizeof(numBuf), "%d", m_transportNumerator);
-        drawText(r, f, numBuf, tsX + 6, textY, scale,
-                 editNum ? Theme::transportAccent : Theme::transportText);
-
-        // Slash
-        float slashX = tsX + tsBoxW + slashGap;
-        slashX = drawTextRet(r, f, "/", slashX, textY, scale, Theme::textSecondary);
-
-        // Denominator
-        float denX = slashX + slashGap;
-        bool editDen = (m_editMode == EditMode::TimeSigDen);
-        m_tsDenBoxX = denX; m_tsDenBoxY = boxY; m_tsDenBoxW = tsBoxW; m_tsDenBoxH = boxH;
-        Color denBg = editDen ? Color{60,60,80,255} : Color{40,40,50,255};
-        r.drawRect(denX, boxY, tsBoxW, boxH, denBg);
-        r.drawRectOutline(denX, boxY, tsBoxW, boxH,
-                          editDen ? Theme::transportAccent : Theme::clipSlotBorder);
-        char denBuf[8];
-        if (editDen) std::snprintf(denBuf, sizeof(denBuf), "%s_", m_editBuffer.c_str());
-        else         std::snprintf(denBuf, sizeof(denBuf), "%d", m_transportDenominator);
-        drawText(r, f, denBuf, denX + 6, textY, scale,
-                 editDen ? Theme::transportAccent : Theme::transportText);
-
-        // Tap tempo button
-        float tapX = denX + tsBoxW + 16, tapW = 48;
-        m_tapButtonX = tapX; m_tapButtonY = boxY; m_tapButtonW = tapW; m_tapButtonH = boxH;
-        m_tapFlash = std::max(0.0f, m_tapFlash - 1.0f / 15.0f);
-        uint8_t fR = static_cast<uint8_t>(40 + m_tapFlash * 60);
-        uint8_t fG = static_cast<uint8_t>(40 + m_tapFlash * 80);
-        Color tapBg = {fR, fG, 50, 255};
-        r.drawRect(tapX, boxY, tapW, boxH, tapBg);
-        r.drawRectOutline(tapX, boxY, tapW, boxH, Theme::clipSlotBorder);
-        drawText(r, f, "TAP", tapX + 6, textY, scale * 0.85f, Theme::transportText);
-
-        // Bar.Beat position
-        int bpb = std::max(1, m_transportNumerator);
-        int bar  = static_cast<int>(m_transportBeats / bpb) + 1;
-        int beat = static_cast<int>(std::fmod(m_transportBeats, (double)bpb)) + 1;
-        char posBuf[32];
-        std::snprintf(posBuf, sizeof(posBuf), "%d . %d", bar, beat);
-        drawText(r, f, posBuf, tapX + tapW + 20, textY, scale, Theme::transportAccent);
     }
 
     // ─── Track Headers ──────────────────────────────────────────────────
@@ -716,12 +501,6 @@ private:
 
     ClipSlotUIState m_trackStates[kMaxTracks] = {};
 
-    bool   m_transportPlaying     = false;
-    double m_transportBeats       = 0.0;
-    double m_transportBPM         = 120.0;
-    int    m_transportNumerator   = 4;
-    int    m_transportDenominator = 4;
-
     float m_scrollX = 0.0f;
     float m_scrollY = 0.0f;
 
@@ -735,21 +514,10 @@ private:
     int   m_lastClickTrack = -1;
     float m_animTimer      = 0.0f;
 
-    enum class EditMode { None, BPM, TimeSigNum, TimeSigDen };
-    EditMode    m_editMode = EditMode::None;
-    std::string m_editBuffer;
-
-    float m_bpmBoxX = 0, m_bpmBoxY = 0, m_bpmBoxW = 0, m_bpmBoxH = 0;
-    float m_tsNumBoxX = 0, m_tsNumBoxY = 0, m_tsNumBoxW = 0, m_tsNumBoxH = 0;
-    float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
-    float m_tapButtonX = 0, m_tapButtonY = 0, m_tapButtonW = 0, m_tapButtonH = 0;
+    std::function<void(float)> m_onScrollChanged;
 
     static constexpr float kScrollbarH    = 12.0f;
     static constexpr int kVisibleScenes  = 8;
-    static constexpr int kTapHistorySize = 4;
-    double m_tapTimes[kTapHistorySize] = {};
-    int    m_tapCount = 0;
-    float  m_tapFlash = 0.0f;
 };
 
 } // namespace fw

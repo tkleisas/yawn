@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <functional>
 
 namespace yawn {
 namespace ui {
@@ -39,11 +40,6 @@ public:
     void updateMeter(int trackIndex, float peakL, float peakR) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks) {
             m_trackMeters[trackIndex] = {peakL, peakR};
-        } else if (trackIndex == -1) {
-            m_masterMeter = {peakL, peakR};
-        } else if (trackIndex >= -5 && trackIndex <= -2) {
-            int busIdx = -(trackIndex + 2);
-            m_returnMeters[busIdx] = {peakL, peakR};
         }
     }
 
@@ -51,6 +47,9 @@ public:
     int  selectedTrack() const { return m_selectedTrack; }
     bool isDragging() const { return m_dragging; }
     float preferredHeight() const { return kMixerHeight; }
+    float scrollX() const { return m_scrollX; }
+    void setScrollX(float sx) { m_scrollX = sx; }
+    void setOnScrollChanged(std::function<void(float)> cb) { m_onScrollChanged = std::move(cb); }
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
@@ -83,37 +82,20 @@ public:
         float scale = fontScale(f) * 0.85f;
         drawText(r, f, "MIX", x + 6, y + stripH * 0.5f - 8, scale, Theme::textDim);
 
-        float gridX  = x + Theme::kSceneLabelWidth;
-        float gridW  = w - Theme::kSceneLabelWidth;
-        float fixedW = fixedAreaWidth();
-        float scrollAreaW = std::max(0.0f, gridW - fixedW);
+        float gridX = x + Theme::kSceneLabelWidth;
+        float gridW = w - Theme::kSceneLabelWidth;
 
         // Track channel strips (scrollable, clipped)
-        r.pushClip(gridX, y, scrollAreaW, h - kScrollbarH);
+        r.pushClip(gridX, y, gridW, h - kScrollbarH);
         for (int t = 0; t < m_project->numTracks(); ++t) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-            if (sx + Theme::kTrackWidth < gridX || sx > gridX + scrollAreaW) continue;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
             paintChannelStrip(r, f, t, sx, stripY, Theme::kTrackWidth, stripH);
         }
         r.popClip();
 
-        // Fixed area: separator + returns + separator + master
-        float fixedX = gridX + scrollAreaW;
-        r.drawRect(fixedX, y + 4, kSeparatorWidth, h - kScrollbarH - 8, Theme::clipSlotBorder);
-        float retX = fixedX + kSeparatorWidth + 4;
-
-        for (int b = 0; b < kMaxReturnBuses; ++b) {
-            paintReturnStrip(r, f, b, retX, stripY, kRetStripW, stripH);
-            retX += kRetStripW + kStripPadding;
-        }
-
-        r.drawRect(retX, y + 4, kSeparatorWidth, h - kScrollbarH - 8, Theme::clipSlotBorder);
-        retX += kSeparatorWidth + 4;
-
-        paintMasterStrip(r, f, retX, stripY, kRetStripW, stripH);
-
         // Horizontal scrollbar
-        paintHScrollbar(r, gridX, y + h - kScrollbarH, scrollAreaW);
+        paintHScrollbar(r, gridX, y + h - kScrollbarH, gridW);
     }
 
     // ─── Events ─────────────────────────────────────────────────────────
@@ -124,28 +106,27 @@ public:
         float mx = e.x, my = e.y;
         bool rightClick = (e.button == MouseButton::Right);
         float x = m_bounds.x, y = m_bounds.y;
-        float gridX  = x + Theme::kSceneLabelWidth;
-        float gridW  = m_bounds.w - Theme::kSceneLabelWidth;
-        float fixedW = fixedAreaWidth();
-        float scrollAreaW = std::max(0.0f, gridW - fixedW);
+        float gridX = x + Theme::kSceneLabelWidth;
+        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
 
         // --- Scrollbar ---
         float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
-        if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + scrollAreaW) {
+        if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW) {
             float contentW  = m_project->numTracks() * Theme::kTrackWidth;
-            float maxScroll = std::max(0.0f, contentW - scrollAreaW);
+            float maxScroll = std::max(0.0f, contentW - gridW);
             if (maxScroll > 0) {
-                float thumbW     = std::max(20.0f, scrollAreaW * (scrollAreaW / std::max(1.0f, contentW)));
+                float thumbW     = std::max(20.0f, gridW * (gridW / std::max(1.0f, contentW)));
                 float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
-                float thumbX     = gridX + scrollFrac * (scrollAreaW - thumbW);
+                float thumbX     = gridX + scrollFrac * (gridW - thumbW);
                 if (mx >= thumbX && mx < thumbX + thumbW) {
                     m_hsbDragging        = true;
                     m_hsbDragStartX      = mx;
                     m_hsbDragStartScroll = m_scrollX;
                     captureMouse();
                 } else {
-                    float clickFrac = (mx - gridX) / scrollAreaW;
+                    float clickFrac = (mx - gridX) / gridW;
                     m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
+                    if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
                 }
                 return true;
             }
@@ -154,7 +135,7 @@ public:
         // --- Track channel strips (scroll-adjusted) ---
         for (int t = 0; t < m_project->numTracks(); ++t) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-            if (sx + Theme::kTrackWidth < gridX || sx > gridX + scrollAreaW) continue;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
             float ix = sx + Theme::kSlotPadding;
             float iw = Theme::kTrackWidth - Theme::kSlotPadding * 2;
             if (mx < sx || mx >= sx + Theme::kTrackWidth) continue;
@@ -200,55 +181,6 @@ public:
             }
         }
 
-        // --- Return bus strips (fixed area) ---
-        float fixedX = gridX + scrollAreaW;
-        float retX   = fixedX + kSeparatorWidth + 4;
-        for (int b = 0; b < kMaxReturnBuses; ++b) {
-            float rx = retX + b * (kRetStripW + kStripPadding);
-            if (mx < rx || mx >= rx + kRetStripW) continue;
-            const auto& rb = m_engine->mixer().returnBus(b);
-
-            float muteY = y + 2 + 26;
-            if (my >= muteY && my < muteY + kButtonHeight && mx >= rx + 4 && mx < rx + 4 + kButtonWidth) {
-                m_engine->sendCommand(audio::SetReturnMuteMsg{b, !rb.muted});
-                return true;
-            }
-            float panY = y + 56;
-            float panW = kRetStripW - 8;
-            if (my >= panY && my < panY + 8 && mx >= rx + 4 && mx < rx + 4 + panW) {
-                if (rightClick) {
-                    m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
-                    return true;
-                }
-                beginDrag(DragType::Pan, kDragReturn0 + b, mx, rb.pan);
-                return true;
-            }
-            float faderY = y + 74;
-            float faderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
-            if (my >= faderY && my < faderBottom && mx >= rx + 4 && mx < rx + 4 + kFaderWidth) {
-                if (rightClick) {
-                    m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
-                    return true;
-                }
-                beginDrag(DragType::Fader, kDragReturn0 + b, my, rb.volume);
-                return true;
-            }
-        }
-
-        // --- Master strip (fixed area) ---
-        float masterX = retX + kMaxReturnBuses * (kRetStripW + kStripPadding) + kSeparatorWidth + 4;
-        float masterFaderY = y + 2 + 30;
-        float masterFaderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
-        if (mx >= masterX + 4 && mx < masterX + 4 + kFaderWidth + 2 &&
-            my >= masterFaderY && my < masterFaderBottom) {
-            if (rightClick) {
-                m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
-                return true;
-            }
-            beginDrag(DragType::Fader, kDragMaster, my, m_engine->mixer().master().volume);
-            return true;
-        }
-
         return false;
     }
 
@@ -257,26 +189,23 @@ public:
 
         // Scrollbar drag
         if (m_hsbDragging && m_project) {
-            float gridW       = m_bounds.w - Theme::kSceneLabelWidth;
-            float fixedW      = fixedAreaWidth();
-            float scrollAreaW = std::max(0.0f, gridW - fixedW);
-            float contentW    = m_project->numTracks() * Theme::kTrackWidth;
-            float maxScroll   = std::max(0.0f, contentW - scrollAreaW);
-            float delta       = mx - m_hsbDragStartX;
-            float scrollDelta = delta * (contentW / std::max(1.0f, scrollAreaW));
+            float gridW    = m_bounds.w - Theme::kSceneLabelWidth;
+            float contentW = m_project->numTracks() * Theme::kTrackWidth;
+            float maxScroll= std::max(0.0f, contentW - gridW);
+            float delta    = mx - m_hsbDragStartX;
+            float scrollDelta = delta * (contentW / std::max(1.0f, gridW));
             m_scrollX = std::clamp(m_hsbDragStartScroll + scrollDelta, 0.0f, maxScroll);
+            if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
             return true;
         }
 
         if (!m_dragging || !m_engine) {
             // Scrollbar hover
-            float gridX2      = m_bounds.x + Theme::kSceneLabelWidth;
-            float gridW2      = m_bounds.w - Theme::kSceneLabelWidth;
-            float fixedW2     = fixedAreaWidth();
-            float scrollAreaW2= std::max(0.0f, gridW2 - fixedW2);
-            float sbY2        = m_bounds.y + m_bounds.h - kScrollbarH;
-            m_hsbHovered = (my >= sbY2 && my < sbY2 + kScrollbarH
-                            && mx >= gridX2 && mx < gridX2 + scrollAreaW2);
+            float gridX = m_bounds.x + Theme::kSceneLabelWidth;
+            float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+            float sbY   = m_bounds.y + m_bounds.h - kScrollbarH;
+            m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH
+                            && mx >= gridX && mx < gridX + gridW);
             return false;
         }
 
@@ -289,10 +218,6 @@ public:
 
             if (m_dragTarget >= 0)
                 m_engine->sendCommand(audio::SetTrackVolumeMsg{m_dragTarget, newVol});
-            else if (m_dragTarget == kDragMaster)
-                m_engine->sendCommand(audio::SetMasterVolumeMsg{newVol});
-            else if (m_dragTarget <= kDragReturn0)
-                m_engine->sendCommand(audio::SetReturnVolumeMsg{m_dragTarget - kDragReturn0, newVol});
             return true;
         }
 
@@ -304,8 +229,6 @@ public:
 
             if (m_dragTarget >= 0)
                 m_engine->sendCommand(audio::SetTrackPanMsg{m_dragTarget, newPan});
-            else if (m_dragTarget <= kDragReturn0)
-                m_engine->sendCommand(audio::SetReturnPanMsg{m_dragTarget - kDragReturn0, newPan});
             return true;
         }
         return false;
@@ -329,12 +252,11 @@ public:
 
     bool onScroll(ScrollEvent& e) override {
         if (!m_project) return false;
-        float gridW       = m_bounds.w - Theme::kSceneLabelWidth;
-        float fixedW      = fixedAreaWidth();
-        float scrollAreaW = std::max(0.0f, gridW - fixedW);
-        float contentW    = m_project->numTracks() * Theme::kTrackWidth;
-        float maxScroll   = std::max(0.0f, contentW - scrollAreaW);
+        float gridW    = m_bounds.w - Theme::kSceneLabelWidth;
+        float contentW = m_project->numTracks() * Theme::kTrackWidth;
+        float maxScroll= std::max(0.0f, contentW - gridW);
         m_scrollX = std::clamp(m_scrollX - e.dx * 30.0f, 0.0f, maxScroll);
+        if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
         return true;
     }
 
@@ -455,68 +377,6 @@ private:
         r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);
     }
 
-    void paintReturnStrip(Renderer2D& r, Font& f,
-                          int idx, float x, float y, float w, float h) {
-        r.drawRect(x, y, w, h, Theme::background);
-        Color busCol{100, 180, 255};
-        float scale = fontScale(f);
-        float smallScale = scale * 0.8f;
-        const auto& rb = m_engine->mixer().returnBus(idx);
-
-        r.drawRect(x, y, w, 3, busCol);
-        const char* names[] = {"Ret A","Ret B","Ret C","Ret D","Ret E","Ret F","Ret G","Ret H"};
-        drawText(r, f, names[idx], x + 4, y + 5, scale, Theme::textPrimary);
-
-        float curY = y + 26;
-        Color muteCol = rb.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty;
-        paintButton(r, f, x + 4, curY, kButtonWidth, kButtonHeight, "M", muteCol,
-                    rb.muted ? Color{0,0,0} : Theme::textSecondary);
-
-        curY += kButtonHeight + 6;
-        float panW = w - 8, panH = 16;
-        r.drawRect(x + 4, curY, panW, panH, Theme::clipSlotEmpty);
-        float panCenter = x + 4 + panW * 0.5f;
-        r.drawRect(panCenter + rb.pan * (panW * 0.5f - 4) - 4, curY, 8, panH, busCol);
-
-        curY += panH + 8;
-        float faderBottom = y + h - 22;
-        float faderH = std::max(20.0f, faderBottom - curY);
-        paintFader(r, x + 4, curY, kFaderWidth, faderH, rb.volume, busCol);
-        paintMeter(r, x + 4 + kFaderWidth + 3, curY, kMeterWidth * 2, faderH,
-                   m_returnMeters[idx].peakL, m_returnMeters[idx].peakR);
-
-        float db = rb.volume > 0.001f ? 20.0f * std::log10(rb.volume) : -60.0f;
-        char dbText[16];
-        if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
-        else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-        drawText(r, f, dbText, x + 4, y + h - 18, smallScale, Theme::textDim);
-    }
-
-    void paintMasterStrip(Renderer2D& r, Font& f,
-                          float x, float y, float w, float h) {
-        r.drawRect(x, y, w, h, Color{35, 35, 40});
-        Color masterCol = Theme::transportAccent;
-        float scale = fontScale(f);
-        float smallScale = scale * 0.8f;
-        const auto& master = m_engine->mixer().master();
-
-        r.drawRect(x, y, w, 3, masterCol);
-        drawText(r, f, "MASTER", x + 4, y + 5, scale, Theme::textPrimary);
-
-        float curY = y + 30;
-        float faderBottom = y + h - 22;
-        float faderH = std::max(20.0f, faderBottom - curY);
-        paintFader(r, x + 4, curY, kFaderWidth + 2, faderH, master.volume, masterCol);
-        paintMeter(r, x + kFaderWidth + 10, curY, kMeterWidth * 2 + 2, faderH,
-                   m_masterMeter.peakL, m_masterMeter.peakR);
-
-        float db = master.volume > 0.001f ? 20.0f * std::log10(master.volume) : -60.0f;
-        char dbText[16];
-        if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
-        else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-        drawText(r, f, dbText, x + 4, y + h - 18, smallScale, Theme::textDim);
-    }
-
     void paintFader(Renderer2D& r, float x, float y, float w, float h,
                     float value, Color col) {
         float trackX = x + w * 0.5f - 1;
@@ -567,8 +427,6 @@ private:
     audio::AudioEngine* m_engine  = nullptr;
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
-    MixerMeter m_returnMeters[kMaxReturnBuses] = {};
-    MixerMeter m_masterMeter = {};
 
     bool     m_dragging       = false;
     DragType m_dragType       = DragType::None;
@@ -585,12 +443,7 @@ private:
     static constexpr float kButtonHeight = 22.0f;
     static constexpr float kButtonWidth  = 28.0f;
     static constexpr float kStripPadding = 2.0f;
-    static constexpr float kSeparatorWidth = 2.0f;
-    static constexpr float kRetStripW    = 70.0f;
     static constexpr float kScrollbarH   = 12.0f;
-
-    static constexpr int kDragMaster  = -1;
-    static constexpr int kDragReturn0 = -100;
 
     // Horizontal scrollbar state
     float m_scrollX            = 0.0f;
@@ -599,13 +452,7 @@ private:
     float m_hsbDragStartX      = 0;
     float m_hsbDragStartScroll = 0;
 
-    // Helper: width of the fixed (non-scrollable) area (separators + returns + master)
-    float fixedAreaWidth() const {
-        return kSeparatorWidth + 4
-             + kMaxReturnBuses * (kRetStripW + kStripPadding)
-             + kSeparatorWidth + 4
-             + kRetStripW;
-    }
+    std::function<void(float)> m_onScrollChanged;
 };
 
 } // namespace fw
