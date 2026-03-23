@@ -90,13 +90,16 @@ void App::setupMenuBar() {
     // Track menu
     m_menuBar.addMenu("Track", {
         {"Add Audio Track",  "",  [this]() {
-            m_project.addTrack("Audio " + std::to_string(m_project.numTracks() + 1), Track::Type::Audio);
+            int idx = m_project.numTracks();
+            m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
             markDirty();
             std::printf("Added Audio track %d\n", m_project.numTracks());
         }},
         {"Add MIDI Track",   "",  [this]() {
             int idx = m_project.numTracks();
             m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
             m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
             markDirty();
             std::printf("Added MIDI track %d (with SubSynth)\n", m_project.numTracks());
@@ -225,6 +228,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_audioEngine.mixer().trackEffects(trackIndex).clear();
                 m_audioEngine.setInstrument(trackIndex, nullptr);
                 m_project.track(trackIndex).type = Track::Type::Audio;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 0});
                 m_detailPanel->clear();
                 markDirty();
             });
@@ -239,6 +243,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_audioEngine.midiEffectChain(trackIndex).clear();
                 m_audioEngine.mixer().trackEffects(trackIndex).clear();
                 m_project.track(trackIndex).type = Track::Type::Midi;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
                 m_audioEngine.setInstrument(trackIndex,
                     std::make_unique<instruments::SubtractiveSynth>());
                 m_detailPanel->clear();
@@ -250,26 +255,31 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     std::vector<ui::ContextMenu::Item> instrItems;
     instrItems.push_back({"SubSynth", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::SubtractiveSynth>());
         markDirty();
     }});
     instrItems.push_back({"FM Synth", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::FMSynth>());
         markDirty();
     }});
     instrItems.push_back({"Sampler", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Sampler>());
         markDirty();
     }});
     instrItems.push_back({"Drum Rack", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::DrumRack>());
         markDirty();
     }});
     instrItems.push_back({"Instrument Rack", [this, trackIndex]() {
         m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::InstrumentRack>());
         markDirty();
     }});

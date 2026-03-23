@@ -164,51 +164,83 @@ public:
         r.drawRect(x, y, w, h, Theme::transportBg);
         r.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
 
-        float textY = y + 6;
         float scale = Theme::kFontSize / f.pixelHeight();
-        float boxH = h - 8, boxY = y + 4;
+        float textY = y + (h - Theme::kFontSize) * 0.5f;
 
-        // Play/Stop indicator
-        Color stateCol = m_transportPlaying ? Theme::playing : Theme::stopped;
-        const char* stateTxt = m_transportPlaying ? "PLAYING" : "STOPPED";
-        float circX = x + 12, circY = y + h * 0.5f - 5;
-        r.drawRect(circX, circY, 10, 10, stateCol);
-        drawText(r, f, stateTxt, circX + 18, textY, scale, stateCol);
+        // ── Stop / Play / Record buttons ────────────────────────────────
+        constexpr float btnSize = 38.0f;
+        constexpr float btnGap  = 2.0f;
+        float btnY = y + (h - btnSize) * 0.5f;
+        float btnX = x + 8.0f;
+
+        // Stop button
+        m_stopBtnX = btnX; m_stopBtnY = btnY; m_stopBtnW = btnSize; m_stopBtnH = btnSize;
+        {
+            Color bg = m_transportPlaying ? Color{38,38,41} : Color{50,50,55};
+            r.drawRect(btnX, btnY, btnSize, btnSize, bg);
+            r.drawRectOutline(btnX, btnY, btnSize, btnSize, Theme::clipSlotBorder);
+            Color ic = m_transportPlaying ? Color{120,120,120} : Color{255,255,255};
+            float cx = btnX + (btnSize - 10) * 0.5f;
+            float cy = btnY + (btnSize - 10) * 0.5f;
+            r.drawRect(cx, cy, 10, 10, ic);
+        }
+        btnX += btnSize + btnGap;
+
+        // Play button
+        m_playBtnX = btnX; m_playBtnY = btnY; m_playBtnW = btnSize; m_playBtnH = btnSize;
+        {
+            Color bg = m_transportPlaying ? Color{30,60,30} : Color{38,38,41};
+            r.drawRect(btnX, btnY, btnSize, btnSize, bg);
+            r.drawRectOutline(btnX, btnY, btnSize, btnSize, Theme::clipSlotBorder);
+            Color ic = m_transportPlaying ? Color{80,230,80} : Color{120,120,120};
+            // Play triangle: stacked horizontal rects approximating ▶
+            float triCx = btnX + btnSize * 0.5f - 1.0f;
+            float triCy = btnY + btnSize * 0.5f;
+            r.drawRect(triCx - 4, triCy - 6, 2, 12, ic);
+            r.drawRect(triCx - 2, triCy - 5, 2, 10, ic);
+            r.drawRect(triCx,     triCy - 4, 2,  8, ic);
+            r.drawRect(triCx + 2, triCy - 3, 2,  6, ic);
+            r.drawRect(triCx + 4, triCy - 2, 2,  4, ic);
+            r.drawRect(triCx + 6, triCy - 1, 2,  2, ic);
+        }
+        btnX += btnSize + btnGap;
 
         // Record button
-        float recX = circX + 90, recW = 36, recH = boxH;
-        float recY = boxY;
-        m_recButtonX = recX; m_recButtonY = recY; m_recButtonW = recW; m_recButtonH = recH;
-        Color recBg = m_recording ? Color{200, 40, 40} : Color{60, 30, 30};
-        if (m_countingIn) {
-            m_recPulse += 0.1f;
-            float pulse = (std::sin(m_recPulse * 6.0f) + 1.0f) * 0.5f;
-            recBg = Color{static_cast<uint8_t>(120 + static_cast<int>(pulse * 80)), 30, 30};
-        }
-        r.drawRect(recX, recY, recW, recH, recBg);
-        r.drawRectOutline(recX, recY, recW, recH,
-            m_recording ? Color{255, 80, 80} : Theme::clipSlotBorder);
-        // Record circle icon
-        float dotX = recX + recW * 0.5f, dotY = recY + recH * 0.5f;
-        Color dotCol = m_recording ? Color{255, 100, 100} : Color{200, 60, 60};
-        r.drawRect(dotX - 4, dotY - 4, 8, 8, dotCol);
-
-        // Count-in indicator
-        if (m_countInBars > 0) {
-            char ciBuf[8];
-            std::snprintf(ciBuf, sizeof(ciBuf), "-%d", m_countInBars);
-            float ciScale = scale * 0.7f;
-            drawText(r, f, ciBuf, recX + recW + 2, textY + 4, ciScale, Theme::textDim);
-        }
-
-        // Count-in progress bar
-        if (m_countingIn) {
-            float progW = recW * static_cast<float>(m_countInProgress);
-            r.drawRect(recX, recY + recH - 3, progW, 3, Color{255, 100, 100});
+        float recBtnX = btnX;
+        m_recButtonX = btnX; m_recButtonY = btnY; m_recButtonW = btnSize; m_recButtonH = btnSize;
+        {
+            Color bg = m_recording ? Color{200,40,40} : Color{60,30,30};
+            if (m_countingIn) {
+                m_recPulse += 0.1f;
+                float pulse = (std::sin(m_recPulse * 6.0f) + 1.0f) * 0.5f;
+                bg = Color{static_cast<uint8_t>(120 + static_cast<int>(pulse * 80)), 30, 30};
+            }
+            r.drawRect(btnX, btnY, btnSize, btnSize, bg);
+            r.drawRectOutline(btnX, btnY, btnSize, btnSize,
+                m_recording ? Color{255,80,80} : Theme::clipSlotBorder);
+            // Record circle: cross-shaped pattern of rects approximating ●
+            Color dc = m_recording ? Color{255,100,100} : Color{200,60,60};
+            float cx = btnX + btnSize * 0.5f;
+            float cy = btnY + btnSize * 0.5f;
+            r.drawRect(cx - 3, cy - 5, 6,  1, dc);
+            r.drawRect(cx - 4, cy - 4, 8,  1, dc);
+            r.drawRect(cx - 5, cy - 3, 10, 6, dc);
+            r.drawRect(cx - 4, cy + 3, 8,  1, dc);
+            r.drawRect(cx - 3, cy + 4, 6,  1, dc);
+            // Count-in progress bar
+            if (m_countingIn) {
+                float progW = btnSize * static_cast<float>(m_countInProgress);
+                r.drawRect(btnX, btnY + btnSize - 3, progW, 3, Color{255,100,100});
+            }
         }
 
-        // BPM box
-        float bpmX = x + 220, bpmW = 100;
+        // Separator after transport buttons
+        float sepX = recBtnX + btnSize + 10.0f;
+        r.drawRect(sepX, y + 6, 1, h - 12, Theme::clipSlotBorder);
+
+        // ── BPM box ─────────────────────────────────────────────────────
+        float bpmX = x + 140.0f, bpmW = 100.0f;
+        float boxH = btnSize, boxY = btnY;
         m_bpmBoxX = bpmX; m_bpmBoxY = boxY; m_bpmBoxW = bpmW; m_bpmBoxH = boxH;
         bool editBpm = (m_editMode == EditMode::BPM);
         Color bpmBg = editBpm ? Color{60,60,80,255} : Color{40,40,50,255};
@@ -218,12 +250,13 @@ public:
         char bpmBuf[32];
         if (editBpm) std::snprintf(bpmBuf, sizeof(bpmBuf), "%s_", m_editBuffer.c_str());
         else         std::snprintf(bpmBuf, sizeof(bpmBuf), "%.2f", m_transportBPM);
-        drawTextRet(r, f, bpmBuf, bpmX + 6, textY, scale,
+        float bpmTextEnd = drawTextRet(r, f, bpmBuf, bpmX + 6, textY, scale,
                     editBpm ? Theme::transportAccent : Theme::transportText);
+        (void)bpmTextEnd;
         drawText(r, f, "BPM", bpmX + bpmW + 4, textY, scale * 0.85f, Theme::textSecondary);
 
-        // Time signature
-        float tsX = bpmX + bpmW + 50, tsBoxW = 30, slashGap = 4;
+        // ── Time signature ──────────────────────────────────────────────
+        float tsX = bpmX + bpmW + 50.0f, tsBoxW = 30.0f, slashGap = 4.0f;
 
         bool editNum = (m_editMode == EditMode::TimeSigNum);
         m_tsNumBoxX = tsX; m_tsNumBoxY = boxY; m_tsNumBoxW = tsBoxW; m_tsNumBoxH = boxH;
@@ -253,8 +286,8 @@ public:
         drawText(r, f, denBuf, denX + 6, textY, scale,
                  editDen ? Theme::transportAccent : Theme::transportText);
 
-        // Tap tempo
-        float tapX = denX + tsBoxW + 16, tapW = 48;
+        // ── Tap tempo ───────────────────────────────────────────────────
+        float tapX = denX + tsBoxW + 16.0f, tapW = 48.0f;
         m_tapButtonX = tapX; m_tapButtonY = boxY; m_tapButtonW = tapW; m_tapButtonH = boxH;
         m_tapFlash = std::max(0.0f, m_tapFlash - 1.0f / 15.0f);
         uint8_t fR = static_cast<uint8_t>(40 + m_tapFlash * 60);
@@ -264,13 +297,27 @@ public:
         r.drawRectOutline(tapX, boxY, tapW, boxH, Theme::clipSlotBorder);
         drawText(r, f, "TAP", tapX + 6, textY, scale * 0.85f, Theme::transportText);
 
-        // Bar.Beat position
-        int bpb = std::max(1, m_transportNumerator);
+        // Separator after tempo section
+        float sep2X = tapX + tapW + 10.0f;
+        r.drawRect(sep2X, y + 6, 1, h - 12, Theme::clipSlotBorder);
+
+        // ── Bar . Beat . Sub position ───────────────────────────────────
+        int bpb  = std::max(1, m_transportNumerator);
         int bar  = static_cast<int>(m_transportBeats / bpb) + 1;
-        int beat = static_cast<int>(std::fmod(m_transportBeats, (double)bpb)) + 1;
+        double beatInBar = std::fmod(m_transportBeats, static_cast<double>(bpb));
+        int beat = static_cast<int>(beatInBar) + 1;
+        int sub  = static_cast<int>((beatInBar - std::floor(beatInBar)) * 100.0) % 100;
         char posBuf[32];
-        std::snprintf(posBuf, sizeof(posBuf), "%d . %d", bar, beat);
-        drawText(r, f, posBuf, tapX + tapW + 20, textY, scale, Theme::transportAccent);
+        std::snprintf(posBuf, sizeof(posBuf), "%d . %d . %02d", bar, beat, sub);
+        float posX = sep2X + 10.0f;
+        float posEnd = drawTextRet(r, f, posBuf, posX, textY, scale, Theme::transportAccent);
+
+        // ── Count-in indicator ──────────────────────────────────────────
+        if (m_countInBars > 0) {
+            char ciBuf[16];
+            std::snprintf(ciBuf, sizeof(ciBuf), "CI:%d", m_countInBars);
+            drawText(r, f, ciBuf, posEnd + 14.0f, textY, scale * 0.8f, Theme::textDim);
+        }
     }
 
     // ─── Mouse events ───────────────────────────────────────────────────
@@ -279,6 +326,24 @@ public:
         if (!m_engine) return false;
         float mx = e.x, my = e.y;
         bool rightClick = (e.button == MouseButton::Right);
+
+        // Stop button
+        if (mx >= m_stopBtnX && mx <= m_stopBtnX + m_stopBtnW &&
+            my >= m_stopBtnY && my <= m_stopBtnY + m_stopBtnH) {
+            m_engine->sendCommand(audio::TransportStopMsg{});
+            m_engine->sendCommand(audio::TransportSetPositionMsg{0});
+            return true;
+        }
+
+        // Play button (toggle: if playing, stop; else play)
+        if (mx >= m_playBtnX && mx <= m_playBtnX + m_playBtnW &&
+            my >= m_playBtnY && my <= m_playBtnY + m_playBtnH) {
+            if (m_transportPlaying)
+                m_engine->sendCommand(audio::TransportStopMsg{});
+            else
+                m_engine->sendCommand(audio::TransportPlayMsg{});
+            return true;
+        }
 
         // Record button (right-click cycles count-in)
         if (mx >= m_recButtonX && mx <= m_recButtonX + m_recButtonW &&
@@ -377,6 +442,8 @@ private:
     EditMode    m_editMode = EditMode::None;
     std::string m_editBuffer;
 
+    float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;
+    float m_playBtnX = 0, m_playBtnY = 0, m_playBtnW = 0, m_playBtnH = 0;
     float m_bpmBoxX = 0, m_bpmBoxY = 0, m_bpmBoxW = 0, m_bpmBoxH = 0;
     float m_tsNumBoxX = 0, m_tsNumBoxY = 0, m_tsNumBoxW = 0, m_tsNumBoxH = 0;
     float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;

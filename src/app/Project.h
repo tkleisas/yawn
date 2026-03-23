@@ -11,6 +11,7 @@ namespace yawn {
 
 struct Track {
     enum class Type : uint8_t { Audio, Midi };
+    enum class MonitorMode : uint8_t { Auto, In, Off };
 
     std::string name;
     Type type = Type::Audio;
@@ -21,6 +22,7 @@ struct Track {
     int midiInputPort = -1;   // -1 = all ports
     int midiInputChannel = -1; // -1 = all channels
     bool armed = false;        // For MIDI recording
+    MonitorMode monitorMode = MonitorMode::Auto;
 };
 
 struct Scene {

@@ -73,7 +73,7 @@ namespace Theme {
     inline constexpr int kNumTrackColors = sizeof(trackColors) / sizeof(trackColors[0]);
 
     // Layout dimensions
-    inline constexpr float kTransportBarHeight = 44.0f;
+    inline constexpr float kTransportBarHeight = 52.0f;
     inline constexpr float kTrackHeaderHeight  = 32.0f;
     inline constexpr float kTrackWidth         = 130.0f;
     inline constexpr float kClipSlotHeight     = 48.0f;

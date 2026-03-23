@@ -137,6 +137,8 @@ private:
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
     bool m_trackArmed[kMaxTracks] = {};
+    uint8_t m_trackMonitorMode[kMaxTracks] = {}; // 0=Auto, 1=In, 2=Off
+    uint8_t m_trackType[kMaxTracks] = {};         // 0=Audio, 1=Midi
     midi::MidiEngine* m_midiEngine = nullptr;
 
     // MIDI recording state per track

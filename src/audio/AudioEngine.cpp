@@ -217,10 +217,13 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         std::memset(m_trackBufferPtrs[t], 0, nf * nc * sizeof(float));
     }
 
-    // Route audio input to armed audio tracks (add to track buffer for monitoring)
+    // Route audio input to monitored tracks (add to track buffer for monitoring)
+    // MonitorMode: 0=Auto (only when armed), 1=In (always), 2=Off (never)
     if (input && m_hasInputDevice) {
         for (int t = 0; t < kMaxTracks; ++t) {
-            if (!m_trackArmed[t]) continue;
+            bool shouldMonitor = (m_trackMonitorMode[t] == 1) ||
+                                 (m_trackMonitorMode[t] == 0 && m_trackArmed[t]);
+            if (!shouldMonitor) continue;
             // Copy interleaved input to track's interleaved buffer
             // Map input channels to output channels (mono→mono, stereo→stereo, etc.)
             float* dst = m_trackBufferPtrs[t];
@@ -583,8 +586,14 @@ void AudioEngine::processCommands() {
                     if (m_midiEngine) m_midiEngine->setTrackArmed(msg.trackIndex, msg.armed);
                 }
             }
-            else if constexpr (std::is_same_v<T, StartMidiRecordMsg>) {
+            else if constexpr (std::is_same_v<T, SetTrackMonitorMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackMonitorMode[msg.trackIndex] = msg.mode;
+                }
+            }
+            else if constexpr (std::is_same_v<T, StartMidiRecordMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks
+                    && m_trackType[msg.trackIndex] == 1) { // Midi only
                     auto& rs = m_trackRecordStates[msg.trackIndex];
                     rs.reset();
                     rs.recording = true;
@@ -635,7 +644,8 @@ void AudioEngine::processCommands() {
                 }
             }
             else if constexpr (std::is_same_v<T, StartAudioRecordMsg>) {
-                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks
+                    && m_trackType[msg.trackIndex] == 0) { // Audio only
                     auto& ars = m_audioRecordStates[msg.trackIndex];
                     ars.reset();
                     ars.recording = true;
@@ -681,6 +691,11 @@ void AudioEngine::processCommands() {
                     } else {
                         ars.recording = false;
                     }
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetTrackTypeMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackType[msg.trackIndex] = msg.type;
                 }
             }
         }, cmd);

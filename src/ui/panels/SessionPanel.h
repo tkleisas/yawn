@@ -221,22 +221,49 @@ public:
                 m_lastClickScene = si;
                 m_selectedScene = si;
                 auto* slot = m_project->getSlot(ti, si);
+                bool hasClip = slot && !slot->empty();
+                bool isPlaying = m_trackStates[ti].playing && hasClip;
+                bool trackArmed = m_project->track(ti).armed;
+
+                // Compute slot-local position
+                float slotLocalX = cmx - gridX - ti * Theme::kTrackWidth;
+
                 if (rightClick) {
                     m_lastRightClickTrack = ti;
                     m_lastRightClickScene = si;
-                } else if (slot && slot->audioClip) {
-                    m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
-                } else if (slot && slot->midiClip) {
-                    m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
-                } else if (m_project->track(ti).armed && m_globalRecordArmed) {
-                    // Empty slot + armed + recording: start recording
-                    if (m_project->track(ti).type == Track::Type::Midi) {
-                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
-                    } else {
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
+                } else if (slotLocalX < kIconZoneW + Theme::kSlotPadding) {
+                    // Icon zone click — trigger action
+                    if (isPlaying) {
+                        // Stop the playing clip
+                        if (slot->audioClip)
+                            m_engine->sendCommand(audio::StopClipMsg{ti});
+                        else
+                            m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+                    } else if (hasClip) {
+                        // Launch the clip
+                        if (slot->audioClip)
+                            m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
+                        else if (slot->midiClip)
+                            m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
+                    } else if (trackArmed && m_globalRecordArmed) {
+                        // Start recording into empty slot
+                        if (m_project->track(ti).type == Track::Type::Midi)
+                            m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
+                        else
+                            m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
                     }
-                    m_selectedTrack = ti;
-                    m_selectedScene = si;
+                } else {
+                    // Content area click — launch or select
+                    if (slot && slot->audioClip) {
+                        m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
+                    } else if (slot && slot->midiClip) {
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
+                    } else if (trackArmed && m_globalRecordArmed) {
+                        if (m_project->track(ti).type == Track::Type::Midi)
+                            m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
+                        else
+                            m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
+                    }
                 }
                 return true;
             }
@@ -428,6 +455,8 @@ private:
         r.drawRect(thumbX, y, thumbW, kScrollbarH, thumbCol);
     }
 
+    static constexpr float kIconZoneW = 16.0f;
+
     void paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
                        float x, float y, float w, float h) {
         float pad = Theme::kSlotPadding;
@@ -439,23 +468,64 @@ private:
         const audio::Clip* aClip = slot ? slot->audioClip.get() : nullptr;
         const midi::MidiClip* mClip = slot ? slot->midiClip.get() : nullptr;
         bool isPlaying = m_trackStates[ti].playing && hasClip;
+        bool trackArmed = m_project->track(ti).armed;
+        bool recReady = !hasClip && trackArmed && m_globalRecordArmed;
+        bool isRecording = m_trackStates[ti].recording;
 
         Color bgCol = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
         r.drawRect(ix, iy, iw, ih, bgCol);
 
+        // --- Icon zone (left 16px) ---
+        float iconX = ix + 2;
+        float iconCY = iy + ih * 0.5f;
+        r.drawRect(ix, iy, kIconZoneW, ih, Color{30, 30, 33, 255});
+
+        if (isRecording) {
+            // Pulsing red record circle
+            float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
+            uint8_t a = static_cast<uint8_t>(150 + static_cast<int>(pulse * 105));
+            Color recCol = Color{220, 40, 40, a};
+            // Approximate circle with cross-shaped rects
+            r.drawRect(iconX + 2, iconCY - 4, 8, 8, recCol);
+            r.drawRect(iconX + 3, iconCY - 5, 6, 10, recCol);
+            r.drawRect(iconX + 4, iconCY - 5, 4, 10, recCol);
+        } else if (isPlaying) {
+            // Stop square (click to stop)
+            Color stopCol = Theme::playing;
+            r.drawRect(iconX + 3, iconCY - 4, 8, 8, stopCol);
+        } else if (hasClip) {
+            // Play triangle (click to launch)
+            Color trkCol = Theme::trackColors[
+                m_project->track(ti).colorIndex % Theme::kNumTrackColors];
+            Color triCol = trkCol.withAlpha(180);
+            r.drawRect(iconX + 2, iconCY - 5, 2, 10, triCol);
+            r.drawRect(iconX + 4, iconCY - 4, 2, 8, triCol);
+            r.drawRect(iconX + 6, iconCY - 3, 2, 6, triCol);
+            r.drawRect(iconX + 8, iconCY - 2, 2, 4, triCol);
+            r.drawRect(iconX + 10, iconCY - 1, 2, 2, triCol);
+        } else if (recReady) {
+            // Record-ready circle outline
+            Color recCol = Color{200, 40, 40};
+            r.drawRectOutline(iconX + 2, iconCY - 4, 8, 8, recCol, 1.5f);
+        }
+
+        // --- Clip content (right of icon zone) ---
+        float contentX = ix + kIconZoneW;
+        float contentW = iw - kIconZoneW;
+
         if (hasClip) {
             Color trkCol = Theme::trackColors[
                 m_project->track(ti).colorIndex % Theme::kNumTrackColors];
-            r.drawRect(ix, iy, 3, ih, trkCol);
+            r.drawRect(contentX, iy, 2, ih, trkCol);
 
             // Clip name
             const std::string& name = aClip ? aClip->name
                 : (mClip ? mClip->name() : std::string());
             float scale = Theme::kSmallFontSize / f.pixelHeight();
             if (f.isLoaded() && !name.empty()) {
-                float tx2 = ix + 7, ty2 = iy + 2;
+                float tx2 = contentX + 5, ty2 = iy + 2;
                 for (char c : name) {
-                    if (c == '/' || c == '\\') { tx2 = ix + 7; continue; }
+                    if (c == '/' || c == '\\') { tx2 = contentX + 5; continue; }
                     auto g = f.getGlyph(c, tx2, ty2, scale);
                     r.drawTexturedQuad(g.x0, g.y0, g.x1-g.x0, g.y1-g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
@@ -471,12 +541,12 @@ private:
                 Color wfCol = trkCol.withAlpha(160);
                 r.drawWaveform(aClip->buffer->channelData(0),
                                aClip->buffer->numFrames(),
-                               ix + 4, wfY, iw - 8, wfH, wfCol);
+                               contentX + 4, wfY, contentW - 8, wfH, wfCol);
                 if (isPlaying) {
                     int64_t pos = m_trackStates[ti].playPosition;
                     float frac = std::fmod(
                         static_cast<float>(pos) / aClip->buffer->numFrames(), 1.0f);
-                    r.drawRect(ix + 4 + frac * (iw - 8), wfY, 2, wfH, Theme::playing);
+                    r.drawRect(contentX + 4 + frac * (contentW - 8), wfY, 2, wfH, Theme::playing);
                 }
             }
 
@@ -494,9 +564,9 @@ private:
                 double len = mClip->lengthBeats();
                 for (int i = 0; i < mClip->noteCount(); ++i) {
                     const auto& n = mClip->note(i);
-                    float nx = ix + 4 + static_cast<float>(n.startBeat / len) * (iw - 8);
+                    float nx = contentX + 4 + static_cast<float>(n.startBeat / len) * (contentW - 8);
                     float nw = std::max(1.0f,
-                        static_cast<float>(n.duration / len) * (iw - 8));
+                        static_cast<float>(n.duration / len) * (contentW - 8));
                     float ny = nY + nH -
                         (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
                     float nh = std::max(1.0f, nH / pRange);
@@ -511,33 +581,14 @@ private:
                     static_cast<uint8_t>(150 + pulse * 105));
                 r.drawRectOutline(ix, iy, iw, ih, bc, 2.0f);
             }
-        }
 
-        // Per-slot state icons
-        bool trackArmed = m_project->track(ti).armed;
-        bool recReady = !hasClip && trackArmed && m_globalRecordArmed;
-        bool isRecording = m_trackStates[ti].recording;
-
-        if (isRecording) {
-            // Pulsing red filled circle for recording
-            float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
-            Color recCol = Color{220, 40, 40}.withAlpha(static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
-            float cx = ix + iw - 14, cy = iy + ih * 0.5f;
-            r.drawRect(cx - 5, cy - 5, 10, 10, recCol);
-            r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
-        } else if (recReady) {
-            // Red rect outline for record-ready
-            float cx = ix + iw - 14, cy = iy + ih * 0.5f;
-            Color recCol = Color{200, 40, 40};
-            r.drawRectOutline(cx - 5, cy - 5, 10, 10, recCol, 2.0f);
-        } else if (hasClip && !isPlaying) {
-            // Small play triangle indicator
-            Color trkCol = Theme::trackColors[m_project->track(ti).colorIndex % Theme::kNumTrackColors];
-            float triX = ix + iw - 16, triY = iy + ih * 0.5f - 5;
-            r.drawRect(triX, triY, 2, 10, trkCol.withAlpha(120));
-            r.drawRect(triX + 2, triY + 2, 2, 6, trkCol.withAlpha(120));
-            r.drawRect(triX + 4, triY + 3, 2, 4, trkCol.withAlpha(120));
-            r.drawRect(triX + 6, triY + 4, 2, 2, trkCol.withAlpha(120));
+            // Recording border pulse
+            if (isRecording) {
+                float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
+                Color recCol = Color{220, 40, 40}.withAlpha(
+                    static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
+                r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
+            }
         }
 
         r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);

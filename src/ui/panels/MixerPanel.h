@@ -170,8 +170,30 @@ public:
                 }
             }
 
-            // Pan bar
-            float panY = y + 80;
+            // Monitor mode button (below arm)
+            float monY = armY + kButtonHeight + 2;
+            if (my >= monY && my < monY + kButtonHeight) {
+                float monW = iw - 8;
+                if (mx >= ix + 4 && mx < ix + 4 + monW) {
+                    auto& track = m_project->track(t);
+                    if (rightClick) {
+                        track.monitorMode = Track::MonitorMode::Auto;
+                    } else {
+                        // Cycle: Auto → In → Off → Auto
+                        if (track.monitorMode == Track::MonitorMode::Auto)
+                            track.monitorMode = Track::MonitorMode::In;
+                        else if (track.monitorMode == Track::MonitorMode::In)
+                            track.monitorMode = Track::MonitorMode::Off;
+                        else
+                            track.monitorMode = Track::MonitorMode::Auto;
+                    }
+                    m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(track.monitorMode)});
+                    return true;
+                }
+            }
+
+            // Pan bar (shifted down by monitor button)
+            float panY = monY + kButtonHeight + 6;
             float panW = iw - 8;
             if (my >= panY && my < panY + 8 && mx >= ix + 4 && mx < ix + 4 + panW) {
                 if (rightClick) {
@@ -183,7 +205,7 @@ public:
             }
 
             // Fader
-            float faderY = y + 104;
+            float faderY = panY + 16 + 16;
             float faderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
             if (my >= faderY && my < faderBottom && mx >= ix + 4 && mx < ix + 4 + kFaderWidth) {
                 if (rightClick) {
@@ -361,6 +383,24 @@ private:
             Color armBg = isArmed ? Color{200, 40, 40} : Theme::clipSlotEmpty;
             Color armTxt = isArmed ? Color{255, 255, 255} : Theme::textSecondary;
             paintButton(r, f, ix + 4, curY, armBtnW, kButtonHeight, "R", armBg, armTxt);
+        }
+
+        // Monitor mode selector (Auto / In / Off)
+        curY += kButtonHeight + 2;
+        {
+            float monW = iw - 8;
+            auto mode = m_project->track(idx).monitorMode;
+            const char* monLabel = "Auto";
+            Color monBg = Theme::clipSlotEmpty;
+            if (mode == Track::MonitorMode::In) {
+                monLabel = "In";
+                monBg = Color{40, 80, 40};
+            } else if (mode == Track::MonitorMode::Off) {
+                monLabel = "Off";
+                monBg = Color{50, 40, 40};
+            }
+            Color monTxt = (mode == Track::MonitorMode::In) ? Color{120, 230, 120} : Theme::textSecondary;
+            paintButton(r, f, ix + 4, curY, monW, kButtonHeight, monLabel, monBg, monTxt);
         }
 
         // Pan bar

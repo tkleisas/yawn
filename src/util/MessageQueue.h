@@ -150,6 +150,11 @@ struct SetTrackArmedMsg {
     bool armed;
 };
 
+struct SetTrackMonitorMsg {
+    int trackIndex;
+    uint8_t mode; // 0=Auto, 1=In, 2=Off (matches Track::MonitorMode)
+};
+
 // MIDI recording
 struct StartMidiRecordMsg {
     int trackIndex;
@@ -168,6 +173,11 @@ struct StartAudioRecordMsg {
 
 struct StopAudioRecordMsg {
     int trackIndex;
+};
+
+struct SetTrackTypeMsg {
+    int trackIndex;
+    uint8_t type; // 0=Audio, 1=Midi
 };
 
 using AudioCommand = std::variant<
@@ -200,10 +210,12 @@ using AudioCommand = std::variant<
     TransportRecordMsg,
     TransportSetCountInMsg,
     SetTrackArmedMsg,
+    SetTrackMonitorMsg,
     StartMidiRecordMsg,
     StopMidiRecordMsg,
     StartAudioRecordMsg,
-    StopAudioRecordMsg
+    StopAudioRecordMsg,
+    SetTrackTypeMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)
