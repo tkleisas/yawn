@@ -517,9 +517,12 @@ private:
             r.drawRect(iconX + 8, iconCY - 2, 2, 4, triCol);
             r.drawRect(iconX + 10, iconCY - 1, 2, 2, triCol);
         } else if (recReady) {
-            // Record-ready circle outline (brighter when global record is armed)
+            // Record-ready filled circle
             Color recCol = recFullyArmed ? Color{200, 40, 40} : Color{140, 50, 50};
-            r.drawRectOutline(iconX + 2, iconCY - 4, 8, 8, recCol, 1.5f);
+            // Approximate filled circle with cross-shaped rects
+            r.drawRect(iconX + 3, iconCY - 3, 6, 6, recCol);
+            r.drawRect(iconX + 4, iconCY - 4, 4, 8, recCol);
+            r.drawRect(iconX + 2, iconCY - 2, 8, 4, recCol);
         }
 
         // --- Clip content (right of icon zone) ---
