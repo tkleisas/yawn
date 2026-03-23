@@ -437,6 +437,9 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
                 m_clipEngine.scheduleClip(msg.trackIndex, msg.clip);
+                // Auto-start transport if not playing (Ableton-like behavior)
+                if (!m_transport.isPlaying())
+                    m_transport.play();
             }
             else if constexpr (std::is_same_v<T, StopClipMsg>) {
                 m_clipEngine.scheduleStop(msg.trackIndex);
@@ -502,6 +505,9 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, LaunchMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_midiClipEngine.scheduleClip(msg.trackIndex, msg.clip);
+                    // Auto-start transport if not playing
+                    if (!m_transport.isPlaying())
+                        m_transport.play();
                 }
             }
             else if constexpr (std::is_same_v<T, StopMidiClipMsg>) {
