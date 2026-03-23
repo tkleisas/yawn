@@ -348,6 +348,96 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     m_contextMenu.open(mx, my, std::move(items));
 }
 
+void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my) {
+    std::vector<ui::ContextMenu::Item> items;
+    auto* slot = m_project.getSlot(trackIndex, sceneIndex);
+    bool hasClip = slot && !slot->empty();
+    bool hasClipboard = m_clipboard.type != ClipboardData::Type::None;
+
+    items.push_back({"Copy", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (s && s->audioClip) {
+            m_clipboard.clear();
+            m_clipboard.type = ClipboardData::Type::Audio;
+            m_clipboard.audioClip = s->audioClip->clone();
+        } else if (s && s->midiClip) {
+            m_clipboard.clear();
+            m_clipboard.type = ClipboardData::Type::Midi;
+            m_clipboard.midiClip = s->midiClip->clone();
+        }
+    }, false, hasClip});
+
+    items.push_back({"Cut", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (s && s->audioClip) {
+            m_clipboard.clear();
+            m_clipboard.type = ClipboardData::Type::Audio;
+            m_clipboard.audioClip = s->audioClip->clone();
+            m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+            s->audioClip.reset();
+        } else if (s && s->midiClip) {
+            m_clipboard.clear();
+            m_clipboard.type = ClipboardData::Type::Midi;
+            m_clipboard.midiClip = s->midiClip->clone();
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+            s->midiClip.reset();
+        }
+        markDirty();
+    }, false, hasClip});
+
+    items.push_back({"Paste", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (!s) return;
+        if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
+            m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+            s->clear();
+            s->audioClip = m_clipboard.audioClip->clone();
+        } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
+            m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+            s->clear();
+            s->midiClip = m_clipboard.midiClip->clone();
+        }
+        markDirty();
+    }, false, hasClipboard});
+
+    items.push_back({"Duplicate", [this, trackIndex, sceneIndex]() {
+        auto* src = m_project.getSlot(trackIndex, sceneIndex);
+        if (!src || src->empty()) return;
+        for (int s = sceneIndex + 1; s < m_project.numScenes(); ++s) {
+            auto* dst = m_project.getSlot(trackIndex, s);
+            if (dst && dst->empty()) {
+                if (src->audioClip) dst->audioClip = src->audioClip->clone();
+                else if (src->midiClip) dst->midiClip = src->midiClip->clone();
+                m_selectedScene = s;
+                m_sessionPanel->setSelectedScene(s);
+                markDirty();
+                break;
+            }
+        }
+    }, false, hasClip});
+
+    items.push_back({"", nullptr, true}); // separator
+
+    items.push_back({"Delete", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (s && !s->empty()) {
+            m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+            s->clear();
+            markDirty();
+        }
+    }, false, hasClip});
+
+    items.push_back({"Rename", [this, trackIndex, sceneIndex]() {
+        // TODO: open rename dialog
+        (void)trackIndex; (void)sceneIndex;
+    }, false, hasClip});
+
+    m_contextMenu.open(mx, my, std::move(items));
+}
+
 void App::updateDetailForSelectedTrack() {
     if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) {
         m_detailPanel->clear();
@@ -584,6 +674,79 @@ void App::processEvents() {
                             if (shift) saveProjectAs();
                             else       saveProject();
                             break;
+                        case SDLK_C: { // Copy clip
+                            auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                            if (slot && slot->audioClip) {
+                                m_clipboard.clear();
+                                m_clipboard.type = ClipboardData::Type::Audio;
+                                m_clipboard.audioClip = slot->audioClip->clone();
+                            } else if (slot && slot->midiClip) {
+                                m_clipboard.clear();
+                                m_clipboard.type = ClipboardData::Type::Midi;
+                                m_clipboard.midiClip = slot->midiClip->clone();
+                            }
+                            break;
+                        }
+                        case SDLK_X: { // Cut clip
+                            auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                            if (slot && slot->audioClip) {
+                                m_clipboard.clear();
+                                m_clipboard.type = ClipboardData::Type::Audio;
+                                m_clipboard.audioClip = slot->audioClip->clone();
+                                m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                                slot->audioClip.reset();
+                                markDirty();
+                            } else if (slot && slot->midiClip) {
+                                m_clipboard.clear();
+                                m_clipboard.type = ClipboardData::Type::Midi;
+                                m_clipboard.midiClip = slot->midiClip->clone();
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                slot->midiClip.reset();
+                                markDirty();
+                            }
+                            break;
+                        }
+                        case SDLK_V: { // Paste clip
+                            if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
+                                auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                                if (slot) {
+                                    m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                    slot->clear();
+                                    slot->audioClip = m_clipboard.audioClip->clone();
+                                    markDirty();
+                                }
+                            } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
+                                auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                                if (slot) {
+                                    m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                    slot->clear();
+                                    slot->midiClip = m_clipboard.midiClip->clone();
+                                    markDirty();
+                                }
+                            }
+                            break;
+                        }
+                        case SDLK_D: { // Duplicate clip to next empty slot below
+                            auto* srcSlot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                            if (srcSlot && !srcSlot->empty()) {
+                                for (int s = m_selectedScene + 1; s < m_project.numScenes(); ++s) {
+                                    auto* dst = m_project.getSlot(m_selectedTrack, s);
+                                    if (dst && dst->empty()) {
+                                        if (srcSlot->audioClip)
+                                            dst->audioClip = srcSlot->audioClip->clone();
+                                        else if (srcSlot->midiClip)
+                                            dst->midiClip = srcSlot->midiClip->clone();
+                                        m_selectedScene = s;
+                                        m_sessionPanel->setSelectedScene(m_selectedScene);
+                                        markDirty();
+                                        break;
+                                    }
+                                }
+                            }
+                            break;
+                        }
                         default: break;
                     }
                     break;
@@ -660,6 +823,18 @@ void App::processEvents() {
                             if (m_showDetailPanel) m_detailPanel->setOpen(true);
                         }
                         break;
+
+                    case SDLK_DELETE:
+                    case SDLK_BACKSPACE: {
+                        auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                        if (slot && !slot->empty()) {
+                            m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                            slot->clear();
+                            markDirty();
+                        }
+                        break;
+                    }
 
                     default:
                         break;
@@ -874,6 +1049,7 @@ void App::processEvents() {
                 // Dispatch click through content grid (handles dividers + children)
                 {
                     m_sessionPanel->clearLastClickTrack();
+                    m_sessionPanel->clearRightClick();
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
@@ -883,6 +1059,18 @@ void App::processEvents() {
                         m_selectedTrack = selTrack;
                         m_virtualKeyboard.setTargetTrack(selTrack);
                         m_mixerPanel->setSelectedTrack(selTrack);
+                    }
+                    int selScene = m_sessionPanel->lastClickScene();
+                    if (selScene >= 0) {
+                        m_selectedScene = selScene;
+                    }
+                    // Right-click on clip slot → show clip context menu
+                    int rcTrack = m_sessionPanel->lastRightClickTrack();
+                    int rcScene = m_sessionPanel->lastRightClickScene();
+                    if (rcTrack >= 0 && rcScene >= 0) {
+                        m_selectedTrack = rcTrack;
+                        m_selectedScene = rcScene;
+                        showClipContextMenu(rcTrack, rcScene, mx, my);
                     }
                 }
                 if (wasEditing && !m_transportPanel->isEditing())

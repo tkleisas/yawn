@@ -218,10 +218,12 @@ public:
                 si >= 0 && si < m_project->numScenes()) {
                 m_selectedTrack  = ti;
                 m_lastClickTrack = ti;
+                m_lastClickScene = si;
+                m_selectedScene = si;
                 auto* slot = m_project->getSlot(ti, si);
                 if (rightClick) {
-                    m_engine->sendCommand(audio::StopClipMsg{ti});
-                    m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+                    m_lastRightClickTrack = ti;
+                    m_lastRightClickScene = si;
                 } else if (slot && slot->audioClip) {
                     m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
                 } else if (slot && slot->midiClip) {
@@ -239,8 +241,14 @@ public:
     }
 
     // Track selected by last click (for App to sync selection)
-    int lastClickTrack() const { int t = m_lastClickTrack; return t; }
-    void clearLastClickTrack() { m_lastClickTrack = -1; }
+    int lastClickTrack() const { return m_lastClickTrack; }
+    int lastClickScene() const { return m_lastClickScene; }
+    void clearLastClickTrack() { m_lastClickTrack = -1; m_lastClickScene = -1; }
+
+    // Right-click on clip slot (for App to show context menu)
+    int lastRightClickTrack() const { return m_lastRightClickTrack; }
+    int lastRightClickScene() const { return m_lastRightClickScene; }
+    void clearRightClick() { m_lastRightClickTrack = -1; m_lastRightClickScene = -1; }
 
     bool onMouseMove(MouseMoveEvent& e) override {
         float mx = e.x, my = e.y;
@@ -551,6 +559,9 @@ private:
     int   m_selectedTrack  = 0;
     int   m_selectedScene  = 0;
     int   m_lastClickTrack = -1;
+    int   m_lastClickScene = -1;
+    int   m_lastRightClickTrack = -1;
+    int   m_lastRightClickScene = -1;
     float m_animTimer      = 0.0f;
     bool  m_globalRecordArmed = false;
 

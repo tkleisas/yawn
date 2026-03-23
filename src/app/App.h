@@ -57,6 +57,7 @@ private:
     bool loadFont();
     void setupMenuBar();
     void showTrackContextMenu(int trackIndex, float mx, float my);
+    void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
     void updateDetailForSelectedTrack();
 
     // Project file operations
@@ -104,6 +105,17 @@ private:
     bool m_showMixer = true;
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
+    int m_selectedScene = 0;
+
+    // Clip clipboard
+    struct ClipboardData {
+        enum class Type { None, Audio, Midi };
+        Type type = Type::None;
+        std::unique_ptr<audio::Clip> audioClip;
+        std::unique_ptr<midi::MidiClip> midiClip;
+        void clear() { type = Type::None; audioClip.reset(); midiClip.reset(); }
+    };
+    ClipboardData m_clipboard;
 
     // Cached system cursors
     SDL_Cursor* m_cursorDefault  = nullptr;
