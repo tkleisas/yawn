@@ -125,3 +125,59 @@ TEST(MessageQueueTest, MultipleCommandsFIFO) {
     q.pop(out);
     EXPECT_TRUE(std::holds_alternative<TransportStopMsg>(out));
 }
+
+TEST(MessageQueueTest, StartAudioRecordMsg) {
+    CommandQueue q;
+    q.push(AudioCommand{StartAudioRecordMsg{2, 3}});
+    AudioCommand out;
+    q.pop(out);
+    ASSERT_TRUE(std::holds_alternative<StartAudioRecordMsg>(out));
+    auto& msg = std::get<StartAudioRecordMsg>(out);
+    EXPECT_EQ(msg.trackIndex, 2);
+    EXPECT_EQ(msg.sceneIndex, 3);
+}
+
+TEST(MessageQueueTest, StopAudioRecordMsg) {
+    CommandQueue q;
+    q.push(AudioCommand{StopAudioRecordMsg{5}});
+    AudioCommand out;
+    q.pop(out);
+    ASSERT_TRUE(std::holds_alternative<StopAudioRecordMsg>(out));
+    EXPECT_EQ(std::get<StopAudioRecordMsg>(out).trackIndex, 5);
+}
+
+TEST(MessageQueueTest, AudioRecordCompleteEvent) {
+    EventQueue q;
+    q.push(AudioEvent{AudioRecordCompleteEvent{1, 2, 44100}});
+    AudioEvent out;
+    q.pop(out);
+    ASSERT_TRUE(std::holds_alternative<AudioRecordCompleteEvent>(out));
+    auto& evt = std::get<AudioRecordCompleteEvent>(out);
+    EXPECT_EQ(evt.trackIndex, 1);
+    EXPECT_EQ(evt.sceneIndex, 2);
+    EXPECT_EQ(evt.frameCount, 44100);
+}
+
+TEST(MessageQueueTest, StartMidiRecordMsg) {
+    CommandQueue q;
+    q.push(AudioCommand{StartMidiRecordMsg{0, 1, true}});
+    AudioCommand out;
+    q.pop(out);
+    ASSERT_TRUE(std::holds_alternative<StartMidiRecordMsg>(out));
+    auto& msg = std::get<StartMidiRecordMsg>(out);
+    EXPECT_EQ(msg.trackIndex, 0);
+    EXPECT_EQ(msg.sceneIndex, 1);
+    EXPECT_TRUE(msg.overdub);
+}
+
+TEST(MessageQueueTest, MidiRecordCompleteEvent) {
+    EventQueue q;
+    q.push(AudioEvent{MidiRecordCompleteEvent{3, 0, 42}});
+    AudioEvent out;
+    q.pop(out);
+    ASSERT_TRUE(std::holds_alternative<MidiRecordCompleteEvent>(out));
+    auto& evt = std::get<MidiRecordCompleteEvent>(out);
+    EXPECT_EQ(evt.trackIndex, 3);
+    EXPECT_EQ(evt.sceneIndex, 0);
+    EXPECT_EQ(evt.noteCount, 42);
+}

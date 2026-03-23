@@ -25,6 +25,8 @@ struct AudioEngineConfig {
     double sampleRate = 44100.0;
     int framesPerBuffer = 256;
     int outputChannels = 2;
+    int inputChannels = 2;
+    int inputDevice = -1;   // -1 = default input device
 };
 
 class AudioEngine {
@@ -81,6 +83,17 @@ public:
     };
     RecordedMidiData& recordedMidiData() { return m_recordedMidi; }
 
+    // Thread-safe transfer of recorded audio data to UI
+    struct RecordedAudioData {
+        std::vector<float> buffer;  // non-interleaved: [ch0_frames...][ch1_frames...]
+        int channels = 2;
+        int64_t frameCount = 0;
+        int trackIndex = -1;
+        int sceneIndex = -1;
+        std::atomic<bool> ready{false};
+    };
+    RecordedAudioData& recordedAudioData() { return m_recordedAudio; }
+
 private:
     static int paCallback(
         const void* inputBuffer,
@@ -91,7 +104,7 @@ private:
         void* userData
     );
 
-    void processAudio(float* output, unsigned long numFrames);
+    void processAudio(const float* input, float* output, unsigned long numFrames);
     void processCommands();
     void emitPositionUpdate();
     void emitClipStates();
@@ -156,6 +169,28 @@ private:
 
     TrackRecordState m_trackRecordStates[kMaxTracks];
     RecordedMidiData m_recordedMidi;
+    RecordedAudioData m_recordedAudio;
+
+    // Audio recording state per track
+    struct AudioRecordState {
+        bool recording = false;
+        int targetScene = -1;
+        int64_t recordedFrames = 0;
+        int64_t maxFrames = 0;          // capacity of buffer (in frames per channel)
+        std::vector<float> buffer;       // non-interleaved: [ch0_frames...][ch1_frames...]
+        int channels = 2;
+
+        void reset() {
+            recording = false;
+            targetScene = -1;
+            recordedFrames = 0;
+        }
+    };
+    AudioRecordState m_audioRecordStates[kMaxTracks];
+
+    // Per-track input buffer (interleaved from PortAudio, deinterleaved during processing)
+    std::vector<float> m_inputBufferHeap;   // inputChannels * kMaxFramesPerBuffer
+    bool m_hasInputDevice = false;
 
     // Per-track scratch buffers for mixer routing (heap-allocated, preallocated in init)
     std::vector<float> m_trackBufferHeap;     // kMaxTracks * kMaxFramesPerBuffer * 2

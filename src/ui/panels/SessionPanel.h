@@ -229,8 +229,12 @@ public:
                 } else if (slot && slot->midiClip) {
                     m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
                 } else if (m_project->track(ti).armed && m_globalRecordArmed) {
-                    // Empty slot + armed + recording: start MIDI recording
-                    m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
+                    // Empty slot + armed + recording: start recording
+                    if (m_project->track(ti).type == Track::Type::Midi) {
+                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
+                    } else {
+                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
+                    }
                     m_selectedTrack = ti;
                     m_selectedScene = si;
                 }

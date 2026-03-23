@@ -57,7 +57,10 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
         m_trackRecordStates[t].recordedCCs.reserve(1024);
     }
 
-    // Open default output stream
+    // Allocate input buffer for deinterleaving
+    m_inputBufferHeap.resize(config.inputChannels * kMaxFramesPerBuffer, 0.0f);
+
+    // Open audio stream (full-duplex if input device available, output-only otherwise)
     PaStreamParameters outputParams;
     outputParams.device = Pa_GetDefaultOutputDevice();
     if (outputParams.device == paNoDevice) {
@@ -71,9 +74,28 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
         Pa_GetDeviceInfo(outputParams.device)->defaultLowOutputLatency;
     outputParams.hostApiSpecificStreamInfo = nullptr;
 
+    // Try to open input device for full-duplex recording
+    PaStreamParameters inputParams;
+    PaStreamParameters* inputParamsPtr = nullptr;
+    PaDeviceIndex inputDev = (config.inputDevice >= 0)
+        ? static_cast<PaDeviceIndex>(config.inputDevice)
+        : Pa_GetDefaultInputDevice();
+
+    if (inputDev != paNoDevice) {
+        const PaDeviceInfo* inInfo = Pa_GetDeviceInfo(inputDev);
+        if (inInfo && inInfo->maxInputChannels >= config.inputChannels) {
+            inputParams.device = inputDev;
+            inputParams.channelCount = config.inputChannels;
+            inputParams.sampleFormat = paFloat32;
+            inputParams.suggestedLatency = inInfo->defaultLowInputLatency;
+            inputParams.hostApiSpecificStreamInfo = nullptr;
+            inputParamsPtr = &inputParams;
+        }
+    }
+
     err = Pa_OpenStream(
         &m_stream,
-        nullptr,         // no input
+        inputParamsPtr,  // nullptr if no input device
         &outputParams,
         config.sampleRate,
         config.framesPerBuffer,
@@ -82,13 +104,38 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
         this
     );
 
+    if (err != paNoError && inputParamsPtr) {
+        // Full-duplex failed, fall back to output-only
+        std::fprintf(stderr, "Full-duplex failed (%s), falling back to output-only\n",
+                     Pa_GetErrorText(err));
+        inputParamsPtr = nullptr;
+        err = Pa_OpenStream(
+            &m_stream,
+            nullptr,
+            &outputParams,
+            config.sampleRate,
+            config.framesPerBuffer,
+            paClipOff,
+            &AudioEngine::paCallback,
+            this
+        );
+    }
+
     if (err != paNoError) {
         std::fprintf(stderr, "PortAudio open stream failed: %s\n", Pa_GetErrorText(err));
         return false;
     }
 
+    m_hasInputDevice = (inputParamsPtr != nullptr);
+
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
-    std::printf("Audio device: %s\n", devInfo->name);
+    std::printf("Output device: %s\n", devInfo->name);
+    if (m_hasInputDevice) {
+        const PaDeviceInfo* inDevInfo = Pa_GetDeviceInfo(inputParams.device);
+        std::printf("Input device: %s (%d ch)\n", inDevInfo->name, config.inputChannels);
+    } else {
+        std::printf("No audio input device (recording disabled)\n");
+    }
     std::printf("Sample rate: %.0f Hz, Buffer: %d frames, Channels: %d\n",
         config.sampleRate, config.framesPerBuffer, config.outputChannels);
 
@@ -142,7 +189,7 @@ bool AudioEngine::pollEvent(AudioEvent& event) {
 // --- PortAudio callback (audio thread) ---
 
 int AudioEngine::paCallback(
-    const void* /*inputBuffer*/,
+    const void* inputBuffer,
     void* outputBuffer,
     unsigned long framesPerBuffer,
     const PaStreamCallbackTimeInfo* /*timeInfo*/,
@@ -151,21 +198,61 @@ int AudioEngine::paCallback(
 {
     auto* engine = static_cast<AudioEngine*>(userData);
     auto* output = static_cast<float*>(outputBuffer);
+    auto* input = static_cast<const float*>(inputBuffer);
 
-    engine->processAudio(output, framesPerBuffer);
+    engine->processAudio(input, output, framesPerBuffer);
     return paContinue;
 }
 
-void AudioEngine::processAudio(float* output, unsigned long numFrames) {
+void AudioEngine::processAudio(const float* input, float* output, unsigned long numFrames) {
     // Process any pending commands from the UI thread
     processCommands();
 
     int nc = m_config.outputChannels;
     int nf = static_cast<int>(numFrames);
+    int inCh = m_config.inputChannels;
 
     // Clear per-track buffers (pointers already set up in init)
     for (int t = 0; t < kMaxTracks; ++t) {
         std::memset(m_trackBufferPtrs[t], 0, nf * nc * sizeof(float));
+    }
+
+    // Route audio input to armed audio tracks (add to track buffer for monitoring)
+    if (input && m_hasInputDevice) {
+        for (int t = 0; t < kMaxTracks; ++t) {
+            if (!m_trackArmed[t]) continue;
+            // Copy interleaved input to track's interleaved buffer
+            // Map input channels to output channels (mono→mono, stereo→stereo, etc.)
+            float* dst = m_trackBufferPtrs[t];
+            for (int f = 0; f < nf; ++f) {
+                for (int ch = 0; ch < nc; ++ch) {
+                    int srcCh = (ch < inCh) ? ch : (inCh - 1);
+                    dst[f * nc + ch] += input[f * inCh + srcCh];
+                }
+            }
+        }
+    }
+
+    // Capture audio for recording (before any effects/mixing modify the buffer)
+    if (m_transport.isRecording() && input && m_hasInputDevice) {
+        for (int t = 0; t < kMaxTracks; ++t) {
+            auto& ars = m_audioRecordStates[t];
+            if (!ars.recording || !m_trackArmed[t]) continue;
+
+            int64_t remaining = ars.maxFrames - ars.recordedFrames;
+            int64_t framesToCopy = std::min(static_cast<int64_t>(nf), remaining);
+            if (framesToCopy <= 0) continue;
+
+            // Deinterleave input into non-interleaved record buffer
+            for (int ch = 0; ch < ars.channels; ++ch) {
+                int srcCh = (ch < inCh) ? ch : (inCh - 1);
+                float* dst = ars.buffer.data() + ch * ars.maxFrames + ars.recordedFrames;
+                for (int64_t f = 0; f < framesToCopy; ++f) {
+                    dst[f] = input[f * inCh + srcCh];
+                }
+            }
+            ars.recordedFrames += framesToCopy;
+        }
     }
 
     // Render each track's clip into its own buffer
@@ -424,6 +511,67 @@ void AudioEngine::processCommands() {
                     }
                 } else {
                     m_transport.stopRecording();
+                    // Stop all active recordings
+                    for (int t = 0; t < kMaxTracks; ++t) {
+                        if (m_trackRecordStates[t].recording) {
+                            StopMidiRecordMsg stopMsg{t};
+                            // Inline the stop logic (reuse via self-send would re-enter)
+                            auto& rs = m_trackRecordStates[t];
+                            double endBeat = m_transport.positionInBeats() - rs.recordStartBeat;
+                            for (auto& pn : rs.pendingNotes) {
+                                midi::MidiNote note;
+                                note.startBeat = pn.startBeat;
+                                note.duration = std::max(0.01, endBeat - pn.startBeat);
+                                note.pitch = pn.pitch;
+                                note.channel = pn.channel;
+                                note.velocity = static_cast<uint16_t>(pn.velocity * 512);
+                                if (note.velocity == 0) note.velocity = 1;
+                                rs.recordedNotes.push_back(note);
+                            }
+                            rs.pendingNotes.clear();
+                            m_recordedMidi.notes = rs.recordedNotes;
+                            m_recordedMidi.ccs = rs.recordedCCs;
+                            m_recordedMidi.trackIndex = t;
+                            m_recordedMidi.sceneIndex = rs.targetScene;
+                            m_recordedMidi.overdub = rs.overdub;
+                            double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
+                            int bpb = m_transport.beatsPerBar();
+                            double bars = std::ceil(rawLen / bpb);
+                            m_recordedMidi.lengthBeats = bars * bpb;
+                            m_recordedMidi.ready.store(true, std::memory_order_release);
+                            MidiRecordCompleteEvent mevt;
+                            mevt.trackIndex = t;
+                            mevt.sceneIndex = rs.targetScene;
+                            mevt.noteCount = static_cast<int>(rs.recordedNotes.size());
+                            m_eventQueue.push(mevt);
+                            rs.recording = false;
+                        }
+                        if (m_audioRecordStates[t].recording) {
+                            auto& ars = m_audioRecordStates[t];
+                            if (ars.recordedFrames > 0) {
+                                m_recordedAudio.channels = ars.channels;
+                                m_recordedAudio.frameCount = ars.recordedFrames;
+                                m_recordedAudio.trackIndex = t;
+                                m_recordedAudio.sceneIndex = ars.targetScene;
+                                m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
+                                for (int ch = 0; ch < ars.channels; ++ch) {
+                                    std::memcpy(
+                                        m_recordedAudio.buffer.data() + ch * ars.recordedFrames,
+                                        ars.buffer.data() + ch * ars.maxFrames,
+                                        ars.recordedFrames * sizeof(float));
+                                }
+                                m_recordedAudio.ready.store(true, std::memory_order_release);
+                                AudioRecordCompleteEvent aevt;
+                                aevt.trackIndex = t;
+                                aevt.sceneIndex = ars.targetScene;
+                                aevt.frameCount = ars.recordedFrames;
+                                m_eventQueue.push(aevt);
+                            }
+                            ars.buffer.clear();
+                            ars.buffer.shrink_to_fit();
+                            ars.recording = false;
+                        }
+                    }
                 }
             }
             else if constexpr (std::is_same_v<T, TransportSetCountInMsg>) {
@@ -483,6 +631,55 @@ void AudioEngine::processCommands() {
                         m_eventQueue.push(evt);
 
                         rs.recording = false;
+                    }
+                }
+            }
+            else if constexpr (std::is_same_v<T, StartAudioRecordMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    auto& ars = m_audioRecordStates[msg.trackIndex];
+                    ars.reset();
+                    ars.recording = true;
+                    ars.targetScene = msg.sceneIndex;
+                    ars.channels = m_config.inputChannels;
+                    // Pre-allocate for 5 minutes of recording
+                    static constexpr int64_t kMaxRecordSec = 300;
+                    ars.maxFrames = static_cast<int64_t>(m_config.sampleRate * kMaxRecordSec);
+                    ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
+                    ars.recordedFrames = 0;
+                }
+            }
+            else if constexpr (std::is_same_v<T, StopAudioRecordMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    auto& ars = m_audioRecordStates[msg.trackIndex];
+                    if (ars.recording && ars.recordedFrames > 0) {
+                        // Transfer to UI-readable buffer
+                        m_recordedAudio.channels = ars.channels;
+                        m_recordedAudio.frameCount = ars.recordedFrames;
+                        m_recordedAudio.trackIndex = msg.trackIndex;
+                        m_recordedAudio.sceneIndex = ars.targetScene;
+                        // Copy only the recorded portion
+                        m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
+                        for (int ch = 0; ch < ars.channels; ++ch) {
+                            std::memcpy(
+                                m_recordedAudio.buffer.data() + ch * ars.recordedFrames,
+                                ars.buffer.data() + ch * ars.maxFrames,
+                                ars.recordedFrames * sizeof(float));
+                        }
+                        m_recordedAudio.ready.store(true, std::memory_order_release);
+
+                        // Emit completion event
+                        AudioRecordCompleteEvent evt;
+                        evt.trackIndex = msg.trackIndex;
+                        evt.sceneIndex = ars.targetScene;
+                        evt.frameCount = ars.recordedFrames;
+                        m_eventQueue.push(evt);
+
+                        // Free the large record buffer
+                        ars.buffer.clear();
+                        ars.buffer.shrink_to_fit();
+                        ars.recording = false;
+                    } else {
+                        ars.recording = false;
                     }
                 }
             }

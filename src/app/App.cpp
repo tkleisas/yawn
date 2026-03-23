@@ -25,7 +25,9 @@
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cstdio>
+#include <cinttypes>
 #include <cmath>
+#include <cstring>
 
 namespace yawn {
 
@@ -1225,6 +1227,38 @@ void App::update() {
                             m_project.setMidiClip(ti, si, std::move(newClip));
                         }
                     }
+                    data.ready.store(false, std::memory_order_release);
+                }
+            }
+            else if constexpr (std::is_same_v<T, audio::AudioRecordCompleteEvent>) {
+                auto& data = m_audioEngine.recordedAudioData();
+                if (data.ready.load(std::memory_order_acquire)) {
+                    int ti = data.trackIndex;
+                    int si = data.sceneIndex;
+                    if (ti >= 0 && si >= 0 && data.frameCount > 0) {
+                        // Create AudioBuffer from recorded data
+                        auto audioBuffer = std::make_shared<audio::AudioBuffer>(
+                            data.channels, static_cast<int>(data.frameCount));
+                        for (int ch = 0; ch < data.channels; ++ch) {
+                            std::memcpy(
+                                audioBuffer->channelData(ch),
+                                data.buffer.data() + ch * data.frameCount,
+                                data.frameCount * sizeof(float));
+                        }
+                        // Create clip
+                        auto clip = std::make_unique<audio::Clip>();
+                        clip->name = "Rec " + std::to_string(ti + 1) + "-" + std::to_string(si + 1);
+                        clip->buffer = audioBuffer;
+                        clip->looping = true;
+                        clip->gain = 1.0f;
+                        m_project.setClip(ti, si, std::move(clip));
+                        markDirty();
+                        std::printf("Audio recorded: Track %d, Scene %d, %" PRId64 " frames\n",
+                                    ti + 1, si + 1, data.frameCount);
+                    }
+                    // Free the transfer buffer
+                    data.buffer.clear();
+                    data.buffer.shrink_to_fit();
                     data.ready.store(false, std::memory_order_release);
                 }
             }

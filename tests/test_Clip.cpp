@@ -62,3 +62,34 @@ TEST(ClipPlayStateTest, FadeIncrement) {
     EXPECT_GT(ClipPlayState::kFadeIncrement, 0.0f);
     EXPECT_LT(ClipPlayState::kFadeIncrement, 0.1f);
 }
+
+TEST(ClipTest, CloneSharesBuffer) {
+    Clip clip;
+    clip.name = "TestClip";
+    clip.buffer = std::make_shared<AudioBuffer>(2, 1000);
+    clip.loopStart = 100;
+    clip.loopEnd = 500;
+    clip.looping = false;
+    clip.gain = 0.5f;
+
+    auto cloned = clip.clone();
+    EXPECT_EQ(cloned->name, "TestClip");
+    EXPECT_EQ(cloned->buffer, clip.buffer);  // shared_ptr, same buffer
+    EXPECT_EQ(cloned->loopStart, 100);
+    EXPECT_EQ(cloned->loopEnd, 500);
+    EXPECT_FALSE(cloned->looping);
+    EXPECT_FLOAT_EQ(cloned->gain, 0.5f);
+}
+
+TEST(ClipTest, CloneIndependent) {
+    Clip clip;
+    clip.name = "Original";
+    clip.buffer = std::make_shared<AudioBuffer>(1, 100);
+    auto cloned = clip.clone();
+
+    // Modifying clone doesn't affect original
+    cloned->name = "Modified";
+    cloned->loopStart = 50;
+    EXPECT_EQ(clip.name, "Original");
+    EXPECT_EQ(clip.loopStart, 0);
+}

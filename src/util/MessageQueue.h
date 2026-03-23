@@ -161,6 +161,15 @@ struct StopMidiRecordMsg {
     int trackIndex;
 };
 
+struct StartAudioRecordMsg {
+    int trackIndex;
+    int sceneIndex;
+};
+
+struct StopAudioRecordMsg {
+    int trackIndex;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -192,7 +201,9 @@ using AudioCommand = std::variant<
     TransportSetCountInMsg,
     SetTrackArmedMsg,
     StartMidiRecordMsg,
-    StopMidiRecordMsg
+    StopMidiRecordMsg,
+    StartAudioRecordMsg,
+    StopAudioRecordMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)
@@ -226,12 +237,19 @@ struct MidiRecordCompleteEvent {
     int noteCount;
 };
 
+struct AudioRecordCompleteEvent {
+    int trackIndex;
+    int sceneIndex;
+    int64_t frameCount;
+};
+
 using AudioEvent = std::variant<
     TransportPositionUpdate,
     ClipStateUpdate,
     MeterUpdate,
     TransportRecordStateUpdate,
-    MidiRecordCompleteEvent
+    MidiRecordCompleteEvent,
+    AudioRecordCompleteEvent
 >;
 
 // Command queue: UI → Audio (1024 slots)
