@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(YAWN
-    VERSION 0.4.2
+    VERSION 0.4.3
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
