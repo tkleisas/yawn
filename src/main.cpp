@@ -22,16 +22,16 @@ int main(int /*argc*/, char* /*argv*/[]) {
     std::printf("Starting Y.A.W.N — Yet Another Audio Workstation New\n");
     std::fflush(stdout);
 
-    yawn::App app;
+    auto app = std::make_unique<yawn::App>();
 
-    if (!app.init()) {
+    if (!app->init()) {
         std::fprintf(stderr, "Failed to initialize application\n");
         std::fflush(stderr);
         return 1;
     }
 
-    app.run();
-    app.shutdown();
+    app->run();
+    app->shutdown();
 
     std::printf("Y.A.W.N shutdown complete\n");
     std::fflush(stdout);
