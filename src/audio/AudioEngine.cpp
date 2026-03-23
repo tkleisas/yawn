@@ -611,6 +611,13 @@ void AudioEngine::processCommands() {
                     rs.targetScene = msg.sceneIndex;
                     rs.overdub = msg.overdub;
                     rs.recordStartBeat = m_transport.positionInBeats();
+
+                    // Auto-arm transport recording and start playback
+                    if (!m_transport.isRecording()) {
+                        m_transport.startRecording();
+                        if (!m_transport.isPlaying())
+                            m_transport.play();
+                    }
                 }
             }
             else if constexpr (std::is_same_v<T, StopMidiRecordMsg>) {
@@ -651,6 +658,9 @@ void AudioEngine::processCommands() {
                         m_eventQueue.push(evt);
 
                         rs.recording = false;
+
+                        // Disarm transport if no tracks are still recording
+                        maybeStopTransportRecording();
                     }
                 }
             }
@@ -667,6 +677,13 @@ void AudioEngine::processCommands() {
                     ars.maxFrames = static_cast<int64_t>(m_config.sampleRate * kMaxRecordSec);
                     ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
                     ars.recordedFrames = 0;
+
+                    // Auto-arm transport recording and start playback
+                    if (!m_transport.isRecording()) {
+                        m_transport.startRecording();
+                        if (!m_transport.isPlaying())
+                            m_transport.play();
+                    }
                 }
             }
             else if constexpr (std::is_same_v<T, StopAudioRecordMsg>) {
@@ -702,6 +719,9 @@ void AudioEngine::processCommands() {
                     } else {
                         ars.recording = false;
                     }
+
+                    // Disarm transport if no tracks are still recording
+                    maybeStopTransportRecording();
                 }
             }
             else if constexpr (std::is_same_v<T, SetTrackTypeMsg>) {
@@ -728,6 +748,15 @@ void AudioEngine::emitPositionUpdate() {
         rsu.countInProgress = m_transport.countInProgress();
         m_eventQueue.push(rsu);
     }
+}
+
+void AudioEngine::maybeStopTransportRecording() {
+    if (!m_transport.isRecording()) return;
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (m_trackRecordStates[t].recording || m_audioRecordStates[t].recording)
+            return; // At least one track still recording
+    }
+    m_transport.stopRecording();
 }
 
 void AudioEngine::emitClipStates() {

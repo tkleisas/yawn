@@ -109,6 +109,7 @@ private:
     void emitPositionUpdate();
     void emitClipStates();
     void emitMeterUpdates();
+    void maybeStopTransportRecording();
 
     struct TestTone {
         bool enabled = false;
