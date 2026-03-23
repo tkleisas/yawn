@@ -71,6 +71,10 @@ public:
     void setScrollX(float sx)    { m_scrollX = sx; }
 
     void setGlobalRecordArmed(bool armed) { m_globalRecordArmed = armed; }
+    void setTrackRecording(int trackIndex, bool recording) {
+        if (trackIndex >= 0 && trackIndex < kMaxTracks)
+            m_trackStates[trackIndex].recording = recording;
+    }
     void updateAnimTimer(float dt) { m_animTimer += dt; }
 
     float preferredHeight() const {

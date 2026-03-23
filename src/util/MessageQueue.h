@@ -231,6 +231,7 @@ struct ClipStateUpdate {
     int64_t playPosition;
     bool isMidi = false;
     double clipLengthBeats = 0.0;
+    bool recording = false;
 };
 
 struct MeterUpdate {

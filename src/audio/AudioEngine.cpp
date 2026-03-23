@@ -732,25 +732,40 @@ void AudioEngine::emitPositionUpdate() {
 
 void AudioEngine::emitClipStates() {
     for (int t = 0; t < kMaxTracks; ++t) {
+        bool midiRec = m_trackRecordStates[t].recording;
+        bool audioRec = m_audioRecordStates[t].recording;
+
         // Audio clips
         const auto& state = m_clipEngine.trackState(t);
-        if (state.clip) {
+        if (state.clip || audioRec) {
             ClipStateUpdate csu;
             csu.trackIndex = t;
             csu.playing = state.active;
             csu.playPosition = state.playPosition;
+            csu.recording = audioRec;
             m_eventQueue.push(csu);
         }
         // MIDI clips
         const auto& mstate = m_midiClipEngine.trackState(t);
-        if (mstate.clip) {
+        if (mstate.clip || midiRec) {
             ClipStateUpdate csu;
             csu.trackIndex = t;
             csu.playing = mstate.active;
             // Encode beat position as fixed-point in int64 (×1000000 for precision)
             csu.playPosition = static_cast<int64_t>(mstate.playPositionBeats * 1000000.0);
             csu.isMidi = true;
-            csu.clipLengthBeats = mstate.clip->lengthBeats();
+            csu.clipLengthBeats = mstate.clip ? mstate.clip->lengthBeats() : 0.0;
+            csu.recording = midiRec;
+            m_eventQueue.push(csu);
+        }
+
+        // Emit recording state even when no clip is loaded
+        if ((midiRec || audioRec) && !state.clip && !mstate.clip) {
+            ClipStateUpdate csu;
+            csu.trackIndex = t;
+            csu.playing = false;
+            csu.playPosition = 0;
+            csu.recording = midiRec || audioRec;
             m_eventQueue.push(csu);
         }
     }
