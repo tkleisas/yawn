@@ -481,7 +481,8 @@ private:
         const midi::MidiClip* mClip = slot ? slot->midiClip.get() : nullptr;
         bool isPlaying = m_trackStates[ti].playing && hasClip;
         bool trackArmed = m_project->track(ti).armed;
-        bool recReady = !hasClip && trackArmed && m_globalRecordArmed;
+        bool recReady = !hasClip && trackArmed;
+        bool recFullyArmed = recReady && m_globalRecordArmed;
         bool isRecording = m_trackStates[ti].recording;
 
         Color bgCol = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
@@ -516,8 +517,8 @@ private:
             r.drawRect(iconX + 8, iconCY - 2, 2, 4, triCol);
             r.drawRect(iconX + 10, iconCY - 1, 2, 2, triCol);
         } else if (recReady) {
-            // Record-ready circle outline
-            Color recCol = Color{200, 40, 40};
+            // Record-ready circle outline (brighter when global record is armed)
+            Color recCol = recFullyArmed ? Color{200, 40, 40} : Color{140, 50, 50};
             r.drawRectOutline(iconX + 2, iconCY - 4, 8, 8, recCol, 1.5f);
         }
 
