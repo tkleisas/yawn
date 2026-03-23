@@ -1248,6 +1248,8 @@ void App::update() {
                             m_project.setMidiClip(ti, si, std::move(newClip));
                         }
                     }
+                    // Clear recording state in UI
+                    m_sessionPanel->setTrackRecording(ti, false, -1);
                     data.ready.store(false, std::memory_order_release);
                 }
             }
@@ -1277,6 +1279,8 @@ void App::update() {
                         std::printf("Audio recorded: Track %d, Scene %d, %" PRId64 " frames\n",
                                     ti + 1, si + 1, data.frameCount);
                     }
+                    // Clear recording state in UI
+                    m_sessionPanel->setTrackRecording(ti, false, -1);
                     // Free the transfer buffer
                     data.buffer.clear();
                     data.buffer.shrink_to_fit();
