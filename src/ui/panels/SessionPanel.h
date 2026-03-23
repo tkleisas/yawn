@@ -237,8 +237,6 @@ public:
             int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
             if (ti >= 0 && ti < m_project->numTracks() &&
                 si >= 0 && si < m_project->numScenes()) {
-                m_selectedTrack  = ti;
-                m_lastClickTrack = ti;
                 m_lastClickScene = si;
                 m_selectedScene = si;
                 auto* slot = m_project->getSlot(ti, si);
@@ -255,6 +253,8 @@ public:
                 if (rightClick) {
                     m_lastRightClickTrack = ti;
                     m_lastRightClickScene = si;
+                    m_selectedTrack  = ti;
+                    m_lastClickTrack = ti;
                 } else if (isSlotRecording) {
                     // Stop recording (click anywhere on the recording slot)
                     if (m_project->track(ti).type == Track::Type::Midi)
@@ -262,7 +262,7 @@ public:
                     else
                         m_engine->sendCommand(audio::StopAudioRecordMsg{ti});
                 } else if (slotLocalX < kIconZoneW + Theme::kSlotPadding) {
-                    // Icon zone click — trigger action
+                    // Icon zone click — trigger action (no track selection change)
                     if (isPlaying) {
                         // Stop the playing clip
                         if (slot->audioClip)
@@ -283,7 +283,9 @@ public:
                             m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
                     }
                 } else {
-                    // Content area click — launch or select
+                    // Content area click — launch AND select track
+                    m_selectedTrack  = ti;
+                    m_lastClickTrack = ti;
                     if (slot && slot->audioClip) {
                         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get()});
                     } else if (slot && slot->midiClip) {
