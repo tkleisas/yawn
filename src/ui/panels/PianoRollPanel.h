@@ -50,6 +50,7 @@ public:
     static constexpr float kMaxPxBeat   = 500.0f;
     static constexpr float kRulerH      = 16.0f;
     static constexpr float kClipOpsW    = 44.0f;
+    static constexpr float kVelLaneH   = 60.0f;
     static constexpr int   kNPitch      = 128;
     static constexpr uint16_t kDefVel   = 32512;
 
@@ -102,7 +103,9 @@ public:
         m_gx = m_px + kClipOpsW + kPianoW;
         m_gy = m_py + kHandleHeight + kToolbarH + kRulerH;
         m_gw = m_pw - kClipOpsW - kPianoW;
-        m_gh = m_bounds.h - kHandleHeight - kToolbarH - kRulerH - kScrollbarH;
+        float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
+        m_gh = m_bounds.h - kHandleHeight - kToolbarH - kRulerH - velH - kScrollbarH;
+        m_velY = m_gy + m_gh;
 
         // Clip to animated bounds so content doesn't overflow during transition
         r.pushClip(m_px, m_py, m_pw, m_animatedHeight);
@@ -141,6 +144,8 @@ public:
         r.popClip();
 
 #ifndef YAWN_TEST_BUILD
+        if (m_showVelocityLane)
+            renderVelocityLane(r, f);
         renderScrollbar(r);
         renderClipOps(r, f);
 #endif
@@ -199,9 +204,15 @@ public:
         // Piano key area
         if (mx < m_gx) return true;
 
+        // Velocity lane area
+        if (m_showVelocityLane && my >= m_velY && my < m_velY + kVelLaneH && mx >= m_gx && mx < m_gx + m_gw) {
+            return handleVelocityLaneClick(mx, my);
+        }
+
         // Scrollbar area
         {
-            float sbY = m_gy + m_gh;
+            float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
+            float sbY = m_gy + m_gh + velH;
             if (my >= sbY && my < sbY + kScrollbarH && mx >= m_gx && mx < m_gx + m_gw) {
                 float totalW = maxBeats() * m_pxBeat;
                 float maxScroll = std::max(0.0f, totalW - m_gw);
@@ -334,9 +345,33 @@ public:
             return true;
         }
 
+        // Velocity lane drag
+        if (m_velDragging && m_clip) {
+            float velFrac = 1.0f - std::clamp((my - m_velY - 2.0f) / (kVelLaneH - 4.0f), 0.0f, 1.0f);
+            uint16_t newVel = static_cast<uint16_t>(std::clamp(velFrac * 65535.0f, 1.0f, 65535.0f));
+            if (m_velDragNoteIdx >= 0 && m_velDragNoteIdx < m_clip->noteCount()) {
+                float oldFrac = m_velDragStartVel;
+                if (m_selectedNotes.count(m_velDragNoteIdx) && m_selectedNotes.size() > 1 && oldFrac > 0.0f) {
+                    float ratio = velFrac / oldFrac;
+                    for (int idx : m_selectedNotes) {
+                        if (idx >= 0 && idx < m_clip->noteCount()) {
+                            auto& n = m_clip->note(idx);
+                            float nf = (n.velocity / 65535.0f) * ratio;
+                            n.velocity = static_cast<uint16_t>(std::clamp(nf * 65535.0f, 1.0f, 65535.0f));
+                        }
+                    }
+                    m_velDragStartVel = velFrac;
+                } else {
+                    m_clip->note(m_velDragNoteIdx).velocity = newVel;
+                }
+            }
+            return true;
+        }
+
         // Track scrollbar hover for highlight
         {
-            float sbY = m_gy + m_gh;
+            float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
+            float sbY = m_gy + m_gh + velH;
             m_scrollbarHovered = (my >= sbY && my < sbY + kScrollbarH
                                   && mx >= m_gx && mx < m_gx + m_gw);
         }
@@ -382,6 +417,12 @@ public:
         (void)e;
         if (m_handleDragActive) {
             m_handleDragActive = false;
+            releaseMouse();
+            return true;
+        }
+        if (m_velDragging) {
+            m_velDragging = false;
+            m_velDragNoteIdx = -1;
             releaseMouse();
             return true;
         }
@@ -508,6 +549,8 @@ public:
         if (key == '6') { m_snap = Snap::EighthTriplet;     return true; }
         if (key == '7') { m_snap = Snap::SixteenthTriplet;  return true; }
 
+        if (key == 'v' || key == 'V') { m_showVelocityLane = !m_showVelocityLane; return true; }
+
         return false;
     }
 
@@ -616,6 +659,16 @@ private:
             r.drawRect(x, tbY + 2, m_loopBtnW, kToolbarH - 4, bg);
             f.drawText(r, "Loop", x + 4, ty, sc, fg);
             x += m_loopBtnW + 6;
+        }
+
+        // Vel lane toggle
+        {
+            Color bg = m_showVelocityLane ? Color{100, 180, 255} : Color{55, 55, 60};
+            Color fg = m_showVelocityLane ? Color{10, 10, 15}    : Theme::textSecondary;
+            m_velBtnX = x;
+            r.drawRect(x, tbY + 2, m_velBtnW, kToolbarH - 4, bg);
+            f.drawText(r, "Vel", x + 4, ty, sc, fg);
+            x += m_velBtnW + 6;
         }
 
         // Clip name (right-aligned)
@@ -877,8 +930,107 @@ private:
         r.drawRect(x + w - 1, y, 1, m_gh, Color{55, 55, 60});
     }
 
+    void renderVelocityLane(Renderer2D& r, Font& f) {
+        if (!m_clip) return;
+        Color trackCol = Theme::trackColors[m_trackIdx % Theme::kNumTrackColors];
+        float sc = 10.0f / f.pixelHeight();
+
+        // Background
+        r.drawRect(m_gx, m_velY, m_gw, kVelLaneH, Color{28, 28, 32});
+        // Left area background (clip-ops + piano width)
+        r.drawRect(m_px, m_velY, kClipOpsW + kPianoW, kVelLaneH, Color{32, 32, 36});
+        // "Vel" label
+        f.drawText(r, "Vel", m_px + 6, m_velY + kVelLaneH * 0.5f - 5, sc, Theme::textSecondary);
+        // Right border for left area
+        r.drawRect(m_px + kClipOpsW + kPianoW - 1, m_velY, 1, kVelLaneH, Color{55, 55, 60});
+        // Top border for lane
+        r.drawRect(m_gx, m_velY, m_gw, 1, Color{50, 50, 55});
+
+        r.pushClip(m_gx, m_velY, m_gw, kVelLaneH);
+
+        // Reference lines: 100% and 50%
+        float ref100Y = m_velY + 2;
+        float ref50Y  = m_velY + 2 + (kVelLaneH - 4) * 0.5f;
+        r.drawRect(m_gx, ref100Y, m_gw, 1, Color{50, 50, 55});
+        r.drawRect(m_gx, ref50Y, m_gw, 1, Color{40, 40, 45});
+
+        // Draw velocity bars
+        double visStart = xToBeat(m_gx);
+        double visEnd   = xToBeat(m_gx + m_gw);
+        for (int i = 0; i < m_clip->noteCount(); ++i) {
+            const auto& n = m_clip->note(i);
+            double noteEnd = n.startBeat + n.duration;
+            if (noteEnd < visStart) continue;
+            if (n.startBeat > visEnd) break;
+
+            float nx = beatToX(n.startBeat);
+            float nw = std::max(3.0f, static_cast<float>(n.duration * m_pxBeat));
+            if (nx + nw < m_gx || nx > m_gx + m_gw) continue;
+
+            float velFrac = n.velocity / 65535.0f;
+            float barH = velFrac * (kVelLaneH - 4);
+            float barY = m_velY + kVelLaneH - 2 - barH;
+
+            // Brighter color for higher velocity
+            uint8_t br = static_cast<uint8_t>(60 + velFrac * 195);
+            Color barCol{
+                static_cast<uint8_t>(std::min(255, trackCol.r * br / 180)),
+                static_cast<uint8_t>(std::min(255, trackCol.g * br / 180)),
+                static_cast<uint8_t>(std::min(255, trackCol.b * br / 180))
+            };
+            r.drawRect(nx, barY, nw, barH, barCol);
+
+            // Selected note outline
+            if (m_selectedNotes.count(i)) {
+                r.drawRectOutline(nx, barY, nw, barH, Color{255, 255, 255}, 1.0f);
+            }
+        }
+
+        r.popClip();
+    }
+
+    bool handleVelocityLaneClick(float mx, float my) {
+        if (!m_clip) return true;
+        double beat = xToBeat(mx);
+        int hitIdx = -1;
+        for (int i = 0; i < m_clip->noteCount(); ++i) {
+            const auto& n = m_clip->note(i);
+            if (beat >= n.startBeat && beat < n.startBeat + n.duration) {
+                hitIdx = i;
+                break;
+            }
+        }
+        if (hitIdx < 0) return true;
+
+        float velFrac = 1.0f - std::clamp((my - m_velY - 2.0f) / (kVelLaneH - 4.0f), 0.0f, 1.0f);
+        uint16_t newVel = static_cast<uint16_t>(std::clamp(velFrac * 65535.0f, 1.0f, 65535.0f));
+
+        auto& hitNote = m_clip->note(hitIdx);
+        float oldFrac = hitNote.velocity / 65535.0f;
+
+        if (m_selectedNotes.count(hitIdx) && m_selectedNotes.size() > 1 && oldFrac > 0.0f) {
+            float ratio = velFrac / oldFrac;
+            for (int idx : m_selectedNotes) {
+                if (idx >= 0 && idx < m_clip->noteCount()) {
+                    auto& n = m_clip->note(idx);
+                    float nf = (n.velocity / 65535.0f) * ratio;
+                    n.velocity = static_cast<uint16_t>(std::clamp(nf * 65535.0f, 1.0f, 65535.0f));
+                }
+            }
+        } else {
+            hitNote.velocity = newVel;
+        }
+
+        m_velDragging = true;
+        m_velDragNoteIdx = hitIdx;
+        m_velDragStartVel = velFrac;
+        captureMouse();
+        return true;
+    }
+
     void renderScrollbar(Renderer2D& r) {
-        float sbY = m_gy + m_gh;
+        float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
+        float sbY = m_gy + m_gh + velH;
         // Track background
         r.drawRect(m_gx, sbY, m_gw, kScrollbarH, Color{40, 40, 45});
         // Fill clip-ops + piano-key portion of the scrollbar row
@@ -926,6 +1078,12 @@ private:
         if (m_clip && mx >= m_loopBtnX && mx < m_loopBtnX + m_loopBtnW) {
             m_clip->setLoop(!m_clip->loop());
             std::printf("[PianoRoll] Loop → %d\n", m_clip->loop());
+            return true;
+        }
+        // Vel lane toggle
+        if (mx >= m_velBtnX && mx < m_velBtnX + m_velBtnW) {
+            m_showVelocityLane = !m_showVelocityLane;
+            std::printf("[PianoRoll] VelLane → %d\n", m_showVelocityLane ? 1 : 0);
             return true;
         }
         return true;
@@ -1259,12 +1417,21 @@ private:
     static constexpr float m_snapBtnW    = 36.0f;
     static constexpr float m_tripletBtnW = 28.0f;
     static constexpr float m_loopBtnW    = 44.0f;
+    static constexpr float m_velBtnW     = 36.0f;
     float m_toolBtnX[3] = {};
     float m_snapBtnX[7] = {};
     float m_loopBtnX = 0;
+    float m_velBtnX  = 0;
 
     // Clip ops button Y positions
     float m_clipOpsBtnY[5] = {};
+
+    // Velocity lane
+    bool  m_showVelocityLane = true;
+    float m_velY = 0;
+    bool  m_velDragging = false;
+    int   m_velDragNoteIdx = -1;
+    float m_velDragStartVel = 0;
 };
 
 } // namespace fw
