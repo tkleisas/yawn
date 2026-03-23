@@ -7,6 +7,7 @@
 #include <array>
 #include <bitset>
 #include <cmath>
+#include <cstdio>
 
 namespace yawn {
 namespace audio {
@@ -138,6 +139,10 @@ private:
         state.active = true;
         state.stopping = false;
         state.sceneIndex = sceneIndex;
+        std::printf("[MidiClipEngine] launchNow track=%d scene=%d notes=%d len=%.2f\n",
+                    trackIndex, sceneIndex,
+                    clip ? static_cast<int>(clip->noteCount()) : 0,
+                    clip ? clip->lengthBeats() : 0.0);
     }
 
     void stopNow(int trackIndex) {

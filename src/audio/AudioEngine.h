@@ -127,6 +127,8 @@ private:
     std::unique_ptr<instruments::Instrument> m_instruments[kMaxTracks];
     // Heap-allocated to avoid stack overflow (~1MB for 64 MidiBuffers)
     std::vector<midi::MidiBuffer> m_trackMidiBuffers;
+    // Captures virtual keyboard / UI MIDI input for recording
+    std::vector<midi::MidiBuffer> m_liveInputMidi;
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;

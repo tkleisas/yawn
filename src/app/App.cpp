@@ -535,6 +535,14 @@ bool App::init() {
     // Wire mixer arm button to MidiEngine
     m_mixerPanel->setOnTrackArmedChanged([this](int trackIndex, bool armed) {
         m_midiEngine.setTrackArmed(trackIndex, armed);
+        // Arming a MIDI track selects it for virtual keyboard input
+        if (armed && trackIndex < m_project.numTracks() &&
+            m_project.track(trackIndex).type == Track::Type::Midi) {
+            m_selectedTrack = trackIndex;
+            m_virtualKeyboard.setTargetTrack(trackIndex);
+            m_sessionPanel->setSelectedTrack(trackIndex);
+            m_mixerPanel->setSelectedTrack(trackIndex);
+        }
     });
 
     SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);

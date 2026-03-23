@@ -39,6 +39,7 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     // Preallocate per-track MIDI buffers on heap
     m_trackMidiBuffers.resize(kMaxTracks);
+    m_liveInputMidi.resize(kMaxTracks);
 
     for (int t = 0; t < kMaxMidiTracks; ++t)
         m_midiEffectChains[t].init(config.sampleRate);
@@ -206,6 +207,8 @@ int AudioEngine::paCallback(
 
 void AudioEngine::processAudio(const float* input, float* output, unsigned long numFrames) {
     // Process any pending commands from the UI thread
+    // (also populates m_liveInputMidi for virtual keyboard MIDI)
+    for (int t = 0; t < kMaxTracks; ++t) m_liveInputMidi[t].clear();
     processCommands();
 
     int nc = m_config.outputChannels;
@@ -278,17 +281,17 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
     }
 
-    // Capture MIDI for recording
+    // Capture MIDI for recording (hardware input + virtual keyboard)
     if (m_transport.isRecording()) {
         double currentBeat = m_transport.positionInBeats();
         for (int t = 0; t < kMaxTracks; ++t) {
             auto& rs = m_trackRecordStates[t];
             if (!rs.recording || !m_trackArmed[t]) continue;
 
-            if (m_midiEngine) {
-                const auto& liveBuf = m_midiEngine->trackBuffer(t);
-                for (int i = 0; i < liveBuf.count(); ++i) {
-                    const auto& msg = liveBuf[i];
+            // Helper: capture messages from a MIDI buffer into recording state
+            auto captureBuf = [&](const midi::MidiBuffer& buf) {
+                for (int i = 0; i < buf.count(); ++i) {
+                    const auto& msg = buf[i];
                     double msgBeat = currentBeat +
                         (static_cast<double>(msg.frameOffset) / m_config.sampleRate) *
                         (m_transport.bpm() / 60.0);
@@ -329,7 +332,14 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                         rs.recordedCCs.push_back(cc);
                     }
                 }
+            };
+
+            // Capture hardware MIDI input
+            if (m_midiEngine) {
+                captureBuf(m_midiEngine->trackBuffer(t));
             }
+            // Capture virtual keyboard / UI MIDI input
+            captureBuf(m_liveInputMidi[t]);
         }
     }
 
@@ -500,10 +510,19 @@ void AudioEngine::processCommands() {
                     m.value = msg.value;
                     m.ccNumber = msg.ccNumber;
                     m_trackMidiBuffers[msg.trackIndex].addMessage(m);
+                    // Also store for recording capture (virtual keyboard input)
+                    m_liveInputMidi[msg.trackIndex].addMessage(m);
+                    if (m.isNoteOn())
+                        std::printf("[MIDI] NoteOn track=%d note=%d vel=%d inst=%s\n",
+                                    msg.trackIndex, msg.note, msg.velocity,
+                                    m_instruments[msg.trackIndex] ? m_instruments[msg.trackIndex]->name() : "NONE");
                 }
             }
             else if constexpr (std::is_same_v<T, LaunchMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    std::printf("[MIDI] LaunchMidiClip track=%d scene=%d clip=%p len=%.2f\n",
+                                msg.trackIndex, msg.sceneIndex, (const void*)msg.clip,
+                                msg.clip ? msg.clip->lengthBeats() : 0.0);
                     m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip);
                     // Auto-start transport if not playing
                     if (!m_transport.isPlaying())
