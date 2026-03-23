@@ -246,9 +246,18 @@ public:
                 // Compute slot-local position
                 float slotLocalX = cmx - gridX - ti * Theme::kTrackWidth;
 
+                bool isSlotRecording = m_trackStates[ti].recording
+                                   && m_trackStates[ti].recordingScene == si;
+
                 if (rightClick) {
                     m_lastRightClickTrack = ti;
                     m_lastRightClickScene = si;
+                } else if (isSlotRecording) {
+                    // Stop recording (click anywhere on the recording slot)
+                    if (m_project->track(ti).type == Track::Type::Midi)
+                        m_engine->sendCommand(audio::StopMidiRecordMsg{ti});
+                    else
+                        m_engine->sendCommand(audio::StopAudioRecordMsg{ti});
                 } else if (slotLocalX < kIconZoneW + Theme::kSlotPadding) {
                     // Icon zone click — trigger action
                     if (isPlaying) {
