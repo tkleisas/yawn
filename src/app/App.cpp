@@ -456,6 +456,15 @@ void App::updateDetailForSelectedTrack() {
         return;
     }
 
+    // Check if the selected slot has an audio clip — show clip detail view
+    auto* audioClip = m_project.getClip(m_selectedTrack, m_selectedScene);
+    if (audioClip) {
+        auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
+        m_detailPanel->setAudioClip(audioClip, fxChain,
+                                     static_cast<int>(m_audioEngine.sampleRate()));
+        return;
+    }
+
     auto* midiChain = &m_audioEngine.midiEffectChain(m_selectedTrack);
     auto* inst = m_audioEngine.instrument(m_selectedTrack);
     auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);

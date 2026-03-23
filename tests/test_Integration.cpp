@@ -25,6 +25,8 @@
 #include "effects/EffectChain.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/MidiClip.h"
+#include "audio/Clip.h"
+#include "audio/AudioBuffer.h"
 #include "instruments/SubtractiveSynth.h"
 
 using namespace yawn;
@@ -312,6 +314,91 @@ TEST(IntegrationDetailPanel, FocusManagement) {
 
     detail.setFocused(false);
     EXPECT_FALSE(detail.isFocused());
+}
+
+// ── Audio Clip Detail View Tests ──
+
+TEST(IntegrationDetailPanel, SetAudioClipSwitchesToClipMode) {
+    DetailPanelWidget detail;
+    audio::Clip clip;
+    clip.name = "Test Audio";
+    clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
+
+    detail.setAudioClip(&clip, nullptr, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_TRUE(detail.isOpen());
+}
+
+TEST(IntegrationDetailPanel, SetDeviceChainSwitchesBackToDevicesMode) {
+    DetailPanelWidget detail;
+    audio::Clip clip;
+    clip.name = "Test Audio";
+    clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
+
+    detail.setAudioClip(&clip, nullptr, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+
+    instruments::SubtractiveSynth synth;
+    synth.init(44100, 256);
+    detail.setDeviceChain(nullptr, &synth, nullptr);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::Devices);
+}
+
+TEST(IntegrationDetailPanel, ClearResetsClipMode) {
+    DetailPanelWidget detail;
+    audio::Clip clip;
+    clip.name = "Test Audio";
+    clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
+
+    detail.setAudioClip(&clip, nullptr, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+
+    detail.clear();
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::Devices);
+}
+
+TEST(IntegrationDetailPanel, AudioClipWithEffectChain) {
+    DetailPanelWidget detail;
+    audio::Clip clip;
+    clip.name = "FX Test";
+    clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
+    clip.gain = 0.5f;
+    clip.looping = true;
+    clip.warpMode = audio::WarpMode::Beats;
+    clip.originalBPM = 128.0;
+
+    effects::EffectChain chain;
+    chain.init(44100.0, 256);
+
+    detail.setAudioClip(&clip, &chain, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_TRUE(detail.isOpen());
+}
+
+TEST(IntegrationDetailPanel, AudioClipFingerprintSkipsRedundantRebuilds) {
+    DetailPanelWidget detail;
+    audio::Clip clip;
+    clip.name = "Test";
+    clip.buffer = std::make_shared<audio::AudioBuffer>(1, 1000);
+
+    // First call — builds
+    detail.setAudioClip(&clip, nullptr, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+
+    // Second call with same pointers — should be a no-op (fingerprint match)
+    detail.setAudioClip(&clip, nullptr, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+}
+
+TEST(IntegrationDetailPanel, AudioClipNullBuffer) {
+    DetailPanelWidget detail;
+    audio::Clip clip;
+    clip.name = "Empty Clip";
+    // No buffer set
+
+    detail.setAudioClip(&clip, nullptr, 44100);
+    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_TRUE(detail.isOpen());
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

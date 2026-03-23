@@ -12,6 +12,7 @@
 #include "ui/framework/DeviceWidget.h"
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/Theme.h"
+#include "audio/Clip.h"
 #include "instruments/Instrument.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
@@ -50,6 +51,14 @@ public:
     static constexpr float kVisualizerMinW   = 300.0f;
 
     enum class DeviceType { MidiFx, Instrument, AudioFx };
+    enum class ViewMode  { Devices, AudioClip };
+
+    // Clip view layout constants
+    static constexpr float kClipWaveformH    = 80.0f;
+    static constexpr float kClipPropsH       = 56.0f;
+    static constexpr float kClipSectionGap   = 4.0f;
+    static constexpr float kClipLabelW       = 60.0f;
+    static constexpr float kClipValueW       = 80.0f;
 
     // --- Public API ---
 
@@ -69,6 +78,77 @@ public:
         m_onRemoveDevice = std::move(cb);
     }
 
+    ViewMode viewMode() const { return m_viewMode; }
+
+    // Show audio clip view: waveform + properties + effect chain
+    void setAudioClip(const audio::Clip* clip, effects::EffectChain* fxChain,
+                      int sampleRate = 44100) {
+        if (clip == m_clipPtr && fxChain == m_lastFxChain &&
+            (fxChain ? fxChain->count() : 0) == m_lastFxCount)
+            return;
+
+        m_viewMode = ViewMode::AudioClip;
+        m_clipPtr = clip;
+        m_clipSampleRate = sampleRate;
+
+        // Rebuild effect chain portion (reuse device chain logic)
+        saveExpandedStates();
+        m_scroll.removeAllChildren();
+        for (auto* dw : m_deviceWidgets) delete dw;
+        m_deviceWidgets.clear();
+        m_deviceRefs.clear();
+
+        // Cache fingerprint
+        m_lastMidiChain = nullptr;
+        m_lastInst      = nullptr;
+        m_lastFxChain   = fxChain;
+        m_lastMidiCount = 0;
+        m_lastFxCount   = fxChain ? fxChain->count() : 0;
+
+        std::vector<float> snapPoints;
+        float xPos = 0;
+
+        if (fxChain) {
+            for (int i = 0; i < fxChain->count(); ++i) {
+                auto* fx = fxChain->effectAt(i);
+                if (!fx) continue;
+
+                DeviceRef ref;
+                ref.type = DeviceType::AudioFx;
+                ref.chainIndex = i;
+                ref.audioEffect = fx;
+
+                auto* dw = new DeviceWidget();
+                dw->setDeviceName(fx->name());
+                dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
+                dw->setRemovable(true);
+                dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
+                dw->setBypassed(fx->bypassed());
+
+                if (fx->isVisualizer())
+                    dw->setVisualizer(true, fx->visualizerType());
+
+                configureDeviceWidget(dw, ref);
+
+                snapPoints.push_back(xPos);
+                xPos += dw->preferredWidth() + kDeviceGap;
+                m_scroll.addChild(dw);
+                m_deviceWidgets.push_back(dw);
+                m_deviceRefs.push_back(ref);
+            }
+        }
+
+        snapPoints.push_back(xPos);
+        m_scroll.setSnapPoints(snapPoints);
+        m_scroll.setGap(kDeviceGap);
+        setOpen(true);
+    }
+
+    void clearClipView() {
+        m_viewMode = ViewMode::Devices;
+        m_clipPtr = nullptr;
+    }
+
     // Rebuild the device chain from current track state.
     void setDeviceChain(midi::MidiEffectChain* midiChain,
                         instruments::Instrument* inst,
@@ -77,10 +157,14 @@ public:
         int fxCount   = fxChain   ? fxChain->count()   : 0;
 
         // Quick fingerprint — skip rebuild if nothing changed
-        if (midiChain == m_lastMidiChain && inst == m_lastInst &&
+        if (m_viewMode == ViewMode::Devices &&
+            midiChain == m_lastMidiChain && inst == m_lastInst &&
             fxChain == m_lastFxChain &&
             midiCount == m_lastMidiCount && fxCount == m_lastFxCount)
             return;
+
+        m_viewMode = ViewMode::Devices;
+        m_clipPtr  = nullptr;
 
         // Save expanded states before tearing down
         saveExpandedStates();
@@ -197,6 +281,8 @@ public:
         m_lastFxChain   = nullptr;
         m_lastMidiCount = 0;
         m_lastFxCount   = 0;
+        m_viewMode = ViewMode::Devices;
+        m_clipPtr  = nullptr;
     }
 
     const char* title() const { return "Detail"; }
@@ -264,8 +350,18 @@ public:
         float bodyY = bounds.y + kHandleHeight;
         float bodyH = m_animatedHeight - kHandleHeight;
         if (bodyH < 0) bodyH = 0;
-        m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
-        m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
+
+        if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
+            // In clip mode, scroll container is positioned below waveform+props
+            float clipHeaderH = kClipWaveformH + kClipPropsH + kClipSectionGap * 2;
+            float scrollY = bodyY + clipHeaderH;
+            float scrollH = std::max(0.0f, bodyH - clipHeaderH);
+            m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
+            m_scroll.layout(Rect{bounds.x, scrollY, bounds.w, scrollH}, ctx);
+        } else {
+            m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
+            m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
+        }
     }
 
     // ─── Rendering ──────────────────────────────────────────────────────
@@ -298,7 +394,10 @@ public:
             renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
 
             float hScale = 14.0f / Theme::kFontSize;
-            if (m_deviceWidgets.empty()) {
+
+            if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
+                paintAudioClipView(renderer, font, x, bodyY, w, bodyH, hScale, ctx);
+            } else if (m_deviceWidgets.empty()) {
                 font.drawText(renderer, "No devices on track",
                               x + 20, bodyY + 20, hScale, Theme::textDim);
             } else {
@@ -622,6 +721,170 @@ private:
     effects::EffectChain*    m_lastFxChain   = nullptr;
     int m_lastMidiCount = 0;
     int m_lastFxCount   = 0;
+
+    // Audio clip view state
+    ViewMode m_viewMode = ViewMode::Devices;
+    const audio::Clip* m_clipPtr = nullptr;
+    int m_clipSampleRate = 44100;
+
+    // ── Audio clip view rendering ──
+    void paintAudioClipView([[maybe_unused]] Renderer2D& renderer,
+                            [[maybe_unused]] Font& font,
+                            [[maybe_unused]] float x,
+                            [[maybe_unused]] float bodyY,
+                            [[maybe_unused]] float w,
+                            [[maybe_unused]] float bodyH,
+                            [[maybe_unused]] float hScale,
+                            [[maybe_unused]] UIContext& ctx) {
+#ifndef YAWN_TEST_BUILD
+        const auto& clip = *m_clipPtr;
+        float pad = 8.0f;
+        float sectionX = x + pad;
+        float sectionW = w - pad * 2;
+
+        // --- Clip name + info header ---
+        float headerY = bodyY + 4.0f;
+        float titleScale = 15.0f / Theme::kFontSize;
+        font.drawText(renderer, clip.name.empty() ? "Audio Clip" : clip.name.c_str(),
+                       sectionX, headerY, titleScale, Theme::textPrimary);
+
+        // Duration text on the right
+        if (clip.buffer) {
+            int64_t frames = clip.lengthInFrames();
+            double seconds = static_cast<double>(frames) / m_clipSampleRate;
+            char durBuf[32];
+            std::snprintf(durBuf, sizeof(durBuf), "%.2fs  %lld smp",
+                          seconds, static_cast<long long>(frames));
+            float durW = static_cast<float>(std::strlen(durBuf)) * 7.0f * hScale;
+            font.drawText(renderer, durBuf, x + w - pad - durW, headerY,
+                          hScale, Theme::textDim);
+        }
+
+        // --- Waveform display ---
+        float waveY = headerY + 20.0f;
+        float waveH = kClipWaveformH;
+        float waveW = sectionW;
+
+        // Waveform background
+        renderer.drawRect(sectionX, waveY, waveW, waveH, Color{20, 20, 24, 255});
+        // Waveform border
+        renderer.drawRectOutline(sectionX, waveY, waveW, waveH, Color{50, 50, 55, 255});
+        // Center line
+        renderer.drawRect(sectionX, waveY + waveH * 0.5f - 0.5f, waveW, 1.0f,
+                          Color{50, 50, 55, 255});
+
+        if (clip.buffer && clip.buffer->numFrames() > 0) {
+            // Draw waveform from channel 0
+            const float* samples = clip.buffer->channelData(0);
+            int sampleCount = clip.buffer->numFrames();
+            // Respect loop region
+            int64_t start = clip.loopStart;
+            int64_t end = clip.effectiveLoopEnd();
+            if (start < 0) start = 0;
+            if (end > sampleCount) end = sampleCount;
+            int visibleSamples = static_cast<int>(end - start);
+            if (visibleSamples > 0) {
+                renderer.drawWaveform(samples + start, visibleSamples,
+                                      sectionX + 1, waveY + 1,
+                                      waveW - 2, waveH - 2,
+                                      Color{100, 180, 255, 200});
+            }
+
+            // Draw loop region markers if not default
+            if (clip.loopStart > 0) {
+                float frac = static_cast<float>(clip.loopStart) / sampleCount;
+                float lx = sectionX + 1 + frac * (waveW - 2);
+                renderer.drawRect(lx, waveY, 1.0f, waveH, Color{255, 200, 0, 160});
+            }
+            if (clip.loopEnd > 0 && clip.loopEnd < clip.buffer->numFrames()) {
+                float frac = static_cast<float>(clip.loopEnd) / sampleCount;
+                float lx = sectionX + 1 + frac * (waveW - 2);
+                renderer.drawRect(lx, waveY, 1.0f, waveH, Color{255, 200, 0, 160});
+            }
+        }
+
+        // --- Properties section ---
+        float propsY = waveY + waveH + kClipSectionGap;
+        float propH = 16.0f;
+        float propGap = 2.0f;
+        float col1X = sectionX;
+        float col2X = sectionX + sectionW * 0.33f;
+        float col3X = sectionX + sectionW * 0.66f;
+        float labelScale = 11.0f / Theme::kFontSize;
+        float valScale = 12.0f / Theme::kFontSize;
+        Color labelCol = Theme::textDim;
+        Color valCol = Theme::textPrimary;
+
+        // Row 1: Gain | BPM | Warp Mode
+        font.drawText(renderer, "Gain", col1X, propsY, labelScale, labelCol);
+        {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%.1f dB",
+                          20.0f * std::log10(std::max(clip.gain, 0.0001f)));
+            font.drawText(renderer, buf, col1X, propsY + propH, valScale, valCol);
+        }
+
+        font.drawText(renderer, "BPM", col2X, propsY, labelScale, labelCol);
+        {
+            char buf[16];
+            if (clip.originalBPM > 0)
+                std::snprintf(buf, sizeof(buf), "%.1f", clip.originalBPM);
+            else
+                std::snprintf(buf, sizeof(buf), "---");
+            font.drawText(renderer, buf, col2X, propsY + propH, valScale, valCol);
+        }
+
+        font.drawText(renderer, "Warp", col3X, propsY, labelScale, labelCol);
+        {
+            const char* warpNames[] = {"Off", "Auto", "Beats", "Tones", "Texture", "Repitch"};
+            int idx = static_cast<int>(clip.warpMode);
+            if (idx < 0 || idx > 5) idx = 0;
+            font.drawText(renderer, warpNames[idx], col3X, propsY + propH, valScale, valCol);
+        }
+
+        // Row 2: Loop | Channels | Sample Rate
+        float row2Y = propsY + propH * 2 + propGap;
+        font.drawText(renderer, "Loop", col1X, row2Y, labelScale, labelCol);
+        font.drawText(renderer, clip.looping ? "On" : "Off",
+                       col1X, row2Y + propH, valScale,
+                       clip.looping ? Color{100, 255, 100, 255} : valCol);
+
+        if (clip.buffer) {
+            font.drawText(renderer, "Channels", col2X, row2Y, labelScale, labelCol);
+            {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%d", clip.buffer->numChannels());
+                font.drawText(renderer, buf, col2X, row2Y + propH, valScale, valCol);
+            }
+
+            font.drawText(renderer, "Rate", col3X, row2Y, labelScale, labelCol);
+            {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "%d Hz", m_clipSampleRate);
+                font.drawText(renderer, buf, col3X, row2Y + propH, valScale, valCol);
+            }
+        }
+
+        // --- Effect chain separator ---
+        float fxSepY = propsY + kClipPropsH;
+        renderer.drawRect(sectionX, fxSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
+
+        // "Effects" label
+        float fxLabelY = fxSepY + 3.0f;
+        font.drawText(renderer, "Audio Effects", sectionX, fxLabelY, labelScale, labelCol);
+
+        // Effect chain widgets are rendered by the scroll container below
+        if (!m_deviceWidgets.empty()) {
+            updateParamValues();
+            updateVisualizerData();
+            m_scroll.paint(ctx);
+        } else {
+            float noFxY = fxLabelY + 14.0f;
+            font.drawText(renderer, "No effects", sectionX + 80.0f, noFxY,
+                          labelScale, Theme::textDim);
+        }
+#endif
+    }
 };
 
 } // namespace fw
