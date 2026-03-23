@@ -13,6 +13,7 @@ void ClipEngine::scheduleClip(int trackIndex, const Clip* clip) {
         auto& state = m_tracks[trackIndex];
         state.clip = clip;
         state.playPosition = clip ? clip->loopStart : 0;
+        state.fractionalPosition = static_cast<double>(state.playPosition);
         state.active = (clip != nullptr);
         state.stopping = false;
         state.fadeGain = 0.0f; // fade in
@@ -111,6 +112,7 @@ void ClipEngine::checkPendingLaunches() {
         if (clip) {
             state.clip = clip;
             state.playPosition = clip->loopStart;
+            state.fractionalPosition = static_cast<double>(clip->loopStart);
             state.active = true;
             state.stopping = false;
             state.fadeGain = 0.0f; // fade in
@@ -132,46 +134,111 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
     const auto& clip = *state.clip;
     const auto& buffer = *clip.buffer;
     int bufChannels = buffer.numChannels();
+    int bufFrames = buffer.numFrames();
     int64_t loopStart = clip.loopStart;
     int64_t loopEnd = clip.effectiveLoopEnd();
 
-    for (int i = 0; i < numFrames; ++i) {
-        // Handle fade-in / fade-out
-        if (state.stopping) {
-            state.fadeGain -= ClipPlayState::kFadeIncrement;
-            if (state.fadeGain <= 0.0f) {
-                state.fadeGain = 0.0f;
-                state.active = false;
-                state.stopping = false;
-                return;
+    // Compute warp speed ratio (how fast we advance through the source)
+    double projectBPM = m_transport ? m_transport->bpm() : 120.0;
+    double speedRatio = clip.warpSpeedRatio(projectBPM);
+    bool warping = (speedRatio != 1.0);
+
+    // For Repitch mode, speedRatio changes both speed and pitch (simple resampling)
+    // For Beats/Tones/Texture/Auto, we'd use TimeStretcher (preserves pitch).
+    // Currently implementing Repitch-style variable-rate playback with interpolation.
+    // TimeStretcher integration for pitch-preserving modes is a future enhancement.
+
+    if (warping) {
+        // Fractional position playback with linear interpolation
+        double pos = state.fractionalPosition;
+        if (pos < loopStart) pos = static_cast<double>(loopStart);
+
+        for (int i = 0; i < numFrames; ++i) {
+            // Handle fade-in / fade-out
+            if (state.stopping) {
+                state.fadeGain -= ClipPlayState::kFadeIncrement;
+                if (state.fadeGain <= 0.0f) {
+                    state.fadeGain = 0.0f;
+                    state.active = false;
+                    state.stopping = false;
+                    return;
+                }
+            } else if (state.fadeGain < 1.0f) {
+                state.fadeGain += ClipPlayState::kFadeIncrement;
+                if (state.fadeGain > 1.0f) state.fadeGain = 1.0f;
             }
-        } else if (state.fadeGain < 1.0f) {
-            state.fadeGain += ClipPlayState::kFadeIncrement;
-            if (state.fadeGain > 1.0f) state.fadeGain = 1.0f;
-        }
 
-        float effectiveGain = clip.gain * state.fadeGain;
+            float effectiveGain = clip.gain * state.fadeGain;
 
-        // Read sample from buffer
-        if (state.playPosition >= loopEnd) {
-            if (clip.looping) {
-                state.playPosition = loopStart;
-            } else {
-                state.active = false;
-                return;
+            // Check loop boundary
+            if (pos >= loopEnd) {
+                if (clip.looping) {
+                    pos = static_cast<double>(loopStart) + std::fmod(pos - loopEnd, loopEnd - loopStart);
+                } else {
+                    state.active = false;
+                    return;
+                }
             }
+
+            // Linear interpolation between adjacent samples
+            int frame0 = static_cast<int>(pos);
+            int frame1 = frame0 + 1;
+            float frac = static_cast<float>(pos - frame0);
+
+            if (frame0 < 0) frame0 = 0;
+            if (frame1 >= bufFrames) frame1 = bufFrames - 1;
+
+            for (int ch = 0; ch < numChannels; ++ch) {
+                int srcCh = (ch < bufChannels) ? ch : (bufChannels - 1);
+                float s0 = buffer.sample(srcCh, frame0);
+                float s1 = buffer.sample(srcCh, frame1);
+                float sample = (s0 + (s1 - s0) * frac) * effectiveGain;
+                output[i * numChannels + ch] += sample;
+            }
+
+            pos += speedRatio;
         }
 
-        int frame = static_cast<int>(state.playPosition);
+        state.fractionalPosition = pos;
+        state.playPosition = static_cast<int64_t>(pos);
+    } else {
+        // Original non-warped playback (integer position, no interpolation needed)
+        for (int i = 0; i < numFrames; ++i) {
+            if (state.stopping) {
+                state.fadeGain -= ClipPlayState::kFadeIncrement;
+                if (state.fadeGain <= 0.0f) {
+                    state.fadeGain = 0.0f;
+                    state.active = false;
+                    state.stopping = false;
+                    return;
+                }
+            } else if (state.fadeGain < 1.0f) {
+                state.fadeGain += ClipPlayState::kFadeIncrement;
+                if (state.fadeGain > 1.0f) state.fadeGain = 1.0f;
+            }
 
-        // Mix into output (interleaved)
-        for (int ch = 0; ch < numChannels; ++ch) {
-            int srcCh = (ch < bufChannels) ? ch : (bufChannels - 1);
-            float sample = buffer.sample(srcCh, frame) * effectiveGain;
-            output[i * numChannels + ch] += sample;
+            float effectiveGain = clip.gain * state.fadeGain;
+
+            if (state.playPosition >= loopEnd) {
+                if (clip.looping) {
+                    state.playPosition = loopStart;
+                } else {
+                    state.active = false;
+                    return;
+                }
+            }
+
+            int frame = static_cast<int>(state.playPosition);
+
+            for (int ch = 0; ch < numChannels; ++ch) {
+                int srcCh = (ch < bufChannels) ? ch : (bufChannels - 1);
+                float sample = buffer.sample(srcCh, frame) * effectiveGain;
+                output[i * numChannels + ch] += sample;
+            }
+
+            state.playPosition++;
         }
-
-        state.playPosition++;
+        state.fractionalPosition = static_cast<double>(state.playPosition);
     }
 }
 

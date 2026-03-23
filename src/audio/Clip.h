@@ -1,8 +1,10 @@
 #pragma once
 
 #include "audio/AudioBuffer.h"
+#include "audio/WarpMarker.h"
 #include <memory>
 #include <string>
+#include <vector>
 #include <cstdint>
 
 namespace yawn {
@@ -21,6 +23,12 @@ struct Clip {
 
     float gain = 1.0f;
 
+    // Audio warping
+    WarpMode warpMode = WarpMode::Off;
+    double originalBPM = 0.0;   // 0 = unknown/not detected
+    std::vector<WarpMarker> warpMarkers;
+    std::vector<int64_t> transients;
+
     int64_t effectiveLoopEnd() const {
         if (!buffer) return 0;
         return (loopEnd < 0) ? buffer->numFrames() : loopEnd;
@@ -30,7 +38,15 @@ struct Clip {
         return effectiveLoopEnd() - loopStart;
     }
 
-    // Shallow copy (shares audio buffer)
+    // Compute speed ratio to play this clip at targetBPM.
+    // Returns 1.0 if warping is off or originalBPM is unknown.
+    double warpSpeedRatio(double targetBPM) const {
+        if (warpMode == WarpMode::Off || originalBPM <= 0.0 || targetBPM <= 0.0)
+            return 1.0;
+        return originalBPM / targetBPM;
+    }
+
+    // Shallow copy (shares audio buffer, copies warp data)
     std::unique_ptr<Clip> clone() const {
         auto c = std::make_unique<Clip>();
         c->name = name;
@@ -39,6 +55,10 @@ struct Clip {
         c->loopEnd = loopEnd;
         c->looping = looping;
         c->gain = gain;
+        c->warpMode = warpMode;
+        c->originalBPM = originalBPM;
+        c->warpMarkers = warpMarkers;
+        c->transients = transients;
         return c;
     }
 };
@@ -47,6 +67,7 @@ struct Clip {
 struct ClipPlayState {
     const Clip* clip = nullptr;
     int64_t playPosition = 0;     // current position within clip buffer
+    double fractionalPosition = 0.0; // sub-sample position for warped playback
     bool active = false;
     bool stopping = false;        // fade-out before stop
 
