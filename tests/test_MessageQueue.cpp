@@ -72,7 +72,7 @@ TEST(MessageQueueTest, LaunchClipMsg) {
     clip.name = "test";
 
     CommandQueue q;
-    q.push(AudioCommand{LaunchClipMsg{3, &clip}});
+    q.push(AudioCommand{LaunchClipMsg{3, 0, &clip}});
     AudioCommand out;
     q.pop(out);
     ASSERT_TRUE(std::holds_alternative<LaunchClipMsg>(out));

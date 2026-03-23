@@ -70,6 +70,7 @@ struct ClipPlayState {
     double fractionalPosition = 0.0; // sub-sample position for warped playback
     bool active = false;
     bool stopping = false;        // fade-out before stop
+    int sceneIndex = -1;          // which scene slot is playing
 
     float fadeGain = 1.0f;        // for fade-in/fade-out
     static constexpr float kFadeIncrement = 0.002f; // ~5ms at 44.1kHz per sample

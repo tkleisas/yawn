@@ -19,6 +19,7 @@ enum class QuantizeMode {
 // A pending clip launch waiting for quantization
 struct PendingLaunch {
     int trackIndex = -1;
+    int sceneIndex = -1;
     const Clip* clip = nullptr;   // nullptr means stop
     bool valid = false;
 };
@@ -36,7 +37,7 @@ public:
     QuantizeMode quantizeMode() const { return m_quantizeMode; }
 
     // Schedule a clip to launch on a track (called from audio thread after command processing)
-    void scheduleClip(int trackIndex, const Clip* clip);
+    void scheduleClip(int trackIndex, int sceneIndex, const Clip* clip);
 
     // Schedule a track to stop
     void scheduleStop(int trackIndex);

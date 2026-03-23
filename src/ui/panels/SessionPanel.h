@@ -30,6 +30,7 @@ struct ClipSlotUIState {
     bool    queued       = false;
     bool    recording    = false;
     int     recordingScene = -1;  // which scene is recording (-1 = none)
+    int     playingScene = -1;    // which scene is playing (-1 = none)
     int64_t playPosition = 0;
     float   midiPlayFrac = 0.0f;
     bool    isMidiPlaying = false;
@@ -47,10 +48,12 @@ public:
     // ─── State updates (called from App) ────────────────────────────────
 
     void updateClipState(int trackIndex, bool playing, int64_t playPos,
+                         int playingScene = -1,
                          bool isMidi = false, double clipLengthBeats = 0.0) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks) {
             m_trackStates[trackIndex].playing      = playing;
             m_trackStates[trackIndex].playPosition  = playPos;
+            m_trackStates[trackIndex].playingScene  = playingScene;
             if (isMidi && clipLengthBeats > 0.0) {
                 double beats = static_cast<double>(playPos) / 1000000.0;
                 m_trackStates[trackIndex].midiPlayFrac =
@@ -215,9 +218,9 @@ public:
                 for (int t = 0; t < m_project->numTracks(); ++t) {
                     auto* slot = m_project->getSlot(t, si);
                     if (slot && slot->audioClip)
-                        m_engine->sendCommand(audio::LaunchClipMsg{t, slot->audioClip.get()});
+                        m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get()});
                     else if (slot && slot->midiClip)
-                        m_engine->sendCommand(audio::LaunchMidiClipMsg{t, slot->midiClip.get()});
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get()});
                     else {
                         m_engine->sendCommand(audio::StopClipMsg{t});
                         m_engine->sendCommand(audio::StopMidiClipMsg{t});
@@ -240,7 +243,7 @@ public:
                 m_selectedScene = si;
                 auto* slot = m_project->getSlot(ti, si);
                 bool hasClip = slot && !slot->empty();
-                bool isPlaying = m_trackStates[ti].playing && hasClip;
+                bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
                 bool trackArmed = m_project->track(ti).armed;
 
                 // Compute slot-local position
@@ -269,9 +272,9 @@ public:
                     } else if (hasClip) {
                         // Launch the clip
                         if (slot->audioClip)
-                            m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
+                            m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get()});
                         else if (slot->midiClip)
-                            m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
+                            m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get()});
                     } else if (trackArmed) {
                         // Start recording into empty slot
                         if (m_project->track(ti).type == Track::Type::Midi)
@@ -282,9 +285,9 @@ public:
                 } else {
                     // Content area click — launch or select
                     if (slot && slot->audioClip) {
-                        m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
+                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get()});
                     } else if (slot && slot->midiClip) {
-                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get()});
                     } else if (trackArmed) {
                         if (m_project->track(ti).type == Track::Type::Midi)
                             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
@@ -494,7 +497,7 @@ private:
         bool hasClip = slot && !slot->empty();
         const audio::Clip* aClip = slot ? slot->audioClip.get() : nullptr;
         const midi::MidiClip* mClip = slot ? slot->midiClip.get() : nullptr;
-        bool isPlaying = m_trackStates[ti].playing && hasClip;
+        bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
         bool trackArmed = m_project->track(ti).armed;
         bool recReady = !hasClip && trackArmed;
         bool recFullyArmed = recReady && m_globalRecordArmed;

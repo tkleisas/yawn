@@ -5,7 +5,7 @@
 namespace yawn {
 namespace audio {
 
-void ClipEngine::scheduleClip(int trackIndex, const Clip* clip) {
+void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
 
     if (m_quantizeMode == QuantizeMode::None) {
@@ -17,9 +17,11 @@ void ClipEngine::scheduleClip(int trackIndex, const Clip* clip) {
         state.active = (clip != nullptr);
         state.stopping = false;
         state.fadeGain = 0.0f; // fade in
+        state.sceneIndex = sceneIndex;
     } else {
         // Queue for quantized launch
         m_pending[trackIndex].trackIndex = trackIndex;
+        m_pending[trackIndex].sceneIndex = sceneIndex;
         m_pending[trackIndex].clip = clip;
         m_pending[trackIndex].valid = true;
     }
@@ -116,6 +118,7 @@ void ClipEngine::checkPendingLaunches() {
             state.active = true;
             state.stopping = false;
             state.fadeGain = 0.0f; // fade in
+            state.sceneIndex = m_pending[t].sceneIndex;
         } else {
             state.stopping = true;
         }

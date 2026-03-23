@@ -17,11 +17,13 @@ struct MidiClipPlayState {
     double playPositionBeats = 0.0;
     bool active = false;
     bool stopping = false;
+    int sceneIndex = -1;          // which scene slot is playing
 };
 
 // Pending MIDI clip launch (for quantized launching)
 struct PendingMidiLaunch {
     int trackIndex = -1;
+    int sceneIndex = -1;
     const midi::MidiClip* clip = nullptr; // nullptr = stop
     bool valid = false;
 };
@@ -36,15 +38,15 @@ public:
     void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
 
     // Schedule a MIDI clip to launch on a track
-    void scheduleClip(int trackIndex, const midi::MidiClip* clip) {
+    void scheduleClip(int trackIndex, int sceneIndex, const midi::MidiClip* clip) {
         if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
-        m_pending[trackIndex] = {trackIndex, clip, true};
+        m_pending[trackIndex] = {trackIndex, sceneIndex, clip, true};
     }
 
     // Schedule a track to stop
     void scheduleStop(int trackIndex) {
         if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
-        m_pending[trackIndex] = {trackIndex, nullptr, true};
+        m_pending[trackIndex] = {trackIndex, -1, nullptr, true};
     }
 
     // Check and fire pending quantized launches. Call once per buffer.
@@ -58,7 +60,7 @@ public:
             // which shares the same transport — we can add independent
             // quantization later if needed)
             if (m_pending[t].clip) {
-                launchNow(t, m_pending[t].clip);
+                launchNow(t, m_pending[t].sceneIndex, m_pending[t].clip);
             } else {
                 stopNow(t);
             }
@@ -124,7 +126,7 @@ public:
     }
 
 private:
-    void launchNow(int trackIndex, const midi::MidiClip* clip) {
+    void launchNow(int trackIndex, int sceneIndex, const midi::MidiClip* clip) {
         auto& state = m_tracks[trackIndex];
         // Send note-offs for any currently active notes before switching
         // (handled by stopNow if previously active)
@@ -135,6 +137,7 @@ private:
         state.playPositionBeats = 0.0;
         state.active = true;
         state.stopping = false;
+        state.sceneIndex = sceneIndex;
     }
 
     void stopNow(int trackIndex) {

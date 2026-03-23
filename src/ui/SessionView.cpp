@@ -517,9 +517,9 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick, int* select
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* slot = m_project->getSlot(t, sceneIndex);
                 if (slot && slot->audioClip) {
-                    m_engine->sendCommand(audio::LaunchClipMsg{t, slot->audioClip.get()});
+                    m_engine->sendCommand(audio::LaunchClipMsg{t, sceneIndex, slot->audioClip.get()});
                 } else if (slot && slot->midiClip) {
-                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, slot->midiClip.get()});
+                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, sceneIndex, slot->midiClip.get()});
                 } else {
                     m_engine->sendCommand(audio::StopClipMsg{t});
                     m_engine->sendCommand(audio::StopMidiClipMsg{t});
@@ -550,10 +550,10 @@ bool SessionView::handleClick(float mx, float my, bool isRightClick, int* select
                 m_engine->sendCommand(audio::StopMidiClipMsg{trackIndex});
                 std::printf("Stop track %d\n", trackIndex + 1);
             } else if (slot && slot->audioClip) {
-                m_engine->sendCommand(audio::LaunchClipMsg{trackIndex, slot->audioClip.get()});
+                m_engine->sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, slot->audioClip.get()});
                 std::printf("Launch audio clip [%d, %d]\n", trackIndex + 1, sceneIndex + 1);
             } else if (slot && slot->midiClip) {
-                m_engine->sendCommand(audio::LaunchMidiClipMsg{trackIndex, slot->midiClip.get()});
+                m_engine->sendCommand(audio::LaunchMidiClipMsg{trackIndex, sceneIndex, slot->midiClip.get()});
                 std::printf("Launch MIDI clip [%d, %d]\n", trackIndex + 1, sceneIndex + 1);
             }
             return true;

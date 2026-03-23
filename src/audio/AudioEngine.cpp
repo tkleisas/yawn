@@ -436,7 +436,7 @@ void AudioEngine::processCommands() {
                 m_testTone.phase = 0.0;
             }
             else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
-                m_clipEngine.scheduleClip(msg.trackIndex, msg.clip);
+                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip);
                 // Auto-start transport if not playing (Ableton-like behavior)
                 if (!m_transport.isPlaying())
                     m_transport.play();
@@ -504,7 +504,7 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, LaunchMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
-                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.clip);
+                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip);
                     // Auto-start transport if not playing
                     if (!m_transport.isPlaying())
                         m_transport.play();
@@ -779,6 +779,7 @@ void AudioEngine::emitClipStates() {
             csu.trackIndex = t;
             csu.playing = state.active;
             csu.playPosition = state.playPosition;
+            csu.playingScene = state.sceneIndex;
             csu.recording = audioRec;
             csu.recordingScene = audioRecScene;
             m_eventQueue.push(csu);
@@ -790,6 +791,7 @@ void AudioEngine::emitClipStates() {
             csu.trackIndex = t;
             csu.playing = mstate.active;
             csu.playPosition = static_cast<int64_t>(mstate.playPositionBeats * 1000000.0);
+            csu.playingScene = mstate.sceneIndex;
             csu.isMidi = true;
             csu.clipLengthBeats = mstate.clip ? mstate.clip->lengthBeats() : 0.0;
             csu.recording = midiRec;

@@ -406,7 +406,7 @@ TEST_F(WarpPlaybackTest, NoWarpPlaysNormally) {
     for (int i = 0; i < 100; ++i) data[i] = static_cast<float>(i);
     clip->warpMode = WarpMode::Off;
     
-    m_engine.scheduleClip(0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get());
     
     std::vector<float> output(20, 0.0f);
     m_engine.processTrackToBuffer(0, output.data(), 10, 1);
@@ -427,7 +427,7 @@ TEST_F(WarpPlaybackTest, RepitchDoubleSpeed) {
     clip->originalBPM = 120.0;
     
     m_transport.setBPM(60.0); // half project BPM → speed ratio = 120/60 = 2.0
-    m_engine.scheduleClip(0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get());
     
     // Process enough frames for fade-in to complete (~500 frames)
     std::vector<float> output(1200, 0.0f);
@@ -454,7 +454,7 @@ TEST_F(WarpPlaybackTest, RepitchHalfSpeed) {
     clip->originalBPM = 120.0;
     
     m_transport.setBPM(240.0); // speed ratio = 120/240 = 0.5
-    m_engine.scheduleClip(0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get());
     
     std::vector<float> output(20, 0.0f);
     m_engine.processTrackToBuffer(0, output.data(), 10, 1);
@@ -475,7 +475,7 @@ TEST_F(WarpPlaybackTest, NonLoopingWarpedClipStops) {
     clip->originalBPM = 120.0;
     
     m_transport.setBPM(60.0); // speed ratio = 2.0 → finishes in ~5 frames
-    m_engine.scheduleClip(0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get());
     
     std::vector<float> output(40, 0.0f);
     m_engine.processTrackToBuffer(0, output.data(), 20, 1);
@@ -496,7 +496,7 @@ TEST_F(WarpPlaybackTest, StereoWarpedPlayback) {
     clip->originalBPM = 120.0;
     
     m_transport.setBPM(120.0); // 1.0x
-    m_engine.scheduleClip(0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get());
     
     // Interleaved stereo output
     std::vector<float> output(40, 0.0f);
@@ -537,8 +537,8 @@ TEST_F(WarpPlaybackTest, WarpSameBPMMatchesNonWarp) {
     engine2.setSampleRate(44100.0);
     engine2.setQuantizeMode(QuantizeMode::None);
     
-    engine1.scheduleClip(0, clip1.get());
-    engine2.scheduleClip(0, clip2.get());
+    engine1.scheduleClip(0, 0, clip1.get());
+    engine2.scheduleClip(0, 0, clip2.get());
     
     std::vector<float> out1(200, 0.0f), out2(200, 0.0f);
     engine1.processTrackToBuffer(0, out1.data(), 100, 1);

@@ -635,7 +635,7 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     std::printf("Loaded '%s' -> Track %d, Scene %d\n",
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
-    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, clipPtr});
+    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr});
     markDirty();
     return true;
 }
@@ -1211,7 +1211,7 @@ void App::update() {
             }
             else if constexpr (std::is_same_v<T, audio::ClipStateUpdate>) {
                 m_sessionPanel->updateClipState(msg.trackIndex, msg.playing, msg.playPosition,
-                                                msg.isMidi, msg.clipLengthBeats);
+                                                msg.playingScene, msg.isMidi, msg.clipLengthBeats);
                 m_sessionPanel->setTrackRecording(msg.trackIndex, msg.recording, msg.recordingScene);
             }
             else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {

@@ -33,6 +33,7 @@ struct TestToneMsg {
 
 struct LaunchClipMsg {
     int trackIndex;
+    int sceneIndex;
     const Clip* clip; // must remain valid while playing (owned by UI-side Project)
 };
 
@@ -127,6 +128,7 @@ struct SendMidiToTrackMsg {
 // Launch a MIDI clip on a track
 struct LaunchMidiClipMsg {
     int trackIndex;
+    int sceneIndex;
     const midi::MidiClip* clip; // must remain valid while playing (owned by Project)
 };
 
@@ -229,6 +231,7 @@ struct ClipStateUpdate {
     int trackIndex;
     bool playing;
     int64_t playPosition;
+    int playingScene = -1;
     bool isMidi = false;
     double clipLengthBeats = 0.0;
     bool recording = false;
