@@ -28,6 +28,7 @@ namespace fw {
 struct ClipSlotUIState {
     bool    playing      = false;
     bool    queued       = false;
+    bool    recording    = false;
     int64_t playPosition = 0;
 };
 
@@ -51,9 +52,14 @@ public:
 
     void setSelectedTrack(int t) { m_selectedTrack = t; }
     int  selectedTrack() const   { return m_selectedTrack; }
+    void setSelectedScene(int s) { m_selectedScene = s; }
+    int  selectedScene() const   { return m_selectedScene; }
     float scrollX() const        { return m_scrollX; }
     float scrollY() const        { return m_scrollY; }
     void setScrollX(float sx)    { m_scrollX = sx; }
+
+    void setGlobalRecordArmed(bool armed) { m_globalRecordArmed = armed; }
+    void updateAnimTimer(float dt) { m_animTimer += dt; }
 
     float preferredHeight() const {
         int scenes = m_project
@@ -220,6 +226,10 @@ public:
                     m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
                 } else if (slot && slot->midiClip) {
                     m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
+                } else if (m_project->track(ti).armed && m_globalRecordArmed) {
+                    // Select slot for recording (actual recording in Phase B)
+                    m_selectedTrack = ti;
+                    m_selectedScene = si;
                 }
                 return true;
             }
@@ -490,6 +500,33 @@ private:
             }
         }
 
+        // Per-slot state icons
+        bool trackArmed = m_project->track(ti).armed;
+        bool recReady = !hasClip && trackArmed && m_globalRecordArmed;
+        bool isRecording = m_trackStates[ti].recording;
+
+        if (isRecording) {
+            // Pulsing red filled circle for recording
+            float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
+            Color recCol = Color{220, 40, 40}.withAlpha(static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
+            float cx = ix + iw - 14, cy = iy + ih * 0.5f;
+            r.drawRect(cx - 5, cy - 5, 10, 10, recCol);
+            r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
+        } else if (recReady) {
+            // Red rect outline for record-ready
+            float cx = ix + iw - 14, cy = iy + ih * 0.5f;
+            Color recCol = Color{200, 40, 40};
+            r.drawRectOutline(cx - 5, cy - 5, 10, 10, recCol, 2.0f);
+        } else if (hasClip && !isPlaying) {
+            // Small play triangle indicator
+            Color trkCol = Theme::trackColors[m_project->track(ti).colorIndex % Theme::kNumTrackColors];
+            float triX = ix + iw - 16, triY = iy + ih * 0.5f - 5;
+            r.drawRect(triX, triY, 2, 10, trkCol.withAlpha(120));
+            r.drawRect(triX + 2, triY + 2, 2, 6, trkCol.withAlpha(120));
+            r.drawRect(triX + 4, triY + 3, 2, 4, trkCol.withAlpha(120));
+            r.drawRect(triX + 6, triY + 4, 2, 2, trkCol.withAlpha(120));
+        }
+
         r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);
         r.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
     }
@@ -511,8 +548,10 @@ private:
 
     int   m_activeScene    = -1;
     int   m_selectedTrack  = 0;
+    int   m_selectedScene  = 0;
     int   m_lastClickTrack = -1;
     float m_animTimer      = 0.0f;
+    bool  m_globalRecordArmed = false;
 
     std::function<void(float)> m_onScrollChanged;
 

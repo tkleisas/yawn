@@ -340,6 +340,26 @@ void AudioEngine::processCommands() {
                     }
                 }
             }
+            else if constexpr (std::is_same_v<T, TransportRecordMsg>) {
+                if (msg.arm) {
+                    m_transport.startRecording();
+                    if (m_transport.countInBars() > 0 && !m_transport.isPlaying()) {
+                        m_transport.beginCountIn();
+                        m_transport.play();
+                    } else if (!m_transport.isPlaying()) {
+                        m_transport.play();
+                    }
+                } else {
+                    m_transport.stopRecording();
+                }
+            }
+            else if constexpr (std::is_same_v<T, TransportSetCountInMsg>) {
+                m_transport.setCountInBars(msg.bars);
+            }
+            else if constexpr (std::is_same_v<T, SetTrackArmedMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
+                    m_trackArmed[msg.trackIndex] = msg.armed;
+            }
         }, cmd);
     }
 }
@@ -350,6 +370,15 @@ void AudioEngine::emitPositionUpdate() {
     update.positionInBeats = m_transport.positionInBeats();
     update.isPlaying = m_transport.isPlaying();
     m_eventQueue.push(update);
+
+    // Also emit record state
+    if (m_transport.isRecording() || m_transport.isCountingIn()) {
+        TransportRecordStateUpdate rsu;
+        rsu.recording = m_transport.isRecording();
+        rsu.countingIn = m_transport.isCountingIn();
+        rsu.countInProgress = m_transport.countInProgress();
+        m_eventQueue.push(rsu);
+    }
 }
 
 void AudioEngine::emitClipStates() {

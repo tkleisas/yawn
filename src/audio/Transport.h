@@ -26,9 +26,43 @@ public:
     void play() { m_playing.store(true, std::memory_order_release); }
     void stop() {
         m_playing.store(false, std::memory_order_release);
+        m_recording.store(false, std::memory_order_release);
+        m_countInRemaining.store(0, std::memory_order_release);
     }
 
     bool isPlaying() const { return m_playing.load(std::memory_order_acquire); }
+
+    // Recording state
+    void startRecording() { m_recording.store(true, std::memory_order_release); }
+    void stopRecording() { m_recording.store(false, std::memory_order_release); }
+    bool isRecording() const { return m_recording.load(std::memory_order_acquire); }
+
+    // Count-in
+    void setCountInBars(int bars) { m_countInBars.store(bars, std::memory_order_release); }
+    int countInBars() const { return m_countInBars.load(std::memory_order_acquire); }
+
+    void beginCountIn() {
+        int bars = countInBars();
+        if (bars > 0) {
+            int64_t countInSamples = static_cast<int64_t>(samplesPerBar() * bars);
+            m_countInRemaining.store(countInSamples, std::memory_order_release);
+        } else {
+            m_countInRemaining.store(0, std::memory_order_release);
+        }
+    }
+
+    bool isCountingIn() const {
+        return m_countInRemaining.load(std::memory_order_acquire) > 0;
+    }
+
+    double countInProgress() const {
+        int bars = countInBars();
+        if (bars <= 0) return 1.0;
+        int64_t total = static_cast<int64_t>(samplesPerBar() * bars);
+        int64_t remaining = m_countInRemaining.load(std::memory_order_acquire);
+        if (total <= 0) return 1.0;
+        return 1.0 - static_cast<double>(remaining) / total;
+    }
 
     void setBPM(double bpm) { m_bpm.store(bpm, std::memory_order_release); }
     double bpm() const { return m_bpm.load(std::memory_order_acquire); }
@@ -43,6 +77,17 @@ public:
 
     // Advance transport position by numFrames. Called each audio callback.
     void advance(int numFrames) {
+        // Handle count-in first
+        int64_t countIn = m_countInRemaining.load(std::memory_order_acquire);
+        if (countIn > 0) {
+            int64_t newCountIn = countIn - numFrames;
+            if (newCountIn <= 0) {
+                m_countInRemaining.store(0, std::memory_order_release);
+            } else {
+                m_countInRemaining.store(newCountIn, std::memory_order_release);
+            }
+            return; // Don't advance position during count-in
+        }
         if (m_playing.load(std::memory_order_acquire)) {
             m_positionInSamples.fetch_add(numFrames, std::memory_order_relaxed);
         }
@@ -82,19 +127,24 @@ public:
 
     void reset() {
         m_playing.store(false, std::memory_order_release);
+        m_recording.store(false, std::memory_order_release);
         m_positionInSamples.store(0, std::memory_order_release);
         m_bpm.store(kDefaultBPM, std::memory_order_release);
         m_numerator.store(kDefaultNumerator, std::memory_order_release);
         m_denominator.store(kDefaultDenominator, std::memory_order_release);
+        m_countInRemaining.store(0, std::memory_order_release);
     }
 
 private:
     double m_sampleRate = kDefaultSampleRate;
     std::atomic<bool> m_playing{false};
+    std::atomic<bool> m_recording{false};
     std::atomic<double> m_bpm{kDefaultBPM};
     std::atomic<int64_t> m_positionInSamples{0};
     std::atomic<int> m_numerator{kDefaultNumerator};
     std::atomic<int> m_denominator{kDefaultDenominator};
+    std::atomic<int> m_countInBars{0};
+    std::atomic<int64_t> m_countInRemaining{0};
 };
 
 } // namespace audio

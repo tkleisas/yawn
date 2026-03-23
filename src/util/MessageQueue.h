@@ -135,6 +135,21 @@ struct StopMidiClipMsg {
     int trackIndex;
 };
 
+// Recording
+struct TransportRecordMsg {
+    bool arm;
+};
+
+struct TransportSetCountInMsg {
+    int bars;
+};
+
+// Track arm state
+struct SetTrackArmedMsg {
+    int trackIndex;
+    bool armed;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -161,7 +176,10 @@ using AudioCommand = std::variant<
     MetronomeSetBeatsPerBarMsg,
     SendMidiToTrackMsg,
     LaunchMidiClipMsg,
-    StopMidiClipMsg
+    StopMidiClipMsg,
+    TransportRecordMsg,
+    TransportSetCountInMsg,
+    SetTrackArmedMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)
@@ -183,10 +201,17 @@ struct MeterUpdate {
     float peakR;
 };
 
+struct TransportRecordStateUpdate {
+    bool recording;
+    bool countingIn;
+    double countInProgress;
+};
+
 using AudioEvent = std::variant<
     TransportPositionUpdate,
     ClipStateUpdate,
-    MeterUpdate
+    MeterUpdate,
+    TransportRecordStateUpdate
 >;
 
 // Command queue: UI → Audio (1024 slots)

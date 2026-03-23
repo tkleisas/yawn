@@ -50,6 +50,7 @@ public:
     float scrollX() const { return m_scrollX; }
     void setScrollX(float sx) { m_scrollX = sx; }
     void setOnScrollChanged(std::function<void(float)> cb) { m_onScrollChanged = std::move(cb); }
+    void setOnTrackArmedChanged(std::function<void(int, bool)> cb) { m_onTrackArmed = std::move(cb); }
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
@@ -156,8 +157,21 @@ public:
                 }
             }
 
+            // Arm button
+            float armY = btnY + kButtonHeight + 2;
+            if (my >= armY && my < armY + kButtonHeight) {
+                float armW = iw - 8;
+                if (mx >= ix + 4 && mx < ix + 4 + armW) {
+                    bool cur = m_project->track(t).armed;
+                    m_project->track(t).armed = !cur;
+                    m_engine->sendCommand(audio::SetTrackArmedMsg{t, !cur});
+                    if (m_onTrackArmed) m_onTrackArmed(t, !cur);
+                    return true;
+                }
+            }
+
             // Pan bar
-            float panY = y + 60;
+            float panY = y + 80;
             float panW = iw - 8;
             if (my >= panY && my < panY + 8 && mx >= ix + 4 && mx < ix + 4 + panW) {
                 if (rightClick) {
@@ -169,7 +183,7 @@ public:
             }
 
             // Fader
-            float faderY = y + 84;
+            float faderY = y + 104;
             float faderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
             if (my >= faderY && my < faderBottom && mx >= ix + 4 && mx < ix + 4 + kFaderWidth) {
                 if (rightClick) {
@@ -339,6 +353,16 @@ private:
         paintButton(r, f, ix + 4 + btnW + 2, curY, btnW, kButtonHeight, "S", soloCol,
                     ch.soloed ? Color{0,0,0} : Theme::textSecondary);
 
+        // Arm button
+        curY += kButtonHeight + 2;
+        {
+            float armBtnW = iw - 8;
+            bool isArmed = m_project->track(idx).armed;
+            Color armBg = isArmed ? Color{200, 40, 40} : Theme::clipSlotEmpty;
+            Color armTxt = isArmed ? Color{255, 255, 255} : Theme::textSecondary;
+            paintButton(r, f, ix + 4, curY, armBtnW, kButtonHeight, "R", armBg, armTxt);
+        }
+
         // Pan bar
         curY += kButtonHeight + 6;
         float panW = iw - 8, panH = 16;
@@ -453,6 +477,7 @@ private:
     float m_hsbDragStartScroll = 0;
 
     std::function<void(float)> m_onScrollChanged;
+    std::function<void(int, bool)> m_onTrackArmed;
 };
 
 } // namespace fw

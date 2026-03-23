@@ -106,6 +106,7 @@ private:
 
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
+    bool m_trackArmed[kMaxTracks] = {};
 
     // Per-track scratch buffers for mixer routing (heap-allocated, preallocated in init)
     std::vector<float> m_trackBufferHeap;     // kMaxTracks * kMaxFramesPerBuffer * 2

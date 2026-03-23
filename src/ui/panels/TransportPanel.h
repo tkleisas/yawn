@@ -42,6 +42,12 @@ public:
         m_transportDenominator = denominator;
     }
 
+    void setRecordState(bool recording, bool countingIn, double progress) {
+        m_recording = recording;
+        m_countingIn = countingIn;
+        m_countInProgress = progress;
+    }
+
     bool isEditing() const { return m_editMode != EditMode::None; }
 
     // ─── Double-click to edit BPM / time signature ──────────────────────
@@ -160,6 +166,7 @@ public:
 
         float textY = y + 6;
         float scale = Theme::kFontSize / f.pixelHeight();
+        float boxH = h - 8, boxY = y + 4;
 
         // Play/Stop indicator
         Color stateCol = m_transportPlaying ? Theme::playing : Theme::stopped;
@@ -168,8 +175,40 @@ public:
         r.drawRect(circX, circY, 10, 10, stateCol);
         drawText(r, f, stateTxt, circX + 18, textY, scale, stateCol);
 
+        // Record button
+        float recX = circX + 90, recW = 36, recH = boxH;
+        float recY = boxY;
+        m_recButtonX = recX; m_recButtonY = recY; m_recButtonW = recW; m_recButtonH = recH;
+        Color recBg = m_recording ? Color{200, 40, 40} : Color{60, 30, 30};
+        if (m_countingIn) {
+            m_recPulse += 0.1f;
+            float pulse = (std::sin(m_recPulse * 6.0f) + 1.0f) * 0.5f;
+            recBg = Color{static_cast<uint8_t>(120 + static_cast<int>(pulse * 80)), 30, 30};
+        }
+        r.drawRect(recX, recY, recW, recH, recBg);
+        r.drawRectOutline(recX, recY, recW, recH,
+            m_recording ? Color{255, 80, 80} : Theme::clipSlotBorder);
+        // Record circle icon
+        float dotX = recX + recW * 0.5f, dotY = recY + recH * 0.5f;
+        Color dotCol = m_recording ? Color{255, 100, 100} : Color{200, 60, 60};
+        r.drawRect(dotX - 4, dotY - 4, 8, 8, dotCol);
+
+        // Count-in indicator
+        if (m_countInBars > 0) {
+            char ciBuf[8];
+            std::snprintf(ciBuf, sizeof(ciBuf), "-%d", m_countInBars);
+            float ciScale = scale * 0.7f;
+            drawText(r, f, ciBuf, recX + recW + 2, textY + 4, ciScale, Theme::textDim);
+        }
+
+        // Count-in progress bar
+        if (m_countingIn) {
+            float progW = recW * static_cast<float>(m_countInProgress);
+            r.drawRect(recX, recY + recH - 3, progW, 3, Color{255, 100, 100});
+        }
+
         // BPM box
-        float bpmX = x + 160, boxH = h - 8, boxY = y + 4, bpmW = 100;
+        float bpmX = x + 220, bpmW = 100;
         m_bpmBoxX = bpmX; m_bpmBoxY = boxY; m_bpmBoxW = bpmW; m_bpmBoxH = boxH;
         bool editBpm = (m_editMode == EditMode::BPM);
         Color bpmBg = editBpm ? Color{60,60,80,255} : Color{40,40,50,255};
@@ -239,6 +278,25 @@ public:
     bool onMouseDown(MouseEvent& e) override {
         if (!m_engine) return false;
         float mx = e.x, my = e.y;
+        bool rightClick = (e.button == MouseButton::Right);
+
+        // Record button (right-click cycles count-in)
+        if (mx >= m_recButtonX && mx <= m_recButtonX + m_recButtonW &&
+            my >= m_recButtonY && my <= m_recButtonY + m_recButtonH) {
+            if (rightClick) {
+                static const int countInValues[] = {0, 1, 2, 4};
+                int idx = 0;
+                for (int i = 0; i < 4; ++i) {
+                    if (countInValues[i] == m_countInBars) { idx = (i + 1) % 4; break; }
+                }
+                m_countInBars = countInValues[idx];
+                m_engine->sendCommand(audio::TransportSetCountInMsg{m_countInBars});
+            } else {
+                bool newState = !m_recording;
+                m_engine->sendCommand(audio::TransportRecordMsg{newState});
+            }
+            return true;
+        }
 
         // Tap tempo button
         if (mx >= m_tapButtonX && mx <= m_tapButtonX + m_tapButtonW &&
@@ -323,11 +381,19 @@ private:
     float m_tsNumBoxX = 0, m_tsNumBoxY = 0, m_tsNumBoxW = 0, m_tsNumBoxH = 0;
     float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
     float m_tapButtonX = 0, m_tapButtonY = 0, m_tapButtonW = 0, m_tapButtonH = 0;
+    float m_recButtonX = 0, m_recButtonY = 0, m_recButtonW = 0, m_recButtonH = 0;
 
     static constexpr int kTapHistorySize = 4;
     double m_tapTimes[kTapHistorySize] = {};
     int    m_tapCount = 0;
     float  m_tapFlash = 0.0f;
+
+    // Recording state
+    bool   m_recording = false;
+    bool   m_countingIn = false;
+    double m_countInProgress = 0.0;
+    int    m_countInBars = 0;
+    float  m_recPulse = 0.0f;
 };
 
 } // namespace fw
