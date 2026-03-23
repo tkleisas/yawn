@@ -150,6 +150,17 @@ struct SetTrackArmedMsg {
     bool armed;
 };
 
+// MIDI recording
+struct StartMidiRecordMsg {
+    int trackIndex;
+    int sceneIndex;
+    bool overdub; // true = overdub into existing clip, false = replace
+};
+
+struct StopMidiRecordMsg {
+    int trackIndex;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -179,7 +190,9 @@ using AudioCommand = std::variant<
     StopMidiClipMsg,
     TransportRecordMsg,
     TransportSetCountInMsg,
-    SetTrackArmedMsg
+    SetTrackArmedMsg,
+    StartMidiRecordMsg,
+    StopMidiRecordMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)
@@ -207,11 +220,18 @@ struct TransportRecordStateUpdate {
     double countInProgress;
 };
 
+struct MidiRecordCompleteEvent {
+    int trackIndex;
+    int sceneIndex;
+    int noteCount;
+};
+
 using AudioEvent = std::variant<
     TransportPositionUpdate,
     ClipStateUpdate,
     MeterUpdate,
-    TransportRecordStateUpdate
+    TransportRecordStateUpdate,
+    MidiRecordCompleteEvent
 >;
 
 // Command queue: UI → Audio (1024 slots)

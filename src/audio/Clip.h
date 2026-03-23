@@ -29,6 +29,18 @@ struct Clip {
     int64_t lengthInFrames() const {
         return effectiveLoopEnd() - loopStart;
     }
+
+    // Shallow copy (shares audio buffer)
+    std::unique_ptr<Clip> clone() const {
+        auto c = std::make_unique<Clip>();
+        c->name = name;
+        c->buffer = buffer;
+        c->loopStart = loopStart;
+        c->loopEnd = loopEnd;
+        c->looping = looping;
+        c->gain = gain;
+        return c;
+    }
 };
 
 // Runtime state of a clip being played (audio-thread owned)

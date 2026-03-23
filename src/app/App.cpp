@@ -414,6 +414,18 @@ bool App::init() {
         std::fprintf(stderr, "Warning: Audio engine failed to start\n");
     }
 
+    // Wire MidiEngine: scan ports, open inputs, connect to AudioEngine
+    m_midiEngine.refreshPorts();
+    for (int i = 0; i < m_midiEngine.availableInputCount(); ++i) {
+        m_midiEngine.openInputPort(i);
+    }
+    m_audioEngine.setMidiEngine(&m_midiEngine);
+
+    // Wire mixer arm button to MidiEngine
+    m_mixerPanel->setOnTrackArmedChanged([this](int trackIndex, bool armed) {
+        m_midiEngine.setTrackArmed(trackIndex, armed);
+    });
+
     SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
 
     // Cache system cursors
@@ -1000,6 +1012,33 @@ void App::update() {
             else if constexpr (std::is_same_v<T, audio::TransportRecordStateUpdate>) {
                 m_transportPanel->setRecordState(msg.recording, msg.countingIn, msg.countInProgress);
                 m_sessionPanel->setGlobalRecordArmed(msg.recording);
+            }
+            else if constexpr (std::is_same_v<T, audio::MidiRecordCompleteEvent>) {
+                auto& data = m_audioEngine.recordedMidiData();
+                if (data.ready.load(std::memory_order_acquire)) {
+                    int ti = data.trackIndex;
+                    int si = data.sceneIndex;
+                    if (ti >= 0 && si >= 0) {
+                        auto* existingClip = m_project.getMidiClip(ti, si);
+                        if (data.overdub && existingClip) {
+                            for (auto& note : data.notes)
+                                existingClip->addNote(note);
+                            for (auto& cc : data.ccs)
+                                existingClip->addCC(cc);
+                            if (data.lengthBeats > existingClip->lengthBeats())
+                                existingClip->setLengthBeats(data.lengthBeats);
+                        } else {
+                            auto newClip = std::make_unique<midi::MidiClip>(data.lengthBeats);
+                            newClip->setName("Rec " + std::to_string(ti + 1));
+                            for (auto& note : data.notes)
+                                newClip->addNote(note);
+                            for (auto& cc : data.ccs)
+                                newClip->addCC(cc);
+                            m_project.setMidiClip(ti, si, std::move(newClip));
+                        }
+                    }
+                    data.ready.store(false, std::memory_order_release);
+                }
             }
         }, evt);
     }

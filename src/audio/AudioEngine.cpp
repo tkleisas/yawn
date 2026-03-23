@@ -50,6 +50,13 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
         m_trackBufferPtrs[t] = m_trackBufferHeap.data() + t * bufferStride;
     }
 
+    // Pre-reserve recording buffers to minimise audio-thread allocations
+    for (int t = 0; t < kMaxTracks; ++t) {
+        m_trackRecordStates[t].pendingNotes.reserve(128);
+        m_trackRecordStates[t].recordedNotes.reserve(4096);
+        m_trackRecordStates[t].recordedCCs.reserve(1024);
+    }
+
     // Open default output stream
     PaStreamParameters outputParams;
     outputParams.device = Pa_GetDefaultOutputDevice();
@@ -169,6 +176,72 @@ void AudioEngine::processAudio(float* output, unsigned long numFrames) {
     }
     // Generate MIDI from MIDI clips into track MIDI buffers
     m_midiClipEngine.process(m_trackMidiBuffers.data(), nf);
+
+    // Merge live MIDI input from MidiEngine into track MIDI buffers
+    if (m_midiEngine) {
+        m_midiEngine->process(nf);
+        for (int t = 0; t < kMaxTracks; ++t) {
+            const auto& liveBuf = m_midiEngine->trackBuffer(t);
+            for (int i = 0; i < liveBuf.count(); ++i) {
+                m_trackMidiBuffers[t].addMessage(liveBuf[i]);
+            }
+        }
+    }
+
+    // Capture MIDI for recording
+    if (m_transport.isRecording()) {
+        double currentBeat = m_transport.positionInBeats();
+        for (int t = 0; t < kMaxTracks; ++t) {
+            auto& rs = m_trackRecordStates[t];
+            if (!rs.recording || !m_trackArmed[t]) continue;
+
+            if (m_midiEngine) {
+                const auto& liveBuf = m_midiEngine->trackBuffer(t);
+                for (int i = 0; i < liveBuf.count(); ++i) {
+                    const auto& msg = liveBuf[i];
+                    double msgBeat = currentBeat +
+                        (static_cast<double>(msg.frameOffset) / m_config.sampleRate) *
+                        (m_transport.bpm() / 60.0);
+                    double relBeat = msgBeat - rs.recordStartBeat;
+                    if (relBeat < 0) relBeat = 0;
+
+                    if (msg.type == midi::MidiMessage::Type::NoteOn && msg.velocity > 0) {
+                        TrackRecordState::PendingNote pn;
+                        pn.pitch = msg.note;
+                        pn.channel = msg.channel;
+                        pn.velocity = msg.velocity;
+                        pn.startBeat = relBeat;
+                        rs.pendingNotes.push_back(pn);
+                    }
+                    else if (msg.type == midi::MidiMessage::Type::NoteOff ||
+                             (msg.type == midi::MidiMessage::Type::NoteOn && msg.velocity == 0)) {
+                        for (auto it = rs.pendingNotes.begin(); it != rs.pendingNotes.end(); ++it) {
+                            if (it->pitch == msg.note && it->channel == msg.channel) {
+                                midi::MidiNote note;
+                                note.startBeat = it->startBeat;
+                                note.duration = std::max(0.01, relBeat - it->startBeat);
+                                note.pitch = it->pitch;
+                                note.channel = it->channel;
+                                note.velocity = static_cast<uint16_t>(it->velocity * 512);
+                                if (note.velocity == 0) note.velocity = 1;
+                                rs.recordedNotes.push_back(note);
+                                rs.pendingNotes.erase(it);
+                                break;
+                            }
+                        }
+                    }
+                    else if (msg.type == midi::MidiMessage::Type::ControlChange) {
+                        midi::MidiCCEvent cc;
+                        cc.beat = relBeat;
+                        cc.ccNumber = msg.ccNumber;
+                        cc.value = static_cast<uint32_t>(msg.value) << 25;
+                        cc.channel = msg.channel;
+                        rs.recordedCCs.push_back(cc);
+                    }
+                }
+            }
+        }
+    }
 
     // Process instruments: MIDI effects → instrument → add to track buffer
     for (int t = 0; t < kMaxTracks; ++t) {
@@ -357,8 +430,61 @@ void AudioEngine::processCommands() {
                 m_transport.setCountInBars(msg.bars);
             }
             else if constexpr (std::is_same_v<T, SetTrackArmedMsg>) {
-                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_trackArmed[msg.trackIndex] = msg.armed;
+                    if (m_midiEngine) m_midiEngine->setTrackArmed(msg.trackIndex, msg.armed);
+                }
+            }
+            else if constexpr (std::is_same_v<T, StartMidiRecordMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    auto& rs = m_trackRecordStates[msg.trackIndex];
+                    rs.reset();
+                    rs.recording = true;
+                    rs.targetScene = msg.sceneIndex;
+                    rs.overdub = msg.overdub;
+                    rs.recordStartBeat = m_transport.positionInBeats();
+                }
+            }
+            else if constexpr (std::is_same_v<T, StopMidiRecordMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    auto& rs = m_trackRecordStates[msg.trackIndex];
+                    if (rs.recording) {
+                        // Close any pending notes at current position
+                        double endBeat = m_transport.positionInBeats() - rs.recordStartBeat;
+                        for (auto& pn : rs.pendingNotes) {
+                            midi::MidiNote note;
+                            note.startBeat = pn.startBeat;
+                            note.duration = std::max(0.01, endBeat - pn.startBeat);
+                            note.pitch = pn.pitch;
+                            note.channel = pn.channel;
+                            note.velocity = static_cast<uint16_t>(pn.velocity * 512);
+                            if (note.velocity == 0) note.velocity = 1;
+                            rs.recordedNotes.push_back(note);
+                        }
+                        rs.pendingNotes.clear();
+
+                        // Transfer to UI-readable buffer
+                        m_recordedMidi.notes = rs.recordedNotes;
+                        m_recordedMidi.ccs = rs.recordedCCs;
+                        m_recordedMidi.trackIndex = msg.trackIndex;
+                        m_recordedMidi.sceneIndex = rs.targetScene;
+                        m_recordedMidi.overdub = rs.overdub;
+                        double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
+                        int bpb = m_transport.beatsPerBar();
+                        double bars = std::ceil(rawLen / bpb);
+                        m_recordedMidi.lengthBeats = bars * bpb;
+                        m_recordedMidi.ready.store(true, std::memory_order_release);
+
+                        // Emit completion event
+                        MidiRecordCompleteEvent evt;
+                        evt.trackIndex = msg.trackIndex;
+                        evt.sceneIndex = rs.targetScene;
+                        evt.noteCount = static_cast<int>(rs.recordedNotes.size());
+                        m_eventQueue.push(evt);
+
+                        rs.recording = false;
+                    }
+                }
             }
         }, cmd);
     }

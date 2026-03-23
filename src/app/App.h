@@ -22,6 +22,7 @@
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
 #include "app/Project.h"
+#include "midi/MidiEngine.h"
 #include "util/FileIO.h"
 #include <vector>
 #include <memory>
@@ -97,6 +98,7 @@ private:
     ui::fw::UIContext m_uiContext;
 
     audio::AudioEngine m_audioEngine;
+    midi::MidiEngine m_midiEngine;
     Project m_project;
     bool m_running = false;
     bool m_showMixer = true;

@@ -140,6 +140,17 @@ public:
     const std::string& name() const { return m_name; }
     void setName(const std::string& n) { m_name = n; }
 
+    // Deep copy (for clipboard / duplicate)
+    std::unique_ptr<MidiClip> clone() const {
+        auto c = std::make_unique<MidiClip>(m_lengthBeats);
+        c->m_notes = m_notes;
+        c->m_ccEvents = m_ccEvents;
+        c->m_loop = m_loop;
+        c->m_loopStartBeat = m_loopStartBeat;
+        c->m_name = m_name;
+        return c;
+    }
+
 private:
     std::vector<MidiNote>    m_notes;       // Sorted by startBeat
     std::vector<MidiCCEvent> m_ccEvents;    // Sorted by beat

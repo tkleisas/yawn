@@ -9,6 +9,8 @@
 #include "instruments/Instrument.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/MidiTypes.h"
+#include "midi/MidiClip.h"
+#include "midi/MidiEngine.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
 #include <atomic>
@@ -64,6 +66,21 @@ public:
     double sampleRate() const { return m_config.sampleRate; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
+    // MidiEngine integration — called from App after init
+    void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
+
+    // Thread-safe transfer of recorded MIDI data to UI
+    struct RecordedMidiData {
+        std::vector<midi::MidiNote> notes;
+        std::vector<midi::MidiCCEvent> ccs;
+        int trackIndex = -1;
+        int sceneIndex = -1;
+        bool overdub = true;
+        double lengthBeats = 4.0;
+        std::atomic<bool> ready{false};
+    };
+    RecordedMidiData& recordedMidiData() { return m_recordedMidi; }
+
 private:
     static int paCallback(
         const void* inputBuffer,
@@ -107,6 +124,38 @@ private:
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
     bool m_trackArmed[kMaxTracks] = {};
+    midi::MidiEngine* m_midiEngine = nullptr;
+
+    // MIDI recording state per track
+    struct TrackRecordState {
+        bool recording = false;
+        int targetScene = -1;
+        bool overdub = true;
+        double recordStartBeat = 0.0;
+
+        struct PendingNote {
+            uint8_t pitch = 0;
+            uint8_t channel = 0;
+            uint16_t velocity = 0;
+            double startBeat = 0.0;
+        };
+        std::vector<PendingNote> pendingNotes;
+        std::vector<midi::MidiNote> recordedNotes;
+        std::vector<midi::MidiCCEvent> recordedCCs;
+
+        void reset() {
+            recording = false;
+            targetScene = -1;
+            overdub = true;
+            recordStartBeat = 0.0;
+            pendingNotes.clear();
+            recordedNotes.clear();
+            recordedCCs.clear();
+        }
+    };
+
+    TrackRecordState m_trackRecordStates[kMaxTracks];
+    RecordedMidiData m_recordedMidi;
 
     // Per-track scratch buffers for mixer routing (heap-allocated, preallocated in init)
     std::vector<float> m_trackBufferHeap;     // kMaxTracks * kMaxFramesPerBuffer * 2

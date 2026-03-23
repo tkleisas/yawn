@@ -227,7 +227,8 @@ public:
                 } else if (slot && slot->midiClip) {
                     m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
                 } else if (m_project->track(ti).armed && m_globalRecordArmed) {
-                    // Select slot for recording (actual recording in Phase B)
+                    // Empty slot + armed + recording: start MIDI recording
+                    m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
                     m_selectedTrack = ti;
                     m_selectedScene = si;
                 }
