@@ -1201,7 +1201,8 @@ void App::update() {
                 m_displayPlaying = msg.isPlaying;
             }
             else if constexpr (std::is_same_v<T, audio::ClipStateUpdate>) {
-                m_sessionPanel->updateClipState(msg.trackIndex, msg.playing, msg.playPosition);
+                m_sessionPanel->updateClipState(msg.trackIndex, msg.playing, msg.playPosition,
+                                                msg.isMidi, msg.clipLengthBeats);
             }
             else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {
                 if (msg.trackIndex >= 0)

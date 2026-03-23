@@ -408,6 +408,17 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, TransportStopMsg>) {
                 m_transport.stop();
+                // Stop all playing clips (audio and MIDI)
+                for (int t = 0; t < kMaxTracks; ++t) {
+                    m_clipEngine.scheduleStop(t);
+                    if (m_midiClipEngine.isTrackPlaying(t)) {
+                        m_midiClipEngine.scheduleStop(t);
+                        for (uint8_t n = 0; n < 128; ++n) {
+                            m_trackMidiBuffers[t].addMessage(
+                                midi::MidiMessage::noteOff(0, n, 0, 0));
+                        }
+                    }
+                }
             }
             else if constexpr (std::is_same_v<T, TransportSetBPMMsg>) {
                 m_transport.setBPM(msg.bpm);
@@ -721,12 +732,25 @@ void AudioEngine::emitPositionUpdate() {
 
 void AudioEngine::emitClipStates() {
     for (int t = 0; t < kMaxTracks; ++t) {
+        // Audio clips
         const auto& state = m_clipEngine.trackState(t);
         if (state.clip) {
             ClipStateUpdate csu;
             csu.trackIndex = t;
             csu.playing = state.active;
             csu.playPosition = state.playPosition;
+            m_eventQueue.push(csu);
+        }
+        // MIDI clips
+        const auto& mstate = m_midiClipEngine.trackState(t);
+        if (mstate.clip) {
+            ClipStateUpdate csu;
+            csu.trackIndex = t;
+            csu.playing = mstate.active;
+            // Encode beat position as fixed-point in int64 (×1000000 for precision)
+            csu.playPosition = static_cast<int64_t>(mstate.playPositionBeats * 1000000.0);
+            csu.isMidi = true;
+            csu.clipLengthBeats = mstate.clip->lengthBeats();
             m_eventQueue.push(csu);
         }
     }

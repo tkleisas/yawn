@@ -30,6 +30,9 @@ struct ClipSlotUIState {
     bool    queued       = false;
     bool    recording    = false;
     int64_t playPosition = 0;
+    // MIDI playhead: position as fraction of clip length (0.0–1.0)
+    float   midiPlayFrac = 0.0f;
+    bool    isMidiPlaying = false;
 };
 
 class SessionPanel : public Widget {
@@ -43,10 +46,19 @@ public:
 
     // ─── State updates (called from App) ────────────────────────────────
 
-    void updateClipState(int trackIndex, bool playing, int64_t playPos) {
+    void updateClipState(int trackIndex, bool playing, int64_t playPos,
+                         bool isMidi = false, double clipLengthBeats = 0.0) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks) {
             m_trackStates[trackIndex].playing      = playing;
             m_trackStates[trackIndex].playPosition  = playPos;
+            if (isMidi && clipLengthBeats > 0.0) {
+                double beats = static_cast<double>(playPos) / 1000000.0;
+                m_trackStates[trackIndex].midiPlayFrac =
+                    static_cast<float>(std::fmod(beats, clipLengthBeats) / clipLengthBeats);
+                m_trackStates[trackIndex].isMidiPlaying = playing;
+            } else {
+                m_trackStates[trackIndex].isMidiPlaying = false;
+            }
         }
     }
 
@@ -571,6 +583,13 @@ private:
                         (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
                     float nh = std::max(1.0f, nH / pRange);
                     r.drawRect(nx, ny, nw, nh, noteCol);
+                }
+
+                // MIDI playhead
+                if (isPlaying && m_trackStates[ti].isMidiPlaying) {
+                    float frac = m_trackStates[ti].midiPlayFrac;
+                    float phX = contentX + 4 + frac * (contentW - 8);
+                    r.drawRect(phX, nY, 2, nH, Theme::playing);
                 }
             }
 
