@@ -257,7 +257,7 @@ public:
                             m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
                         else if (slot->midiClip)
                             m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
-                    } else if (trackArmed && m_globalRecordArmed) {
+                    } else if (trackArmed) {
                         // Start recording into empty slot
                         if (m_project->track(ti).type == Track::Type::Midi)
                             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
@@ -270,7 +270,7 @@ public:
                         m_engine->sendCommand(audio::LaunchClipMsg{ti, slot->audioClip.get()});
                     } else if (slot && slot->midiClip) {
                         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, slot->midiClip.get()});
-                    } else if (trackArmed && m_globalRecordArmed) {
+                    } else if (trackArmed) {
                         if (m_project->track(ti).type == Track::Type::Midi)
                             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
                         else
