@@ -734,6 +734,8 @@ void AudioEngine::emitClipStates() {
     for (int t = 0; t < kMaxTracks; ++t) {
         bool midiRec = m_trackRecordStates[t].recording;
         bool audioRec = m_audioRecordStates[t].recording;
+        int midiRecScene = midiRec ? m_trackRecordStates[t].targetScene : -1;
+        int audioRecScene = audioRec ? m_audioRecordStates[t].targetScene : -1;
 
         // Audio clips
         const auto& state = m_clipEngine.trackState(t);
@@ -743,6 +745,7 @@ void AudioEngine::emitClipStates() {
             csu.playing = state.active;
             csu.playPosition = state.playPosition;
             csu.recording = audioRec;
+            csu.recordingScene = audioRecScene;
             m_eventQueue.push(csu);
         }
         // MIDI clips
@@ -751,11 +754,11 @@ void AudioEngine::emitClipStates() {
             ClipStateUpdate csu;
             csu.trackIndex = t;
             csu.playing = mstate.active;
-            // Encode beat position as fixed-point in int64 (×1000000 for precision)
             csu.playPosition = static_cast<int64_t>(mstate.playPositionBeats * 1000000.0);
             csu.isMidi = true;
             csu.clipLengthBeats = mstate.clip ? mstate.clip->lengthBeats() : 0.0;
             csu.recording = midiRec;
+            csu.recordingScene = midiRecScene;
             m_eventQueue.push(csu);
         }
 
@@ -765,7 +768,8 @@ void AudioEngine::emitClipStates() {
             csu.trackIndex = t;
             csu.playing = false;
             csu.playPosition = 0;
-            csu.recording = midiRec || audioRec;
+            csu.recording = true;
+            csu.recordingScene = midiRec ? midiRecScene : audioRecScene;
             m_eventQueue.push(csu);
         }
     }

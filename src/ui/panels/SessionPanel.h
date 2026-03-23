@@ -29,8 +29,8 @@ struct ClipSlotUIState {
     bool    playing      = false;
     bool    queued       = false;
     bool    recording    = false;
+    int     recordingScene = -1;  // which scene is recording (-1 = none)
     int64_t playPosition = 0;
-    // MIDI playhead: position as fraction of clip length (0.0–1.0)
     float   midiPlayFrac = 0.0f;
     bool    isMidiPlaying = false;
 };
@@ -71,9 +71,11 @@ public:
     void setScrollX(float sx)    { m_scrollX = sx; }
 
     void setGlobalRecordArmed(bool armed) { m_globalRecordArmed = armed; }
-    void setTrackRecording(int trackIndex, bool recording) {
-        if (trackIndex >= 0 && trackIndex < kMaxTracks)
+    void setTrackRecording(int trackIndex, bool recording, int recordingScene = -1) {
+        if (trackIndex >= 0 && trackIndex < kMaxTracks) {
             m_trackStates[trackIndex].recording = recording;
+            m_trackStates[trackIndex].recordingScene = recording ? recordingScene : -1;
+        }
     }
     void updateAnimTimer(float dt) { m_animTimer += dt; }
 
@@ -487,7 +489,8 @@ private:
         bool trackArmed = m_project->track(ti).armed;
         bool recReady = !hasClip && trackArmed;
         bool recFullyArmed = recReady && m_globalRecordArmed;
-        bool isRecording = m_trackStates[ti].recording;
+        bool isRecording = m_trackStates[ti].recording
+                        && m_trackStates[ti].recordingScene == si;
 
         Color bgCol = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
         r.drawRect(ix, iy, iw, ih, bgCol);
