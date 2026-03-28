@@ -60,14 +60,15 @@ public:
 #ifndef YAWN_TEST_BUILD
         if (!ctx.renderer || !ctx.font) return;
         float scale = m_fontScale > 0 ? m_fontScale
-                     : detail::cmin(m_bounds.h * 0.7f, 20.0f) / Theme::kFontSize;
+                     : Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
         float tw = ctx.font->textWidth(m_text, scale);
         float tx = m_bounds.x;
         if (m_align == TextAlign::Center)
             tx = m_bounds.x + (m_bounds.w - tw) * 0.5f;
         else if (m_align == TextAlign::Right)
             tx = m_bounds.x + m_bounds.w - tw;
-        float ty = m_bounds.y + m_bounds.h * 0.2f;
+        float lh = ctx.font->lineHeight(scale);
+        float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
         ctx.font->drawText(*ctx.renderer, m_text.c_str(), tx, ty, scale, m_color);
 #endif
     }
@@ -95,6 +96,7 @@ public:
     const std::string& label() const { return m_label; }
     void setOnClick(Callback cb) { m_onClick = std::move(cb); }
     void setColor(Color bg) { m_bgColor = bg; m_customColor = true; }
+    void setTextColor(Color c) { m_textColor = c; m_customTextColor = true; }
     void setToggle(bool isToggle) { m_isToggle = isToggle; }
     void setToggleState(bool on) { m_toggleOn = on; }
     bool toggleState() const { return m_toggleOn; }
@@ -128,13 +130,14 @@ public:
         ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
                                       Theme::controlBorder);
         if (!m_label.empty()) {
-            float scale = detail::cmin(m_bounds.h * 0.6f, 20.0f) / Theme::kFontSize;
+            float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
             float tw = ctx.font->textWidth(m_label, scale);
+            float lh = ctx.font->lineHeight(scale);
             float tx = m_bounds.x + (m_bounds.w - tw) * 0.5f;
-            float ty = m_bounds.y + m_bounds.h * 0.3f;
-            // Press effect: shift text down 1px when pressed
+            float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
             if (m_pressed) ty += 1.0f;
-            Color tc = m_enabled ? Theme::textPrimary : Theme::textDim;
+            Color tc = m_customTextColor ? m_textColor
+                     : (m_enabled ? Theme::textPrimary : Theme::textDim);
             ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, scale, tc);
         }
 #endif
@@ -143,12 +146,14 @@ public:
     bool onMouseDown(MouseEvent& e) override {
         if (e.button != MouseButton::Left) return false;
         m_pressed = true;
+        captureMouse();
         return true;
     }
 
     bool onMouseUp(MouseEvent& e) override {
         bool wasPressed = m_pressed;
         m_pressed = false;
+        releaseMouse();
         Point local = toLocal(e.x, e.y);
         if (wasPressed && hitTest(local.x, local.y)) {
             if (m_isToggle) m_toggleOn = !m_toggleOn;
@@ -163,6 +168,8 @@ private:
     Callback m_onClick;
     Color m_bgColor{};
     bool m_customColor = false;
+    Color m_textColor = Theme::textPrimary;
+    bool m_customTextColor = false;
     bool m_isToggle = false;
     bool m_toggleOn = false;
     bool m_pressed = false;
@@ -216,9 +223,10 @@ public:
         ctx.renderer->drawRect(dotX, dotY, dotR * 2, dotR * 2, dotCol);
 
         if (!m_label.empty()) {
-            float scale = detail::cmin(m_bounds.h * 0.55f, 16.0f) / Theme::kFontSize;
+            float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
             float tx = m_bounds.x + 18;
-            float ty = m_bounds.y + m_bounds.h * 0.25f;
+            float lh = ctx.font->lineHeight(scale);
+            float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
             ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, scale, Theme::textPrimary);
         }
 #endif
@@ -543,9 +551,10 @@ public:
         ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
                                       m_editing ? Color{100, 160, 220, 255} : Color{60, 60, 65, 255});
 
-        float scale = detail::cmin(m_bounds.h * 0.6f, 18.0f) / Theme::kFontSize;
+        float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
         float tx = m_bounds.x + 4;
-        float ty = m_bounds.y + m_bounds.h * 0.2f;
+        float lh = ctx.font->lineHeight(scale);
+        float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
 
         if (m_text.empty() && !m_editing) {
             ctx.font->drawText(*ctx.renderer, m_placeholder.c_str(), tx, ty, scale, Theme::textDim);
@@ -636,6 +645,7 @@ public:
     void setSensitivity(float s) { m_sensitivity = s; }
     void setSuffix(const std::string& s) { m_suffix = s; }
     bool isEditing() const { return m_editing; }
+    void beginEdit() { startEditing(); }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({60.0f, 22.0f});
@@ -662,10 +672,11 @@ public:
             }
         }
 
-        float scale = detail::cmin(m_bounds.h * 0.6f, 18.0f) / Theme::kFontSize;
+        float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
         float tw = ctx.font->textWidth(buf, scale);
         float tx = m_bounds.x + (m_bounds.w - tw) * 0.5f;
-        float ty = m_bounds.y + m_bounds.h * 0.2f;
+        float lh = ctx.font->lineHeight(scale);
+        float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
         ctx.font->drawText(*ctx.renderer, buf, tx, ty, scale, Theme::textPrimary);
 #endif
     }
@@ -732,6 +743,7 @@ private:
         m_editText[0] = '\0';
     }
 
+public:
     void commitEdit() {
         m_editing = false;
         if (m_editLen > 0) {
@@ -746,6 +758,7 @@ private:
 
     void cancelEdit() { m_editing = false; }
 
+private:
     float m_value = 0.0f;
     float m_min = 0.0f, m_max = 1000.0f;
     float m_sensitivity = 1.0f;
@@ -793,8 +806,9 @@ public:
         ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
                                       Color{70, 70, 75, 255});
 
-        float scale = detail::cmin(m_bounds.h * 0.6f, 18.0f) / Theme::kFontSize;
-        float ty = m_bounds.y + m_bounds.h * 0.2f;
+        float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
+        float lh = ctx.font->lineHeight(scale);
+        float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
 
         // Current selection
         std::string txt = selectedText();
@@ -812,7 +826,7 @@ public:
                 Color itemBg = (i == m_hoverItem) ? Color{65, 65, 70, 255} : Color{48, 48, 52, 255};
                 ctx.renderer->drawRect(m_bounds.x, iy, m_bounds.w, itemH, itemBg);
                 ctx.renderer->drawRectOutline(m_bounds.x, iy, m_bounds.w, itemH, Color{60, 60, 65, 255});
-                float itemTy = iy + itemH * 0.2f;
+                float itemTy = iy + (itemH - lh) * 0.5f - lh * 0.15f;
                 ctx.font->drawText(*ctx.renderer, m_items[i].c_str(), m_bounds.x + 6, itemTy, scale, Theme::textPrimary);
             }
         }
@@ -849,6 +863,236 @@ private:
     int m_hoverItem = -1;
     bool m_open = false;
     IndexCallback m_onChange;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MeterWidget (stereo VU meter, display-only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+class MeterWidget : public Widget {
+public:
+    MeterWidget() = default;
+
+    void setPeak(float left, float right) { m_peakL = left; m_peakR = right; }
+    float peakL() const { return m_peakL; }
+    float peakR() const { return m_peakR; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({16.0f, 60.0f});
+    }
+
+    void paint(UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer) return;
+        float halfW = m_bounds.w * 0.5f - 1;
+        ctx.renderer->drawRect(m_bounds.x, m_bounds.y, halfW, m_bounds.h,
+                               Color{20, 20, 22});
+        ctx.renderer->drawRect(m_bounds.x + halfW + 2, m_bounds.y, halfW, m_bounds.h,
+                               Color{20, 20, 22});
+
+        float hL = dbToHeight(m_peakL) * m_bounds.h;
+        float hR = dbToHeight(m_peakR) * m_bounds.h;
+        ctx.renderer->drawRect(m_bounds.x, m_bounds.y + m_bounds.h - hL,
+                               halfW, hL, meterColor(m_peakL));
+        ctx.renderer->drawRect(m_bounds.x + halfW + 2, m_bounds.y + m_bounds.h - hR,
+                               halfW, hR, meterColor(m_peakR));
+#endif
+    }
+
+    static float dbToHeight(float peak) {
+        if (peak < 0.001f) return 0.0f;
+        float db = 20.0f * std::log10(peak);
+        return detail::cclamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
+    }
+
+    static Color meterColor(float peak) {
+        if (peak > 1.0f) return {255, 40, 40};
+        if (peak > 0.7f) return {255, 200, 50};
+        return {80, 220, 80};
+    }
+
+private:
+    float m_peakL = 0.0f;
+    float m_peakR = 0.0f;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PanWidget (horizontal pan bar, -1..+1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+class PanWidget : public Widget {
+public:
+    using ValueCallback = std::function<void(float)>;
+
+    PanWidget() = default;
+
+    void setValue(float v) { m_value = detail::cclamp(v, -1.0f, 1.0f); }
+    float value() const { return m_value; }
+    void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setThumbColor(Color c) { m_thumbColor = c; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({60.0f, 16.0f});
+    }
+
+    void paint(UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer) return;
+        ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                               Theme::clipSlotEmpty);
+        float center = m_bounds.x + m_bounds.w * 0.5f;
+        float thumbX = center + m_value * (m_bounds.w * 0.5f - 4) - 4;
+        ctx.renderer->drawRect(thumbX, m_bounds.y, 8, m_bounds.h, m_thumbColor);
+#endif
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button == MouseButton::Left) {
+            m_dragging = true;
+            m_lastX = e.x;
+            captureMouse();
+            return true;
+        }
+        if (e.button == MouseButton::Right) {
+            m_value = 0.0f;
+            if (m_onChange) m_onChange(m_value);
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        m_dragging = false;
+        releaseMouse();
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (!m_dragging) return false;
+        float dx = e.x - m_lastX;
+        m_lastX = e.x;
+        float panW = m_bounds.w;
+        float delta = (dx / panW) * 2.0f;
+        float newVal = detail::cclamp(m_value + delta, -1.0f, 1.0f);
+        if (newVal != m_value) {
+            m_value = newVal;
+            if (m_onChange) m_onChange(m_value);
+        }
+        return true;
+    }
+
+private:
+    float m_value = 0.0f;
+    bool m_dragging = false;
+    float m_lastX = 0;
+    ValueCallback m_onChange;
+    Color m_thumbColor{100, 180, 255};
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ScrollBar (horizontal scrollbar with thumb drag)
+// ═══════════════════════════════════════════════════════════════════════════
+
+class ScrollBar : public Widget {
+public:
+    using ScrollCallback = std::function<void(float)>;
+
+    ScrollBar() = default;
+
+    void setContentSize(float size) { m_contentSize = size; }
+    float contentSize() const { return m_contentSize; }
+    void setScrollPos(float pos) { m_scrollPos = pos; }
+    float scrollPos() const { return m_scrollPos; }
+    void setOnScroll(ScrollCallback cb) { m_onScroll = std::move(cb); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, kDefaultHeight});
+    }
+
+    void paint(UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer) return;
+        ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                               Color{40, 40, 45});
+        if (m_contentSize <= m_bounds.w) return;
+
+        float thumbW = std::max(20.0f,
+            m_bounds.w * (m_bounds.w / std::max(1.0f, m_contentSize)));
+        float maxScroll = m_contentSize - m_bounds.w;
+        float scrollFrac = m_scrollPos / std::max(1.0f, maxScroll);
+        float thumbX = m_bounds.x + scrollFrac * (m_bounds.w - thumbW);
+
+        Color thumbCol = (m_dragging || m_hovered)
+            ? Color{120, 120, 130} : Color{90, 90, 100};
+        ctx.renderer->drawRect(thumbX, m_bounds.y, thumbW, m_bounds.h, thumbCol);
+#endif
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button != MouseButton::Left) return false;
+        if (m_contentSize <= m_bounds.w) return false;
+
+        float maxScroll = m_contentSize - m_bounds.w;
+        float thumbW = std::max(20.0f,
+            m_bounds.w * (m_bounds.w / std::max(1.0f, m_contentSize)));
+        float scrollFrac = m_scrollPos / std::max(1.0f, maxScroll);
+        float thumbX = m_bounds.x + scrollFrac * (m_bounds.w - thumbW);
+
+        if (e.x >= thumbX && e.x < thumbX + thumbW) {
+            m_dragging = true;
+            m_dragStartX = e.x;
+            m_dragStartScroll = m_scrollPos;
+            captureMouse();
+        } else {
+            float clickFrac = (e.x - m_bounds.x) / m_bounds.w;
+            m_scrollPos = detail::cclamp(clickFrac * maxScroll, 0.0f, maxScroll);
+            if (m_onScroll) m_onScroll(m_scrollPos);
+        }
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        float localY = e.y - m_bounds.y;
+        m_hovered = (localY >= 0 && localY < m_bounds.h);
+
+        if (m_dragging && m_contentSize > m_bounds.w) {
+            float dx = e.x - m_dragStartX;
+            float scrollDelta = dx * (m_contentSize / std::max(1.0f, m_bounds.w));
+            float maxScroll = m_contentSize - m_bounds.w;
+            m_scrollPos = detail::cclamp(m_dragStartScroll + scrollDelta, 0.0f, maxScroll);
+            if (m_onScroll) m_onScroll(m_scrollPos);
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_dragging) {
+            m_dragging = false;
+            releaseMouse();
+            return true;
+        }
+        return false;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        if (m_contentSize <= m_bounds.w) return false;
+        float maxScroll = m_contentSize - m_bounds.w;
+        m_scrollPos = detail::cclamp(m_scrollPos - e.dx * 30.0f, 0.0f, maxScroll);
+        if (m_onScroll) m_onScroll(m_scrollPos);
+        return true;
+    }
+
+private:
+    static constexpr float kDefaultHeight = 12.0f;
+
+    float m_contentSize = 0.0f;
+    float m_scrollPos = 0.0f;
+    bool m_dragging = false;
+    bool m_hovered = false;
+    float m_dragStartX = 0;
+    float m_dragStartScroll = 0;
+    ScrollCallback m_onScroll;
 };
 
 } // namespace fw

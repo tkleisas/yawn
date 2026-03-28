@@ -1,11 +1,11 @@
 #pragma once
 // ReturnMasterPanel — Returns + Master channel strip panel.
 //
-// Renders return bus strips and the master strip in the bottom-right
-// quadrant of the ContentGrid.  Handles fader/pan drag for returns
-// and master volume.
+// Uses framework widgets (FwButton, FwFader, MeterWidget, PanWidget, Label)
+// for all controls.  Only the separator and strip backgrounds remain manual.
 
 #include "ui/framework/Widget.h"
+#include "ui/framework/Primitives.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -28,7 +28,50 @@ struct ReturnMeter {
 
 class ReturnMasterPanel : public Widget {
 public:
-    ReturnMasterPanel() = default;
+    ReturnMasterPanel() {
+        static const char* retNames[] = {
+            "Ret A","Ret B","Ret C","Ret D","Ret E","Ret F","Ret G","Ret H"};
+
+        Color busCol{100, 180, 255};
+        Color masterCol = Theme::transportAccent;
+
+        for (int b = 0; b < kMaxReturnBuses; ++b) {
+            auto& rs = m_returnStrips[b];
+
+            rs.nameLabel.setText(retNames[b]);
+            rs.nameLabel.setColor(Theme::textPrimary);
+
+            rs.muteBtn.setLabel("M");
+            rs.muteBtn.setOnClick([this, b]() {
+                if (!m_engine) return;
+                bool cur = m_engine->mixer().returnBus(b).muted;
+                m_engine->sendCommand(audio::SetReturnMuteMsg{b, !cur});
+            });
+
+            rs.pan.setThumbColor(busCol);
+            rs.pan.setOnChange([this, b](float v) {
+                if (!m_engine) return;
+                m_engine->sendCommand(audio::SetReturnPanMsg{b, v});
+            });
+
+            rs.fader.setRange(0.0f, 2.0f);
+            rs.fader.setTrackColor(busCol);
+            rs.fader.setOnChange([this, b](float v) {
+                if (!m_engine) return;
+                m_engine->sendCommand(audio::SetReturnVolumeMsg{b, v});
+            });
+        }
+
+        m_masterStrip.nameLabel.setText("MASTER");
+        m_masterStrip.nameLabel.setColor(Theme::textPrimary);
+
+        m_masterStrip.fader.setRange(0.0f, 2.0f);
+        m_masterStrip.fader.setTrackColor(masterCol);
+        m_masterStrip.fader.setOnChange([this](float v) {
+            if (!m_engine) return;
+            m_engine->sendCommand(audio::SetMasterVolumeMsg{v});
+        });
+    }
 
     void init(Project* project, audio::AudioEngine* engine) {
         m_project = project;
@@ -44,7 +87,7 @@ public:
         }
     }
 
-    bool isDragging() const { return m_dragging; }
+    bool isDragging() const { return Widget::capturedWidget() != nullptr; }
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
@@ -61,7 +104,6 @@ public:
     void paint(UIContext& ctx) override {
         if (!m_engine) return;
         auto& r = *ctx.renderer;
-        auto& f = *ctx.font;
 
         float x = m_bounds.x, y = m_bounds.y;
         float w = m_bounds.w, h = m_bounds.h;
@@ -72,21 +114,18 @@ public:
         float stripY = y + 2;
         float stripH = h - 4;
 
-        // Return bus strips
         float curX = x + 4;
         for (int b = 0; b < kMaxReturnBuses; ++b) {
             if (curX + kRetStripW > x + w) break;
-            paintReturnStrip(r, f, b, curX, stripY, kRetStripW, stripH);
+            paintReturnStrip(ctx, b, curX, stripY, kRetStripW, stripH);
             curX += kRetStripW + kStripPadding;
         }
 
-        // Separator
         r.drawRect(curX, y + 4, kSeparatorWidth, h - 8, Theme::clipSlotBorder);
         curX += kSeparatorWidth + 4;
 
-        // Master strip
         if (curX + kRetStripW <= x + w)
-            paintMasterStrip(r, f, curX, stripY, kRetStripW, stripH);
+            paintMasterStrip(ctx, curX, stripY, kRetStripW, stripH);
     }
 
     // ─── Mouse events ───────────────────────────────────────────────────
@@ -96,238 +135,189 @@ public:
         float mx = e.x, my = e.y;
         bool rightClick = (e.button == MouseButton::Right);
         float x = m_bounds.x, y = m_bounds.y;
-        float h = m_bounds.h;
 
-        // Return bus strips
         float curX = x + 4;
         for (int b = 0; b < kMaxReturnBuses; ++b) {
             float rx = curX + b * (kRetStripW + kStripPadding);
             if (mx < rx || mx >= rx + kRetStripW) continue;
-            const auto& rb = m_engine->mixer().returnBus(b);
 
-            float muteY = y + 2 + 26;
-            if (my >= muteY && my < muteY + kButtonHeight && mx >= rx + 4 && mx < rx + 4 + kButtonWidth) {
-                m_engine->sendCommand(audio::SetReturnMuteMsg{b, !rb.muted});
-                return true;
+            auto& rs = m_returnStrips[b];
+
+            if (!rightClick && hitWidget(rs.muteBtn, mx, my)) {
+                return rs.muteBtn.onMouseDown(e);
             }
-            float panY = y + 56;
-            float panW = kRetStripW - 8;
-            if (my >= panY && my < panY + 8 && mx >= rx + 4 && mx < rx + 4 + panW) {
-                if (rightClick) {
-                    m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
-                    return true;
-                }
-                beginDrag(DragType::Pan, kDragReturn0 + b, mx, rb.pan);
-                return true;
+            if (hitWidget(rs.pan, mx, my)) {
+                return rs.pan.onMouseDown(e);
             }
-            float faderY = y + 74;
-            float faderBottom = y + h - 2 - 22;
-            if (my >= faderY && my < faderBottom && mx >= rx + 4 && mx < rx + 4 + kFaderWidth) {
+            if (hitWidget(rs.fader, mx, my)) {
                 if (rightClick) {
                     m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
                     return true;
                 }
-                beginDrag(DragType::Fader, kDragReturn0 + b, my, rb.volume);
-                return true;
+                return rs.fader.onMouseDown(e);
             }
         }
 
-        // Master strip
-        float masterX = x + 4 + kMaxReturnBuses * (kRetStripW + kStripPadding) + kSeparatorWidth + 4;
-        float masterFaderY = y + 2 + 30;
-        float masterFaderBottom = y + h - 2 - 22;
-        if (mx >= masterX + 4 && mx < masterX + 4 + kFaderWidth + 2 &&
-            my >= masterFaderY && my < masterFaderBottom) {
-            if (rightClick) {
-                m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
-                return true;
+        float masterX = x + 4
+            + kMaxReturnBuses * (kRetStripW + kStripPadding)
+            + kSeparatorWidth + 4;
+
+        if (mx >= masterX && mx < masterX + kRetStripW) {
+            if (hitWidget(m_masterStrip.fader, mx, my)) {
+                if (rightClick) {
+                    m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
+                    return true;
+                }
+                return m_masterStrip.fader.onMouseDown(e);
             }
-            beginDrag(DragType::Fader, kDragMaster, my, m_engine->mixer().master().volume);
-            return true;
         }
 
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (!m_dragging || !m_engine) return false;
-        float mx = e.x, my = e.y;
-
-        if (m_dragType == DragType::Fader) {
-            float faderH = m_bounds.h - 4 - 74 - 22;
-            if (faderH < 20) faderH = 20;
-            float deltaY = m_dragStartPos - my;
-            float deltaVol = (deltaY / faderH) * 2.0f;
-            float newVol = std::clamp(m_dragStartValue + deltaVol, 0.0f, 2.0f);
-
-            if (m_dragTarget == kDragMaster)
-                m_engine->sendCommand(audio::SetMasterVolumeMsg{newVol});
-            else if (m_dragTarget <= kDragReturn0)
-                m_engine->sendCommand(audio::SetReturnVolumeMsg{m_dragTarget - kDragReturn0, newVol});
-            return true;
-        }
-
-        if (m_dragType == DragType::Pan) {
-            float panW = 100.0f;
-            float deltaX = mx - m_dragStartPos;
-            float deltaPan = (deltaX / panW) * 2.0f;
-            float newPan = std::clamp(m_dragStartValue + deltaPan, -1.0f, 1.0f);
-
-            if (m_dragTarget <= kDragReturn0)
-                m_engine->sendCommand(audio::SetReturnPanMsg{m_dragTarget - kDragReturn0, newPan});
-            return true;
+        if (auto* cap = Widget::capturedWidget()) {
+            return cap->onMouseMove(e);
         }
         return false;
     }
 
-    bool onMouseUp(MouseEvent&) override {
-        if (m_dragging) {
-            m_dragging = false;
-            m_dragType = DragType::None;
-            m_dragTarget = -1;
-            releaseMouse();
-            return true;
+    bool onMouseUp(MouseEvent& e) override {
+        if (auto* cap = Widget::capturedWidget()) {
+            return cap->onMouseUp(e);
         }
         return false;
     }
 
 private:
-    // ─── Helpers ────────────────────────────────────────────────────────
+    struct StripWidgets {
+        FwButton   muteBtn;
+        PanWidget  pan;
+        FwFader    fader;
+        MeterWidget meter;
+        Label      nameLabel;
+        Label      dbLabel;
+    };
 
-    float fontScale(Font& f) const {
+    bool hitWidget(Widget& w, float mx, float my) {
+        auto& b = w.bounds();
+        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+    }
+
+    void paintStripCommon(UIContext& ctx, StripWidgets& sw,
+                           const char* name, float x, float y,
+                           float w, float h, Color col,
+                           float volume, float peakL, float peakR,
+                           bool muted) {
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
         float pixH = f.pixelHeight();
-        return (pixH < 1.0f) ? Theme::kSmallFontSize : Theme::kSmallFontSize / pixH;
-    }
-
-    void drawText(Renderer2D& r, Font& f, const char* text,
-                  float x, float y, float scale, Color color) {
-        if (!f.isLoaded()) return;
-        float tx = x;
-        for (const char* p = text; *p; ++p) {
-            auto g = f.getGlyph(*p, tx, y, scale);
-            r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                               g.u0, g.v0, g.u1, g.v1, color, f.textureId());
-            tx += g.xAdvance;
-        }
-    }
-
-    enum class DragType { None, Fader, Pan };
-
-    void beginDrag(DragType type, int target, float startPos, float startValue) {
-        m_dragging = true;
-        m_dragType = type;
-        m_dragTarget = target;
-        m_dragStartPos = startPos;
-        m_dragStartValue = startValue;
-        captureMouse();
-    }
-
-    // ─── Strip Rendering ────────────────────────────────────────────────
-
-    void paintReturnStrip(Renderer2D& r, Font& f,
-                          int idx, float x, float y, float w, float h) {
-        r.drawRect(x, y, w, h, Theme::background);
-        Color busCol{100, 180, 255};
-        float scale = fontScale(f);
+        float scale = (pixH < 1.0f) ? Theme::kSmallFontSize
+                     : Theme::kSmallFontSize / pixH;
         float smallScale = scale * 0.8f;
-        const auto& rb = m_engine->mixer().returnBus(idx);
 
-        r.drawRect(x, y, w, 3, busCol);
-        const char* names[] = {"Ret A","Ret B","Ret C","Ret D","Ret E","Ret F","Ret G","Ret H"};
-        drawText(r, f, names[idx], x + 4, y + 5, scale, Theme::textPrimary);
+        sw.nameLabel.setFontScale(scale);
+        sw.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
+        sw.nameLabel.paint(ctx);
 
         float curY = y + 26;
-        Color muteCol = rb.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty;
-        paintButton(r, f, x + 4, curY, kButtonWidth, kButtonHeight, "M", muteCol,
-                    rb.muted ? Color{0,0,0} : Theme::textSecondary);
+
+        if (&sw.muteBtn != nullptr) {
+            sw.muteBtn.setColor(muted ? Color{255, 80, 80} : Theme::clipSlotEmpty);
+            sw.muteBtn.setTextColor(muted ? Color{0, 0, 0} : Theme::textSecondary);
+            sw.muteBtn.layout(Rect{x + 4, curY, kButtonWidth, kButtonHeight}, ctx);
+            sw.muteBtn.paint(ctx);
+        }
 
         curY += kButtonHeight + 6;
-        float panW = w - 8, panH = 16;
-        r.drawRect(x + 4, curY, panW, panH, Theme::clipSlotEmpty);
-        float panCenter = x + 4 + panW * 0.5f;
-        r.drawRect(panCenter + rb.pan * (panW * 0.5f - 4) - 4, curY, 8, panH, busCol);
+        sw.pan.layout(Rect{x + 4, curY, w - 8, 16}, ctx);
+        sw.pan.paint(ctx);
 
-        curY += panH + 8;
+        curY += 16 + 8;
         float faderBottom = y + h - 22;
         float faderH = std::max(20.0f, faderBottom - curY);
-        paintFader(r, x + 4, curY, kFaderWidth, faderH, rb.volume, busCol);
-        paintMeter(r, x + 4 + kFaderWidth + 3, curY, kMeterWidth * 2, faderH,
-                   m_returnMeters[idx].peakL, m_returnMeters[idx].peakR);
 
-        float db = rb.volume > 0.001f ? 20.0f * std::log10(rb.volume) : -60.0f;
+        sw.fader.setValue(volume);
+        sw.fader.layout(Rect{x + 4, curY, kFaderWidth, faderH}, ctx);
+        sw.fader.paint(ctx);
+
+        sw.meter.setPeak(peakL, peakR);
+        sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
+                             kMeterWidth * 2, faderH}, ctx);
+        sw.meter.paint(ctx);
+
+        float db = volume > 0.001f ? 20.0f * std::log10(volume) : -60.0f;
         char dbText[16];
         if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
         else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-        drawText(r, f, dbText, x + 4, y + h - 18, smallScale, Theme::textDim);
+        sw.dbLabel.setText(dbText);
+        sw.dbLabel.setColor(Theme::textDim);
+        sw.dbLabel.setFontScale(smallScale);
+        sw.dbLabel.layout(Rect{x + 4, y + h - 18, w - 8, 14}, ctx);
+        sw.dbLabel.paint(ctx);
     }
 
-    void paintMasterStrip(Renderer2D& r, Font& f,
-                          float x, float y, float w, float h) {
-        r.drawRect(x, y, w, h, Color{35, 35, 40});
+    void paintReturnStrip(UIContext& ctx, int idx, float x, float y,
+                           float w, float h) {
+        auto& r = *ctx.renderer;
+        Color busCol{100, 180, 255};
+        auto& rs = m_returnStrips[idx];
+        const auto& rb = m_engine->mixer().returnBus(idx);
+
+        r.drawRect(x, y, w, h, Theme::background);
+        r.drawRect(x, y, w, 3, busCol);
+
+        rs.pan.setValue(rb.pan);
+        rs.fader.setTrackColor(busCol);
+
+        paintStripCommon(ctx, rs, nullptr, x, y, w, h, busCol,
+                         rb.volume,
+                         m_returnMeters[idx].peakL,
+                         m_returnMeters[idx].peakR,
+                         rb.muted);
+    }
+
+    void paintMasterStrip(UIContext& ctx, float x, float y,
+                           float w, float h) {
+        auto& r = *ctx.renderer;
         Color masterCol = Theme::transportAccent;
-        float scale = fontScale(f);
-        float smallScale = scale * 0.8f;
         const auto& master = m_engine->mixer().master();
 
+        r.drawRect(x, y, w, h, Color{35, 35, 40});
         r.drawRect(x, y, w, 3, masterCol);
-        drawText(r, f, "MASTER", x + 4, y + 5, scale, Theme::textPrimary);
 
-        float curY = y + 30;
+        m_masterStrip.fader.setValue(master.volume);
+
+        float curY = y + 26;
+
+        m_masterStrip.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
+        m_masterStrip.nameLabel.paint(ctx);
+
+        curY = y + 30;
         float faderBottom = y + h - 22;
         float faderH = std::max(20.0f, faderBottom - curY);
-        paintFader(r, x + 4, curY, kFaderWidth + 2, faderH, master.volume, masterCol);
-        paintMeter(r, x + kFaderWidth + 10, curY, kMeterWidth * 2 + 2, faderH,
-                   m_masterMeter.peakL, m_masterMeter.peakR);
 
+        m_masterStrip.fader.layout(Rect{x + 4, curY, kFaderWidth + 2, faderH}, ctx);
+        m_masterStrip.fader.paint(ctx);
+
+        m_masterStrip.meter.setPeak(m_masterMeter.peakL, m_masterMeter.peakR);
+        m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,
+                                        kMeterWidth * 2 + 2, faderH}, ctx);
+        m_masterStrip.meter.paint(ctx);
+
+        auto& f = *ctx.font;
+        float pixH = f.pixelHeight();
+        float smallScale = (pixH < 1.0f) ? Theme::kSmallFontSize * 0.8f
+                         : Theme::kSmallFontSize * 0.8f / pixH;
         float db = master.volume > 0.001f ? 20.0f * std::log10(master.volume) : -60.0f;
         char dbText[16];
         if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
         else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-        drawText(r, f, dbText, x + 4, y + h - 18, smallScale, Theme::textDim);
-    }
-
-    void paintFader(Renderer2D& r, float x, float y, float w, float h,
-                    float value, Color col) {
-        float trackX = x + w * 0.5f - 1;
-        r.drawRect(trackX, y, 2, h, Theme::clipSlotBorder);
-        float frac = std::min(value / 2.0f, 1.0f);
-        float knobH = 32;
-        float knobY = y + h - frac * h - knobH * 0.5f;
-        r.drawRect(x, knobY, w, knobH, col);
-        r.drawRect(x + 1, knobY + 2, w - 2, knobH - 4, Color{200, 200, 200});
-        float unityY = y + h - 0.5f * h;
-        r.drawRect(x - 2, unityY, w + 4, 1, Theme::textDim);
-    }
-
-    void paintMeter(Renderer2D& r, float x, float y, float w, float h,
-                    float peakL, float peakR) {
-        float halfW = w * 0.5f - 1;
-        r.drawRect(x, y, halfW, h, Color{20, 20, 22});
-        r.drawRect(x + halfW + 2, y, halfW, h, Color{20, 20, 22});
-
-        auto dbToH = [](float peak) -> float {
-            if (peak < 0.001f) return 0.0f;
-            float db = 20.0f * std::log10(peak);
-            return std::max(0.0f, std::min(1.0f, (db + 60.0f) / 60.0f));
-        };
-        auto meterCol = [](float peak) -> Color {
-            if (peak > 1.0f) return {255, 40, 40};
-            if (peak > 0.7f) return {255, 200, 50};
-            return {80, 220, 80};
-        };
-        float hL = dbToH(peakL) * h;
-        float hR = dbToH(peakR) * h;
-        r.drawRect(x, y + h - hL, halfW, hL, meterCol(peakL));
-        r.drawRect(x + halfW + 2, y + h - hR, halfW, hR, meterCol(peakR));
-    }
-
-    void paintButton(Renderer2D& r, Font& f, float x, float y, float w, float h,
-                     const char* label, Color bg, Color text) {
-        r.drawRect(x, y, w, h, bg);
-        r.drawRectOutline(x, y, w, h, Theme::clipSlotBorder);
-        float sc = Theme::kSmallFontSize / f.pixelHeight() * 0.85f;
-        float tw = f.textWidth(label, sc);
-        drawText(r, f, label, x + (w - tw) * 0.5f, y + 1, sc, text);
+        m_masterStrip.dbLabel.setText(dbText);
+        m_masterStrip.dbLabel.setColor(Theme::textDim);
+        m_masterStrip.dbLabel.setFontScale(smallScale);
+        m_masterStrip.dbLabel.layout(Rect{x + 4, y + h - 18, w - 8, 14}, ctx);
+        m_masterStrip.dbLabel.paint(ctx);
     }
 
     // ─── Data ───────────────────────────────────────────────────────────
@@ -338,13 +328,9 @@ private:
     ReturnMeter m_returnMeters[kMaxReturnBuses] = {};
     ReturnMeter m_masterMeter = {};
 
-    bool     m_dragging       = false;
-    DragType m_dragType       = DragType::None;
-    int      m_dragTarget     = -1;
-    float    m_dragStartPos   = 0;
-    float    m_dragStartValue = 0;
+    StripWidgets m_returnStrips[kMaxReturnBuses];
+    StripWidgets m_masterStrip;
 
-    // Constants
     static constexpr float kMeterWidth     = 6.0f;
     static constexpr float kFaderWidth     = 20.0f;
     static constexpr float kButtonHeight   = 22.0f;
@@ -352,9 +338,6 @@ private:
     static constexpr float kStripPadding   = 2.0f;
     static constexpr float kSeparatorWidth = 2.0f;
     static constexpr float kRetStripW      = 70.0f;
-
-    static constexpr int kDragMaster  = -1;
-    static constexpr int kDragReturn0 = -100;
 };
 
 } // namespace fw

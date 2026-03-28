@@ -1,11 +1,12 @@
 #pragma once
 // MixerPanel — Framework widget replacement for MixerView.
 //
-// This is a fw::Widget that renders the mixer and handles events internally.
-// It replaces both MixerView (the panel) and MixerViewWrapper (the wrapper).
-// Only included from App.cpp — never compiled in test builds.
+// Uses framework widgets (FwButton, FwFader, MeterWidget, PanWidget,
+// ScrollBar, Label) for all controls.  Only the color bar, send dots,
+// column borders, and strip background remain as manual rendering.
 
 #include "ui/framework/Widget.h"
+#include "ui/framework/Primitives.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -22,7 +23,6 @@ namespace yawn {
 namespace ui {
 namespace fw {
 
-// Meter data from the audio thread
 struct MixerMeter {
     float peakL = 0.0f;
     float peakR = 0.0f;
@@ -30,7 +30,19 @@ struct MixerMeter {
 
 class MixerPanel : public Widget {
 public:
-    MixerPanel() = default;
+    MixerPanel() {
+        m_mixLabel.setText("MIX");
+        m_mixLabel.setColor(Theme::textDim);
+
+        m_scrollbar.setOnScroll([this](float pos) {
+            m_scrollX = pos;
+            if (m_onScrollChanged) m_onScrollChanged(pos);
+        });
+
+        for (int t = 0; t < kMaxTracks; ++t) {
+            setupStripCallbacks(t);
+        }
+    }
 
     void init(Project* project, audio::AudioEngine* engine) {
         m_project = project;
@@ -45,7 +57,7 @@ public:
 
     void setSelectedTrack(int track) { m_selectedTrack = track; }
     int  selectedTrack() const { return m_selectedTrack; }
-    bool isDragging() const { return m_dragging; }
+    bool isDragging() const { return Widget::capturedWidget() != nullptr; }
     float preferredHeight() const { return kMixerHeight; }
     float scrollX() const { return m_scrollX; }
     void setScrollX(float sx) { m_scrollX = sx; }
@@ -67,422 +79,304 @@ public:
     void paint(UIContext& ctx) override {
         if (!m_project || !m_engine) return;
         auto& r = *ctx.renderer;
-        auto& f = *ctx.font;
 
         float x = m_bounds.x, y = m_bounds.y;
         float w = m_bounds.w,  h = m_bounds.h;
 
-        // Background
         r.drawRect(x, y, w, h, Theme::panelBg);
         r.drawRect(x, y, w, 1, Theme::clipSlotBorder);
 
         float stripY = y + 2;
         float stripH = h - 4 - kScrollbarH;
 
-        // "MIX" label in scene gutter
-        float scale = fontScale(f) * 0.85f;
-        drawText(r, f, "MIX", x + 6, y + stripH * 0.5f - 8, scale, Theme::textDim);
+        float pixH = ctx.font ? ctx.font->pixelHeight() : 0;
+        float labelScale = (pixH < 1.0f) ? Theme::kSmallFontSize
+                         : Theme::kSmallFontSize / pixH;
+        labelScale *= 0.85f;
+        m_mixLabel.setFontScale(labelScale);
+        m_mixLabel.layout(Rect{x + 6, y + stripH * 0.5f - 8, 30, 16}, ctx);
+        m_mixLabel.paint(ctx);
 
         float gridX = x + Theme::kSceneLabelWidth;
         float gridW = w - Theme::kSceneLabelWidth;
 
-        // Track channel strips (scrollable, clipped)
         r.pushClip(gridX, y, gridW, h - kScrollbarH);
         for (int t = 0; t < m_project->numTracks(); ++t) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
             if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-            paintChannelStrip(r, f, t, sx, stripY, Theme::kTrackWidth, stripH);
+            paintStrip(ctx, t, sx, stripY, Theme::kTrackWidth, stripH);
         }
         r.popClip();
 
-        // Horizontal scrollbar
-        paintHScrollbar(r, gridX, y + h - kScrollbarH, gridW);
+        float contentW = m_project->numTracks() * Theme::kTrackWidth;
+        m_scrollbar.setContentSize(contentW);
+        m_scrollbar.setScrollPos(m_scrollX);
+        m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, ctx);
+        m_scrollbar.paint(ctx);
     }
 
     // ─── Events ─────────────────────────────────────────────────────────
 
     bool onMouseDown(MouseEvent& e) override {
         if (!m_project || !m_engine) return false;
-
         float mx = e.x, my = e.y;
         bool rightClick = (e.button == MouseButton::Right);
+
+        if (hitWidget(m_scrollbar, mx, my)) {
+            return m_scrollbar.onMouseDown(e);
+        }
+
         float x = m_bounds.x, y = m_bounds.y;
         float gridX = x + Theme::kSceneLabelWidth;
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
 
-        // --- Scrollbar ---
-        float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
-        if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW) {
-            float contentW  = m_project->numTracks() * Theme::kTrackWidth;
-            float maxScroll = std::max(0.0f, contentW - gridW);
-            if (maxScroll > 0) {
-                float thumbW     = std::max(20.0f, gridW * (gridW / std::max(1.0f, contentW)));
-                float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
-                float thumbX     = gridX + scrollFrac * (gridW - thumbW);
-                if (mx >= thumbX && mx < thumbX + thumbW) {
-                    m_hsbDragging        = true;
-                    m_hsbDragStartX      = mx;
-                    m_hsbDragStartScroll = m_scrollX;
-                    captureMouse();
-                } else {
-                    float clickFrac = (mx - gridX) / gridW;
-                    m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
-                    if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
-                }
-                return true;
-            }
-        }
-
-        // --- Track channel strips (scroll-adjusted) ---
         for (int t = 0; t < m_project->numTracks(); ++t) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
             if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-            float ix = sx + Theme::kSlotPadding;
-            float iw = Theme::kTrackWidth - Theme::kSlotPadding * 2;
             if (mx < sx || mx >= sx + Theme::kTrackWidth) continue;
 
-            // Mute / Solo buttons
-            float btnY = y + 2 + 30;
-            float btnW = std::min((iw - 12) * 0.5f, kButtonWidth);
-            if (my >= btnY && my < btnY + kButtonHeight) {
-                if (mx >= ix + 4 && mx < ix + 4 + btnW) {
-                    bool cur = m_engine->mixer().trackChannel(t).muted;
-                    m_engine->sendCommand(audio::SetTrackMuteMsg{t, !cur});
-                    return true;
-                }
-                if (mx >= ix + 4 + btnW + 2 && mx < ix + 4 + 2 * btnW + 2) {
-                    bool cur = m_engine->mixer().trackChannel(t).soloed;
-                    m_engine->sendCommand(audio::SetTrackSoloMsg{t, !cur});
-                    return true;
-                }
-            }
+            auto& s = m_strips[t];
 
-            // Arm button
-            float armY = btnY + kButtonHeight + 2;
-            if (my >= armY && my < armY + kButtonHeight) {
-                float armW = iw - 8;
-                if (mx >= ix + 4 && mx < ix + 4 + armW) {
-                    bool cur = m_project->track(t).armed;
-                    m_project->track(t).armed = !cur;
-                    m_engine->sendCommand(audio::SetTrackArmedMsg{t, !cur});
-                    if (m_onTrackArmed) m_onTrackArmed(t, !cur);
-                    return true;
-                }
+            if (!rightClick && hitWidget(s.muteBtn, mx, my)) {
+                return s.muteBtn.onMouseDown(e);
             }
-
-            // Monitor mode button (below arm)
-            float monY = armY + kButtonHeight + 2;
-            if (my >= monY && my < monY + kButtonHeight) {
-                float monW = iw - 8;
-                if (mx >= ix + 4 && mx < ix + 4 + monW) {
-                    auto& track = m_project->track(t);
-                    if (rightClick) {
-                        track.monitorMode = Track::MonitorMode::Auto;
-                    } else {
-                        // Cycle: Auto → In → Off → Auto
-                        if (track.monitorMode == Track::MonitorMode::Auto)
-                            track.monitorMode = Track::MonitorMode::In;
-                        else if (track.monitorMode == Track::MonitorMode::In)
-                            track.monitorMode = Track::MonitorMode::Off;
-                        else
-                            track.monitorMode = Track::MonitorMode::Auto;
-                    }
-                    m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(track.monitorMode)});
-                    return true;
-                }
+            if (!rightClick && hitWidget(s.soloBtn, mx, my)) {
+                return s.soloBtn.onMouseDown(e);
             }
-
-            // Pan bar (shifted down by monitor button)
-            float panY = monY + kButtonHeight + 6;
-            float panW = iw - 8;
-            if (my >= panY && my < panY + 8 && mx >= ix + 4 && mx < ix + 4 + panW) {
+            if (!rightClick && hitWidget(s.armBtn, mx, my)) {
+                return s.armBtn.onMouseDown(e);
+            }
+            if (hitWidget(s.monBtn, mx, my)) {
                 if (rightClick) {
-                    m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f});
+                    m_project->track(t).monitorMode = Track::MonitorMode::Auto;
+                    m_engine->sendCommand(
+                        audio::SetTrackMonitorMsg{t,
+                            static_cast<uint8_t>(Track::MonitorMode::Auto)});
                     return true;
                 }
-                beginDrag(DragType::Pan, t, mx, m_engine->mixer().trackChannel(t).pan);
-                return true;
+                return s.monBtn.onMouseDown(e);
             }
-
-            // Fader
-            float faderY = panY + 16 + 16;
-            float faderBottom = y + m_bounds.h - kScrollbarH - 2 - 22;
-            if (my >= faderY && my < faderBottom && mx >= ix + 4 && mx < ix + 4 + kFaderWidth) {
+            if (hitWidget(s.pan, mx, my)) {
+                return s.pan.onMouseDown(e);
+            }
+            if (hitWidget(s.fader, mx, my)) {
                 if (rightClick) {
                     m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
                     return true;
                 }
-                beginDrag(DragType::Fader, t, my, m_engine->mixer().trackChannel(t).volume);
-                return true;
+                return s.fader.onMouseDown(e);
             }
         }
-
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        float mx = e.x, my = e.y;
-
-        // Scrollbar drag
-        if (m_hsbDragging && m_project) {
-            float gridW    = m_bounds.w - Theme::kSceneLabelWidth;
-            float contentW = m_project->numTracks() * Theme::kTrackWidth;
-            float maxScroll= std::max(0.0f, contentW - gridW);
-            float delta    = mx - m_hsbDragStartX;
-            float scrollDelta = delta * (contentW / std::max(1.0f, gridW));
-            m_scrollX = std::clamp(m_hsbDragStartScroll + scrollDelta, 0.0f, maxScroll);
-            if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
-            return true;
+        if (auto* cap = Widget::capturedWidget()) {
+            return cap->onMouseMove(e);
         }
 
-        if (!m_dragging || !m_engine) {
-            // Scrollbar hover
-            float gridX = m_bounds.x + Theme::kSceneLabelWidth;
-            float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-            float sbY   = m_bounds.y + m_bounds.h - kScrollbarH;
-            m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH
-                            && mx >= gridX && mx < gridX + gridW);
-            return false;
-        }
-
-        if (m_dragType == DragType::Fader) {
-            float faderH = m_bounds.h - 4 - kScrollbarH - 84 - 22;
-            if (faderH < 20) faderH = 20;
-            float deltaY = m_dragStartPos - my;
-            float deltaVol = (deltaY / faderH) * 2.0f;
-            float newVol = std::clamp(m_dragStartValue + deltaVol, 0.0f, 2.0f);
-
-            if (m_dragTarget >= 0)
-                m_engine->sendCommand(audio::SetTrackVolumeMsg{m_dragTarget, newVol});
-            return true;
-        }
-
-        if (m_dragType == DragType::Pan) {
-            float panW = 100.0f;
-            float deltaX = mx - m_dragStartPos;
-            float deltaPan = (deltaX / panW) * 2.0f;
-            float newPan = std::clamp(m_dragStartValue + deltaPan, -1.0f, 1.0f);
-
-            if (m_dragTarget >= 0)
-                m_engine->sendCommand(audio::SetTrackPanMsg{m_dragTarget, newPan});
-            return true;
+        float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
+        if (e.y >= sbY && e.y < sbY + kScrollbarH) {
+            m_scrollbar.onMouseMove(e);
         }
         return false;
     }
 
-    bool onMouseUp(MouseEvent&) override {
-        if (m_hsbDragging) {
-            m_hsbDragging = false;
-            releaseMouse();
-            return true;
-        }
-        if (m_dragging) {
-            m_dragging = false;
-            m_dragType = DragType::None;
-            m_dragTarget = -1;
-            releaseMouse();
-            return true;
+    bool onMouseUp(MouseEvent& e) override {
+        if (auto* cap = Widget::capturedWidget()) {
+            return cap->onMouseUp(e);
         }
         return false;
     }
 
     bool onScroll(ScrollEvent& e) override {
         if (!m_project) return false;
-        float gridW    = m_bounds.w - Theme::kSceneLabelWidth;
+        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
         float contentW = m_project->numTracks() * Theme::kTrackWidth;
-        float maxScroll= std::max(0.0f, contentW - gridW);
+        float maxScroll = std::max(0.0f, contentW - gridW);
         m_scrollX = std::clamp(m_scrollX - e.dx * 30.0f, 0.0f, maxScroll);
+        m_scrollbar.setScrollPos(m_scrollX);
         if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
         return true;
     }
 
 private:
-    // ─── Helpers ────────────────────────────────────────────────────────
+    struct TrackStrip {
+        FwButton muteBtn;
+        FwButton soloBtn;
+        FwButton armBtn;
+        FwButton monBtn;
+        PanWidget pan;
+        FwFader fader;
+        MeterWidget meter;
+        Label nameLabel;
+        Label dbLabel;
+    };
 
-    float fontScale(Font& f) const {
-        float pixH = f.pixelHeight();
-        return (pixH < 1.0f) ? Theme::kSmallFontSize : Theme::kSmallFontSize / pixH;
+    bool hitWidget(Widget& w, float mx, float my) {
+        auto& b = w.bounds();
+        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
     }
 
-    void drawText(Renderer2D& r, Font& f, const char* text,
-                  float x, float y, float scale, Color color) {
-        if (!f.isLoaded()) return;
-        float tx = x;
-        for (const char* p = text; *p; ++p) {
-            auto g = f.getGlyph(*p, tx, y, scale);
-            r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                               g.u0, g.v0, g.u1, g.v1, color, f.textureId());
-            tx += g.xAdvance;
-        }
+    void setupStripCallbacks(int t) {
+        auto& s = m_strips[t];
+
+        s.muteBtn.setLabel("M");
+        s.muteBtn.setOnClick([this, t]() {
+            if (!m_engine) return;
+            bool cur = m_engine->mixer().trackChannel(t).muted;
+            m_engine->sendCommand(audio::SetTrackMuteMsg{t, !cur});
+        });
+
+        s.soloBtn.setLabel("S");
+        s.soloBtn.setOnClick([this, t]() {
+            if (!m_engine) return;
+            bool cur = m_engine->mixer().trackChannel(t).soloed;
+            m_engine->sendCommand(audio::SetTrackSoloMsg{t, !cur});
+        });
+
+        s.armBtn.setLabel("R");
+        s.armBtn.setOnClick([this, t]() {
+            if (!m_project || !m_engine) return;
+            bool cur = m_project->track(t).armed;
+            m_project->track(t).armed = !cur;
+            m_engine->sendCommand(audio::SetTrackArmedMsg{t, !cur});
+            if (m_onTrackArmed) m_onTrackArmed(t, !cur);
+        });
+
+        s.monBtn.setOnClick([this, t]() {
+            if (!m_project || !m_engine) return;
+            auto& track = m_project->track(t);
+            if (track.monitorMode == Track::MonitorMode::Auto)
+                track.monitorMode = Track::MonitorMode::In;
+            else if (track.monitorMode == Track::MonitorMode::In)
+                track.monitorMode = Track::MonitorMode::Off;
+            else
+                track.monitorMode = Track::MonitorMode::Auto;
+            m_engine->sendCommand(
+                audio::SetTrackMonitorMsg{t,
+                    static_cast<uint8_t>(track.monitorMode)});
+        });
+
+        s.pan.setOnChange([this, t](float v) {
+            if (!m_engine) return;
+            m_engine->sendCommand(audio::SetTrackPanMsg{t, v});
+        });
+
+        s.fader.setRange(0.0f, 2.0f);
+        s.fader.setOnChange([this, t](float v) {
+            if (!m_engine) return;
+            m_engine->sendCommand(audio::SetTrackVolumeMsg{t, v});
+        });
     }
 
-    enum class DragType { None, Fader, Pan };
-
-    void beginDrag(DragType type, int target, float startPos, float startValue) {
-        m_dragging = true;
-        m_dragType = type;
-        m_dragTarget = target;
-        m_dragStartPos = startPos;
-        m_dragStartValue = startValue;
-        captureMouse();
-    }
-
-    // ─── Strip Rendering ────────────────────────────────────────────────
-
-    void paintHScrollbar(Renderer2D& r, float x, float y, float w) {
-        r.drawRect(x, y, w, kScrollbarH, Color{40, 40, 45});
-        if (!m_project) return;
-        float contentW = m_project->numTracks() * Theme::kTrackWidth;
-        if (contentW <= w) return;
-        float thumbW     = std::max(20.0f, w * (w / std::max(1.0f, contentW)));
-        float maxScroll  = contentW - w;
-        float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
-        float thumbX     = x + scrollFrac * (w - thumbW);
-        Color thumbCol   = (m_hsbDragging || m_hsbHovered) ? Color{120, 120, 130} : Color{90, 90, 100};
-        r.drawRect(thumbX, y, thumbW, kScrollbarH, thumbCol);
-    }
-
-    void paintChannelStrip(Renderer2D& r, Font& f,
-                           int idx, float x, float y, float w, float h) {
+    void paintStrip(UIContext& ctx, int idx, float sx, float stripY,
+                     float stripW, float stripH) {
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+        auto& s = m_strips[idx];
         float pad = Theme::kSlotPadding;
-        float ix = x + pad, iw = w - pad * 2;
-        float scale = fontScale(f);
-        float smallScale = scale * 0.8f;
-
-        r.drawRect(ix, y, iw, h, Theme::background);
-        if (idx == m_selectedTrack)
-            r.drawRect(ix, y, iw, h, Color{50, 55, 65, 255});
-
-        Color col = Theme::trackColors[m_project->track(idx).colorIndex % Theme::kNumTrackColors];
+        float ix = sx + pad, iw = stripW - pad * 2;
         const auto& ch = m_engine->mixer().trackChannel(idx);
+        Color col = Theme::trackColors[
+            m_project->track(idx).colorIndex % Theme::kNumTrackColors];
 
-        // Color bar
-        r.drawRect(ix, y, iw, 3, col);
+        r.drawRect(ix, stripY, iw, stripH, Theme::background);
+        if (idx == m_selectedTrack)
+            r.drawRect(ix, stripY, iw, stripH, Color{50, 55, 65, 255});
 
-        // Track number
-        float curY = y + 5;
-        char name[16];
-        std::snprintf(name, sizeof(name), "%d", idx + 1);
-        drawText(r, f, name, ix + 4, curY, scale, Theme::textPrimary);
+        r.drawRect(ix, stripY, iw, 3, col);
 
-        // Mute / Solo
-        curY = y + 30;
-        Color muteCol = ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty;
-        Color soloCol = ch.soloed ? Color{255, 200, 50} : Theme::clipSlotEmpty;
+        char nameBuf[16];
+        std::snprintf(nameBuf, sizeof(nameBuf), "%d", idx + 1);
+        s.nameLabel.setText(nameBuf);
+        s.nameLabel.layout(Rect{ix + 4, stripY + 5, iw - 8, 14}, ctx);
+        s.nameLabel.paint(ctx);
+
+        float curY = stripY + 30;
         float btnW = std::min((iw - 12) * 0.5f, kButtonWidth);
-        paintButton(r, f, ix + 4, curY, btnW, kButtonHeight, "M", muteCol,
-                    ch.muted ? Color{0,0,0} : Theme::textSecondary);
-        paintButton(r, f, ix + 4 + btnW + 2, curY, btnW, kButtonHeight, "S", soloCol,
-                    ch.soloed ? Color{0,0,0} : Theme::textSecondary);
 
-        // Arm button
+        s.muteBtn.setColor(ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty);
+        s.muteBtn.setTextColor(ch.muted ? Color{0, 0, 0} : Theme::textSecondary);
+        s.muteBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
+        s.muteBtn.paint(ctx);
+
+        s.soloBtn.setColor(ch.soloed ? Color{255, 200, 50} : Theme::clipSlotEmpty);
+        s.soloBtn.setTextColor(ch.soloed ? Color{0, 0, 0} : Theme::textSecondary);
+        s.soloBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
+        s.soloBtn.paint(ctx);
+
         curY += kButtonHeight + 2;
-        {
-            float armBtnW = iw - 8;
-            bool isArmed = m_project->track(idx).armed;
-            Color armBg = isArmed ? Color{200, 40, 40} : Theme::clipSlotEmpty;
-            Color armTxt = isArmed ? Color{255, 255, 255} : Theme::textSecondary;
-            paintButton(r, f, ix + 4, curY, armBtnW, kButtonHeight, "R", armBg, armTxt);
-        }
+        bool armed = m_project->track(idx).armed;
+        s.armBtn.setColor(armed ? Color{200, 40, 40} : Theme::clipSlotEmpty);
+        s.armBtn.setTextColor(armed ? Color{255, 255, 255} : Theme::textSecondary);
+        s.armBtn.layout(Rect{ix + 4, curY, iw - 8, kButtonHeight}, ctx);
+        s.armBtn.paint(ctx);
 
-        // Monitor mode selector (Auto / In / Off)
         curY += kButtonHeight + 2;
-        {
-            float monW = iw - 8;
-            auto mode = m_project->track(idx).monitorMode;
-            const char* monLabel = "Auto";
-            Color monBg = Theme::clipSlotEmpty;
-            if (mode == Track::MonitorMode::In) {
-                monLabel = "In";
-                monBg = Color{40, 80, 40};
-            } else if (mode == Track::MonitorMode::Off) {
-                monLabel = "Off";
-                monBg = Color{50, 40, 40};
-            }
-            Color monTxt = (mode == Track::MonitorMode::In) ? Color{120, 230, 120} : Theme::textSecondary;
-            paintButton(r, f, ix + 4, curY, monW, kButtonHeight, monLabel, monBg, monTxt);
+        auto mode = m_project->track(idx).monitorMode;
+        const char* monLabel = "Auto";
+        Color monBg = Theme::clipSlotEmpty;
+        if (mode == Track::MonitorMode::In) {
+            monLabel = "In";
+            monBg = Color{40, 80, 40};
+        } else if (mode == Track::MonitorMode::Off) {
+            monLabel = "Off";
+            monBg = Color{50, 40, 40};
         }
+        s.monBtn.setLabel(monLabel);
+        s.monBtn.setColor(monBg);
+        s.monBtn.setTextColor((mode == Track::MonitorMode::In) ? Color{120, 230, 120}
+                                                                : Theme::textSecondary);
+        s.monBtn.layout(Rect{ix + 4, curY, iw - 8, kButtonHeight}, ctx);
+        s.monBtn.paint(ctx);
 
-        // Pan bar
         curY += kButtonHeight + 6;
-        float panW = iw - 8, panH = 16;
-        r.drawRect(ix + 4, curY, panW, panH, Theme::clipSlotEmpty);
-        float panCenter = ix + 4 + panW * 0.5f;
-        float panPos = panCenter + ch.pan * (panW * 0.5f - 4);
-        r.drawRect(panPos - 4, curY, 8, panH, col);
+        s.pan.setValue(ch.pan);
+        s.pan.setThumbColor(col);
+        s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, ctx);
+        s.pan.paint(ctx);
 
-        // Send dots
-        curY += panH + 4;
-        int maxDots = std::min(kMaxReturnBuses, static_cast<int>((panW + 2) / 10));
-        for (int s = 0; s < maxDots; ++s) {
-            const auto& send = ch.sends[s];
+        curY += 16 + 4;
+        int maxDots = std::min(kMaxReturnBuses,
+                               static_cast<int>((iw - 8 + 2) / 10));
+        for (int d = 0; d < maxDots; ++d) {
+            const auto& send = ch.sends[d];
             Color dotCol = (send.enabled && send.level > 0.01f)
-                ? Color{100, 180, 255}.withAlpha(static_cast<uint8_t>(100 + send.level * 155))
+                ? Color{100, 180, 255}.withAlpha(
+                      static_cast<uint8_t>(100 + send.level * 155))
                 : Theme::clipSlotEmpty;
-            r.drawRect(ix + 4 + s * 10, curY, 7, 7, dotCol);
+            r.drawRect(ix + 4 + d * 10, curY, 7, 7, dotCol);
         }
 
-        // Fader + Meter
         curY += 12;
-        float faderBottom = y + h - 22;
+        float faderBottom = stripY + stripH - 22;
         float faderH = std::max(20.0f, faderBottom - curY);
-        paintFader(r, ix + 4, curY, kFaderWidth, faderH, ch.volume, col);
-        paintMeter(r, ix + 4 + kFaderWidth + 3, curY, kMeterWidth * 2, faderH,
-                   m_trackMeters[idx].peakL, m_trackMeters[idx].peakR);
 
-        // dB label
+        s.fader.setValue(ch.volume);
+        s.fader.setTrackColor(col);
+        s.fader.layout(Rect{ix + 4, curY, kFaderWidth, faderH}, ctx);
+        s.fader.paint(ctx);
+
+        s.meter.setPeak(m_trackMeters[idx].peakL, m_trackMeters[idx].peakR);
+        s.meter.layout(Rect{ix + 4 + kFaderWidth + 3, curY,
+                            kMeterWidth * 2, faderH}, ctx);
+        s.meter.paint(ctx);
+
         float db = ch.volume > 0.001f ? 20.0f * std::log10(ch.volume) : -60.0f;
         char dbText[16];
         if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
         else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-        drawText(r, f, dbText, ix + 4, y + h - 18, smallScale, Theme::textDim);
+        s.dbLabel.setText(dbText);
+        s.dbLabel.setColor(Theme::textDim);
+        float pixH = f.pixelHeight();
+        float smallScale = (pixH < 1.0f) ? Theme::kSmallFontSize * 0.8f
+                           : Theme::kSmallFontSize * 0.8f / pixH;
+        s.dbLabel.setFontScale(smallScale);
+        s.dbLabel.layout(Rect{ix + 4, stripY + stripH - 18, iw - 8, 14}, ctx);
+        s.dbLabel.paint(ctx);
 
-        // Column border
-        r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);
-    }
-
-    void paintFader(Renderer2D& r, float x, float y, float w, float h,
-                    float value, Color col) {
-        float trackX = x + w * 0.5f - 1;
-        r.drawRect(trackX, y, 2, h, Theme::clipSlotBorder);
-        float frac = std::min(value / 2.0f, 1.0f);
-        float knobH = 32;
-        float knobY = y + h - frac * h - knobH * 0.5f;
-        r.drawRect(x, knobY, w, knobH, col);
-        r.drawRect(x + 1, knobY + 2, w - 2, knobH - 4, Color{200, 200, 200});
-        float unityY = y + h - 0.5f * h;
-        r.drawRect(x - 2, unityY, w + 4, 1, Theme::textDim);
-    }
-
-    void paintMeter(Renderer2D& r, float x, float y, float w, float h,
-                    float peakL, float peakR) {
-        float halfW = w * 0.5f - 1;
-        r.drawRect(x, y, halfW, h, Color{20, 20, 22});
-        r.drawRect(x + halfW + 2, y, halfW, h, Color{20, 20, 22});
-
-        auto dbToH = [](float peak) -> float {
-            if (peak < 0.001f) return 0.0f;
-            float db = 20.0f * std::log10(peak);
-            return std::max(0.0f, std::min(1.0f, (db + 60.0f) / 60.0f));
-        };
-        auto meterCol = [](float peak) -> Color {
-            if (peak > 1.0f) return {255, 40, 40};
-            if (peak > 0.7f) return {255, 200, 50};
-            return {80, 220, 80};
-        };
-        float hL = dbToH(peakL) * h;
-        float hR = dbToH(peakR) * h;
-        r.drawRect(x, y + h - hL, halfW, hL, meterCol(peakL));
-        r.drawRect(x + halfW + 2, y + h - hR, halfW, hR, meterCol(peakR));
-    }
-
-    void paintButton(Renderer2D& r, Font& f, float x, float y, float w, float h,
-                     const char* label, Color bg, Color text) {
-        r.drawRect(x, y, w, h, bg);
-        r.drawRectOutline(x, y, w, h, Theme::clipSlotBorder);
-        float sc = Theme::kSmallFontSize / f.pixelHeight() * 0.85f;
-        float tw = f.textWidth(label, sc);
-        drawText(r, f, label, x + (w - tw) * 0.5f, y + 1, sc, text);
+        r.drawRect(sx + stripW - 1, stripY, 1, stripH, Theme::clipSlotBorder);
     }
 
     // ─── Data ───────────────────────────────────────────────────────────
@@ -491,33 +385,22 @@ private:
     audio::AudioEngine* m_engine  = nullptr;
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
+    TrackStrip m_strips[kMaxTracks];
+    ScrollBar  m_scrollbar;
+    Label      m_mixLabel;
 
-    bool     m_dragging       = false;
-    DragType m_dragType       = DragType::None;
-    int      m_dragTarget     = -1;
-    float    m_dragStartPos   = 0;
-    float    m_dragStartValue = 0;
-    int      m_selectedTrack  = 0;
+    int   m_selectedTrack = 0;
+    float m_scrollX       = 0.0f;
 
-    // Layout constants
     static constexpr float kMixerHeight  = 280.0f;
-    static constexpr float kStripWidth   = 80.0f;
     static constexpr float kMeterWidth   = 6.0f;
     static constexpr float kFaderWidth   = 20.0f;
     static constexpr float kButtonHeight = 22.0f;
     static constexpr float kButtonWidth  = 28.0f;
-    static constexpr float kStripPadding = 2.0f;
     static constexpr float kScrollbarH   = 12.0f;
 
-    // Horizontal scrollbar state
-    float m_scrollX            = 0.0f;
-    bool  m_hsbDragging        = false;
-    bool  m_hsbHovered         = false;
-    float m_hsbDragStartX      = 0;
-    float m_hsbDragStartScroll = 0;
-
-    std::function<void(float)> m_onScrollChanged;
-    std::function<void(int, bool)> m_onTrackArmed;
+    std::function<void(float)>        m_onScrollChanged;
+    std::function<void(int, bool)>    m_onTrackArmed;
 };
 
 } // namespace fw
