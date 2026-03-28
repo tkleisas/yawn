@@ -97,6 +97,7 @@ public:
     void setOnClick(Callback cb) { m_onClick = std::move(cb); }
     void setColor(Color bg) { m_bgColor = bg; m_customColor = true; }
     void setTextColor(Color c) { m_textColor = c; m_customTextColor = true; }
+    void setDrawOutline(bool v) { m_drawOutline = v; }
     void setToggle(bool isToggle) { m_isToggle = isToggle; }
     void setToggleState(bool on) { m_toggleOn = on; }
     bool toggleState() const { return m_toggleOn; }
@@ -127,8 +128,9 @@ public:
             bg = m_customColor ? m_bgColor : Color{200, 100, 40, 255};
 
         ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, bg);
-        ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
-                                      Theme::controlBorder);
+        if (m_drawOutline)
+            ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                                          Theme::controlBorder);
         if (!m_label.empty()) {
             float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
             float tw = ctx.font->textWidth(m_label, scale);
@@ -170,6 +172,7 @@ private:
     bool m_customColor = false;
     Color m_textColor = Theme::textPrimary;
     bool m_customTextColor = false;
+    bool m_drawOutline = true;
     bool m_isToggle = false;
     bool m_toggleOn = false;
     bool m_pressed = false;

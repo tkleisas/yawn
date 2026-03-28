@@ -6,6 +6,7 @@
 // Only included from App.cpp — never compiled in test builds.
 
 #include "ui/framework/Widget.h"
+#include "ui/framework/Primitives.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -54,7 +55,48 @@ public:
     static constexpr int   kNPitch      = 128;
     static constexpr uint16_t kDefVel   = 32512;
 
-    PianoRollPanel() = default;
+    PianoRollPanel() {
+        static const char* toolNames[] = {"Draw", "Select", "Erase"};
+        for (int i = 0; i < 3; ++i) {
+            m_toolBtns[i].setLabel(toolNames[i]);
+            m_toolBtns[i].setDrawOutline(false);
+            m_toolBtns[i].setOnClick([this, i]() {
+                m_tool = static_cast<Tool>(i);
+            });
+        }
+
+        static const char* snapNames[] = {"1/4","1/8","1/16","1/32","4T","8T","16T"};
+        static constexpr float snapW[] = {kSnapBtnW, kSnapBtnW, kSnapBtnW, kSnapBtnW,
+                                          kTripletBtnW, kTripletBtnW, kTripletBtnW};
+        for (int i = 0; i < 7; ++i) {
+            m_snapBtns[i].setLabel(snapNames[i]);
+            m_snapBtns[i].setDrawOutline(false);
+            m_snapBtns[i].setOnClick([this, i]() {
+                m_snap = static_cast<Snap>(i);
+            });
+        }
+
+        m_snapLabel.setText("Snap:");
+        m_snapLabel.setColor(Theme::textSecondary);
+
+        m_loopBtn.setLabel("Loop");
+        m_loopBtn.setDrawOutline(false);
+        m_loopBtn.setOnClick([this]() {
+            if (m_clip) m_clip->setLoop(!m_clip->loop());
+        });
+
+        m_velBtn.setLabel("Vel");
+        m_velBtn.setDrawOutline(false);
+        m_velBtn.setOnClick([this]() {
+            m_showVelocityLane = !m_showVelocityLane;
+        });
+
+        m_clipNameLabel.setColor(Theme::textPrimary);
+
+        m_scrollbar.setOnScroll([this](float pos) {
+            m_scrollX = pos;
+        });
+    }
 
     // ─── Public API ─────────────────────────────────────────────────────
 
@@ -126,7 +168,7 @@ public:
             r.drawRect(cx + spacing - dotR, cy - dotR, dotR * 2, dotR * 2, dotCol);
         }
 
-        renderToolbar(r, f);
+        renderToolbar(ctx);
 
 #ifndef YAWN_TEST_BUILD
         renderRuler(r, f);
@@ -146,7 +188,7 @@ public:
 #ifndef YAWN_TEST_BUILD
         if (m_showVelocityLane)
             renderVelocityLane(r, f);
-        renderScrollbar(r);
+        renderScrollbar(ctx);
         renderClipOps(r, f);
 #endif
 
@@ -214,23 +256,7 @@ public:
             float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
             float sbY = m_gy + m_gh + velH;
             if (my >= sbY && my < sbY + kScrollbarH && mx >= m_gx && mx < m_gx + m_gw) {
-                float totalW = maxBeats() * m_pxBeat;
-                float maxScroll = std::max(0.0f, totalW - m_gw);
-                float thumbW = std::max(20.0f, m_gw * (m_gw / std::max(1.0f, totalW)));
-                float scrollFrac = m_scrollX / std::max(1.0f, totalW - m_gw);
-                float thumbX = m_gx + scrollFrac * (m_gw - thumbW);
-
-                if (mx >= thumbX && mx < thumbX + thumbW) {
-                    m_scrollbarDragging = true;
-                    m_scrollbarDragStartX = mx;
-                    m_scrollbarDragStartScroll = m_scrollX;
-                    captureMouse();
-                } else {
-                    float clickFrac = (mx - m_gx) / m_gw;
-                    m_scrollX = std::clamp(clickFrac * maxScroll, 0.0f, maxScroll);
-                    clampScroll();
-                }
-                return true;
+                return m_scrollbar.onMouseDown(e);
             }
         }
 
@@ -310,6 +336,11 @@ public:
         if (!m_open || !m_clip) return false;
         float mx = e.x, my = e.y;
 
+        // Forward to any captured widget (scrollbar, toolbar button)
+        if (Widget::capturedWidget() && Widget::capturedWidget() != this) {
+            return Widget::capturedWidget()->onMouseMove(e);
+        }
+
         // Handle drag resize
         if (m_handleDragActive) {
             float delta = m_handleDragStartY - my; // drag up = taller
@@ -334,17 +365,7 @@ public:
             return true;
         }
 
-        // Scrollbar thumb drag
-        if (m_scrollbarDragging) {
-            float delta = mx - m_scrollbarDragStartX;
-            float totalW = maxBeats() * m_pxBeat;
-            float maxScroll = std::max(0.0f, totalW - m_gw);
-            float scrollDelta = delta * (totalW / std::max(1.0f, m_gw));
-            m_scrollX = std::clamp(m_scrollbarDragStartScroll + scrollDelta, 0.0f, maxScroll);
-            clampScroll();
-            return true;
-        }
-
+        if (m_dragMode == Drag::None) return false;
         // Velocity lane drag
         if (m_velDragging && m_clip) {
             float velFrac = 1.0f - std::clamp((my - m_velY - 2.0f) / (kVelLaneH - 4.0f), 0.0f, 1.0f);
@@ -366,14 +387,6 @@ public:
                 }
             }
             return true;
-        }
-
-        // Track scrollbar hover for highlight
-        {
-            float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
-            float sbY = m_gy + m_gh + velH;
-            m_scrollbarHovered = (my >= sbY && my < sbY + kScrollbarH
-                                  && mx >= m_gx && mx < m_gx + m_gw);
         }
 
         if (m_dragMode == Drag::None) return false;
@@ -415,6 +428,12 @@ public:
 
     bool onMouseUp(MouseEvent& e) override {
         (void)e;
+
+        // Forward to any captured widget (scrollbar, toolbar button)
+        if (Widget::capturedWidget() && Widget::capturedWidget() != this) {
+            return Widget::capturedWidget()->onMouseUp(e);
+        }
+
         if (m_handleDragActive) {
             m_handleDragActive = false;
             releaseMouse();
@@ -423,11 +442,6 @@ public:
         if (m_velDragging) {
             m_velDragging = false;
             m_velDragNoteIdx = -1;
-            releaseMouse();
-            return true;
-        }
-        if (m_scrollbarDragging) {
-            m_scrollbarDragging = false;
             releaseMouse();
             return true;
         }
@@ -610,71 +624,60 @@ private:
 
     // ─── Rendering helpers ──────────────────────────────────────────────
 
-    void renderToolbar(Renderer2D& r, Font& f) {
+    void renderToolbar(UIContext& ctx) {
+        auto& r = *ctx.renderer;
         float tbY = m_py + kHandleHeight;
         r.drawRect(m_px, tbY, m_pw, kToolbarH, Color{35, 35, 38});
-        float sc = 16.0f / f.pixelHeight();
-        float ty = tbY + 3;
         float x = m_px + 6;
+        float btnH = kToolbarH - 4;
 
-        // Tool buttons
-        static const char* toolNames[] = {"Draw", "Select", "Erase"};
         for (int i = 0; i < 3; ++i) {
             bool active = static_cast<int>(m_tool) == i;
-            Color bg = active ? Color{100, 180, 255} : Color{55, 55, 60};
-            Color fg = active ? Color{10, 10, 15}    : Theme::textSecondary;
-            m_toolBtnX[i] = x;
-            r.drawRect(x, tbY + 2, m_toolBtnW, kToolbarH - 4, bg);
-            f.drawText(r, toolNames[i], x + 4, ty, sc, fg);
-            x += m_toolBtnW + 3;
+            m_toolBtns[i].setColor(active ? Color{100, 180, 255} : Color{55, 55, 60});
+            m_toolBtns[i].setTextColor(active ? Color{10, 10, 15} : Theme::textSecondary);
+            m_toolBtns[i].layout(Rect{x, tbY + 2, kToolBtnW, btnH}, ctx);
+            m_toolBtns[i].paint(ctx);
+            x += kToolBtnW + 16;
         }
 
-        x += 12;
-        f.drawText(r, "Snap:", x, ty, sc, Theme::textSecondary);
-        x += 42;
+        x += 16;
+        m_snapLabel.layout(Rect{x, tbY + 2, 40, btnH}, ctx);
+        m_snapLabel.paint(ctx);
+        x += 46;
 
-        // Snap buttons (4 straight + 3 triplet)
-        static const char* snapNames[] = {"1/4","1/8","1/16","1/32","4T","8T","16T"};
-        static constexpr float snapW[] = {m_snapBtnW, m_snapBtnW, m_snapBtnW, m_snapBtnW,
-                                           m_tripletBtnW, m_tripletBtnW, m_tripletBtnW};
+        static constexpr float snapW[] = {kSnapBtnW, kSnapBtnW, kSnapBtnW, kSnapBtnW,
+                                           kTripletBtnW, kTripletBtnW, kTripletBtnW};
         for (int i = 0; i < 7; ++i) {
             bool active = static_cast<int>(m_snap) == i;
             bool isTriplet = (i >= 4);
             Color bg = active ? (isTriplet ? Color{255, 160, 60} : Color{100, 180, 255})
                               : Color{55, 55, 60};
-            Color fg = active ? Color{10, 10, 15} : Theme::textSecondary;
-            m_snapBtnX[i] = x;
-            r.drawRect(x, tbY + 2, snapW[i], kToolbarH - 4, bg);
-            f.drawText(r, snapNames[i], x + 3, ty, sc, fg);
-            x += snapW[i] + 3;
+            m_snapBtns[i].setColor(bg);
+            m_snapBtns[i].setTextColor(active ? Color{10, 10, 15} : Theme::textSecondary);
+            m_snapBtns[i].layout(Rect{x, tbY + 2, snapW[i], btnH}, ctx);
+            m_snapBtns[i].paint(ctx);
+            x += snapW[i] + 16;
         }
 
-        // Loop toggle
-        x += 12;
-        {
-            bool loopOn = m_clip && m_clip->loop();
-            Color bg = loopOn ? Color{80, 220, 100} : Color{55, 55, 60};
-            Color fg = loopOn ? Color{10, 10, 15}   : Theme::textSecondary;
-            m_loopBtnX = x;
-            r.drawRect(x, tbY + 2, m_loopBtnW, kToolbarH - 4, bg);
-            f.drawText(r, "Loop", x + 4, ty, sc, fg);
-            x += m_loopBtnW + 6;
-        }
+        x += 16;
+        bool loopOn = m_clip && m_clip->loop();
+        m_loopBtn.setColor(loopOn ? Color{80, 220, 100} : Color{55, 55, 60});
+        m_loopBtn.setTextColor(loopOn ? Color{10, 10, 15} : Theme::textSecondary);
+        m_loopBtn.layout(Rect{x, tbY + 2, kLoopBtnW, btnH}, ctx);
+        m_loopBtn.paint(ctx);
+        x += kLoopBtnW + 16;
 
-        // Vel lane toggle
-        {
-            Color bg = m_showVelocityLane ? Color{100, 180, 255} : Color{55, 55, 60};
-            Color fg = m_showVelocityLane ? Color{10, 10, 15}    : Theme::textSecondary;
-            m_velBtnX = x;
-            r.drawRect(x, tbY + 2, m_velBtnW, kToolbarH - 4, bg);
-            f.drawText(r, "Vel", x + 4, ty, sc, fg);
-            x += m_velBtnW + 6;
-        }
+        m_velBtn.setColor(m_showVelocityLane ? Color{100, 180, 255} : Color{55, 55, 60});
+        m_velBtn.setTextColor(m_showVelocityLane ? Color{10, 10, 15} : Theme::textSecondary);
+        m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, ctx);
+        m_velBtn.paint(ctx);
 
-        // Clip name (right-aligned)
         if (m_clip && !m_clip->name().empty()) {
-            f.drawText(r, m_clip->name().c_str(), m_px + m_pw - 160, ty, sc,
-                       Theme::textPrimary);
+            m_clipNameLabel.setText(m_clip->name());
+            float nameW = ctx.font ? ctx.font->textWidth(m_clip->name(),
+                Theme::kSmallFontSize / Theme::kFontSize * 0.6f) : 100.0f;
+            m_clipNameLabel.layout(Rect{m_px + m_pw - 160, tbY + 2, nameW, btnH}, ctx);
+            m_clipNameLabel.paint(ctx);
         }
     }
 
@@ -1028,64 +1031,40 @@ private:
         return true;
     }
 
-    void renderScrollbar(Renderer2D& r) {
+    void renderScrollbar(UIContext& ctx) {
+        auto& r = *ctx.renderer;
         float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
         float sbY = m_gy + m_gh + velH;
-        // Track background
-        r.drawRect(m_gx, sbY, m_gw, kScrollbarH, Color{40, 40, 45});
-        // Fill clip-ops + piano-key portion of the scrollbar row
         r.drawRect(m_px, sbY, kClipOpsW + kPianoW, kScrollbarH, Color{40, 40, 45});
 
-        // Thumb
-        float totalW = maxBeats() * m_pxBeat;
-        float thumbW = std::max(20.0f, m_gw * (m_gw / std::max(1.0f, totalW)));
-        float scrollFrac = m_scrollX / std::max(1.0f, totalW - m_gw);
-        float thumbX = m_gx + scrollFrac * (m_gw - thumbW);
-
-        Color thumbCol = (m_scrollbarDragging || m_scrollbarHovered)
-                         ? Color{120, 120, 130}
-                         : Color{90, 90, 100};
-        r.drawRect(thumbX, sbY, thumbW, kScrollbarH, thumbCol);
+        float contentW = maxBeats() * m_pxBeat;
+        m_scrollbar.setContentSize(contentW);
+        m_scrollbar.setScrollPos(m_scrollX);
+        m_scrollbar.layout(Rect{m_gx, sbY, m_gw, kScrollbarH}, ctx);
+        m_scrollbar.paint(ctx);
     }
 
     // ─── Toolbar click ──────────────────────────────────────────────────
 
-    bool handleToolbarClick(float mx, float /*my*/) {
-        std::printf("[PianoRoll] toolbarClick mx=%.1f tools=[%.1f,%.1f,%.1f] w=%.0f snaps=[%.1f,%.1f,%.1f,%.1f] w=%.0f loop=%.1f\n",
-                    mx, m_toolBtnX[0], m_toolBtnX[1], m_toolBtnX[2], m_toolBtnW,
-                    m_snapBtnX[0], m_snapBtnX[1], m_snapBtnX[2], m_snapBtnX[3], m_snapBtnW,
-                    m_loopBtnX);
+    bool handleToolbarClick(float mx, float my) {
+        auto tryBtn = [&](Widget& w) -> bool {
+            auto& b = w.bounds();
+            if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+                MouseEvent e;
+                e.x = mx; e.y = my;
+                e.button = MouseButton::Left;
+                w.onMouseDown(e);
+                return true;
+            }
+            return false;
+        };
 
-        // Tool buttons
-        for (int i = 0; i < 3; ++i) {
-            if (mx >= m_toolBtnX[i] && mx < m_toolBtnX[i] + m_toolBtnW) {
-                m_tool = static_cast<Tool>(i);
-                std::printf("[PianoRoll] Tool → %d\n", i);
-                return true;
-            }
-        }
-        // Snap buttons (4 straight + 3 triplet)
-        static constexpr float snapClickW[] = {m_snapBtnW, m_snapBtnW, m_snapBtnW, m_snapBtnW,
-                                                m_tripletBtnW, m_tripletBtnW, m_tripletBtnW};
-        for (int i = 0; i < 7; ++i) {
-            if (mx >= m_snapBtnX[i] && mx < m_snapBtnX[i] + snapClickW[i]) {
-                m_snap = static_cast<Snap>(i);
-                std::printf("[PianoRoll] Snap → %d\n", i);
-                return true;
-            }
-        }
-        // Loop toggle
-        if (m_clip && mx >= m_loopBtnX && mx < m_loopBtnX + m_loopBtnW) {
-            m_clip->setLoop(!m_clip->loop());
-            std::printf("[PianoRoll] Loop → %d\n", m_clip->loop());
-            return true;
-        }
-        // Vel lane toggle
-        if (mx >= m_velBtnX && mx < m_velBtnX + m_velBtnW) {
-            m_showVelocityLane = !m_showVelocityLane;
-            std::printf("[PianoRoll] VelLane → %d\n", m_showVelocityLane ? 1 : 0);
-            return true;
-        }
+        for (int i = 0; i < 3; ++i)
+            if (tryBtn(m_toolBtns[i])) return true;
+        for (int i = 0; i < 7; ++i)
+            if (tryBtn(m_snapBtns[i])) return true;
+        if (tryBtn(m_loopBtn)) return true;
+        if (tryBtn(m_velBtn)) return true;
         return true;
     }
 
@@ -1401,27 +1380,25 @@ private:
     float m_rubberStartX = 0, m_rubberStartY = 0;
     float m_rubberEndX = 0,   m_rubberEndY = 0;
 
-    // Scrollbar drag state
-    bool  m_scrollbarDragging = false;
-    bool  m_scrollbarHovered  = false;
-    float m_scrollbarDragStartX = 0;
-    float m_scrollbarDragStartScroll = 0;
-
     // Cached layout
     float m_px = 0, m_py = 0, m_pw = 0;
     float m_gx = 0, m_gy = 0, m_gw = 0, m_gh = 0;
     float m_pianoX = 0;
 
-    // Toolbar button positions
-    static constexpr float m_toolBtnW    = 50.0f;
-    static constexpr float m_snapBtnW    = 36.0f;
-    static constexpr float m_tripletBtnW = 28.0f;
-    static constexpr float m_loopBtnW    = 44.0f;
-    static constexpr float m_velBtnW     = 36.0f;
-    float m_toolBtnX[3] = {};
-    float m_snapBtnX[7] = {};
-    float m_loopBtnX = 0;
-    float m_velBtnX  = 0;
+    // Toolbar widgets
+    static constexpr float kToolBtnW    = 56.0f;
+    static constexpr float kSnapBtnW    = 40.0f;
+    static constexpr float kTripletBtnW = 32.0f;
+    static constexpr float kLoopBtnW    = 50.0f;
+    static constexpr float kVelBtnW     = 40.0f;
+
+    FwButton  m_toolBtns[3];
+    FwButton  m_snapBtns[7];
+    Label     m_snapLabel;
+    FwButton  m_loopBtn;
+    FwButton  m_velBtn;
+    Label     m_clipNameLabel;
+    ScrollBar m_scrollbar;
 
     // Clip ops button Y positions
     float m_clipOpsBtnY[5] = {};
