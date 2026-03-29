@@ -21,7 +21,11 @@ struct Track {
     bool soloed = false;
     int midiInputPort = -1;   // -1 = all ports
     int midiInputChannel = -1; // -1 = all channels
-    bool armed = false;        // For MIDI recording
+    int midiOutputPort = -1;   // -1 = none
+    int midiOutputChannel = -1; // -1 = all channels
+    int audioInputCh = 0;     // 0=none, 1=In1, 2=In2, 3=In1+2, 4=In3, 5=In3+4, etc.
+    bool mono = false;
+    bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;
 };
 

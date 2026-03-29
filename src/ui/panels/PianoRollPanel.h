@@ -184,6 +184,7 @@ public:
         r.pushClip(m_pianoX, m_gy, kPianoW, m_gh);
         renderPianoKeys(r, f);
         r.popClip();
+        renderPianoKeyLabels(r, f);
 
 #ifndef YAWN_TEST_BUILD
         if (m_showVelocityLane)
@@ -477,13 +478,26 @@ public:
 
     // ─── Scroll / Zoom ─────────────────────────────────────────────────
 
-    void handleScroll(float dx, float dy, bool ctrl = false, bool shift = false) {
+    void handleScroll(float dx, float dy, bool ctrl = false, bool shift = false,
+                      float mouseX = -1.0f, float mouseY = -1.0f) {
         if (!m_open) return;
 
         if (ctrl && shift) {
+            float oldRowH = m_rowH;
             m_rowH = std::clamp(m_rowH + dy * 1.0f, kMinRowH, kMaxRowH);
+            if (mouseY >= m_gy && mouseY < m_gy + m_gh && oldRowH > 0 && m_rowH != oldRowH) {
+                float contentY = mouseY - m_gy + m_scrollY;
+                float newContentY = contentY * (m_rowH / oldRowH);
+                m_scrollY = newContentY - (mouseY - m_gy);
+            }
         } else if (ctrl) {
+            float oldPxBeat = m_pxBeat;
             m_pxBeat = std::clamp(m_pxBeat * (1.0f + dy * 0.08f), kMinPxBeat, kMaxPxBeat);
+            if (mouseX >= m_gx && mouseX < m_gx + m_gw && oldPxBeat > 0 && m_pxBeat != oldPxBeat) {
+                float contentX = mouseX - m_gx + m_scrollX;
+                float newContentX = contentX * (m_pxBeat / oldPxBeat);
+                m_scrollX = newContentX - (mouseX - m_gx);
+            }
         } else if (shift) {
             m_scrollX -= dy * 30.0f;
         } else {
@@ -682,28 +696,35 @@ private:
     }
 
     void renderPianoKeys(Renderer2D& r, Font& f) {
-        float sc = 12.0f / f.pixelHeight();
         for (int p = 127; p >= 0; --p) {
             float y = pitchToY(p);
             if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
 
             bool black = isBlack(p);
             Color bg = black ? Color{40, 40, 45} : Color{180, 180, 185};
-            Color fg = black ? Color{180, 180, 180} : Color{30, 30, 30};
 
             r.drawRect(m_pianoX, y, kPianoW, m_rowH, bg);
             r.drawRect(m_pianoX, y + m_rowH - 1, kPianoW, 1, Color{60, 60, 65});
+        }
+        r.drawRect(m_pianoX + kPianoW - 1, m_gy, 1, m_gh, Color{70, 70, 75});
+    }
 
-            // Label C notes
+    void renderPianoKeyLabels(Renderer2D& r, Font& f) {
+        float sc = 12.0f / f.pixelHeight();
+        float textH = 12.0f;
+        for (int p = 127; p >= 0; --p) {
+            float y = pitchToY(p);
+            if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
             if (p % 12 == 0 && m_rowH >= 8.0f) {
                 int oct = (p / 12) - 1;
                 char buf[8];
                 std::snprintf(buf, sizeof(buf), "C%d", oct);
-                f.drawText(r, buf, m_pianoX + 2, y + 1, sc, fg);
+                bool black = isBlack(p);
+                Color fg = black ? Color{180, 180, 180} : Color{30, 30, 30};
+                float textY = std::clamp(y + 1.0f, m_gy, m_gy + m_gh - textH);
+                f.drawText(r, buf, m_pianoX + 2, textY, sc, fg);
             }
         }
-        // Separator between keys and grid
-        r.drawRect(m_pianoX + kPianoW - 1, m_gy, 1, m_gh, Color{70, 70, 75});
     }
 
     void renderGrid(Renderer2D& r) {

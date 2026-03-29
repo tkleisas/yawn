@@ -224,16 +224,31 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // MonitorMode: 0=Auto (only when armed), 1=In (always), 2=Off (never)
     if (input && m_hasInputDevice) {
         for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackType[t] != 0) continue;
             bool shouldMonitor = (m_trackMonitorMode[t] == 1) ||
                                  (m_trackMonitorMode[t] == 0 && m_trackArmed[t]);
             if (!shouldMonitor) continue;
-            // Copy interleaved input to track's interleaved buffer
-            // Map input channels to output channels (mono→mono, stereo→stereo, etc.)
+            int inputCh = m_trackAudioInputCh[t];
+            if (inputCh <= 0) continue;
             float* dst = m_trackBufferPtrs[t];
             for (int f = 0; f < nf; ++f) {
-                for (int ch = 0; ch < nc; ++ch) {
-                    int srcCh = (ch < inCh) ? ch : (inCh - 1);
-                    dst[f * nc + ch] += input[f * inCh + srcCh];
+                if (m_trackMono[t]) {
+                    int srcIdx = ((inputCh - 1) / 2) * 2;
+                    if (srcIdx >= inCh) srcIdx = 0;
+                    float mono = (input[f * inCh + srcIdx] +
+                                  (srcIdx + 1 < inCh ? input[f * inCh + srcIdx + 1] : input[f * inCh + srcIdx])) * 0.5f;
+                    dst[f * nc + 0] += mono;
+                    dst[f * nc + 1] += mono;
+                } else if (inputCh % 2 == 1 && inputCh >= 3) {
+                    int ch0 = inputCh - 2;
+                    int ch1 = inputCh - 1;
+                    if (ch0 < inCh) dst[f * nc + 0] += input[f * inCh + ch0];
+                    if (ch1 < inCh) dst[f * nc + (nc > 1 ? 1 : 0)] += input[f * inCh + ch1];
+                } else {
+                    int ch0 = (inputCh - 1) < inCh ? (inputCh - 1) : 0;
+                    int ch1 = inputCh < inCh ? inputCh : ch0;
+                    dst[f * nc + 0] += input[f * inCh + ch0];
+                    if (nc > 1) dst[f * nc + 1] += input[f * inCh + ch1];
                 }
             }
         }
@@ -242,6 +257,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Capture audio for recording (before any effects/mixing modify the buffer)
     if (m_transport.isRecording() && input && m_hasInputDevice) {
         for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackType[t] != 0) continue;
             auto& ars = m_audioRecordStates[t];
             if (!ars.recording || !m_trackArmed[t]) continue;
 
@@ -752,6 +768,22 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, SetTrackTypeMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_trackType[msg.trackIndex] = msg.type;
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetTrackAudioInputChMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackAudioInputCh[msg.trackIndex] = msg.channel;
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetTrackMonoMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackMono[msg.trackIndex] = msg.mono;
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetTrackMidiOutputMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackMidiOutPort[msg.trackIndex] = msg.portIndex;
+                    m_trackMidiOutCh[msg.trackIndex] = msg.channel;
                 }
             }
         }, cmd);

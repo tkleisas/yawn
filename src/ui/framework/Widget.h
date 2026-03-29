@@ -90,6 +90,10 @@ public:
     // Override to draw this widget's own visuals (before children).
     virtual void paint(UIContext& ctx) { (void)ctx; }
 
+    // Override to draw overlays on top of everything (e.g. dropdown popup lists).
+    // Called by the parent panel after all regular paint calls and after popClip.
+    virtual void paintOverlay(UIContext& ctx) { (void)ctx; }
+
     // ─── Events ─────────────────────────────────────────────────────────
     // Return true to consume the event (stops propagation).
     // Default implementations do nothing and return false.

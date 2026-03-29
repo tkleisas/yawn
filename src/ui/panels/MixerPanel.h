@@ -2,8 +2,8 @@
 // MixerPanel — Framework widget replacement for MixerView.
 //
 // Uses framework widgets (FwButton, FwFader, MeterWidget, PanWidget,
-// ScrollBar, Label) for all controls.  Only the color bar, send dots,
-// column borders, and strip background remain as manual rendering.
+// ScrollBar, Label, FwDropDown) for all controls. I/O routing section
+// shows audio input + mono for Audio tracks, MIDI in/out for MIDI tracks.
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
@@ -12,6 +12,7 @@
 #include "ui/Theme.h"
 #include "audio/Mixer.h"
 #include "audio/AudioEngine.h"
+#include "midi/MidiEngine.h"
 #include "app/Project.h"
 #include "core/Constants.h"
 #include <cstdio>
@@ -44,10 +45,13 @@ public:
         }
     }
 
-    void init(Project* project, audio::AudioEngine* engine) {
+    void init(Project* project, audio::AudioEngine* engine, midi::MidiEngine* midiEngine = nullptr) {
         m_project = project;
         m_engine  = engine;
+        m_midiEngine = midiEngine;
     }
+
+    void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
 
     void updateMeter(int trackIndex, float peakL, float peakR) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks) {
@@ -64,8 +68,6 @@ public:
     void setOnScrollChanged(std::function<void(float)> cb) { m_onScrollChanged = std::move(cb); }
     void setOnTrackArmedChanged(std::function<void(int, bool)> cb) { m_onTrackArmed = std::move(cb); }
 
-    // ─── Measure / Layout ───────────────────────────────────────────────
-
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({c.maxW, kMixerHeight});
     }
@@ -73,8 +75,6 @@ public:
     void layout(const Rect& bounds, const UIContext&) override {
         m_bounds = bounds;
     }
-
-    // ─── Rendering ──────────────────────────────────────────────────────
 
     void paint(UIContext& ctx) override {
         if (!m_project || !m_engine) return;
@@ -108,14 +108,27 @@ public:
         }
         r.popClip();
 
+        // Paint open dropdown overlays on top (outside clip so they're not cut off)
+        for (int t = 0; t < m_project->numTracks(); ++t) {
+            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+            auto& s = m_strips[t];
+            if (m_project->track(t).type == Track::Type::Audio) {
+                s.audioInputDrop.paintOverlay(ctx);
+            } else {
+                s.midiInDrop.paintOverlay(ctx);
+                s.midiInChDrop.paintOverlay(ctx);
+                s.midiOutDrop.paintOverlay(ctx);
+                s.midiOutChDrop.paintOverlay(ctx);
+            }
+        }
+
         float contentW = m_project->numTracks() * Theme::kTrackWidth;
         m_scrollbar.setContentSize(contentW);
         m_scrollbar.setScrollPos(m_scrollX);
         m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, ctx);
         m_scrollbar.paint(ctx);
     }
-
-    // ─── Events ─────────────────────────────────────────────────────────
 
     bool onMouseDown(MouseEvent& e) override {
         if (!m_project || !m_engine) return false;
@@ -130,6 +143,39 @@ public:
         float gridX = x + Theme::kSceneLabelWidth;
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
 
+        // First pass: check if any open dropdown popup was clicked
+        for (int t = 0; t < m_project->numTracks(); ++t) {
+            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+            auto& s = m_strips[t];
+            if (m_project->track(t).type == Track::Type::Audio) {
+                if (s.audioInputDrop.hitPopup(mx, my))
+                    return s.audioInputDrop.handlePopupClick(mx, my);
+            } else {
+                if (s.midiInDrop.hitPopup(mx, my))
+                    return s.midiInDrop.handlePopupClick(mx, my);
+                if (s.midiInChDrop.hitPopup(mx, my))
+                    return s.midiInChDrop.handlePopupClick(mx, my);
+                if (s.midiOutDrop.hitPopup(mx, my))
+                    return s.midiOutDrop.handlePopupClick(mx, my);
+                if (s.midiOutChDrop.hitPopup(mx, my))
+                    return s.midiOutChDrop.handlePopupClick(mx, my);
+            }
+        }
+
+        // Close any open dropdowns if click is outside all popups
+        for (int t = 0; t < m_project->numTracks(); ++t) {
+            auto& s = m_strips[t];
+            if (m_project->track(t).type == Track::Type::Audio) {
+                if (s.audioInputDrop.isOpen()) { s.audioInputDrop.close(); }
+            } else {
+                if (s.midiInDrop.isOpen()) s.midiInDrop.close();
+                if (s.midiInChDrop.isOpen()) s.midiInChDrop.close();
+                if (s.midiOutDrop.isOpen()) s.midiOutDrop.close();
+                if (s.midiOutChDrop.isOpen()) s.midiOutChDrop.close();
+            }
+        }
+
         for (int t = 0; t < m_project->numTracks(); ++t) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
             if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
@@ -137,15 +183,12 @@ public:
 
             auto& s = m_strips[t];
 
-            if (!rightClick && hitWidget(s.muteBtn, mx, my)) {
+            if (!rightClick && hitWidget(s.muteBtn, mx, my))
                 return s.muteBtn.onMouseDown(e);
-            }
-            if (!rightClick && hitWidget(s.soloBtn, mx, my)) {
+            if (!rightClick && hitWidget(s.soloBtn, mx, my))
                 return s.soloBtn.onMouseDown(e);
-            }
-            if (!rightClick && hitWidget(s.armBtn, mx, my)) {
+            if (!rightClick && hitWidget(s.armBtn, mx, my))
                 return s.armBtn.onMouseDown(e);
-            }
             if (hitWidget(s.monBtn, mx, my)) {
                 if (rightClick) {
                     m_project->track(t).monitorMode = Track::MonitorMode::Auto;
@@ -156,9 +199,25 @@ public:
                 }
                 return s.monBtn.onMouseDown(e);
             }
-            if (hitWidget(s.pan, mx, my)) {
-                return s.pan.onMouseDown(e);
+
+            if (m_project->track(t).type == Track::Type::Audio) {
+                if (!rightClick && hitWidget(s.audioInputDrop, mx, my))
+                    return s.audioInputDrop.onMouseDown(e);
+                if (!rightClick && hitWidget(s.monoBtn, mx, my))
+                    return s.monoBtn.onMouseDown(e);
+            } else {
+                if (!rightClick && hitWidget(s.midiInDrop, mx, my))
+                    return s.midiInDrop.onMouseDown(e);
+                if (!rightClick && hitWidget(s.midiInChDrop, mx, my))
+                    return s.midiInChDrop.onMouseDown(e);
+                if (!rightClick && hitWidget(s.midiOutDrop, mx, my))
+                    return s.midiOutDrop.onMouseDown(e);
+                if (!rightClick && hitWidget(s.midiOutChDrop, mx, my))
+                    return s.midiOutChDrop.onMouseDown(e);
             }
+
+            if (hitWidget(s.pan, mx, my))
+                return s.pan.onMouseDown(e);
             if (hitWidget(s.fader, mx, my)) {
                 if (rightClick) {
                     m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
@@ -173,6 +232,26 @@ public:
     bool onMouseMove(MouseMoveEvent& e) override {
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
+        }
+
+        // Forward mouse move to open dropdowns for hover tracking
+        if (m_project) {
+            float x = m_bounds.x;
+            float gridX = x + Theme::kSceneLabelWidth;
+            float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+            for (int t = 0; t < m_project->numTracks(); ++t) {
+                float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+                if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+                auto& s = m_strips[t];
+                if (m_project->track(t).type == Track::Type::Audio) {
+                    s.audioInputDrop.onMouseMove(e);
+                } else {
+                    s.midiInDrop.onMouseMove(e);
+                    s.midiInChDrop.onMouseMove(e);
+                    s.midiOutDrop.onMouseMove(e);
+                    s.midiOutChDrop.onMouseMove(e);
+                }
+            }
         }
 
         float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
@@ -206,6 +285,14 @@ private:
         FwButton soloBtn;
         FwButton armBtn;
         FwButton monBtn;
+        FwDropDown audioInputDrop;
+        FwButton monoBtn;
+        FwDropDown midiInDrop;
+        FwDropDown midiInChDrop;
+        FwDropDown midiOutDrop;
+        FwDropDown midiOutChDrop;
+        Label midiRxLabel;
+        Label midiTxLabel;
         PanWidget pan;
         FwFader fader;
         MeterWidget meter;
@@ -258,6 +345,48 @@ private:
                     static_cast<uint8_t>(track.monitorMode)});
         });
 
+        s.audioInputDrop.setOnChange([this, t](int idx) {
+            if (!m_project || !m_engine) return;
+            m_project->track(t).audioInputCh = idx;
+            m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, idx});
+        });
+
+        s.monoBtn.setLabel("S");
+        s.monoBtn.setOnClick([this, t]() {
+            if (!m_project || !m_engine) return;
+            bool cur = m_project->track(t).mono;
+            m_project->track(t).mono = !cur;
+            m_engine->sendCommand(audio::SetTrackMonoMsg{t, !cur});
+        });
+
+        s.midiInDrop.setOnChange([this, t](int idx) {
+            if (!m_project) return;
+            if (idx == 0) m_project->track(t).midiInputPort = -1;
+            else if (idx == 1) m_project->track(t).midiInputPort = -2;
+            else m_project->track(t).midiInputPort = idx - 2;
+        });
+
+        s.midiInChDrop.setOnChange([this, t](int idx) {
+            if (!m_project) return;
+            m_project->track(t).midiInputChannel = (idx == 0) ? -1 : idx - 1;
+        });
+
+        s.midiOutDrop.setOnChange([this, t](int idx) {
+            if (!m_project) return;
+            m_project->track(t).midiOutputPort = (idx == 0) ? -1 : idx - 1;
+            if (m_engine) m_engine->sendCommand(
+                audio::SetTrackMidiOutputMsg{t, m_project->track(t).midiOutputPort,
+                                              m_project->track(t).midiOutputChannel});
+        });
+
+        s.midiOutChDrop.setOnChange([this, t](int idx) {
+            if (!m_project) return;
+            m_project->track(t).midiOutputChannel = (idx == 0) ? -1 : idx - 1;
+            if (m_engine) m_engine->sendCommand(
+                audio::SetTrackMidiOutputMsg{t, m_project->track(t).midiOutputPort,
+                                              m_project->track(t).midiOutputChannel});
+        });
+
         s.pan.setOnChange([this, t](float v) {
             if (!m_engine) return;
             m_engine->sendCommand(audio::SetTrackPanMsg{t, v});
@@ -278,8 +407,8 @@ private:
         float pad = Theme::kSlotPadding;
         float ix = sx + pad, iw = stripW - pad * 2;
         const auto& ch = m_engine->mixer().trackChannel(idx);
-        Color col = Theme::trackColors[
-            m_project->track(idx).colorIndex % Theme::kNumTrackColors];
+        const auto& track = m_project->track(idx);
+        Color col = Theme::trackColors[track.colorIndex % Theme::kNumTrackColors];
 
         r.drawRect(ix, stripY, iw, stripH, Theme::background);
         if (idx == m_selectedTrack)
@@ -293,9 +422,10 @@ private:
         s.nameLabel.layout(Rect{ix + 4, stripY + 5, iw - 8, 14}, ctx);
         s.nameLabel.paint(ctx);
 
-        float curY = stripY + 30;
+        float curY = stripY + 24;
         float btnW = std::min((iw - 12) * 0.5f, kButtonWidth);
 
+        // Mute / Solo row
         s.muteBtn.setColor(ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty);
         s.muteBtn.setTextColor(ch.muted ? Color{0, 0, 0} : Theme::textSecondary);
         s.muteBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
@@ -306,15 +436,16 @@ private:
         s.soloBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
         s.soloBtn.paint(ctx);
 
+        // Arm + Monitor row
         curY += kButtonHeight + 2;
-        bool armed = m_project->track(idx).armed;
+        bool armed = track.armed;
         s.armBtn.setColor(armed ? Color{200, 40, 40} : Theme::clipSlotEmpty);
         s.armBtn.setTextColor(armed ? Color{255, 255, 255} : Theme::textSecondary);
-        s.armBtn.layout(Rect{ix + 4, curY, iw - 8, kButtonHeight}, ctx);
+        s.armBtn.setLabel("R");
+        s.armBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
         s.armBtn.paint(ctx);
 
-        curY += kButtonHeight + 2;
-        auto mode = m_project->track(idx).monitorMode;
+        auto mode = track.monitorMode;
         const char* monLabel = "Auto";
         Color monBg = Theme::clipSlotEmpty;
         if (mode == Track::MonitorMode::In) {
@@ -328,15 +459,32 @@ private:
         s.monBtn.setColor(monBg);
         s.monBtn.setTextColor((mode == Track::MonitorMode::In) ? Color{120, 230, 120}
                                                                 : Theme::textSecondary);
-        s.monBtn.layout(Rect{ix + 4, curY, iw - 8, kButtonHeight}, ctx);
+        s.monBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
         s.monBtn.paint(ctx);
 
-        curY += kButtonHeight + 6;
+        // ─── I/O Section ─────────────────────────────────────────────
+        curY += kButtonHeight + 4;
+
+        if (track.type == Track::Type::Audio) {
+            paintAudioIO(ctx, s, track, idx, ix, iw, curY);
+        } else {
+            paintMidiIO(ctx, s, track, idx, ix, iw, curY);
+        }
+
+        // ─── Separator ───────────────────────────────────────────────
+        if (track.type == Track::Type::Audio) {
+            curY += kIOHeight + 2 + 6;
+        } else {
+            curY += kIOHeight * 2 + 12.0f + 6;
+        }
+
+        // Pan
         s.pan.setValue(ch.pan);
         s.pan.setThumbColor(col);
         s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, ctx);
         s.pan.paint(ctx);
 
+        // Send dots
         curY += 16 + 4;
         int maxDots = std::min(kMaxReturnBuses,
                                static_cast<int>((iw - 8 + 2) / 10));
@@ -349,6 +497,7 @@ private:
             r.drawRect(ix + 4 + d * 10, curY, 7, 7, dotCol);
         }
 
+        // Fader + Meter
         curY += 12;
         float faderBottom = stripY + stripH - 22;
         float faderH = std::max(20.0f, faderBottom - curY);
@@ -379,10 +528,102 @@ private:
         r.drawRect(sx + stripW - 1, stripY, 1, stripH, Theme::clipSlotBorder);
     }
 
+    void paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
+                       int idx, float ix, float iw, float curY) {
+        // Audio input dropdown
+        std::vector<std::string> inputItems = {"None", "In 1", "In 2", "In 1+2",
+                                                "In 3", "In 3+4", "In 5", "In 5+6",
+                                                "In 7", "In 7+8"};
+        s.audioInputDrop.setItems(inputItems);
+        int sel = std::clamp(track.audioInputCh, 0, static_cast<int>(inputItems.size()) - 1);
+        s.audioInputDrop.setSelected(sel);
+        s.audioInputDrop.layout(Rect{ix + 4, curY, iw - 8, kIOHeight}, ctx);
+        s.audioInputDrop.paint(ctx);
+
+        // Mono toggle
+        curY += kIOHeight + 2;
+        s.monoBtn.setLabel(track.mono ? "Mono" : "Stereo");
+        s.monoBtn.setColor(track.mono ? Color{60, 100, 60} : Theme::clipSlotEmpty);
+        s.monoBtn.setTextColor(track.mono ? Color{140, 240, 140} : Theme::textSecondary);
+        s.monoBtn.layout(Rect{ix + 4, curY, iw - 8, kIOHeight}, ctx);
+        s.monoBtn.paint(ctx);
+    }
+
+    void paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
+                      int idx, float ix, float iw, float curY) {
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+        float halfW = (iw - 10) * 0.5f;
+        float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.5f;
+        float labelH = 12.0f;
+
+        // "MIDI RX" label
+        s.midiRxLabel.setText("MIDI RX");
+        s.midiRxLabel.setColor(Theme::textDim);
+        s.midiRxLabel.setFontScale(labelScale);
+        s.midiRxLabel.setAlign(TextAlign::Center);
+        s.midiRxLabel.layout(Rect{ix + 4, curY, iw - 8, labelH}, ctx);
+        s.midiRxLabel.paint(ctx);
+        curY += labelH;
+
+        // MIDI Input port
+        std::vector<std::string> inPortItems = {"All", "None"};
+        if (m_midiEngine) {
+            for (int i = 0; i < m_midiEngine->availableInputCount(); ++i)
+                inPortItems.push_back(m_midiEngine->availableInputName(i));
+        }
+        s.midiInDrop.setItems(inPortItems);
+        int inPortSel = 0;
+        if (track.midiInputPort == -2) inPortSel = 1;
+        else if (track.midiInputPort >= 0) inPortSel = track.midiInputPort + 2;
+        s.midiInDrop.setSelected(std::clamp(inPortSel, 0, static_cast<int>(inPortItems.size()) - 1));
+        s.midiInDrop.layout(Rect{ix + 4, curY, halfW, kIOHeight}, ctx);
+        s.midiInDrop.paint(ctx);
+
+        // MIDI Input channel
+        std::vector<std::string> chItems = {"All"};
+        for (int c = 1; c <= 16; ++c) chItems.push_back(std::to_string(c));
+        s.midiInChDrop.setItems(chItems);
+        int inChSel = (track.midiInputChannel < 0) ? 0 : track.midiInputChannel + 1;
+        s.midiInChDrop.setSelected(std::clamp(inChSel, 0, 16));
+        s.midiInChDrop.layout(Rect{ix + 4 + halfW + 2, curY, halfW, kIOHeight}, ctx);
+        s.midiInChDrop.paint(ctx);
+
+        // "MIDI TX" label
+        curY += kIOHeight + 2;
+        s.midiTxLabel.setText("MIDI TX");
+        s.midiTxLabel.setColor(Theme::textDim);
+        s.midiTxLabel.setFontScale(labelScale);
+        s.midiTxLabel.setAlign(TextAlign::Center);
+        s.midiTxLabel.layout(Rect{ix + 4, curY, iw - 8, labelH}, ctx);
+        s.midiTxLabel.paint(ctx);
+        curY += labelH;
+
+        // MIDI Output port
+        std::vector<std::string> outPortItems = {"None"};
+        if (m_midiEngine) {
+            for (int i = 0; i < m_midiEngine->availableOutputCount(); ++i)
+                outPortItems.push_back(m_midiEngine->availableOutputName(i));
+        }
+        s.midiOutDrop.setItems(outPortItems);
+        int outPortSel = (track.midiOutputPort < 0) ? 0 : track.midiOutputPort + 1;
+        s.midiOutDrop.setSelected(std::clamp(outPortSel, 0, static_cast<int>(outPortItems.size()) - 1));
+        s.midiOutDrop.layout(Rect{ix + 4, curY, halfW, kIOHeight}, ctx);
+        s.midiOutDrop.paint(ctx);
+
+        // MIDI Output channel
+        s.midiOutChDrop.setItems(chItems);
+        int outChSel = (track.midiOutputChannel < 0) ? 0 : track.midiOutputChannel + 1;
+        s.midiOutChDrop.setSelected(std::clamp(outChSel, 0, 16));
+        s.midiOutChDrop.layout(Rect{ix + 4 + halfW + 2, curY, halfW, kIOHeight}, ctx);
+        s.midiOutChDrop.paint(ctx);
+    }
+
     // ─── Data ───────────────────────────────────────────────────────────
 
-    Project*            m_project = nullptr;
-    audio::AudioEngine* m_engine  = nullptr;
+    Project*            m_project    = nullptr;
+    audio::AudioEngine* m_engine     = nullptr;
+    midi::MidiEngine*   m_midiEngine = nullptr;
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
     TrackStrip m_strips[kMaxTracks];
@@ -392,11 +633,12 @@ private:
     int   m_selectedTrack = 0;
     float m_scrollX       = 0.0f;
 
-    static constexpr float kMixerHeight  = 280.0f;
+    static constexpr float kMixerHeight  = 420.0f;
     static constexpr float kMeterWidth   = 6.0f;
     static constexpr float kFaderWidth   = 20.0f;
-    static constexpr float kButtonHeight = 22.0f;
+    static constexpr float kButtonHeight = 20.0f;
     static constexpr float kButtonWidth  = 28.0f;
+    static constexpr float kIOHeight     = 20.0f;
     static constexpr float kScrollbarH   = 12.0f;
 
     std::function<void(float)>        m_onScrollChanged;

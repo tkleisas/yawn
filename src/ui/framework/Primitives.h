@@ -796,6 +796,35 @@ public:
     }
     void setOnChange(IndexCallback cb) { m_onChange = std::move(cb); }
     bool isOpen() const { return m_open; }
+    void close() { m_open = false; m_hoverItem = -1; }
+
+    int maxVisible() const { return std::min(static_cast<int>(m_items.size()), 8); }
+    float popupTop() const { return m_bounds.y + m_bounds.h; }
+    float popupBottom() const { return popupTop() + maxVisible() * m_bounds.h; }
+    float popupLeft() const { return m_bounds.x; }
+    float popupRight() const { return m_bounds.x + m_bounds.w; }
+
+    bool hitPopup(float mx, float my) const {
+        if (!m_open) return false;
+        return mx >= popupLeft() && mx < popupRight() && my >= popupTop() && my < popupBottom();
+    }
+
+    bool handlePopupClick(float mx, float my) {
+        if (!m_open) return false;
+        float relY = my - popupTop();
+        float itemH = m_bounds.h;
+        int idx = static_cast<int>(relY / itemH);
+        if (idx >= 0 && idx < maxVisible()) {
+            m_selected = idx;
+            m_open = false;
+            m_hoverItem = -1;
+            if (m_onChange) m_onChange(m_selected);
+            return true;
+        }
+        m_open = false;
+        m_hoverItem = -1;
+        return true;
+    }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({100.0f, 24.0f});
@@ -807,56 +836,86 @@ public:
         Color bg = m_open ? Color{55, 55, 60, 255} : Color{42, 42, 46, 255};
         ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, bg);
         ctx.renderer->drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
-                                      Color{70, 70, 75, 255});
+                                      m_open ? Color{100, 160, 220, 255} : Color{70, 70, 75, 255});
 
         float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
         float lh = ctx.font->lineHeight(scale);
         float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
 
-        // Current selection
         std::string txt = selectedText();
         ctx.font->drawText(*ctx.renderer, txt.c_str(), m_bounds.x + 6, ty, scale, Theme::textPrimary);
 
-        // Arrow indicator
-        ctx.font->drawText(*ctx.renderer, "v", m_bounds.x + m_bounds.w - 14, ty, scale, Theme::textSecondary);
+        ctx.font->drawText(*ctx.renderer, m_open ? "^" : "v",
+                           m_bounds.x + m_bounds.w - 14, ty, scale, Theme::textSecondary);
+#endif
+    }
 
-        // Dropdown list
-        if (m_open) {
-            float itemH = m_bounds.h;
-            float listY = m_bounds.y + m_bounds.h;
-            for (int i = 0; i < static_cast<int>(m_items.size()); ++i) {
-                float iy = listY + i * itemH;
-                Color itemBg = (i == m_hoverItem) ? Color{65, 65, 70, 255} : Color{48, 48, 52, 255};
-                ctx.renderer->drawRect(m_bounds.x, iy, m_bounds.w, itemH, itemBg);
-                ctx.renderer->drawRectOutline(m_bounds.x, iy, m_bounds.w, itemH, Color{60, 60, 65, 255});
-                float itemTy = iy + (itemH - lh) * 0.5f - lh * 0.15f;
-                ctx.font->drawText(*ctx.renderer, m_items[i].c_str(), m_bounds.x + 6, itemTy, scale, Theme::textPrimary);
+    void paintOverlay(UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!m_open || !ctx.renderer || !ctx.font) return;
+
+        float scale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
+        float lh = ctx.font->lineHeight(scale);
+        float itemH = m_bounds.h;
+        int mv = maxVisible();
+        float listH = mv * itemH;
+        float listX = m_bounds.x;
+        float listY = m_bounds.y + m_bounds.h;
+
+        ctx.renderer->drawRect(listX, listY, m_bounds.w, listH, Color{30, 30, 34, 255});
+        ctx.renderer->drawRectOutline(listX, listY, m_bounds.w, listH, Color{90, 140, 200, 255});
+
+        for (int i = 0; i < static_cast<int>(m_items.size()) && i < mv; ++i) {
+            float iy = listY + i * itemH;
+
+            Color itemBg;
+            Color textCol;
+            if (i == m_hoverItem) {
+                itemBg = Color{200, 200, 210, 255};
+                textCol = Color{15, 15, 20, 255};
+            } else if (i == m_selected) {
+                itemBg = Color{70, 130, 200, 255};
+                textCol = Color{255, 255, 255, 255};
+            } else {
+                itemBg = Color{30, 30, 34, 255};
+                textCol = Theme::textPrimary;
             }
+
+            ctx.renderer->drawRect(listX + 1, iy, m_bounds.w - 2, itemH, itemBg);
+
+            float itemTy = iy + (itemH - lh) * 0.5f - lh * 0.15f;
+            ctx.font->drawText(*ctx.renderer, m_items[i].c_str(),
+                               listX + 8, itemTy, scale, textCol);
         }
 #endif
     }
 
     bool onMouseDown(MouseEvent& e) override {
         if (e.button != MouseButton::Left) return false;
-        Point local = toLocal(e.x, e.y);
 
         if (m_open) {
-            float itemH = m_bounds.h;
-            float listTop = m_bounds.h;
-            for (int i = 0; i < static_cast<int>(m_items.size()); ++i) {
-                float iy = listTop + i * itemH;
-                if (local.y >= iy && local.y < iy + itemH) {
-                    m_selected = i;
-                    m_open = false;
-                    if (m_onChange) m_onChange(m_selected);
-                    return true;
-                }
+            if (hitPopup(e.x, e.y)) {
+                return handlePopupClick(e.x, e.y);
             }
             m_open = false;
+            m_hoverItem = -1;
             return true;
         }
 
         m_open = true;
+        m_hoverItem = -1;
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (!m_open) return false;
+        if (hitPopup(e.x, e.y)) {
+            float relY = e.y - popupTop();
+            m_hoverItem = static_cast<int>(relY / m_bounds.h);
+            if (m_hoverItem < 0 || m_hoverItem >= maxVisible()) m_hoverItem = -1;
+        } else {
+            m_hoverItem = -1;
+        }
         return true;
     }
 

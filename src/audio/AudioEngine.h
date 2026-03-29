@@ -142,6 +142,10 @@ private:
     bool m_trackArmed[kMaxTracks] = {};
     uint8_t m_trackMonitorMode[kMaxTracks] = {}; // 0=Auto, 1=In, 2=Off
     uint8_t m_trackType[kMaxTracks] = {};         // 0=Audio, 1=Midi
+    int m_trackAudioInputCh[kMaxTracks] = {};     // 0=none, 1=In1, 2=In2, 3=In1+2...
+    bool m_trackMono[kMaxTracks] = {};
+    int m_trackMidiOutPort[kMaxTracks] = {};       // -1=none
+    int m_trackMidiOutCh[kMaxTracks] = {};         // -1=all, 0-15
     midi::MidiEngine* m_midiEngine = nullptr;
 
     // MIDI recording state per track

@@ -182,6 +182,22 @@ struct SetTrackTypeMsg {
     uint8_t type; // 0=Audio, 1=Midi
 };
 
+struct SetTrackAudioInputChMsg {
+    int trackIndex;
+    int channel; // 0=none, 1=In1, 2=In2, 3=In1+2, 4=In3, 5=In3+4...
+};
+
+struct SetTrackMonoMsg {
+    int trackIndex;
+    bool mono;
+};
+
+struct SetTrackMidiOutputMsg {
+    int trackIndex;
+    int portIndex;  // -1=none
+    int channel;    // -1=all, 0-15
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -217,7 +233,10 @@ using AudioCommand = std::variant<
     StopMidiRecordMsg,
     StartAudioRecordMsg,
     StopAudioRecordMsg,
-    SetTrackTypeMsg
+    SetTrackTypeMsg,
+    SetTrackAudioInputChMsg,
+    SetTrackMonoMsg,
+    SetTrackMidiOutputMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

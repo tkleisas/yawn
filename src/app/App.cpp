@@ -510,7 +510,7 @@ bool App::init() {
     buildWidgetTree();
     m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine);
-    m_mixerPanel->init(&m_project, &m_audioEngine);
+    m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine);
     m_transportPanel->init(&m_project, &m_audioEngine);
     m_returnMasterPanel->init(&m_project, &m_audioEngine);
 
@@ -1146,7 +1146,7 @@ void App::processEvents() {
                     auto mod = SDL_GetModState();
                     bool ctrl  = (mod & SDL_KMOD_CTRL) != 0;
                     bool shift = (mod & SDL_KMOD_SHIFT) != 0;
-                    m_pianoRoll->handleScroll(dx, dy, ctrl, shift);
+                    m_pianoRoll->handleScroll(dx, dy, ctrl, shift, m_lastMouseX, m_lastMouseY);
                 } else if (m_showDetailPanel && m_lastMouseY >= db.y) {
                     m_detailPanel->handleScroll(dx, dy);
                 } else if (m_showMixer && m_lastMouseY >= mb.y && m_lastMouseY < mb.y + mb.h) {
