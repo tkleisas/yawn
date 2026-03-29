@@ -141,11 +141,9 @@ private:
     float m_lastMouseY = 0;
 
     // Track which scene/track to assign next dropped file to
-    int m_nextDropTrack = 0;
     int m_nextDropScene = 0;
 
     // UI state from audio thread
-    int64_t m_displayPosition = 0;
     double m_displayBeats = 0.0;
     bool m_displayPlaying = false;
 };

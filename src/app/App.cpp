@@ -26,7 +26,6 @@
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cinttypes>
-#include <cmath>
 #include <cstring>
 
 namespace yawn {
@@ -1339,7 +1338,6 @@ void App::update() {
         std::visit([this](auto&& msg) {
             using T = std::decay_t<decltype(msg)>;
             if constexpr (std::is_same_v<T, audio::TransportPositionUpdate>) {
-                m_displayPosition = msg.positionInSamples;
                 m_displayBeats = msg.positionInBeats;
                 m_displayPlaying = msg.isPlaying;
             }

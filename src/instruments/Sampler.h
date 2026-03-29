@@ -91,14 +91,14 @@ public:
                 float highL = sL - voice.filterLow - q * voice.filterBand;
                 voice.filterBand += f * highL;
                 voice.filterLow  += f * voice.filterBand;
-                sL = voice.filterLow;
-                // Simple: apply same filter to right by reusing coefficients
-                // (true stereo would need separate state, but this is acceptable)
-                sR = (m_sampleChannels > 1) ? sR * (voice.filterLow / (sL + 0.0001f)) : sL;
-                // Actually just filter L only for simplicity, use original R balance
-                float ratio = (std::abs(sL) > 0.0001f) ? voice.filterLow / sL : 1.0f;
-                sR = sR; // Keep R unfiltered for now (TODO: per-channel SVF)
-                sL = voice.filterLow;
+                float filteredL = voice.filterLow;
+                if (m_sampleChannels > 1) {
+                    float filterRatio = (std::abs(sL) > 0.0001f) ? filteredL / sL : 1.0f;
+                    sR *= filterRatio;
+                } else {
+                    sR = filteredL;
+                }
+                sL = filteredL;
 
                 float env = voice.env.process();
                 float gain = env * voice.velocity * m_volume;
