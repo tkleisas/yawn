@@ -39,7 +39,7 @@ public:
 
     // ─── Actions ────────────────────────────────────────────────────────
 
-    void close(DialogResult result = DialogResult::Cancel) {
+    virtual void close(DialogResult result = DialogResult::Cancel) {
         m_result = result;
         if (m_onResult) m_onResult(m_result);
         m_visible = false;

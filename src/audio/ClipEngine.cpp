@@ -5,36 +5,36 @@
 namespace yawn {
 namespace audio {
 
-void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip) {
+void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, QuantizeMode quantize) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
 
-    if (m_quantizeMode == QuantizeMode::None) {
-        // Launch immediately
+    if (quantize == QuantizeMode::None) {
         auto& state = m_tracks[trackIndex];
         state.clip = clip;
         state.playPosition = clip ? clip->loopStart : 0;
         state.fractionalPosition = static_cast<double>(state.playPosition);
         state.active = (clip != nullptr);
         state.stopping = false;
-        state.fadeGain = 0.0f; // fade in
+        state.fadeGain = 0.0f;
         state.sceneIndex = sceneIndex;
     } else {
-        // Queue for quantized launch
         m_pending[trackIndex].trackIndex = trackIndex;
         m_pending[trackIndex].sceneIndex = sceneIndex;
         m_pending[trackIndex].clip = clip;
+        m_pending[trackIndex].quantizeMode = quantize;
         m_pending[trackIndex].valid = true;
     }
 }
 
-void ClipEngine::scheduleStop(int trackIndex) {
+void ClipEngine::scheduleStop(int trackIndex, QuantizeMode quantize) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
 
-    if (m_quantizeMode == QuantizeMode::None) {
+    if (quantize == QuantizeMode::None) {
         m_tracks[trackIndex].stopping = true;
     } else {
         m_pending[trackIndex].trackIndex = trackIndex;
         m_pending[trackIndex].clip = nullptr;
+        m_pending[trackIndex].quantizeMode = quantize;
         m_pending[trackIndex].valid = true;
     }
 }
@@ -71,42 +71,37 @@ void ClipEngine::checkPendingLaunches() {
     if (!m_transport) return;
 
     int64_t pos = m_transport->positionInSamples();
+    double spb = m_transport->samplesPerBar();
+    double spBeat = m_transport->samplesPerBeat();
 
-    // Determine quantize interval in samples
-    double interval = 0.0;
-    switch (m_quantizeMode) {
-        case QuantizeMode::None:
-            return; // shouldn't get here, but just in case
-        case QuantizeMode::NextBeat:
-            interval = m_transport->samplesPerBeat();
-            break;
-        case QuantizeMode::NextBar:
-            interval = m_transport->samplesPerBar();
-            break;
+    bool anyPending = false;
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (m_pending[t].valid) { anyPending = true; break; }
+    }
+    if (!anyPending) {
+        m_lastQuantizeCheck = pos;
+        return;
     }
 
-    if (interval <= 0.0) return;
-
-    // Check if we've crossed a quantize boundary since last check
-    int64_t iInterval = static_cast<int64_t>(interval);
-    if (iInterval <= 0) return;
-
-    int64_t currentBoundary = (pos / iInterval) * iInterval;
-    bool atBoundary = (m_lastQuantizeCheck < 0) ||
-                      ((currentBoundary / iInterval) != (m_lastQuantizeCheck / iInterval));
-
-    m_lastQuantizeCheck = pos;
-
-    if (!atBoundary && m_transport->isPlaying()) return;
-
-    // If not playing, allow immediate launch
-    if (!m_transport->isPlaying()) {
-        atBoundary = true;
-    }
-
-    // Fire all pending launches
     for (int t = 0; t < kMaxTracks; ++t) {
         if (!m_pending[t].valid) continue;
+
+        QuantizeMode qm = m_pending[t].quantizeMode;
+        if (qm == QuantizeMode::None) {
+            // Fire immediately
+        } else {
+            double interval = (qm == QuantizeMode::NextBar) ? spb : spBeat;
+            if (interval <= 0.0) continue;
+            int64_t iInterval = static_cast<int64_t>(interval);
+            if (iInterval <= 0) continue;
+
+            int64_t currentBoundary = (pos / iInterval) * iInterval;
+            bool atBoundary = (m_lastQuantizeCheck < 0) ||
+                ((currentBoundary / iInterval) != (m_lastQuantizeCheck / iInterval));
+
+            if (!atBoundary && m_transport->isPlaying()) continue;
+            if (!m_transport->isPlaying()) atBoundary = true;
+        }
 
         auto& state = m_tracks[t];
         const Clip* clip = m_pending[t].clip;
@@ -117,7 +112,7 @@ void ClipEngine::checkPendingLaunches() {
             state.fractionalPosition = static_cast<double>(clip->loopStart);
             state.active = true;
             state.stopping = false;
-            state.fadeGain = 0.0f; // fade in
+            state.fadeGain = 0.0f;
             state.sceneIndex = m_pending[t].sceneIndex;
         } else {
             state.stopping = true;
@@ -125,6 +120,8 @@ void ClipEngine::checkPendingLaunches() {
 
         m_pending[t].valid = false;
     }
+
+    m_lastQuantizeCheck = pos;
 }
 
 void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int numChannels) {

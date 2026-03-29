@@ -16,6 +16,37 @@ AudioEngine::~AudioEngine() {
     shutdown();
 }
 
+std::vector<AudioDevice> AudioEngine::enumerateDevices() {
+    std::vector<AudioDevice> devices;
+    PaError err = Pa_Initialize();
+    if (err != paNoError) return devices;
+    int count = Pa_GetDeviceCount();
+    for (int i = 0; i < count; ++i) {
+        const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+        if (!info) continue;
+        AudioDevice d;
+        d.id = i;
+        d.name = info->name ? info->name : "";
+        d.maxInputChannels = info->maxInputChannels;
+        d.maxOutputChannels = info->maxOutputChannels;
+        d.defaultSampleRate = info->defaultSampleRate;
+        devices.push_back(d);
+    }
+    return devices;
+}
+
+int AudioEngine::defaultOutputDevice() {
+    Pa_Initialize();
+    int dev = Pa_GetDefaultOutputDevice();
+    return dev;
+}
+
+int AudioEngine::defaultInputDevice() {
+    Pa_Initialize();
+    int dev = Pa_GetDefaultInputDevice();
+    return dev;
+}
+
 bool AudioEngine::init(const AudioEngineConfig& config) {
     m_config = config;
 
@@ -63,7 +94,9 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     // Open audio stream (full-duplex if input device available, output-only otherwise)
     PaStreamParameters outputParams;
-    outputParams.device = Pa_GetDefaultOutputDevice();
+    outputParams.device = (config.outputDevice >= 0)
+        ? static_cast<PaDeviceIndex>(config.outputDevice)
+        : Pa_GetDefaultOutputDevice();
     if (outputParams.device == paNoDevice) {
         std::fprintf(stderr, "No default audio output device found\n");
         return false;
@@ -280,6 +313,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Render each track's clip into its own buffer
     m_clipEngine.checkAndFirePending();
     m_midiClipEngine.checkAndFirePending();
+    checkPendingRecordStops();
     for (int t = 0; t < kMaxTracks; ++t) {
         m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
     }
@@ -436,9 +470,9 @@ void AudioEngine::processCommands() {
                 m_transport.stop();
                 // Stop all playing clips (audio and MIDI)
                 for (int t = 0; t < kMaxTracks; ++t) {
-                    m_clipEngine.scheduleStop(t);
+                    m_clipEngine.scheduleStop(t, QuantizeMode::None);
                     if (m_midiClipEngine.isTrackPlaying(t)) {
-                        m_midiClipEngine.scheduleStop(t);
+                        m_midiClipEngine.scheduleStop(t, QuantizeMode::None);
                         for (uint8_t n = 0; n < 128; ++n) {
                             m_trackMidiBuffers[t].addMessage(
                                 midi::MidiMessage::noteOff(0, n, 0, 0));
@@ -462,13 +496,12 @@ void AudioEngine::processCommands() {
                 m_testTone.phase = 0.0;
             }
             else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
-                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip);
-                // Auto-start transport if not playing (Ableton-like behavior)
+                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize);
                 if (!m_transport.isPlaying())
                     m_transport.play();
             }
             else if constexpr (std::is_same_v<T, StopClipMsg>) {
-                m_clipEngine.scheduleStop(msg.trackIndex);
+                m_clipEngine.scheduleStop(msg.trackIndex, QuantizeMode::NextBar);
             }
             else if constexpr (std::is_same_v<T, SetQuantizeMsg>) {
                 m_clipEngine.setQuantizeMode(msg.mode);
@@ -539,7 +572,7 @@ void AudioEngine::processCommands() {
                     std::printf("[MIDI] LaunchMidiClip track=%d scene=%d clip=%p len=%.2f\n",
                                 msg.trackIndex, msg.sceneIndex, (const void*)msg.clip,
                                 msg.clip ? msg.clip->lengthBeats() : 0.0);
-                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip);
+                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize);
                     // Auto-start transport if not playing
                     if (!m_transport.isPlaying())
                         m_transport.play();
@@ -547,7 +580,7 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, StopMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
-                    m_midiClipEngine.scheduleStop(msg.trackIndex);
+                    m_midiClipEngine.scheduleStop(msg.trackIndex, QuantizeMode::NextBar);
                     // Send all-notes-off to clean up any held notes
                     for (uint8_t n = 0; n < 128; ++n) {
                         m_trackMidiBuffers[msg.trackIndex].addMessage(
@@ -665,43 +698,11 @@ void AudioEngine::processCommands() {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     auto& rs = m_trackRecordStates[msg.trackIndex];
                     if (rs.recording) {
-                        // Close any pending notes at current position
-                        double endBeat = m_transport.positionInBeats() - rs.recordStartBeat;
-                        for (auto& pn : rs.pendingNotes) {
-                            midi::MidiNote note;
-                            note.startBeat = pn.startBeat;
-                            note.duration = std::max(0.01, endBeat - pn.startBeat);
-                            note.pitch = pn.pitch;
-                            note.channel = pn.channel;
-                            note.velocity = static_cast<uint16_t>(pn.velocity * 512);
-                            if (note.velocity == 0) note.velocity = 1;
-                            rs.recordedNotes.push_back(note);
+                        if (msg.quantize == QuantizeMode::None) {
+                            finalizeMidiRecord(msg.trackIndex);
+                        } else {
+                            rs.pendingStopQuantize = msg.quantize;
                         }
-                        rs.pendingNotes.clear();
-
-                        // Transfer to UI-readable buffer
-                        m_recordedMidi.notes = rs.recordedNotes;
-                        m_recordedMidi.ccs = rs.recordedCCs;
-                        m_recordedMidi.trackIndex = msg.trackIndex;
-                        m_recordedMidi.sceneIndex = rs.targetScene;
-                        m_recordedMidi.overdub = rs.overdub;
-                        double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
-                        int bpb = m_transport.beatsPerBar();
-                        double bars = std::ceil(rawLen / bpb);
-                        m_recordedMidi.lengthBeats = bars * bpb;
-                        m_recordedMidi.ready.store(true, std::memory_order_release);
-
-                        // Emit completion event
-                        MidiRecordCompleteEvent evt;
-                        evt.trackIndex = msg.trackIndex;
-                        evt.sceneIndex = rs.targetScene;
-                        evt.noteCount = static_cast<int>(rs.recordedNotes.size());
-                        m_eventQueue.push(evt);
-
-                        rs.recording = false;
-
-                        // Disarm transport if no tracks are still recording
-                        maybeStopTransportRecording();
                     }
                 }
             }
@@ -730,39 +731,13 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, StopAudioRecordMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     auto& ars = m_audioRecordStates[msg.trackIndex];
-                    if (ars.recording && ars.recordedFrames > 0) {
-                        // Transfer to UI-readable buffer
-                        m_recordedAudio.channels = ars.channels;
-                        m_recordedAudio.frameCount = ars.recordedFrames;
-                        m_recordedAudio.trackIndex = msg.trackIndex;
-                        m_recordedAudio.sceneIndex = ars.targetScene;
-                        // Copy only the recorded portion
-                        m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
-                        for (int ch = 0; ch < ars.channels; ++ch) {
-                            std::memcpy(
-                                m_recordedAudio.buffer.data() + ch * ars.recordedFrames,
-                                ars.buffer.data() + ch * ars.maxFrames,
-                                ars.recordedFrames * sizeof(float));
+                    if (ars.recording) {
+                        if (msg.quantize == QuantizeMode::None) {
+                            finalizeAudioRecord(msg.trackIndex);
+                        } else {
+                            ars.pendingStopQuantize = msg.quantize;
                         }
-                        m_recordedAudio.ready.store(true, std::memory_order_release);
-
-                        // Emit completion event
-                        AudioRecordCompleteEvent evt;
-                        evt.trackIndex = msg.trackIndex;
-                        evt.sceneIndex = ars.targetScene;
-                        evt.frameCount = ars.recordedFrames;
-                        m_eventQueue.push(evt);
-
-                        // Free the large record buffer
-                        ars.buffer.clear();
-                        ars.buffer.shrink_to_fit();
-                        ars.recording = false;
-                    } else {
-                        ars.recording = false;
                     }
-
-                    // Disarm transport if no tracks are still recording
-                    maybeStopTransportRecording();
                 }
             }
             else if constexpr (std::is_same_v<T, SetTrackTypeMsg>) {
@@ -788,6 +763,111 @@ void AudioEngine::processCommands() {
             }
         }, cmd);
     }
+}
+
+void AudioEngine::checkPendingRecordStops() {
+    if (!m_transport.isPlaying()) return;
+
+    int64_t pos = m_transport.positionInSamples();
+    double spb = m_transport.samplesPerBar();
+    double spBeat = m_transport.samplesPerBeat();
+
+    for (int t = 0; t < kMaxTracks; ++t) {
+        auto& rs = m_trackRecordStates[t];
+        if (rs.recording && rs.pendingStopQuantize != QuantizeMode::None) {
+            double interval = (rs.pendingStopQuantize == QuantizeMode::NextBar) ? spb : spBeat;
+            if (interval <= 0.0) continue;
+            int64_t iInterval = static_cast<int64_t>(interval);
+            if (iInterval <= 0) continue;
+            if ((pos / iInterval) != ((pos - 1) / iInterval) || !m_transport.isPlaying()) {
+                finalizeMidiRecord(t);
+            }
+        }
+
+        auto& ars = m_audioRecordStates[t];
+        if (ars.recording && ars.pendingStopQuantize != QuantizeMode::None) {
+            double interval = (ars.pendingStopQuantize == QuantizeMode::NextBar) ? spb : spBeat;
+            if (interval <= 0.0) continue;
+            int64_t iInterval = static_cast<int64_t>(interval);
+            if (iInterval <= 0) continue;
+            if ((pos / iInterval) != ((pos - 1) / iInterval) || !m_transport.isPlaying()) {
+                finalizeAudioRecord(t);
+            }
+        }
+    }
+}
+
+void AudioEngine::finalizeMidiRecord(int trackIndex) {
+    auto& rs = m_trackRecordStates[trackIndex];
+    if (!rs.recording) return;
+
+    double endBeat = m_transport.positionInBeats() - rs.recordStartBeat;
+    for (auto& pn : rs.pendingNotes) {
+        midi::MidiNote note;
+        note.startBeat = pn.startBeat;
+        note.duration = std::max(0.01, endBeat - pn.startBeat);
+        note.pitch = pn.pitch;
+        note.channel = pn.channel;
+        note.velocity = static_cast<uint16_t>(pn.velocity * 512);
+        if (note.velocity == 0) note.velocity = 1;
+        rs.recordedNotes.push_back(note);
+    }
+    rs.pendingNotes.clear();
+
+    m_recordedMidi.notes = rs.recordedNotes;
+    m_recordedMidi.ccs = rs.recordedCCs;
+    m_recordedMidi.trackIndex = trackIndex;
+    m_recordedMidi.sceneIndex = rs.targetScene;
+    m_recordedMidi.overdub = rs.overdub;
+    double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
+    int bpb = m_transport.beatsPerBar();
+    double bars = std::ceil(rawLen / bpb);
+    m_recordedMidi.lengthBeats = bars * bpb;
+    m_recordedMidi.ready.store(true, std::memory_order_release);
+
+    MidiRecordCompleteEvent evt;
+    evt.trackIndex = trackIndex;
+    evt.sceneIndex = rs.targetScene;
+    evt.noteCount = static_cast<int>(rs.recordedNotes.size());
+    m_eventQueue.push(evt);
+
+    rs.recording = false;
+    rs.pendingStopQuantize = QuantizeMode::None;
+    maybeStopTransportRecording();
+}
+
+void AudioEngine::finalizeAudioRecord(int trackIndex) {
+    auto& ars = m_audioRecordStates[trackIndex];
+    if (!ars.recording || ars.recordedFrames <= 0) {
+        ars.recording = false;
+        ars.pendingStopQuantize = QuantizeMode::None;
+        return;
+    }
+
+    m_recordedAudio.channels = ars.channels;
+    m_recordedAudio.frameCount = ars.recordedFrames;
+    m_recordedAudio.trackIndex = trackIndex;
+    m_recordedAudio.sceneIndex = ars.targetScene;
+    m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
+    for (int ch = 0; ch < ars.channels; ++ch) {
+        std::memcpy(
+            m_recordedAudio.buffer.data() + ch * ars.recordedFrames,
+            ars.buffer.data() + ch * ars.maxFrames,
+            ars.recordedFrames * sizeof(float));
+    }
+    m_recordedAudio.ready.store(true, std::memory_order_release);
+
+    AudioRecordCompleteEvent evt;
+    evt.trackIndex = trackIndex;
+    evt.sceneIndex = ars.targetScene;
+    evt.frameCount = ars.recordedFrames;
+    m_eventQueue.push(evt);
+
+    ars.buffer.clear();
+    ars.buffer.shrink_to_fit();
+    ars.recording = false;
+    ars.pendingStopQuantize = QuantizeMode::None;
+    maybeStopTransportRecording();
 }
 
 void AudioEngine::emitPositionUpdate() {

@@ -16,17 +16,27 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace yawn {
 namespace audio {
+
+struct AudioDevice {
+    int id = -1;
+    std::string name;
+    int maxInputChannels = 0;
+    int maxOutputChannels = 0;
+    double defaultSampleRate = 44100.0;
+};
 
 struct AudioEngineConfig {
     double sampleRate = 44100.0;
     int framesPerBuffer = 256;
     int outputChannels = 2;
     int inputChannels = 2;
-    int inputDevice = -1;   // -1 = default input device
+    int inputDevice = -1;
+    int outputDevice = -1;
 };
 
 class AudioEngine {
@@ -41,6 +51,10 @@ public:
     bool start();
     void stop();
     void shutdown();
+
+    static std::vector<AudioDevice> enumerateDevices();
+    static int defaultOutputDevice();
+    static int defaultInputDevice();
 
     void sendCommand(const AudioCommand& cmd);
     bool pollEvent(AudioEvent& event);
@@ -66,6 +80,7 @@ public:
     }
 
     double sampleRate() const { return m_config.sampleRate; }
+    const AudioEngineConfig& config() const { return m_config; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
     // MidiEngine integration — called from App after init
@@ -110,6 +125,9 @@ private:
     void emitClipStates();
     void emitMeterUpdates();
     void maybeStopTransportRecording();
+    void checkPendingRecordStops();
+    void finalizeMidiRecord(int trackIndex);
+    void finalizeAudioRecord(int trackIndex);
 
     struct TestTone {
         bool enabled = false;
@@ -154,6 +172,7 @@ private:
         int targetScene = -1;
         bool overdub = true;
         double recordStartBeat = 0.0;
+        QuantizeMode pendingStopQuantize = QuantizeMode::None;
 
         struct PendingNote {
             uint8_t pitch = 0;
@@ -170,6 +189,7 @@ private:
             targetScene = -1;
             overdub = true;
             recordStartBeat = 0.0;
+            pendingStopQuantize = QuantizeMode::None;
             pendingNotes.clear();
             recordedNotes.clear();
             recordedCCs.clear();
@@ -185,14 +205,16 @@ private:
         bool recording = false;
         int targetScene = -1;
         int64_t recordedFrames = 0;
-        int64_t maxFrames = 0;          // capacity of buffer (in frames per channel)
-        std::vector<float> buffer;       // non-interleaved: [ch0_frames...][ch1_frames...]
+        int64_t maxFrames = 0;
+        std::vector<float> buffer;
         int channels = 2;
+        QuantizeMode pendingStopQuantize = QuantizeMode::None;
 
         void reset() {
             recording = false;
             targetScene = -1;
             recordedFrames = 0;
+            pendingStopQuantize = QuantizeMode::None;
         }
     };
     AudioRecordState m_audioRecordStates[kMaxTracks];

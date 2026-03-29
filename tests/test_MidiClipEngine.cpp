@@ -38,7 +38,7 @@ TEST_F(MidiClipEngineTest, LaunchClipMakesTrackActive) {
     clip.setLengthBeats(4.0);
     clip.addNote({0.0, 1.0, 60, 0, 16000, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
 
     EXPECT_TRUE(m_engine.isTrackPlaying(0));
@@ -49,11 +49,11 @@ TEST_F(MidiClipEngineTest, StopClipDeactivatesTrack) {
     MidiClip clip;
     clip.setLengthBeats(4.0);
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
     EXPECT_TRUE(m_engine.isTrackPlaying(0));
 
-    m_engine.scheduleStop(0);
+    m_engine.scheduleStop(0, QuantizeMode::None);
     m_engine.checkAndFirePending();
     EXPECT_FALSE(m_engine.isTrackPlaying(0));
 }
@@ -64,7 +64,7 @@ TEST_F(MidiClipEngineTest, EmitsNoteOnForNoteInBuffer) {
     // Note at beat 0, velocity ~100 in 7-bit (100 << 9 = 51200)
     clip.addNote({0.0, 1.0, 60, 0, 51200, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
 
     int numFrames = 256;
@@ -91,7 +91,7 @@ TEST_F(MidiClipEngineTest, EmitsNoteOffWhenNoteEnds) {
     // At 120 BPM, 0.1 beats = 0.05 seconds = 2205 samples
     clip.addNote({0.0, 0.1, 72, 0, 32000, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
 
     // Process enough frames for note to end
@@ -115,7 +115,7 @@ TEST_F(MidiClipEngineTest, LoopWrapsCorrectly) {
     clip.setLoop(true);
     clip.addNote({0.0, 0.25, 60, 0, 32000, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
     m_transport.play();
 
@@ -141,7 +141,7 @@ TEST_F(MidiClipEngineTest, NonLoopingClipStopsAtEnd) {
     clip.setLoop(false);
     clip.addNote({0.0, 0.5, 60, 0, 32000, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
     m_transport.play();
 
@@ -160,7 +160,7 @@ TEST_F(MidiClipEngineTest, CCEventsEmitted) {
     // CC event at beat 0
     clip.addCC({0.0, 1, 0x40000000, 0}); // CC1, value ~50%
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
     m_transport.play();
 
@@ -183,8 +183,8 @@ TEST_F(MidiClipEngineTest, MultipleTracksIndependent) {
     clipB.setLengthBeats(4.0);
     clipB.addNote({0.0, 1.0, 72, 0, 32000, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clipA);
-    m_engine.scheduleClip(1, 0, &clipB);
+    m_engine.scheduleClip(0, 0, &clipA, QuantizeMode::None);
+    m_engine.scheduleClip(1, 0, &clipB, QuantizeMode::None);
     m_engine.checkAndFirePending();
     m_transport.play();
 
@@ -205,10 +205,10 @@ TEST_F(MidiClipEngineTest, MultipleTracksIndependent) {
 
 TEST_F(MidiClipEngineTest, OutOfRangeTrackIndexIgnored) {
     MidiClip clip;
-    m_engine.scheduleClip(-1, 0, &clip);
-    m_engine.scheduleClip(kMaxTracks, 0, &clip);
-    m_engine.scheduleStop(-1);
-    m_engine.scheduleStop(kMaxTracks);
+    m_engine.scheduleClip(-1, 0, &clip, QuantizeMode::None);
+    m_engine.scheduleClip(kMaxTracks, 0, &clip, QuantizeMode::None);
+    m_engine.scheduleStop(-1, QuantizeMode::None);
+    m_engine.scheduleStop(kMaxTracks, QuantizeMode::None);
     // Should not crash
     m_engine.checkAndFirePending();
     m_engine.process(m_buffers, 256);
@@ -220,7 +220,7 @@ TEST_F(MidiClipEngineTest, NoteFrameOffsetIsReasonable) {
     // Note at beat 0.5 — at 120 BPM, 0.5 beats = 0.25s = 11025 samples
     clip.addNote({0.5, 0.5, 64, 0, 32000, 0, 0, 0, 0});
 
-    m_engine.scheduleClip(0, 0, &clip);
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
     m_engine.checkAndFirePending();
     m_transport.play();
 

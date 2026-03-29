@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Constants.h"
+#include "audio/ClipEngine.h"
 #include "audio/Transport.h"
 #include "midi/MidiClip.h"
 #include "midi/MidiTypes.h"
@@ -25,7 +26,8 @@ struct MidiClipPlayState {
 struct PendingMidiLaunch {
     int trackIndex = -1;
     int sceneIndex = -1;
-    const midi::MidiClip* clip = nullptr; // nullptr = stop
+    const midi::MidiClip* clip = nullptr;
+    QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
 };
 
@@ -39,27 +41,52 @@ public:
     void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
 
     // Schedule a MIDI clip to launch on a track
-    void scheduleClip(int trackIndex, int sceneIndex, const midi::MidiClip* clip) {
+    void scheduleClip(int trackIndex, int sceneIndex, const midi::MidiClip* clip,
+                      QuantizeMode quantize = QuantizeMode::NextBar) {
         if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
-        m_pending[trackIndex] = {trackIndex, sceneIndex, clip, true};
+        if (quantize == QuantizeMode::None) {
+            if (clip) launchNow(trackIndex, sceneIndex, clip);
+            else stopNow(trackIndex);
+        } else {
+            m_pending[trackIndex] = {trackIndex, sceneIndex, clip, quantize, true};
+        }
     }
 
-    // Schedule a track to stop
-    void scheduleStop(int trackIndex) {
+    void scheduleStop(int trackIndex,
+                      QuantizeMode quantize = QuantizeMode::NextBar) {
         if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
-        m_pending[trackIndex] = {trackIndex, -1, nullptr, true};
+        if (quantize == QuantizeMode::None) {
+            stopNow(trackIndex);
+        } else {
+            m_pending[trackIndex] = {trackIndex, -1, nullptr, quantize, true};
+        }
     }
 
     // Check and fire pending quantized launches. Call once per buffer.
     void checkAndFirePending() {
         if (!m_transport) return;
 
+        int64_t pos = m_transport->positionInSamples();
+        double spb = m_transport->samplesPerBar();
+        double spBeat = m_transport->samplesPerBeat();
+
         for (int t = 0; t < kMaxTracks; ++t) {
             if (!m_pending[t].valid) continue;
 
-            // For now, fire immediately (quantization handled by ClipEngine
-            // which shares the same transport — we can add independent
-            // quantization later if needed)
+            QuantizeMode qm = m_pending[t].quantizeMode;
+            if (qm != QuantizeMode::None) {
+                double interval = (qm == QuantizeMode::NextBar) ? spb : spBeat;
+                if (interval <= 0.0) continue;
+                int64_t iInterval = static_cast<int64_t>(interval);
+                if (iInterval <= 0) continue;
+
+                int64_t currentBoundary = (pos / iInterval) * iInterval;
+                bool atBoundary = (m_lastQuantizeCheck < 0) ||
+                    ((currentBoundary / iInterval) != (m_lastQuantizeCheck / iInterval));
+
+                if (!atBoundary && m_transport->isPlaying()) continue;
+            }
+
             if (m_pending[t].clip) {
                 launchNow(t, m_pending[t].sceneIndex, m_pending[t].clip);
             } else {
@@ -67,6 +94,8 @@ public:
             }
             m_pending[t].valid = false;
         }
+
+        m_lastQuantizeCheck = pos;
     }
 
     // Process one buffer: scan clips for notes/CCs, write into MIDI buffers.
@@ -223,6 +252,7 @@ private:
 
     Transport* m_transport = nullptr;
     double m_sampleRate = 44100.0;
+    int64_t m_lastQuantizeCheck = -1;
 
     std::array<MidiClipPlayState, kMaxTracks> m_tracks{};
     std::array<PendingMidiLaunch, kMaxTracks> m_pending{};

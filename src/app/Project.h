@@ -2,6 +2,7 @@
 
 #include "core/Constants.h"
 #include "audio/Clip.h"
+#include "audio/ClipEngine.h"
 #include "midi/MidiClip.h"
 #include <vector>
 #include <memory>
@@ -27,6 +28,7 @@ struct Track {
     bool mono = false;
     bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;
+    audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
 };
 
 struct Scene {
@@ -49,6 +51,7 @@ struct ClipSlot {
 
     std::unique_ptr<audio::Clip> audioClip;
     std::unique_ptr<midi::MidiClip> midiClip;
+    audio::QuantizeMode launchQuantize = audio::QuantizeMode::NextBar;
 };
 
 // Project model: holds tracks, scenes, and the 2D clip grid.

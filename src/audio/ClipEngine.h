@@ -21,6 +21,7 @@ struct PendingLaunch {
     int trackIndex = -1;
     int sceneIndex = -1;
     const Clip* clip = nullptr;   // nullptr means stop
+    QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
 };
 
@@ -37,10 +38,12 @@ public:
     QuantizeMode quantizeMode() const { return m_quantizeMode; }
 
     // Schedule a clip to launch on a track (called from audio thread after command processing)
-    void scheduleClip(int trackIndex, int sceneIndex, const Clip* clip);
+    void scheduleClip(int trackIndex, int sceneIndex, const Clip* clip,
+                      QuantizeMode quantize = QuantizeMode::NextBar);
 
     // Schedule a track to stop
-    void scheduleStop(int trackIndex);
+    void scheduleStop(int trackIndex,
+                      QuantizeMode quantize = QuantizeMode::NextBar);
 
     // Process one audio buffer worth of frames. Writes into output (interleaved stereo).
     void process(float* output, int numFrames, int numChannels);

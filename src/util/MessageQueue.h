@@ -34,7 +34,8 @@ struct TestToneMsg {
 struct LaunchClipMsg {
     int trackIndex;
     int sceneIndex;
-    const Clip* clip; // must remain valid while playing (owned by UI-side Project)
+    const Clip* clip;
+    QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
 struct StopClipMsg {
@@ -129,7 +130,8 @@ struct SendMidiToTrackMsg {
 struct LaunchMidiClipMsg {
     int trackIndex;
     int sceneIndex;
-    const midi::MidiClip* clip; // must remain valid while playing (owned by Project)
+    const midi::MidiClip* clip;
+    QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
 // Stop a MIDI clip on a track
@@ -166,6 +168,7 @@ struct StartMidiRecordMsg {
 
 struct StopMidiRecordMsg {
     int trackIndex;
+    QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
 struct StartAudioRecordMsg {
@@ -175,6 +178,7 @@ struct StartAudioRecordMsg {
 
 struct StopAudioRecordMsg {
     int trackIndex;
+    QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
 struct SetTrackTypeMsg {

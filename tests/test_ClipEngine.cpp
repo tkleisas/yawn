@@ -56,7 +56,7 @@ TEST_F(ClipEngineTest, SilenceWhenNoClips) {
 TEST_F(ClipEngineTest, ScheduleClipImmediateMode) {
     m_engine.setQuantizeMode(QuantizeMode::None);
     auto clip = makeClip(44100);
-    m_engine.scheduleClip(0, 0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     EXPECT_TRUE(m_engine.isTrackPlaying(0));
 }
@@ -64,8 +64,8 @@ TEST_F(ClipEngineTest, ScheduleClipImmediateMode) {
 TEST_F(ClipEngineTest, ScheduleStopImmediateMode) {
     m_engine.setQuantizeMode(QuantizeMode::None);
     auto clip = makeClip(44100);
-    m_engine.scheduleClip(0, 0, clip.get());
-    m_engine.scheduleStop(0);
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
+    m_engine.scheduleStop(0, QuantizeMode::None);
 
     EXPECT_TRUE(m_engine.trackState(0).stopping);
 }
@@ -73,7 +73,7 @@ TEST_F(ClipEngineTest, ScheduleStopImmediateMode) {
 TEST_F(ClipEngineTest, ProducesAudioWhenPlaying) {
     m_engine.setQuantizeMode(QuantizeMode::None);
     auto clip = makeClip(44100, 0.5f);
-    m_engine.scheduleClip(0, 0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     auto output = processFrames(256);
 
@@ -91,7 +91,7 @@ TEST_F(ClipEngineTest, ProducesAudioWhenPlaying) {
 TEST_F(ClipEngineTest, FadeInFromZero) {
     m_engine.setQuantizeMode(QuantizeMode::None);
     auto clip = makeClip(44100, 1.0f);
-    m_engine.scheduleClip(0, 0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     auto output = processFrames(1, 2);
     // First sample should be near-zero due to fade-in starting at 0
@@ -103,8 +103,8 @@ TEST_F(ClipEngineTest, MultipleTracks) {
     auto clip1 = makeClip(44100, 0.3f);
     auto clip2 = makeClip(44100, 0.2f);
 
-    m_engine.scheduleClip(0, 0, clip1.get());
-    m_engine.scheduleClip(1, 0, clip2.get());
+    m_engine.scheduleClip(0, 0, clip1.get(), QuantizeMode::None);
+    m_engine.scheduleClip(1, 0, clip2.get(), QuantizeMode::None);
 
     EXPECT_TRUE(m_engine.isTrackPlaying(0));
     EXPECT_TRUE(m_engine.isTrackPlaying(1));
@@ -115,10 +115,10 @@ TEST_F(ClipEngineTest, InvalidTrackIndex) {
     auto clip = makeClip(100);
 
     // Should not crash
-    m_engine.scheduleClip(-1, 0, clip.get());
-    m_engine.scheduleClip(kMaxTracks, 0, clip.get());
-    m_engine.scheduleStop(-1);
-    m_engine.scheduleStop(kMaxTracks);
+    m_engine.scheduleClip(-1, 0, clip.get(), QuantizeMode::None);
+    m_engine.scheduleClip(kMaxTracks, 0, clip.get(), QuantizeMode::None);
+    m_engine.scheduleStop(-1, QuantizeMode::None);
+    m_engine.scheduleStop(kMaxTracks, QuantizeMode::None);
 
     EXPECT_FALSE(m_engine.isTrackPlaying(-1));
     EXPECT_FALSE(m_engine.isTrackPlaying(kMaxTracks));
@@ -139,8 +139,7 @@ TEST_F(ClipEngineTest, QuantizedLaunchPendsUntilBoundary) {
     m_transport.play();
     m_transport.setPositionInSamples(100); // mid-bar
 
-    m_engine.scheduleClip(0, 0, clip.get());
-    // Should not be active yet (pending quantized launch)
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::NextBar);
     EXPECT_FALSE(m_engine.isTrackPlaying(0));
 }
 
@@ -149,7 +148,7 @@ TEST_F(ClipEngineTest, NonLoopingClipStops) {
     auto clip = makeClip(64, 1.0f); // very short
     clip->looping = false;
 
-    m_engine.scheduleClip(0, 0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     // Process enough frames to exhaust the clip
     auto output = processFrames(128);
@@ -161,7 +160,7 @@ TEST_F(ClipEngineTest, LoopingClipWraps) {
     auto clip = makeClip(64, 1.0f);
     clip->looping = true;
 
-    m_engine.scheduleClip(0, 0, clip.get());
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     // Process more frames than the clip length - should still be playing
     processFrames(256);

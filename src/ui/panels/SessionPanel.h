@@ -218,9 +218,9 @@ public:
                 for (int t = 0; t < m_project->numTracks(); ++t) {
                     auto* slot = m_project->getSlot(t, si);
                     if (slot && slot->audioClip)
-                        m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get()});
+                        m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get(), slot->launchQuantize});
                     else if (slot && slot->midiClip)
-                        m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get()});
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize});
                     else {
                         m_engine->sendCommand(audio::StopClipMsg{t});
                         m_engine->sendCommand(audio::StopMidiClipMsg{t});
@@ -256,40 +256,36 @@ public:
                     m_selectedTrack  = ti;
                     m_lastClickTrack = ti;
                 } else if (isSlotRecording) {
-                    // Stop recording (click anywhere on the recording slot)
+                    auto recQ = m_project->track(ti).recordQuantize;
                     if (m_project->track(ti).type == Track::Type::Midi)
-                        m_engine->sendCommand(audio::StopMidiRecordMsg{ti});
+                        m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
                     else
-                        m_engine->sendCommand(audio::StopAudioRecordMsg{ti});
+                        m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
                 } else if (slotLocalX < kIconZoneW + Theme::kSlotPadding) {
-                    // Icon zone click — trigger action (no track selection change)
                     if (isPlaying) {
-                        // Stop the playing clip
                         if (slot->audioClip)
                             m_engine->sendCommand(audio::StopClipMsg{ti});
                         else
                             m_engine->sendCommand(audio::StopMidiClipMsg{ti});
                     } else if (hasClip) {
-                        // Launch the clip
+                        auto lq = slot->launchQuantize;
                         if (slot->audioClip)
-                            m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get()});
+                            m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq});
                         else if (slot->midiClip)
-                            m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get()});
+                            m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq});
                     } else if (trackArmed) {
-                        // Start recording into empty slot
                         if (m_project->track(ti).type == Track::Type::Midi)
                             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
                         else
                             m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
                     }
                 } else {
-                    // Content area click — launch AND select track
                     m_selectedTrack  = ti;
                     m_lastClickTrack = ti;
                     if (slot && slot->audioClip) {
-                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get()});
+                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), slot->launchQuantize});
                     } else if (slot && slot->midiClip) {
-                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get()});
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), slot->launchQuantize});
                     } else if (trackArmed) {
                         if (m_project->track(ti).type == Track::Type::Midi)
                             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});

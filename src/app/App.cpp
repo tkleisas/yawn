@@ -73,7 +73,27 @@ void App::setupMenuBar() {
     m_menuBar.addMenu("Edit", {
         {"Undo",        "Ctrl+Z", nullptr},
         {"Redo",        "Ctrl+Y", nullptr},
-        {"Preferences", "",       nullptr, true},
+        {"Preferences", "",       [this]() {
+            ui::fw::PreferencesDialog::State state;
+            state.selectedOutputDevice = m_audioEngine.config().outputDevice;
+            state.selectedInputDevice = m_audioEngine.config().inputDevice;
+            state.sampleRate = m_audioEngine.config().sampleRate;
+            state.bufferSize = static_cast<int>(m_audioEngine.config().framesPerBuffer);
+            state.defaultLaunchQuantize = static_cast<audio::QuantizeMode>(m_settings.defaultLaunchQuantize);
+            state.defaultRecordQuantize = static_cast<audio::QuantizeMode>(m_settings.defaultRecordQuantize);
+            m_midiEngine.refreshPorts();
+            state.enabledMidiInputs.clear();
+            for (int i = 0; i < m_midiEngine.openInputPortCount(); ++i) {
+                if (i < m_midiEngine.availableInputCount())
+                    state.enabledMidiInputs.push_back(i);
+            }
+            if (state.enabledMidiInputs.empty()) {
+                for (int i = 0; i < m_midiEngine.availableInputCount(); ++i)
+                    state.enabledMidiInputs.push_back(i);
+            }
+            state.enabledMidiOutputs = m_settings.enabledMidiOutputs;
+            m_preferencesDialog->open(state, &m_audioEngine, &m_midiEngine);
+        }},
     });
 
     // View menu
@@ -139,6 +159,7 @@ void App::buildWidgetTree() {
     auto pianoP     = std::make_unique<PianoRollPanel>();
     auto aboutDlg   = std::make_unique<AboutDialog>();
     auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
+    auto prefsDlg   = std::make_unique<PreferencesDialog>();
 
     // ContentGrid fills remaining space
     gridP->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
@@ -155,6 +176,46 @@ void App::buildWidgetTree() {
     m_pianoRoll         = pianoP.get();
     m_aboutDialog       = aboutDlg.get();
     m_confirmDialog     = confirmDlg.get();
+    m_preferencesDialog = prefsDlg.get();
+
+    m_preferencesDialog->setOnResult([this](ui::fw::DialogResult result) {
+        if (result == ui::fw::DialogResult::OK) {
+            auto& s = m_preferencesDialog->state();
+            const auto& oldCfg = m_audioEngine.config();
+            bool audioChanged = (s.sampleRate != oldCfg.sampleRate ||
+                                 s.bufferSize != oldCfg.framesPerBuffer ||
+                                 s.selectedOutputDevice != oldCfg.outputDevice ||
+                                 s.selectedInputDevice != oldCfg.inputDevice);
+            if (audioChanged) {
+                audio::AudioEngineConfig newCfg = oldCfg;
+                newCfg.sampleRate = s.sampleRate;
+                newCfg.framesPerBuffer = s.bufferSize;
+                newCfg.outputDevice = s.selectedOutputDevice;
+                newCfg.inputDevice = s.selectedInputDevice;
+                m_audioEngine.stop();
+                m_audioEngine.shutdown();
+                m_audioEngine.init(newCfg);
+                m_audioEngine.start();
+            }
+
+            m_midiEngine.shutdown();
+            m_midiEngine.refreshPorts();
+            for (int i : s.enabledMidiInputs)
+                m_midiEngine.openInputPort(i);
+            for (int i : s.enabledMidiOutputs)
+                m_midiEngine.openOutputPort(i);
+
+            m_settings.outputDevice = s.selectedOutputDevice;
+            m_settings.inputDevice = s.selectedInputDevice;
+            m_settings.sampleRate = s.sampleRate;
+            m_settings.bufferSize = s.bufferSize;
+            m_settings.defaultLaunchQuantize = static_cast<int>(s.defaultLaunchQuantize);
+            m_settings.defaultRecordQuantize = static_cast<int>(s.defaultRecordQuantize);
+            m_settings.enabledMidiInputs = s.enabledMidiInputs;
+            m_settings.enabledMidiOutputs = s.enabledMidiOutputs;
+            util::AppSettings::save(m_settings);
+        }
+    });
 
     // Wire the 4-quadrant layout
     m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
@@ -186,6 +247,7 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(pianoP));
     m_wrappers.push_back(std::move(aboutDlg));
     m_wrappers.push_back(std::move(confirmDlg));
+    m_wrappers.push_back(std::move(prefsDlg));
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
@@ -357,6 +419,20 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     }});
     items.push_back({"Add MIDI Effect", nullptr, false, true, std::move(midiItems)});
 
+    // Record quantize submenu
+    auto curRQ = track.recordQuantize;
+    std::vector<ui::ContextMenu::Item> rqItems;
+    rqItems.push_back({"None", [this, trackIndex]() {
+        m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::None;
+    }, false, curRQ != audio::QuantizeMode::None});
+    rqItems.push_back({"Beat", [this, trackIndex]() {
+        m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBeat;
+    }, false, curRQ != audio::QuantizeMode::NextBeat});
+    rqItems.push_back({"Bar", [this, trackIndex]() {
+        m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBar;
+    }, false, curRQ != audio::QuantizeMode::NextBar});
+    items.push_back({"Record Quantize", nullptr, false, true, std::move(rqItems)});
+
     m_contextMenu.open(mx, my, std::move(items));
 }
 
@@ -429,6 +505,26 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             }
         }
     }, false, hasClip});
+
+    items.push_back({"", nullptr, true}); // separator
+
+    // Launch quantize submenu
+    auto* slotForQ = m_project.getSlot(trackIndex, sceneIndex);
+    auto curLQ = slotForQ ? slotForQ->launchQuantize : audio::QuantizeMode::NextBar;
+    std::vector<ui::ContextMenu::Item> lqItems;
+    lqItems.push_back({"None", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (s) s->launchQuantize = audio::QuantizeMode::None;
+    }, false, curLQ != audio::QuantizeMode::None});
+    lqItems.push_back({"Beat", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (s) s->launchQuantize = audio::QuantizeMode::NextBeat;
+    }, false, curLQ != audio::QuantizeMode::NextBeat});
+    lqItems.push_back({"Bar", [this, trackIndex, sceneIndex]() {
+        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+        if (s) s->launchQuantize = audio::QuantizeMode::NextBar;
+    }, false, curLQ != audio::QuantizeMode::NextBar});
+    items.push_back({"Launch Quantize", nullptr, false, true, std::move(lqItems)});
 
     items.push_back({"", nullptr, true}); // separator
 
@@ -514,10 +610,14 @@ bool App::init() {
     m_transportPanel->init(&m_project, &m_audioEngine);
     m_returnMasterPanel->init(&m_project, &m_audioEngine);
 
+    m_settings = util::AppSettings::load();
+
     audio::AudioEngineConfig audioConfig;
-    audioConfig.sampleRate = 44100.0;
-    audioConfig.framesPerBuffer = 256;
+    audioConfig.sampleRate = m_settings.sampleRate;
+    audioConfig.framesPerBuffer = m_settings.bufferSize;
     audioConfig.outputChannels = 2;
+    audioConfig.outputDevice = m_settings.outputDevice;
+    audioConfig.inputDevice = m_settings.inputDevice;
 
     if (!m_audioEngine.init(audioConfig)) {
         std::fprintf(stderr, "Warning: Audio engine failed to initialize\n");
@@ -527,9 +627,15 @@ bool App::init() {
 
     // Wire MidiEngine: scan ports, open inputs, connect to AudioEngine
     m_midiEngine.refreshPorts();
-    for (int i = 0; i < m_midiEngine.availableInputCount(); ++i) {
-        m_midiEngine.openInputPort(i);
+    if (!m_settings.enabledMidiInputs.empty()) {
+        for (int i : m_settings.enabledMidiInputs)
+            m_midiEngine.openInputPort(i);
+    } else {
+        for (int i = 0; i < m_midiEngine.availableInputCount(); ++i)
+            m_midiEngine.openInputPort(i);
     }
+    for (int i : m_settings.enabledMidiOutputs)
+        m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
 
     // Wire mixer arm button to MidiEngine
@@ -643,7 +749,8 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     std::printf("Loaded '%s' -> Track %d, Scene %d\n",
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
-    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr});
+    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr,
+        m_project.getSlot(trackIndex, sceneIndex) ? m_project.getSlot(trackIndex, sceneIndex)->launchQuantize : audio::QuantizeMode::NextBar});
     markDirty();
     return true;
 }
@@ -675,6 +782,16 @@ void App::processEvents() {
                 if (m_aboutDialog->isVisible()) {
                     if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN)
                         m_aboutDialog->setVisible(false);
+                    break;
+                }
+
+                // Block keys when preferences dialog is open
+                if (m_preferencesDialog->isOpen()) {
+                    if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN) {
+                        ui::fw::KeyEvent ke;
+                        ke.keyCode = (event.key.key == SDLK_ESCAPE) ? 27 : 13;
+                        m_preferencesDialog->onKeyDown(ke);
+                    }
                     break;
                 }
 
@@ -951,6 +1068,15 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.button = ui::fw::MouseButton::Left;
                     m_aboutDialog->onMouseDown(me);
+                    break;
+                }
+
+                // Preferences dialog (modal)
+                if (m_preferencesDialog->isOpen()) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = ui::fw::MouseButton::Left;
+                    m_preferencesDialog->onMouseDown(me);
                     break;
                 }
 
@@ -1261,7 +1387,9 @@ void App::update() {
 
                     auto* clipPtr = m_project.getMidiClip(ti, si);
                     if (clipPtr) {
-                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr});
+                        auto* slot = m_project.getSlot(ti, si);
+                        auto lq = slot ? slot->launchQuantize : audio::QuantizeMode::NextBar;
+                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq});
                     }
                 }
             }
@@ -1292,7 +1420,9 @@ void App::update() {
                                     ti + 1, si + 1, data.frameCount);
 
                         if (clipPtr) {
-                            m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr});
+                            auto* recSlot = m_project.getSlot(ti, si);
+                            auto lq = recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar;
+                            m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr, lq});
                         }
                     }
                     // Clear recording state in UI
@@ -1352,6 +1482,10 @@ void App::render() {
         if (m_aboutDialog->isVisible()) {
             m_aboutDialog->layout(screenBounds, m_uiContext);
             m_aboutDialog->paint(m_uiContext);
+        }
+        if (m_preferencesDialog->isOpen()) {
+            m_preferencesDialog->layout(screenBounds, m_uiContext);
+            m_preferencesDialog->paint(m_uiContext);
         }
     }
 

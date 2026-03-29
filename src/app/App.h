@@ -11,6 +11,7 @@
 #include "ui/ContextMenu.h"
 #include "ui/framework/AboutDialog.h"
 #include "ui/framework/ConfirmDialogWidget.h"
+#include "ui/panels/PreferencesDialog.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
 #include "ui/framework/ContentGrid.h"
@@ -24,6 +25,7 @@
 #include "app/Project.h"
 #include "midi/MidiEngine.h"
 #include "util/FileIO.h"
+#include "util/AppSettings.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -95,12 +97,14 @@ private:
     ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
     ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
     ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
+    ui::fw::PreferencesDialog*    m_preferencesDialog = nullptr;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
     ui::fw::UIContext m_uiContext;
 
     audio::AudioEngine m_audioEngine;
     midi::MidiEngine m_midiEngine;
     Project m_project;
+    util::AppSettings m_settings;
     bool m_running = false;
     bool m_showMixer = true;
     bool m_showDetailPanel = false;
