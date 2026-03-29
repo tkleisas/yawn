@@ -23,7 +23,10 @@ public:
 
     // Detect transients in a mono or stereo AudioBuffer.
     // Returns vector of sample positions where transients occur.
-    static std::vector<int64_t> detect(const AudioBuffer& buffer, const Config& config = Config()) {
+    static std::vector<int64_t> detect(const AudioBuffer& buffer) {
+        return detect(buffer, Config());
+    }
+    static std::vector<int64_t> detect(const AudioBuffer& buffer, const Config& config) {
         if (buffer.isEmpty() || buffer.numFrames() < config.windowSize)
             return {};
 
