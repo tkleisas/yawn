@@ -35,6 +35,15 @@ public:
         Color busCol{100, 180, 255};
         Color masterCol = Theme::transportAccent;
 
+        m_stopAllBtn.setOnClick([this]() {
+            if (!m_engine) return;
+            int numTracks = m_project ? m_project->numTracks() : kMaxTracks;
+            for (int t = 0; t < numTracks; ++t) {
+                m_engine->sendCommand(audio::StopClipMsg{t});
+                m_engine->sendCommand(audio::StopMidiClipMsg{t});
+            }
+        });
+
         for (int b = 0; b < kMaxReturnBuses; ++b) {
             auto& rs = m_returnStrips[b];
 
@@ -163,6 +172,9 @@ public:
             + kSeparatorWidth + 4;
 
         if (mx >= masterX && mx < masterX + kRetStripW) {
+            if (!rightClick && hitWidget(m_stopAllBtn, mx, my)) {
+                return m_stopAllBtn.onMouseDown(e);
+            }
             if (hitWidget(m_masterStrip.fader, mx, my)) {
                 if (rightClick) {
                     m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
@@ -288,12 +300,22 @@ private:
 
         m_masterStrip.fader.setValue(master.volume);
 
-        float curY = y + 26;
-
         m_masterStrip.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
         m_masterStrip.nameLabel.paint(ctx);
 
-        curY = y + 30;
+        m_stopAllBtn.setColor(Theme::clipSlotEmpty);
+        m_stopAllBtn.setTextColor(Theme::textSecondary);
+        m_stopAllBtn.layout(Rect{x + 4, y + 22, w - 8, kButtonHeight}, ctx);
+        m_stopAllBtn.paint(ctx);
+        {
+            auto& sb = m_stopAllBtn.bounds();
+            float iconSize = 8.0f;
+            float iconX = sb.x + (sb.w - iconSize) * 0.5f;
+            float iconY = sb.y + (sb.h - iconSize) * 0.5f;
+            r.drawRect(iconX, iconY, iconSize, iconSize, Theme::textSecondary);
+        }
+
+        float curY = y + 22 + kButtonHeight + 4;
         float faderBottom = y + h - 22;
         float faderH = std::max(20.0f, faderBottom - curY);
 
@@ -330,6 +352,7 @@ private:
 
     StripWidgets m_returnStrips[kMaxReturnBuses];
     StripWidgets m_masterStrip;
+    FwButton     m_stopAllBtn;
 
     static constexpr float kMeterWidth     = 6.0f;
     static constexpr float kFaderWidth     = 20.0f;

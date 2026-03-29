@@ -183,6 +183,8 @@ public:
 
             auto& s = m_strips[t];
 
+            if (!rightClick && hitWidget(s.stopBtn, mx, my))
+                return s.stopBtn.onMouseDown(e);
             if (!rightClick && hitWidget(s.muteBtn, mx, my))
                 return s.muteBtn.onMouseDown(e);
             if (!rightClick && hitWidget(s.soloBtn, mx, my))
@@ -281,6 +283,7 @@ public:
 
 private:
     struct TrackStrip {
+        FwButton stopBtn;
         FwButton muteBtn;
         FwButton soloBtn;
         FwButton armBtn;
@@ -307,6 +310,12 @@ private:
 
     void setupStripCallbacks(int t) {
         auto& s = m_strips[t];
+
+        s.stopBtn.setOnClick([this, t]() {
+            if (!m_engine) return;
+            m_engine->sendCommand(audio::StopClipMsg{t});
+            m_engine->sendCommand(audio::StopMidiClipMsg{t});
+        });
 
         s.muteBtn.setLabel("M");
         s.muteBtn.setOnClick([this, t]() {
@@ -423,17 +432,29 @@ private:
         s.nameLabel.paint(ctx);
 
         float curY = stripY + 24;
-        float btnW = std::min((iw - 12) * 0.5f, kButtonWidth);
+        float btnW = std::min((iw - 16) / 3.0f, kButtonWidth);
 
-        // Mute / Solo row
+        // Stop / Mute / Solo row
+        {
+            auto& sb = s.stopBtn.bounds();
+            s.stopBtn.setColor(Theme::clipSlotEmpty);
+            s.stopBtn.setTextColor(Theme::textSecondary);
+            s.stopBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
+            s.stopBtn.paint(ctx);
+            float iconSize = 6.0f;
+            float iconX = sb.x + (sb.w - iconSize) * 0.5f;
+            float iconY = sb.y + (sb.h - iconSize) * 0.5f;
+            r.drawRect(iconX, iconY, iconSize, iconSize, Theme::textSecondary);
+        }
+
         s.muteBtn.setColor(ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty);
         s.muteBtn.setTextColor(ch.muted ? Color{0, 0, 0} : Theme::textSecondary);
-        s.muteBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
+        s.muteBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
         s.muteBtn.paint(ctx);
 
         s.soloBtn.setColor(ch.soloed ? Color{255, 200, 50} : Theme::clipSlotEmpty);
         s.soloBtn.setTextColor(ch.soloed ? Color{0, 0, 0} : Theme::textSecondary);
-        s.soloBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
+        s.soloBtn.layout(Rect{ix + 4 + (btnW + 2) * 2, curY, btnW, kButtonHeight}, ctx);
         s.soloBtn.paint(ctx);
 
         // Arm + Monitor row

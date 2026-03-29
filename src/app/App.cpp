@@ -1256,9 +1256,13 @@ void App::update() {
                             m_project.setMidiClip(ti, si, std::move(newClip));
                         }
                     }
-                    // Clear recording state in UI
                     m_sessionPanel->setTrackRecording(ti, false, -1);
                     data.ready.store(false, std::memory_order_release);
+
+                    auto* clipPtr = m_project.getMidiClip(ti, si);
+                    if (clipPtr) {
+                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr});
+                    }
                 }
             }
             else if constexpr (std::is_same_v<T, audio::AudioRecordCompleteEvent>) {
@@ -1282,10 +1286,14 @@ void App::update() {
                         clip->buffer = audioBuffer;
                         clip->looping = true;
                         clip->gain = 1.0f;
-                        m_project.setClip(ti, si, std::move(clip));
+                        auto* clipPtr = m_project.setClip(ti, si, std::move(clip));
                         markDirty();
                         std::printf("Audio recorded: Track %d, Scene %d, %" PRId64 " frames\n",
                                     ti + 1, si + 1, data.frameCount);
+
+                        if (clipPtr) {
+                            m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr});
+                        }
                     }
                     // Clear recording state in UI
                     m_sessionPanel->setTrackRecording(ti, false, -1);
