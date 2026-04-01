@@ -105,6 +105,7 @@ public:
         int64_t frameCount = 0;
         int trackIndex = -1;
         int sceneIndex = -1;
+        bool overdub = false;
         std::atomic<bool> ready{false};
     };
     RecordedAudioData& recordedAudioData() { return m_recordedAudio; }
@@ -208,12 +209,14 @@ private:
         int64_t maxFrames = 0;
         std::vector<float> buffer;
         int channels = 2;
+        bool overdub = false;
         QuantizeMode pendingStopQuantize = QuantizeMode::None;
 
         void reset() {
             recording = false;
             targetScene = -1;
             recordedFrames = 0;
+            overdub = false;
             pendingStopQuantize = QuantizeMode::None;
         }
     };

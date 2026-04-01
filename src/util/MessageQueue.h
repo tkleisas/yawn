@@ -174,6 +174,7 @@ struct StopMidiRecordMsg {
 struct StartAudioRecordMsg {
     int trackIndex;
     int sceneIndex;
+    bool overdub = false; // true = mix into existing clip buffer
 };
 
 struct StopAudioRecordMsg {
@@ -283,6 +284,13 @@ struct AudioRecordCompleteEvent {
     int trackIndex;
     int sceneIndex;
     int64_t frameCount;
+    bool overdub = false;
+};
+
+struct RecordBufferFullEvent {
+    int trackIndex;
+    int sceneIndex;
+    int64_t frameCount;
 };
 
 using AudioEvent = std::variant<
@@ -291,7 +299,8 @@ using AudioEvent = std::variant<
     MeterUpdate,
     TransportRecordStateUpdate,
     MidiRecordCompleteEvent,
-    AudioRecordCompleteEvent
+    AudioRecordCompleteEvent,
+    RecordBufferFullEvent
 >;
 
 // Command queue: UI → Audio (1024 slots)

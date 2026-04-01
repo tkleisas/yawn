@@ -295,8 +295,17 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             if (!ars.recording || !m_trackArmed[t]) continue;
 
             int64_t remaining = ars.maxFrames - ars.recordedFrames;
+            if (remaining <= 0) {
+                // Buffer full — auto-finalize and notify UI
+                RecordBufferFullEvent bfe;
+                bfe.trackIndex = t;
+                bfe.sceneIndex = ars.targetScene;
+                bfe.frameCount = ars.recordedFrames;
+                m_eventQueue.push(bfe);
+                finalizeAudioRecord(t);
+                continue;
+            }
             int64_t framesToCopy = std::min(static_cast<int64_t>(nf), remaining);
-            if (framesToCopy <= 0) continue;
 
             // Deinterleave input into non-interleaved record buffer
             for (int ch = 0; ch < ars.channels; ++ch) {
@@ -598,68 +607,22 @@ void AudioEngine::processCommands() {
                         m_transport.play();
                     }
                 } else {
-                    m_transport.stopRecording();
-                    // Stop all active recordings
+                    // Gracefully stop all active recordings respecting per-track quantize
                     for (int t = 0; t < kMaxTracks; ++t) {
                         if (m_trackRecordStates[t].recording) {
-                            StopMidiRecordMsg stopMsg{t};
-                            // Inline the stop logic (reuse via self-send would re-enter)
-                            auto& rs = m_trackRecordStates[t];
-                            double endBeat = m_transport.positionInBeats() - rs.recordStartBeat;
-                            for (auto& pn : rs.pendingNotes) {
-                                midi::MidiNote note;
-                                note.startBeat = pn.startBeat;
-                                note.duration = std::max(0.01, endBeat - pn.startBeat);
-                                note.pitch = pn.pitch;
-                                note.channel = pn.channel;
-                                note.velocity = static_cast<uint16_t>(pn.velocity * 512);
-                                if (note.velocity == 0) note.velocity = 1;
-                                rs.recordedNotes.push_back(note);
+                            if (m_trackRecordStates[t].pendingStopQuantize == QuantizeMode::None) {
+                                // No pending stop yet — finalize immediately
+                                finalizeMidiRecord(t);
                             }
-                            rs.pendingNotes.clear();
-                            m_recordedMidi.notes = rs.recordedNotes;
-                            m_recordedMidi.ccs = rs.recordedCCs;
-                            m_recordedMidi.trackIndex = t;
-                            m_recordedMidi.sceneIndex = rs.targetScene;
-                            m_recordedMidi.overdub = rs.overdub;
-                            double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
-                            int bpb = m_transport.beatsPerBar();
-                            double bars = std::ceil(rawLen / bpb);
-                            m_recordedMidi.lengthBeats = bars * bpb;
-                            m_recordedMidi.ready.store(true, std::memory_order_release);
-                            MidiRecordCompleteEvent mevt;
-                            mevt.trackIndex = t;
-                            mevt.sceneIndex = rs.targetScene;
-                            mevt.noteCount = static_cast<int>(rs.recordedNotes.size());
-                            m_eventQueue.push(mevt);
-                            rs.recording = false;
+                            // else: already has a pending quantized stop, let it complete naturally
                         }
                         if (m_audioRecordStates[t].recording) {
-                            auto& ars = m_audioRecordStates[t];
-                            if (ars.recordedFrames > 0) {
-                                m_recordedAudio.channels = ars.channels;
-                                m_recordedAudio.frameCount = ars.recordedFrames;
-                                m_recordedAudio.trackIndex = t;
-                                m_recordedAudio.sceneIndex = ars.targetScene;
-                                m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
-                                for (int ch = 0; ch < ars.channels; ++ch) {
-                                    std::memcpy(
-                                        m_recordedAudio.buffer.data() + ch * ars.recordedFrames,
-                                        ars.buffer.data() + ch * ars.maxFrames,
-                                        ars.recordedFrames * sizeof(float));
-                                }
-                                m_recordedAudio.ready.store(true, std::memory_order_release);
-                                AudioRecordCompleteEvent aevt;
-                                aevt.trackIndex = t;
-                                aevt.sceneIndex = ars.targetScene;
-                                aevt.frameCount = ars.recordedFrames;
-                                m_eventQueue.push(aevt);
+                            if (m_audioRecordStates[t].pendingStopQuantize == QuantizeMode::None) {
+                                finalizeAudioRecord(t);
                             }
-                            ars.buffer.clear();
-                            ars.buffer.shrink_to_fit();
-                            ars.recording = false;
                         }
                     }
+                    m_transport.stopRecording();
                 }
             }
             else if constexpr (std::is_same_v<T, TransportSetCountInMsg>) {
@@ -713,6 +676,7 @@ void AudioEngine::processCommands() {
                     ars.reset();
                     ars.recording = true;
                     ars.targetScene = msg.sceneIndex;
+                    ars.overdub = msg.overdub;
                     ars.channels = m_config.inputChannels;
                     // Pre-allocate for 5 minutes of recording
                     static constexpr int64_t kMaxRecordSec = 300;
@@ -848,6 +812,7 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     m_recordedAudio.frameCount = ars.recordedFrames;
     m_recordedAudio.trackIndex = trackIndex;
     m_recordedAudio.sceneIndex = ars.targetScene;
+    m_recordedAudio.overdub = ars.overdub;
     m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
     for (int ch = 0; ch < ars.channels; ++ch) {
         std::memcpy(
@@ -861,6 +826,7 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     evt.trackIndex = trackIndex;
     evt.sceneIndex = ars.targetScene;
     evt.frameCount = ars.recordedFrames;
+    evt.overdub = ars.overdub;
     m_eventQueue.push(evt);
 
     ars.buffer.clear();

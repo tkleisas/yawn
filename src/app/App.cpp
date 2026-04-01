@@ -1406,17 +1406,38 @@ void App::update() {
                                 data.buffer.data() + ch * data.frameCount,
                                 data.frameCount * sizeof(float));
                         }
-                        // Create clip
-                        auto clip = std::make_unique<audio::Clip>();
-                        clip->name = "Rec " + std::to_string(ti + 1) + "-" + std::to_string(si + 1);
-                        clip->buffer = audioBuffer;
-                        clip->looping = true;
-                        clip->gain = 1.0f;
-                        auto* clipPtr = m_project.setClip(ti, si, std::move(clip));
-                        markDirty();
-                        LOG_INFO("Audio", "Audio recorded: Track %d, Scene %d, %" PRId64 " frames",
-                                    ti + 1, si + 1, data.frameCount);
 
+                        auto* existingSlot = m_project.getSlot(ti, si);
+                        auto* existingClip = existingSlot ? existingSlot->audioClip.get() : nullptr;
+
+                        if (data.overdub && existingClip && existingClip->buffer) {
+                            // Overdub: mix new audio into existing clip buffer
+                            auto& existBuf = existingClip->buffer;
+                            int mixFrames = std::min(
+                                static_cast<int>(data.frameCount), existBuf->numFrames());
+                            int mixCh = std::min(data.channels, existBuf->numChannels());
+                            for (int ch = 0; ch < mixCh; ++ch) {
+                                float* dst = existBuf->channelData(ch);
+                                const float* src = audioBuffer->channelData(ch);
+                                for (int f = 0; f < mixFrames; ++f)
+                                    dst[f] += src[f];
+                            }
+                            LOG_INFO("Audio", "Audio overdub: Track %d, Scene %d, %d frames mixed",
+                                        ti + 1, si + 1, mixFrames);
+                        } else {
+                            // New recording: create clip
+                            auto clip = std::make_unique<audio::Clip>();
+                            clip->name = "Rec " + std::to_string(ti + 1) + "-" + std::to_string(si + 1);
+                            clip->buffer = audioBuffer;
+                            clip->looping = true;
+                            clip->gain = 1.0f;
+                            m_project.setClip(ti, si, std::move(clip));
+                            LOG_INFO("Audio", "Audio recorded: Track %d, Scene %d, %" PRId64 " frames",
+                                        ti + 1, si + 1, data.frameCount);
+                        }
+                        markDirty();
+
+                        auto* clipPtr = m_project.getClip(ti, si);
                         if (clipPtr) {
                             auto* recSlot = m_project.getSlot(ti, si);
                             auto lq = recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar;
@@ -1430,6 +1451,10 @@ void App::update() {
                     data.buffer.shrink_to_fit();
                     data.ready.store(false, std::memory_order_release);
                 }
+            }
+            else if constexpr (std::is_same_v<T, audio::RecordBufferFullEvent>) {
+                LOG_WARN("Audio", "Recording buffer full on Track %d (%.0f sec limit). Auto-saved.",
+                         msg.trackIndex + 1, 300.0);
             }
         }, evt);
     }

@@ -149,7 +149,7 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                     if (m_project->track(ti).type == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
                     else
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
+                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, true});
                 }
             } else {
                 m_selectedTrack  = ti;
@@ -162,7 +162,7 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                     if (m_project->track(ti).type == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
                     else
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si});
+                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !e.mods.shift});
                 }
             }
             return true;
