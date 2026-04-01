@@ -41,6 +41,28 @@ file(GLOB_RECURSE YAWN_SOURCES
     src/*.c
 )
 
+# Core library — non-UI code (audio, midi, instruments, effects, util)
+# Linked by both main executable and test executable
+set(YAWN_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ClipEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
+)
+add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
+target_include_directories(yawn_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(yawn_core PUBLIC YAWN_CORE_BUILD)
+target_link_libraries(yawn_core PUBLIC
+    PortAudio
+    sndfile
+    rtmidi
+    nlohmann_json::nlohmann_json
+)
+
+# Remove core sources from main exe (they're in yawn_core now)
+list(REMOVE_ITEM YAWN_SOURCES ${YAWN_CORE_SOURCES})
+
 add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -51,14 +73,11 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 add_dependencies(${PROJECT_NAME} generate_version)
 
-# Link dependencies
+# Link dependencies — yawn_core provides audio/midi/json libs
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    yawn_core
     SDL3::SDL3
     glad
-    PortAudio
-    sndfile
-    rtmidi
-    nlohmann_json::nlohmann_json
 )
 
 # Platform-specific

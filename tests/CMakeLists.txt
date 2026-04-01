@@ -1,14 +1,7 @@
-# Test executable — all test files + required source files (no UI/OpenGL deps)
+# Test executable — all test files, linked against yawn_core (no UI/OpenGL deps)
 file(GLOB TEST_SOURCES *.cpp)
 
-# Source files needed by tests (non-UI logic only)
-set(TESTABLE_SOURCES
-    ${CMAKE_SOURCE_DIR}/src/audio/ClipEngine.cpp
-    ${CMAKE_SOURCE_DIR}/src/audio/AudioEngine.cpp
-    ${CMAKE_SOURCE_DIR}/src/util/FileIO.cpp
-)
-
-add_executable(yawn_tests ${TEST_SOURCES} ${TESTABLE_SOURCES})
+add_executable(yawn_tests ${TEST_SOURCES})
 
 target_include_directories(yawn_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
@@ -17,12 +10,9 @@ target_include_directories(yawn_tests PRIVATE
 target_compile_definitions(yawn_tests PRIVATE YAWN_TEST_BUILD)
 
 target_link_libraries(yawn_tests PRIVATE
+    yawn_core
     GTest::gtest
     GTest::gtest_main
-    sndfile
-    nlohmann_json::nlohmann_json
-    PortAudio
-    rtmidi
 )
 
 include(GoogleTest)
