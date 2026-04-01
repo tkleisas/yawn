@@ -38,6 +38,20 @@ public:
         m_mixLabel.setText("MIX");
         m_mixLabel.setColor(Theme::textDim);
 
+        m_ioToggle.setLabel("I/O");
+        m_ioToggle.setTextColor(Theme::textDim);
+        m_ioToggle.setColor(Theme::clipSlotEmpty);
+        m_ioToggle.setOnClick([this]() {
+            m_showIO = !m_showIO;
+        });
+
+        m_sendToggle.setLabel("S");
+        m_sendToggle.setTextColor(Theme::textDim);
+        m_sendToggle.setColor(Theme::clipSlotEmpty);
+        m_sendToggle.setOnClick([this]() {
+            m_showSends = !m_showSends;
+        });
+
         m_scrollbar.setOnScroll([this](float pos) {
             m_scrollX = pos;
             if (m_onScrollChanged) m_onScrollChanged(pos);
@@ -205,9 +219,13 @@ private:
     TrackStrip m_strips[kMaxTracks];
     ScrollBar  m_scrollbar;
     Label      m_mixLabel;
+    FwButton   m_ioToggle;
+    FwButton   m_sendToggle;
 
     int   m_selectedTrack = 0;
     float m_scrollX       = 0.0f;
+    bool  m_showIO        = false;
+    bool  m_showSends     = false;
 
     static constexpr float kMixerHeight  = 420.0f;
     static constexpr float kMeterWidth   = 6.0f;

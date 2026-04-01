@@ -30,8 +30,24 @@ void MixerPanel::paint(UIContext& ctx) {
                      : Theme::kSmallFontSize / pixH;
     labelScale *= 0.85f;
     m_mixLabel.setFontScale(labelScale);
-    m_mixLabel.layout(Rect{x + 6, y + stripH * 0.5f - 8, 30, 16}, ctx);
+    m_mixLabel.layout(Rect{x + 6, stripY + 4, 30, 14}, ctx);
     m_mixLabel.paint(ctx);
+
+    // I/O and Send toggle buttons in left margin
+    float toggleW = 30.0f, toggleH = 18.0f;
+    float toggleX = x + 6;
+    float toggleY = stripY + 22;
+
+    m_ioToggle.setColor(m_showIO ? Color{60, 80, 110} : Theme::clipSlotEmpty);
+    m_ioToggle.setTextColor(m_showIO ? Color{150, 200, 255} : Theme::textDim);
+    m_ioToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
+    m_ioToggle.paint(ctx);
+
+    toggleY += toggleH + 2;
+    m_sendToggle.setColor(m_showSends ? Color{60, 80, 110} : Theme::clipSlotEmpty);
+    m_sendToggle.setTextColor(m_showSends ? Color{150, 200, 255} : Theme::textDim);
+    m_sendToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
+    m_sendToggle.paint(ctx);
 
     float gridX = x + Theme::kSceneLabelWidth;
     float gridW = w - Theme::kSceneLabelWidth;
@@ -45,17 +61,19 @@ void MixerPanel::paint(UIContext& ctx) {
     r.popClip();
 
     // Paint open dropdown overlays on top (outside clip so they're not cut off)
-    for (int t = 0; t < m_project->numTracks(); ++t) {
-        float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-        if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-        auto& s = m_strips[t];
-        if (m_project->track(t).type == Track::Type::Audio) {
-            s.audioInputDrop.paintOverlay(ctx);
-        } else {
-            s.midiInDrop.paintOverlay(ctx);
-            s.midiInChDrop.paintOverlay(ctx);
-            s.midiOutDrop.paintOverlay(ctx);
-            s.midiOutChDrop.paintOverlay(ctx);
+    if (m_showIO) {
+        for (int t = 0; t < m_project->numTracks(); ++t) {
+            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+            auto& s = m_strips[t];
+            if (m_project->track(t).type == Track::Type::Audio) {
+                s.audioInputDrop.paintOverlay(ctx);
+            } else {
+                s.midiInDrop.paintOverlay(ctx);
+                s.midiInChDrop.paintOverlay(ctx);
+                s.midiOutDrop.paintOverlay(ctx);
+                s.midiOutChDrop.paintOverlay(ctx);
+            }
         }
     }
 
@@ -75,27 +93,35 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
         return m_scrollbar.onMouseDown(e);
     }
 
+    // Toggle buttons in left margin
+    if (!rightClick && hitWidget(m_ioToggle, mx, my))
+        return m_ioToggle.onMouseDown(e);
+    if (!rightClick && hitWidget(m_sendToggle, mx, my))
+        return m_sendToggle.onMouseDown(e);
+
     float x = m_bounds.x, y = m_bounds.y;
     float gridX = x + Theme::kSceneLabelWidth;
     float gridW = m_bounds.w - Theme::kSceneLabelWidth;
 
     // First pass: check if any open dropdown popup was clicked
-    for (int t = 0; t < m_project->numTracks(); ++t) {
-        float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-        if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-        auto& s = m_strips[t];
-        if (m_project->track(t).type == Track::Type::Audio) {
-            if (s.audioInputDrop.hitPopup(mx, my))
-                return s.audioInputDrop.handlePopupClick(mx, my);
-        } else {
-            if (s.midiInDrop.hitPopup(mx, my))
-                return s.midiInDrop.handlePopupClick(mx, my);
-            if (s.midiInChDrop.hitPopup(mx, my))
-                return s.midiInChDrop.handlePopupClick(mx, my);
-            if (s.midiOutDrop.hitPopup(mx, my))
-                return s.midiOutDrop.handlePopupClick(mx, my);
-            if (s.midiOutChDrop.hitPopup(mx, my))
-                return s.midiOutChDrop.handlePopupClick(mx, my);
+    if (m_showIO) {
+        for (int t = 0; t < m_project->numTracks(); ++t) {
+            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+            auto& s = m_strips[t];
+            if (m_project->track(t).type == Track::Type::Audio) {
+                if (s.audioInputDrop.hitPopup(mx, my))
+                    return s.audioInputDrop.handlePopupClick(mx, my);
+            } else {
+                if (s.midiInDrop.hitPopup(mx, my))
+                    return s.midiInDrop.handlePopupClick(mx, my);
+                if (s.midiInChDrop.hitPopup(mx, my))
+                    return s.midiInChDrop.handlePopupClick(mx, my);
+                if (s.midiOutDrop.hitPopup(mx, my))
+                    return s.midiOutDrop.handlePopupClick(mx, my);
+                if (s.midiOutChDrop.hitPopup(mx, my))
+                    return s.midiOutChDrop.handlePopupClick(mx, my);
+            }
         }
     }
 
@@ -138,12 +164,12 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             return s.monBtn.onMouseDown(e);
         }
 
-        if (m_project->track(t).type == Track::Type::Audio) {
+        if (m_showIO && m_project->track(t).type == Track::Type::Audio) {
             if (!rightClick && hitWidget(s.audioInputDrop, mx, my))
                 return s.audioInputDrop.onMouseDown(e);
             if (!rightClick && hitWidget(s.monoBtn, mx, my))
                 return s.monoBtn.onMouseDown(e);
-        } else {
+        } else if (m_showIO) {
             if (!rightClick && hitWidget(s.midiInDrop, mx, my))
                 return s.midiInDrop.onMouseDown(e);
             if (!rightClick && hitWidget(s.midiInChDrop, mx, my))
@@ -342,20 +368,22 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.monBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
     s.monBtn.paint(ctx);
 
-    // I/O Section
+    // I/O Section (only when toggled on)
     curY += kButtonHeight + 4;
 
-    if (track.type == Track::Type::Audio) {
-        paintAudioIO(ctx, s, track, idx, ix, iw, curY);
-    } else {
-        paintMidiIO(ctx, s, track, idx, ix, iw, curY);
-    }
+    if (m_showIO) {
+        if (track.type == Track::Type::Audio) {
+            paintAudioIO(ctx, s, track, idx, ix, iw, curY);
+        } else {
+            paintMidiIO(ctx, s, track, idx, ix, iw, curY);
+        }
 
-    // Separator
-    if (track.type == Track::Type::Audio) {
-        curY += kIOHeight + 2 + 6;
-    } else {
-        curY += kIOHeight * 2 + 12.0f + 6;
+        // Separator
+        if (track.type == Track::Type::Audio) {
+            curY += kIOHeight + 2 + 6;
+        } else {
+            curY += kIOHeight * 2 + 12.0f + 6;
+        }
     }
 
     // Pan
@@ -364,17 +392,21 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, ctx);
     s.pan.paint(ctx);
 
-    // Send dots
     curY += 16 + 4;
-    int maxDots = std::min(kMaxReturnBuses,
-                           static_cast<int>((iw - 8 + 2) / 10));
-    for (int d = 0; d < maxDots; ++d) {
-        const auto& send = ch.sends[d];
-        Color dotCol = (send.enabled && send.level > 0.01f)
-            ? Color{100, 180, 255}.withAlpha(
-                  static_cast<uint8_t>(100 + send.level * 155))
-            : Theme::clipSlotEmpty;
-        r.drawRect(ix + 4 + d * 10, curY, 7, 7, dotCol);
+
+    // Send dots (only when toggled on)
+    if (m_showSends) {
+        int maxDots = std::min(kMaxReturnBuses,
+                               static_cast<int>((iw - 8 + 2) / 10));
+        for (int d = 0; d < maxDots; ++d) {
+            const auto& send = ch.sends[d];
+            Color dotCol = (send.enabled && send.level > 0.01f)
+                ? Color{100, 180, 255}.withAlpha(
+                      static_cast<uint8_t>(100 + send.level * 155))
+                : Theme::clipSlotEmpty;
+            r.drawRect(ix + 4 + d * 10, curY, 7, 7, dotCol);
+        }
+        curY += 12;
     }
 
     // Fader + Meter
