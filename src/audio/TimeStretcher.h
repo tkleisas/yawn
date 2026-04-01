@@ -60,6 +60,20 @@ public:
         m_pvInputPos = 0.0;
     }
 
+    // Reset input position tracking without clearing overlap/phase state.
+    // Call before each process() when providing a new input buffer starting at offset 0.
+    void resetInputPosition() {
+        m_wsolaInputPos = 0.0;
+        m_pvInputPos = 0.0;
+    }
+
+    // Minimum output frames needed for the stretcher to produce a single block.
+    int minOutputFrames() const {
+        if (m_algorithm == Algorithm::WSOLA)
+            return m_wsolaWindowSize;
+        return kPVFFTSize;
+    }
+
     Algorithm algorithm() const { return m_algorithm; }
 
     // Simple radix-2 FFT (Cooley-Tukey). Public for testing.

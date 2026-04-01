@@ -549,3 +549,170 @@ TEST_F(WarpPlaybackTest, WarpSameBPMMatchesNonWarp) {
         EXPECT_NEAR(out1[i], out2[i], 0.001f) << "at frame " << i;
     }
 }
+
+// ==================== TimeStretcher Integration Tests ====================
+
+TEST_F(WarpPlaybackTest, BeatsModeStereoProducesOutput) {
+    // A long enough clip for the stretcher to work (>2048 frames)
+    auto clip = makeWarpClip(2, 8000);
+    float* left = clip->buffer->channelData(0);
+    float* right = clip->buffer->channelData(1);
+    for (int i = 0; i < 8000; ++i) {
+        left[i] = std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * i / 44100.0f);
+        right[i] = std::sin(2.0f * static_cast<float>(M_PI) * 880.0f * i / 44100.0f);
+    }
+    clip->warpMode = WarpMode::Beats;
+    clip->originalBPM = 120.0;
+    clip->looping = true;
+
+    m_transport.setBPM(100.0); // speed ratio = 1.2
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
+
+    std::vector<float> output(2048, 0.0f);
+    m_engine.processTrackToBuffer(0, output.data(), 512, 2);
+
+    // Should produce non-zero output on both channels
+    bool leftNonZero = false, rightNonZero = false;
+    for (int i = 0; i < 512; ++i) {
+        if (std::abs(output[i * 2]) > 0.001f) leftNonZero = true;
+        if (std::abs(output[i * 2 + 1]) > 0.001f) rightNonZero = true;
+    }
+    EXPECT_TRUE(leftNonZero);
+    EXPECT_TRUE(rightNonZero);
+    EXPECT_TRUE(m_engine.isTrackPlaying(0));
+}
+
+TEST_F(WarpPlaybackTest, TonesModePitchPreserving) {
+    // Tones mode should use PhaseVocoder (pitch-preserving)
+    auto clip = makeWarpClip(1, 8000);
+    float* data = clip->buffer->channelData(0);
+    for (int i = 0; i < 8000; ++i) {
+        data[i] = std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * i / 44100.0f);
+    }
+    clip->warpMode = WarpMode::Tones;
+    clip->originalBPM = 120.0;
+    clip->looping = true;
+
+    m_transport.setBPM(60.0); // speed ratio = 2.0 (half speed)
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
+
+    std::vector<float> output(2048, 0.0f);
+    m_engine.processTrackToBuffer(0, output.data(), 1024, 1);
+
+    // Should produce output
+    float maxVal = 0.0f;
+    for (int i = 0; i < 1024; ++i) {
+        maxVal = std::max(maxVal, std::abs(output[i]));
+    }
+    EXPECT_GT(maxVal, 0.01f);
+}
+
+TEST_F(WarpPlaybackTest, RepitchVsBeatsOutputDiffers) {
+    // Repitch changes pitch; Beats preserves pitch. Outputs should differ.
+    int len = 8000;
+    auto clipRepitch = makeWarpClip(1, len);
+    auto clipBeats = makeWarpClip(1, len);
+    for (int i = 0; i < len; ++i) {
+        float v = std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * i / 44100.0f);
+        clipRepitch->buffer->channelData(0)[i] = v;
+        clipBeats->buffer->channelData(0)[i] = v;
+    }
+    clipRepitch->warpMode = WarpMode::Repitch;
+    clipRepitch->originalBPM = 120.0;
+    clipRepitch->looping = true;
+    clipBeats->warpMode = WarpMode::Beats;
+    clipBeats->originalBPM = 120.0;
+    clipBeats->looping = true;
+
+    m_transport.setBPM(60.0); // speed ratio = 2.0
+
+    ClipEngine engineR, engineB;
+    engineR.setTransport(&m_transport);
+    engineR.setSampleRate(44100.0);
+    engineB.setTransport(&m_transport);
+    engineB.setSampleRate(44100.0);
+    engineR.scheduleClip(0, 0, clipRepitch.get(), QuantizeMode::None);
+    engineB.scheduleClip(0, 0, clipBeats.get(), QuantizeMode::None);
+
+    int frames = 512;
+    std::vector<float> outR(frames, 0.0f), outB(frames, 0.0f);
+    engineR.processTrackToBuffer(0, outR.data(), frames, 1);
+    engineB.processTrackToBuffer(0, outB.data(), frames, 1);
+
+    // Both should produce output
+    float maxR = 0.0f, maxB = 0.0f;
+    for (int i = 0; i < frames; ++i) {
+        maxR = std::max(maxR, std::abs(outR[i]));
+        maxB = std::max(maxB, std::abs(outB[i]));
+    }
+    EXPECT_GT(maxR, 0.01f);
+    EXPECT_GT(maxB, 0.01f);
+
+    // Outputs should differ (Repitch speeds up, Beats time-stretches)
+    int diffCount = 0;
+    for (int i = 0; i < frames; ++i) {
+        if (std::abs(outR[i] - outB[i]) > 0.01f) ++diffCount;
+    }
+    EXPECT_GT(diffCount, frames / 4);
+}
+
+TEST_F(WarpPlaybackTest, TransposeChangesRepitchOutput) {
+    auto clip1 = makeWarpClip(1, 200);
+    auto clip2 = makeWarpClip(1, 200);
+    for (int i = 0; i < 200; ++i) {
+        float v = std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * i / 44100.0f);
+        clip1->buffer->channelData(0)[i] = v;
+        clip2->buffer->channelData(0)[i] = v;
+    }
+    clip1->warpMode = WarpMode::Repitch;
+    clip1->originalBPM = 120.0;
+    clip1->transposeSemitones = 0;
+    clip2->warpMode = WarpMode::Repitch;
+    clip2->originalBPM = 120.0;
+    clip2->transposeSemitones = 12; // one octave up
+
+    m_transport.setBPM(120.0);
+
+    ClipEngine eng1, eng2;
+    eng1.setTransport(&m_transport);
+    eng1.setSampleRate(44100.0);
+    eng2.setTransport(&m_transport);
+    eng2.setSampleRate(44100.0);
+    eng1.scheduleClip(0, 0, clip1.get(), QuantizeMode::None);
+    eng2.scheduleClip(0, 0, clip2.get(), QuantizeMode::None);
+
+    std::vector<float> out1(200, 0.0f), out2(200, 0.0f);
+    eng1.processTrackToBuffer(0, out1.data(), 50, 1);
+    eng2.processTrackToBuffer(0, out2.data(), 50, 1);
+
+    // Transposed output should differ (playing at 2x speed for octave up)
+    int diffCount = 0;
+    for (int i = 5; i < 50; ++i) {
+        if (std::abs(out1[i] - out2[i]) > 0.01f) ++diffCount;
+    }
+    EXPECT_GT(diffCount, 10);
+}
+
+TEST_F(WarpPlaybackTest, ShortClipFallsBackFromStretcher) {
+    // Clips too short for the stretcher should fall back to Repitch path
+    auto clip = makeWarpClip(1, 100);
+    float* data = clip->buffer->channelData(0);
+    for (int i = 0; i < 100; ++i) data[i] = 1.0f;
+    clip->warpMode = WarpMode::Beats;
+    clip->originalBPM = 120.0;
+    clip->looping = true;
+
+    m_transport.setBPM(60.0); // speed ratio = 2.0
+    m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
+
+    std::vector<float> output(256, 0.0f);
+    m_engine.processTrackToBuffer(0, output.data(), 128, 1);
+
+    // Should still produce output via Repitch fallback
+    float maxVal = 0.0f;
+    for (int i = 0; i < 128; ++i) {
+        maxVal = std::max(maxVal, std::abs(output[i]));
+    }
+    EXPECT_GT(maxVal, 0.01f);
+    EXPECT_TRUE(m_engine.isTrackPlaying(0));
+}

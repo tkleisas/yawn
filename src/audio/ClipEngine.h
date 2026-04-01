@@ -3,8 +3,10 @@
 #include "core/Constants.h"
 #include "audio/Clip.h"
 #include "audio/Transport.h"
+#include "audio/TimeStretcher.h"
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace yawn {
 namespace audio {
@@ -23,6 +25,52 @@ struct PendingLaunch {
     const Clip* clip = nullptr;   // nullptr means stop
     QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
+};
+
+// Per-track time stretcher state (one stretcher per channel, max 2 for stereo)
+struct TrackStretcher {
+    static constexpr int kMaxChannels = 2;
+    static constexpr int kOutBufSize = 8192;
+    TimeStretcher stretchers[kMaxChannels];
+    WarpMode activeMode = WarpMode::Off;
+    int numChannels = 0;
+    bool initialized = false;
+
+    // Intermediate output buffer per channel (heap-allocated on init)
+    std::vector<float> outBuf[kMaxChannels];
+    int outBufAvail[kMaxChannels]{};
+    int outBufRead[kMaxChannels]{};
+
+    void init(double sampleRate, int blockSize, WarpMode mode, int channels) {
+        auto algo = (mode == WarpMode::Tones || mode == WarpMode::Texture)
+                    ? TimeStretcher::Algorithm::PhaseVocoder
+                    : TimeStretcher::Algorithm::WSOLA;
+        numChannels = std::min(channels, kMaxChannels);
+        for (int ch = 0; ch < numChannels; ++ch) {
+            stretchers[ch].init(sampleRate, blockSize, algo);
+            outBuf[ch].resize(kOutBufSize, 0.0f);
+        }
+        activeMode = mode;
+        initialized = true;
+        for (int ch = 0; ch < kMaxChannels; ++ch) {
+            outBufAvail[ch] = 0;
+            outBufRead[ch] = 0;
+        }
+    }
+
+    void reset() {
+        for (int ch = 0; ch < numChannels; ++ch)
+            stretchers[ch].reset();
+        for (int ch = 0; ch < kMaxChannels; ++ch) {
+            outBufAvail[ch] = 0;
+            outBufRead[ch] = 0;
+        }
+    }
+
+    void setSpeedRatio(double ratio) {
+        for (int ch = 0; ch < numChannels; ++ch)
+            stretchers[ch].setSpeedRatio(ratio);
+    }
 };
 
 // ClipEngine: manages playback of clips across multiple tracks.
@@ -62,6 +110,8 @@ public:
 private:
     void checkPendingLaunches();
     void processTrack(int trackIndex, float* output, int numFrames, int numChannels);
+    void processTrackStretched(int trackIndex, float* output, int numFrames, int numChannels);
+    double computeLocalSpeedRatio(const Clip& clip, double samplePos, double projectBPM) const;
 
     Transport* m_transport = nullptr;
     double m_sampleRate = 44100.0;
@@ -69,6 +119,7 @@ private:
 
     std::array<ClipPlayState, kMaxTracks> m_tracks{};
     std::array<PendingLaunch, kMaxTracks> m_pending{};
+    std::array<TrackStretcher, kMaxTracks> m_stretchers{};
 
     int64_t m_lastQuantizeCheck = -1;
 };

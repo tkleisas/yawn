@@ -17,6 +17,14 @@ void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, 
         state.stopping = false;
         state.fadeGain = 0.0f;
         state.sceneIndex = sceneIndex;
+
+        // Initialize stretcher for pitch-preserving modes
+        if (clip && clip->warpMode != WarpMode::Off && clip->warpMode != WarpMode::Repitch) {
+            int bufCh = clip->buffer ? clip->buffer->numChannels() : 1;
+            m_stretchers[trackIndex].init(m_sampleRate, 4096, clip->warpMode, bufCh);
+        } else {
+            m_stretchers[trackIndex].initialized = false;
+        }
     } else {
         m_pending[trackIndex].trackIndex = trackIndex;
         m_pending[trackIndex].sceneIndex = sceneIndex;
@@ -114,6 +122,14 @@ void ClipEngine::checkPendingLaunches() {
             state.stopping = false;
             state.fadeGain = 0.0f;
             state.sceneIndex = m_pending[t].sceneIndex;
+
+            // Initialize stretcher for pitch-preserving modes
+            if (clip->warpMode != WarpMode::Off && clip->warpMode != WarpMode::Repitch) {
+                int bufCh = clip->buffer ? clip->buffer->numChannels() : 1;
+                m_stretchers[t].init(m_sampleRate, 4096, clip->warpMode, bufCh);
+            } else {
+                m_stretchers[t].initialized = false;
+            }
         } else {
             state.stopping = true;
         }
@@ -151,11 +167,18 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
 
     bool warping = (speedRatio != 1.0);
 
-    // For Repitch mode, speedRatio changes both speed and pitch (simple resampling)
-    // For Beats/Tones/Texture/Auto, we'd use TimeStretcher (preserves pitch).
-    // Currently implementing Repitch-style variable-rate playback with interpolation.
-    // TimeStretcher integration for pitch-preserving modes is a future enhancement.
+    // Pitch-preserving modes: use TimeStretcher (Beats→WSOLA, Tones/Texture→PhaseVocoder)
+    bool usePitchPreserving = (clip.warpMode == WarpMode::Beats ||
+                               clip.warpMode == WarpMode::Tones ||
+                               clip.warpMode == WarpMode::Texture ||
+                               clip.warpMode == WarpMode::Auto) && warping;
 
+    if (usePitchPreserving && m_stretchers[trackIndex].initialized) {
+        processTrackStretched(trackIndex, output, numFrames, numChannels);
+        return;
+    }
+
+    // Repitch mode or no warping: variable-rate playback with linear interpolation
     if (warping) {
         // Fractional position playback with linear interpolation
         double pos = state.fractionalPosition;
@@ -248,6 +271,181 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
         }
         state.fractionalPosition = static_cast<double>(state.playPosition);
     }
+}
+
+void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFrames, int numChannels) {
+    auto& state = m_tracks[trackIndex];
+    auto& stretcher = m_stretchers[trackIndex];
+    const auto& clip = *state.clip;
+    const auto& buffer = *clip.buffer;
+    int bufChannels = buffer.numChannels();
+    int bufFrames = buffer.numFrames();
+    int64_t loopStart = clip.loopStart;
+    int64_t loopEnd = clip.effectiveLoopEnd();
+
+    double projectBPM = m_transport ? m_transport->bpm() : 120.0;
+    double globalSpeed = clip.warpSpeedRatio(projectBPM);
+
+    if (clip.transposeSemitones != 0 || clip.detuneCents != 0) {
+        double semitones = clip.transposeSemitones + clip.detuneCents / 100.0;
+        globalSpeed *= std::pow(2.0, semitones / 12.0);
+    }
+
+    stretcher.setSpeedRatio(globalSpeed);
+
+    int stretcherCh = stretcher.numChannels;
+    double pos = state.fractionalPosition;
+    if (pos < loopStart) pos = static_cast<double>(loopStart);
+    int inputStart = static_cast<int>(pos);
+
+    int availableFromPos = static_cast<int>(loopEnd) - inputStart;
+    if (availableFromPos <= 0 && !clip.looping) {
+        state.active = false;
+        return;
+    }
+
+    // If clip is too short for the stretcher, fall back to Repitch
+    int clipLength = static_cast<int>(loopEnd - loopStart);
+    int minStretcherInput = 2048;
+    if (clipLength < minStretcherInput && !clip.looping) {
+        stretcher.initialized = false;
+        processTrack(trackIndex, output, numFrames, numChannels);
+        return;
+    }
+
+    float monoIn[4096];
+
+    // For each channel, ensure we have enough output buffered
+    for (int ch = 0; ch < numChannels; ++ch) {
+        int srcCh = (ch < bufChannels) ? ch : (bufChannels - 1);
+        int strCh = (ch < stretcherCh) ? ch : (stretcherCh - 1);
+        auto& str = stretcher.stretchers[strCh];
+
+        // Produce enough output in the intermediate buffer
+        while (stretcher.outBufAvail[ch] - stretcher.outBufRead[ch] < numFrames) {
+            // Gather input from clip at current position
+            int gatherStart = static_cast<int>(pos);
+            int gathered = 0;
+            int gatherPos = gatherStart;
+            int maxGather = 4096;
+
+            while (gathered < maxGather) {
+                if (gatherPos >= static_cast<int>(loopEnd)) {
+                    if (clip.looping)
+                        gatherPos = static_cast<int>(loopStart);
+                    else
+                        break;
+                }
+                int avail = static_cast<int>(loopEnd) - gatherPos;
+                int toCopy = std::min(avail, maxGather - gathered);
+                for (int s = 0; s < toCopy; ++s) {
+                    int frame = gatherPos + s;
+                    monoIn[gathered + s] = (frame < bufFrames) ? buffer.sample(srcCh, frame) : 0.0f;
+                }
+                gathered += toCopy;
+                gatherPos += toCopy;
+            }
+
+            if (gathered == 0) break; // no more input
+
+            // Reset input position so stretcher reads from start of monoIn
+            str.resetInputPosition();
+
+            // Request a large chunk of output
+            int outSpace = TrackStretcher::kOutBufSize - stretcher.outBufAvail[ch];
+            if (outSpace <= 0) break;
+            float* outPtr = stretcher.outBuf[ch].data() + stretcher.outBufAvail[ch];
+
+            int consumed = 0;
+            int produced = str.process(monoIn, gathered, outPtr, outSpace, consumed);
+            stretcher.outBufAvail[ch] += produced;
+
+            // Advance position by consumed (only track on first channel)
+            if (ch == 0 && consumed > 0) {
+                pos += consumed;
+                while (pos >= loopEnd && clip.looping)
+                    pos -= (loopEnd - loopStart);
+            }
+
+            if (produced == 0) break; // stretcher can't produce more
+        }
+    }
+
+    // Read from intermediate buffers into interleaved output
+    for (int i = 0; i < numFrames; ++i) {
+        if (state.stopping) {
+            state.fadeGain -= ClipPlayState::kFadeIncrement;
+            if (state.fadeGain <= 0.0f) {
+                state.fadeGain = 0.0f;
+                state.active = false;
+                state.stopping = false;
+                return;
+            }
+        } else if (state.fadeGain < 1.0f) {
+            state.fadeGain += ClipPlayState::kFadeIncrement;
+            if (state.fadeGain > 1.0f) state.fadeGain = 1.0f;
+        }
+
+        float gain = clip.gain * state.fadeGain;
+
+        for (int ch = 0; ch < numChannels; ++ch) {
+            float sample = 0.0f;
+            if (stretcher.outBufRead[ch] < stretcher.outBufAvail[ch]) {
+                sample = stretcher.outBuf[ch][stretcher.outBufRead[ch]];
+                stretcher.outBufRead[ch]++;
+            }
+            output[i * numChannels + ch] += sample * gain;
+        }
+    }
+
+    // Compact the intermediate buffers (shift remaining data to start)
+    for (int ch = 0; ch < numChannels; ++ch) {
+        int remaining = stretcher.outBufAvail[ch] - stretcher.outBufRead[ch];
+        if (remaining > 0 && stretcher.outBufRead[ch] > 0) {
+            std::memmove(stretcher.outBuf[ch].data(),
+                         stretcher.outBuf[ch].data() + stretcher.outBufRead[ch],
+                         remaining * sizeof(float));
+        }
+        stretcher.outBufAvail[ch] = remaining;
+        stretcher.outBufRead[ch] = 0;
+    }
+
+    state.fractionalPosition = pos;
+    state.playPosition = static_cast<int64_t>(pos);
+
+    // If stretcher produced no output and we've passed the end, stop
+    if (!clip.looping && pos >= loopEnd) {
+        state.active = false;
+    }
+}
+
+double ClipEngine::computeLocalSpeedRatio(const Clip& clip, double samplePos, double projectBPM) const {
+    // If no warp markers, use global BPM ratio
+    if (clip.warpMarkers.size() < 2)
+        return clip.warpSpeedRatio(projectBPM);
+
+    // Find the two warp markers surrounding the current position
+    const auto& markers = clip.warpMarkers;
+    size_t idx = 0;
+    for (size_t i = 0; i + 1 < markers.size(); ++i) {
+        if (samplePos >= markers[i].samplePosition &&
+            samplePos < markers[i + 1].samplePosition) {
+            idx = i;
+            break;
+        }
+        if (i + 2 == markers.size()) idx = i; // clamp to last segment
+    }
+
+    // Compute local speed ratio between these two markers
+    double srcSamples = static_cast<double>(markers[idx + 1].samplePosition - markers[idx].samplePosition);
+    double beatSpan = markers[idx + 1].beatPosition - markers[idx].beatPosition;
+    if (beatSpan <= 0.0 || srcSamples <= 0.0) return 1.0;
+
+    // How many output samples this beat span occupies at project BPM
+    double secondsPerBeat = 60.0 / projectBPM;
+    double dstSamples = beatSpan * secondsPerBeat * m_sampleRate;
+
+    return srcSamples / dstSamples;
 }
 
 } // namespace audio
