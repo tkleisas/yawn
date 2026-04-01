@@ -278,11 +278,33 @@ void FwDropDown::paint(UIContext& ctx) {
     float lh = ctx.font->lineHeight(scale);
     float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
 
+    // Clip text to dropdown bounds (leave room for arrow)
+    float arrowZone = 14.0f;
+    float textW = m_bounds.w - 6 - arrowZone;
+    ctx.renderer->pushClip(m_bounds.x + 1, m_bounds.y, textW + 5, m_bounds.h);
     std::string txt = selectedText();
     ctx.font->drawText(*ctx.renderer, txt.c_str(), m_bounds.x + 6, ty, scale, Theme::textPrimary);
+    ctx.renderer->popClip();
 
-    ctx.font->drawText(*ctx.renderer, m_open ? "^" : "v",
-                       m_bounds.x + m_bounds.w - 14, ty, scale, Theme::textSecondary);
+    // Draw triangle arrow (▼ or ▲)
+    float triSize = 4.0f;
+    float triCx = m_bounds.x + m_bounds.w - arrowZone * 0.5f;
+    float triCy = m_bounds.y + m_bounds.h * 0.5f;
+    if (m_open) {
+        // Up triangle ▲
+        ctx.renderer->drawTriangle(
+            triCx, triCy - triSize * 0.5f,
+            triCx - triSize, triCy + triSize * 0.5f,
+            triCx + triSize, triCy + triSize * 0.5f,
+            Theme::textSecondary);
+    } else {
+        // Down triangle ▼
+        ctx.renderer->drawTriangle(
+            triCx - triSize, triCy - triSize * 0.5f,
+            triCx + triSize, triCy - triSize * 0.5f,
+            triCx, triCy + triSize * 0.5f,
+            Theme::textSecondary);
+    }
 }
 
 void FwDropDown::paintOverlay(UIContext& ctx) {
@@ -299,6 +321,8 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
     ctx.renderer->drawRect(listX, listY, m_bounds.w, listH, Color{30, 30, 34, 255});
     ctx.renderer->drawRectOutline(listX, listY, m_bounds.w, listH, Color{90, 140, 200, 255});
 
+    // Clip item text to popup bounds
+    ctx.renderer->pushClip(listX, listY, m_bounds.w, listH);
     for (int i = 0; i < static_cast<int>(m_items.size()) && i < mv; ++i) {
         float iy = listY + i * itemH;
 
@@ -321,6 +345,7 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
         ctx.font->drawText(*ctx.renderer, m_items[i].c_str(),
                            listX + 8, itemTy, scale, textCol);
     }
+    ctx.renderer->popClip();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

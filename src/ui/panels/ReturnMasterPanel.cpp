@@ -196,10 +196,7 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
                                     kMeterWidth * 2 + 2, faderH}, ctx);
     m_masterStrip.meter.paint(ctx);
 
-    auto& f = *ctx.font;
-    float pixH = f.pixelHeight();
-    float smallScale = (pixH < 1.0f) ? Theme::kSmallFontSize * 0.8f
-                     : Theme::kSmallFontSize * 0.8f / pixH;
+    float smallScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
     float db = master.volume > 0.001f ? 20.0f * std::log10(master.volume) : -60.0f;
     char dbText[16];
     if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");

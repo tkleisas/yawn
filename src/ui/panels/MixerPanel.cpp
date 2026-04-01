@@ -25,10 +25,7 @@ void MixerPanel::paint(UIContext& ctx) {
     float stripY = y + 2;
     float stripH = h - 4 - kScrollbarH;
 
-    float pixH = ctx.font ? ctx.font->pixelHeight() : 0;
-    float labelScale = (pixH < 1.0f) ? Theme::kSmallFontSize
-                     : Theme::kSmallFontSize / pixH;
-    labelScale *= 0.85f;
+    float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
     m_mixLabel.setFontScale(labelScale);
     m_mixLabel.layout(Rect{x + 6, stripY + 4, 30, 14}, ctx);
     m_mixLabel.paint(ctx);
@@ -296,7 +293,6 @@ void MixerPanel::setupStripCallbacks(int t) {
 void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
                  float stripW, float stripH) {
     auto& r = *ctx.renderer;
-    auto& f = *ctx.font;
     auto& s = m_strips[idx];
     float pad = Theme::kSlotPadding;
     float ix = sx + pad, iw = stripW - pad * 2;
@@ -430,10 +426,8 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
     s.dbLabel.setText(dbText);
     s.dbLabel.setColor(Theme::textDim);
-    float pixH = f.pixelHeight();
-    float smallScale = (pixH < 1.0f) ? Theme::kSmallFontSize * 0.8f
-                       : Theme::kSmallFontSize * 0.8f / pixH;
-    s.dbLabel.setFontScale(smallScale);
+    float dbScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
+    s.dbLabel.setFontScale(dbScale);
     s.dbLabel.layout(Rect{ix + 4, stripY + stripH - 18, iw - 8, 14}, ctx);
     s.dbLabel.paint(ctx);
 
