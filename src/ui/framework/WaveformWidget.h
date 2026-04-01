@@ -16,6 +16,7 @@
 #include "audio/Clip.h"
 #include "ui/Theme.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -160,7 +161,6 @@ public:
             int hitIdx = hitTestWarpMarker(e.lx, 6.0f);
             if (hitIdx >= 0) {
                 if (e.mods.alt) {
-                    // Alt+click → delete marker
                     auto& markers = const_cast<std::vector<audio::WarpMarker>&>(m_clip->warpMarkers);
                     if (hitIdx < static_cast<int>(markers.size()))
                         markers.erase(markers.begin() + hitIdx);
@@ -170,6 +170,36 @@ public:
                 captureMouse();
                 return true;
             }
+        }
+
+        // Double-click detection → create warp marker
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - m_lastClickTime).count();
+        m_lastClickTime = now;
+
+        if (elapsed < 300 && m_clip->warpMode != audio::WarpMode::Off) {
+            double samplePos = m_scrollOffset + static_cast<double>(e.lx) * m_samplesPerPixel;
+            int64_t sp = static_cast<int64_t>(std::clamp(samplePos, 0.0,
+                static_cast<double>(m_clip->buffer->numFrames() - 1)));
+
+            // Calculate beat position from sample position
+            double beatPos = 0.0;
+            if (m_clip->originalBPM > 0.0 && m_sampleRate > 0) {
+                double samplesPerBeat = (60.0 / m_clip->originalBPM) * m_sampleRate;
+                beatPos = static_cast<double>(sp) / samplesPerBeat;
+            }
+
+            audio::WarpMarker newMarker{sp, beatPos};
+            auto& markers = const_cast<std::vector<audio::WarpMarker>&>(m_clip->warpMarkers);
+
+            // Insert sorted by sample position
+            auto it = std::lower_bound(markers.begin(), markers.end(), newMarker,
+                [](const audio::WarpMarker& a, const audio::WarpMarker& b) {
+                    return a.samplePosition < b.samplePosition;
+                });
+            markers.insert(it, newMarker);
+            return true;
         }
 
         return false;
@@ -214,6 +244,8 @@ public:
         return false;
     }
 
+    void setSampleRate(int sr) { m_sampleRate = sr; }
+
 private:
     const audio::Clip* m_clip = nullptr;
     double m_samplesPerPixel = 100.0;    // zoom level
@@ -223,6 +255,8 @@ private:
     bool m_followPlayhead = true;
     bool m_draggingOverview = false;
     int m_draggingMarker = -1;           // index of warp marker being dragged
+    int m_sampleRate = 44100;
+    std::chrono::steady_clock::time_point m_lastClickTime{};
 
     // ─── Paint helpers ──────────────────────────────────────────────────
 

@@ -10,10 +10,12 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/DeviceWidget.h"
+#include "ui/framework/Primitives.h"
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/WaveformWidget.h"
 #include "ui/Theme.h"
 #include "audio/Clip.h"
+#include "audio/TransientDetector.h"
 #include "instruments/Instrument.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
@@ -92,6 +94,28 @@ public:
         m_clipPtr = clip;
         m_clipSampleRate = sampleRate;
         m_waveformWidget.setClip(clip);
+        m_waveformWidget.setSampleRate(sampleRate);
+
+        // Setup warp mode dropdown
+        m_warpModeDropdown.setItems({"Off", "Auto", "Beats", "Tones", "Texture", "Repitch"});
+        m_warpModeDropdown.setSelected(static_cast<int>(clip->warpMode));
+        m_warpModeDropdown.setOnChange([this](int idx) {
+            if (m_clipPtr) {
+                auto* mutableClip = const_cast<audio::Clip*>(m_clipPtr);
+                mutableClip->warpMode = static_cast<audio::WarpMode>(idx);
+            }
+        });
+
+        // Setup detect button
+        m_detectBtn.setLabel("Detect");
+        m_detectBtn.setOnClick([this]() {
+            if (!m_clipPtr || !m_clipPtr->buffer) return;
+            auto* mutableClip = const_cast<audio::Clip*>(m_clipPtr);
+            mutableClip->transients = audio::TransientDetector::detect(*m_clipPtr->buffer);
+            if (mutableClip->originalBPM <= 0.0 && !mutableClip->transients.empty())
+                mutableClip->originalBPM = audio::TransientDetector::estimateBPM(
+                    mutableClip->transients, static_cast<double>(m_clipSampleRate));
+        });
 
         saveExpandedStates();
         m_scroll.removeAllChildren();
@@ -406,6 +430,10 @@ public:
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
             if (m_waveformWidget.onMouseUp(e)) return true;
+            if (hitWidget(m_detectBtn, e.x, e.y))
+                return m_detectBtn.onMouseUp(e);
+            if (hitWidget(m_warpModeDropdown, e.x, e.y))
+                return m_warpModeDropdown.onMouseUp(e);
         }
         for (auto* dw : m_deviceWidgets) {
             auto& db = dw->bounds();
@@ -432,6 +460,11 @@ public:
     }
 
 private:
+    bool hitWidget(Widget& w, float mx, float my) {
+        auto& b = w.bounds();
+        return mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h;
+    }
+
     // ── DeviceRef — lightweight bridge to device pointers ──
     struct DeviceRef {
         DeviceType type = DeviceType::AudioFx;
@@ -620,6 +653,8 @@ private:
     const audio::Clip* m_clipPtr = nullptr;
     int m_clipSampleRate = 44100;
     WaveformWidget m_waveformWidget;
+    FwDropDown m_warpModeDropdown;
+    FwButton m_detectBtn;
     float m_lastMouseX = 0, m_lastMouseY = 0;
 
     // ── Audio clip view rendering ──

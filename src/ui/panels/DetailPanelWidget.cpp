@@ -90,6 +90,10 @@ void DetailPanelWidget::paint(UIContext& ctx) {
     }
 
     renderer.popClip();
+
+    // Dropdown overlay must render outside clip region
+    if (m_viewMode == ViewMode::AudioClip && m_warpModeDropdown.isOpen())
+        m_warpModeDropdown.paintOverlay(ctx);
 }
 
 bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
@@ -116,7 +120,7 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         return true;
     }
 
-    if (!m_open || m_deviceWidgets.empty()) return false;
+    if (!m_open) return false;
 
     // Forward to waveform widget in audio clip view
     if (m_viewMode == ViewMode::AudioClip) {
@@ -126,7 +130,15 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
             e.ly = my - wb.y;
             if (m_waveformWidget.onMouseDown(e)) return true;
         }
+        // Warp mode dropdown
+        if (hitWidget(m_warpModeDropdown, mx, my))
+            return m_warpModeDropdown.onMouseDown(e);
+        // Detect button
+        if (hitWidget(m_detectBtn, mx, my))
+            return m_detectBtn.onMouseDown(e);
     }
+
+    if (m_deviceWidgets.empty()) return false;
 
     if (m_scroll.onMouseDown(e)) return true;
 
@@ -244,10 +256,20 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
 
     font.drawText(renderer, "Warp", col3X, propsY, labelScale, labelCol);
     {
-        const char* warpNames[] = {"Off", "Auto", "Beats", "Tones", "Texture", "Repitch"};
-        int idx = static_cast<int>(clip.warpMode);
-        if (idx < 0 || idx > 5) idx = 0;
-        font.drawText(renderer, warpNames[idx], col3X, propsY + propH, valScale, valCol);
+        // Warp mode dropdown
+        m_warpModeDropdown.setSelected(static_cast<int>(clip.warpMode));
+        float ddW = sectionW * 0.20f;
+        float ddX = col3X;
+        float ddY = propsY + propH;
+        m_warpModeDropdown.layout(Rect{ddX, ddY, ddW, propH}, ctx);
+        m_warpModeDropdown.paint(ctx);
+
+        // Detect button
+        float btnX = ddX + ddW + 4.0f;
+        float btnW = sectionW - (btnX - sectionX);
+        if (btnW > 50.0f) btnW = 50.0f;
+        m_detectBtn.layout(Rect{btnX, ddY, btnW, propH}, ctx);
+        m_detectBtn.paint(ctx);
     }
 
     float row2Y = propsY + propH * 2 + propGap;
