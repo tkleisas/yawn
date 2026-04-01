@@ -334,22 +334,37 @@ void Renderer2D::drawWaveform(const float* samples, int sampleCount,
     float barWidth = w / numBars;
 
     for (int i = 0; i < numBars; ++i) {
-        // Find peak in this segment
         int startSample = (i * sampleCount) / numBars;
         int endSample = ((i + 1) * sampleCount) / numBars;
         if (endSample > sampleCount) endSample = sampleCount;
 
-        float peak = 0.0f;
+        float minVal = 0.0f, maxVal = 0.0f;
         for (int s = startSample; s < endSample; ++s) {
-            float abs = samples[s] < 0 ? -samples[s] : samples[s];
-            if (abs > peak) peak = abs;
+            float v = samples[s];
+            if (v < minVal) minVal = v;
+            if (v > maxVal) maxVal = v;
         }
 
-        float barH = peak * halfH;
-        if (barH < 0.5f) barH = 0.5f;
+        float top = midY - maxVal * halfH;
+        float bot = midY - minVal * halfH;
+        float barH = bot - top;
+        if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
 
-        drawRect(x + i * barWidth, midY - barH, barWidth, barH * 2.0f, color);
+        drawRect(x + i * barWidth, top, barWidth, barH, color);
     }
+}
+
+void Renderer2D::drawWaveformStereo(const float* ch0, const float* ch1,
+                                     int sampleCount,
+                                     float x, float y, float w, float h,
+                                     Color color) {
+    if (sampleCount <= 0 || w <= 0) return;
+    float halfH = h * 0.5f;
+    float sepY = y + halfH;
+    // Top half = channel 0, bottom half = channel 1
+    drawWaveform(ch0, sampleCount, x, y, w, halfH - 0.5f, color);
+    drawRect(x, sepY - 0.5f, w, 1.0f, Color{50, 50, 55, 128});
+    drawWaveform(ch1, sampleCount, x, sepY + 0.5f, w, halfH - 0.5f, color);
 }
 
 void Renderer2D::pushClip(float x, float y, float w, float h) {

@@ -390,9 +390,17 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
         if (aClip && aClip->buffer && aClip->buffer->numFrames() > 0) {
             float wfY = iy + 18, wfH = ih - 22;
             Color wfCol = trkCol.withAlpha(160);
-            r.drawWaveform(aClip->buffer->channelData(0),
-                           aClip->buffer->numFrames(),
-                           contentX + 4, wfY, contentW - 8, wfH, wfCol);
+            int nch = aClip->buffer->numChannels();
+            if (nch >= 2) {
+                r.drawWaveformStereo(aClip->buffer->channelData(0),
+                                     aClip->buffer->channelData(1),
+                                     aClip->buffer->numFrames(),
+                                     contentX + 4, wfY, contentW - 8, wfH, wfCol);
+            } else {
+                r.drawWaveform(aClip->buffer->channelData(0),
+                               aClip->buffer->numFrames(),
+                               contentX + 4, wfY, contentW - 8, wfH, wfCol);
+            }
             if (isPlaying) {
                 int64_t pos = m_trackStates[ti].playPosition;
                 float frac = std::fmod(

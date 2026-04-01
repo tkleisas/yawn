@@ -215,10 +215,21 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         if (end > sampleCount) end = sampleCount;
         int visibleSamples = static_cast<int>(end - start);
         if (visibleSamples > 0) {
-            renderer.drawWaveform(samples + start, visibleSamples,
-                                  sectionX + 1, waveY + 1,
-                                  waveW - 2, waveH - 2,
-                                  Color{100, 180, 255, 200});
+            int nch = clip.buffer->numChannels();
+            if (nch >= 2) {
+                renderer.drawWaveformStereo(
+                    clip.buffer->channelData(0) + start,
+                    clip.buffer->channelData(1) + start,
+                    visibleSamples,
+                    sectionX + 1, waveY + 1,
+                    waveW - 2, waveH - 2,
+                    Color{100, 180, 255, 200});
+            } else {
+                renderer.drawWaveform(samples + start, visibleSamples,
+                                      sectionX + 1, waveY + 1,
+                                      waveW - 2, waveH - 2,
+                                      Color{100, 180, 255, 200});
+            }
         }
 
         if (clip.loopStart > 0) {

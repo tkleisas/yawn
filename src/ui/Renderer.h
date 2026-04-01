@@ -33,9 +33,13 @@ public:
                           float u0, float v0, float u1, float v1,
                           Color color, GLuint textureId);
 
-    // Waveform: draws vertical bars from audio samples
+    // Waveform: draws vertical bars from audio samples (min/max envelope)
     void drawWaveform(const float* samples, int sampleCount,
                       float x, float y, float w, float h, Color color);
+
+    // Stereo waveform: two channels split top/bottom
+    void drawWaveformStereo(const float* ch0, const float* ch1, int sampleCount,
+                            float x, float y, float w, float h, Color color);
 
     // Scissor clipping
     void pushClip(float x, float y, float w, float h);
