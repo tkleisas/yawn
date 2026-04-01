@@ -1357,9 +1357,9 @@ void App::update() {
                 m_sessionPanel->setGlobalRecordArmed(msg.recording);
             }
             else if constexpr (std::is_same_v<T, audio::MidiRecordCompleteEvent>) {
-                auto& data = m_audioEngine.recordedMidiData();
+                int ti = msg.trackIndex;
+                auto& data = m_audioEngine.recordedMidiData(ti);
                 if (data.ready.load(std::memory_order_acquire)) {
-                    int ti = data.trackIndex;
                     int si = data.sceneIndex;
                     if (ti >= 0 && si >= 0) {
                         auto* existingClip = m_project.getMidiClip(ti, si);
@@ -1392,9 +1392,9 @@ void App::update() {
                 }
             }
             else if constexpr (std::is_same_v<T, audio::AudioRecordCompleteEvent>) {
-                auto& data = m_audioEngine.recordedAudioData();
+                int ti = msg.trackIndex;
+                auto& data = m_audioEngine.recordedAudioData(ti);
                 if (data.ready.load(std::memory_order_acquire)) {
-                    int ti = data.trackIndex;
                     int si = data.sceneIndex;
                     if (ti >= 0 && si >= 0 && data.frameCount > 0) {
                         // Create AudioBuffer from recorded data

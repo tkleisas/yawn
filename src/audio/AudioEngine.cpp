@@ -778,16 +778,25 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
     }
     rs.pendingNotes.clear();
 
-    m_recordedMidi.notes = rs.recordedNotes;
-    m_recordedMidi.ccs = rs.recordedCCs;
-    m_recordedMidi.trackIndex = trackIndex;
-    m_recordedMidi.sceneIndex = rs.targetScene;
-    m_recordedMidi.overdub = rs.overdub;
+    // Discard empty MIDI recordings (no notes and no CCs)
+    if (rs.recordedNotes.empty() && rs.recordedCCs.empty()) {
+        rs.recording = false;
+        rs.pendingStopQuantize = QuantizeMode::None;
+        maybeStopTransportRecording();
+        return;
+    }
+
+    auto& xfer = m_recordedMidi[trackIndex];
+    xfer.notes = rs.recordedNotes;
+    xfer.ccs = rs.recordedCCs;
+    xfer.trackIndex = trackIndex;
+    xfer.sceneIndex = rs.targetScene;
+    xfer.overdub = rs.overdub;
     double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
     int bpb = m_transport.beatsPerBar();
     double bars = std::ceil(rawLen / bpb);
-    m_recordedMidi.lengthBeats = bars * bpb;
-    m_recordedMidi.ready.store(true, std::memory_order_release);
+    xfer.lengthBeats = bars * bpb;
+    xfer.ready.store(true, std::memory_order_release);
 
     MidiRecordCompleteEvent evt;
     evt.trackIndex = trackIndex;
@@ -802,25 +811,31 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
 
 void AudioEngine::finalizeAudioRecord(int trackIndex) {
     auto& ars = m_audioRecordStates[trackIndex];
-    if (!ars.recording || ars.recordedFrames <= 0) {
+    // Minimum ~50ms at any sample rate
+    static constexpr int64_t kMinRecordFrames = 2048;
+    if (!ars.recording || ars.recordedFrames < kMinRecordFrames) {
+        ars.buffer.clear();
+        ars.buffer.shrink_to_fit();
         ars.recording = false;
         ars.pendingStopQuantize = QuantizeMode::None;
+        maybeStopTransportRecording();
         return;
     }
 
-    m_recordedAudio.channels = ars.channels;
-    m_recordedAudio.frameCount = ars.recordedFrames;
-    m_recordedAudio.trackIndex = trackIndex;
-    m_recordedAudio.sceneIndex = ars.targetScene;
-    m_recordedAudio.overdub = ars.overdub;
-    m_recordedAudio.buffer.resize(ars.channels * ars.recordedFrames);
+    auto& xfer = m_recordedAudio[trackIndex];
+    xfer.channels = ars.channels;
+    xfer.frameCount = ars.recordedFrames;
+    xfer.trackIndex = trackIndex;
+    xfer.sceneIndex = ars.targetScene;
+    xfer.overdub = ars.overdub;
+    xfer.buffer.resize(ars.channels * ars.recordedFrames);
     for (int ch = 0; ch < ars.channels; ++ch) {
         std::memcpy(
-            m_recordedAudio.buffer.data() + ch * ars.recordedFrames,
+            xfer.buffer.data() + ch * ars.recordedFrames,
             ars.buffer.data() + ch * ars.maxFrames,
             ars.recordedFrames * sizeof(float));
     }
-    m_recordedAudio.ready.store(true, std::memory_order_release);
+    xfer.ready.store(true, std::memory_order_release);
 
     AudioRecordCompleteEvent evt;
     evt.trackIndex = trackIndex;

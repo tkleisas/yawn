@@ -86,7 +86,7 @@ public:
     // MidiEngine integration — called from App after init
     void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
 
-    // Thread-safe transfer of recorded MIDI data to UI
+    // Thread-safe transfer of recorded MIDI data to UI (per-track)
     struct RecordedMidiData {
         std::vector<midi::MidiNote> notes;
         std::vector<midi::MidiCCEvent> ccs;
@@ -96,9 +96,9 @@ public:
         double lengthBeats = 4.0;
         std::atomic<bool> ready{false};
     };
-    RecordedMidiData& recordedMidiData() { return m_recordedMidi; }
+    RecordedMidiData& recordedMidiData(int track) { return m_recordedMidi[track]; }
 
-    // Thread-safe transfer of recorded audio data to UI
+    // Thread-safe transfer of recorded audio data to UI (per-track)
     struct RecordedAudioData {
         std::vector<float> buffer;  // non-interleaved: [ch0_frames...][ch1_frames...]
         int channels = 2;
@@ -108,7 +108,7 @@ public:
         bool overdub = false;
         std::atomic<bool> ready{false};
     };
-    RecordedAudioData& recordedAudioData() { return m_recordedAudio; }
+    RecordedAudioData& recordedAudioData(int track) { return m_recordedAudio[track]; }
 
 private:
     static int paCallback(
@@ -198,8 +198,8 @@ private:
     };
 
     TrackRecordState m_trackRecordStates[kMaxTracks];
-    RecordedMidiData m_recordedMidi;
-    RecordedAudioData m_recordedAudio;
+    RecordedMidiData m_recordedMidi[kMaxTracks];
+    RecordedAudioData m_recordedAudio[kMaxTracks];
 
     // Audio recording state per track
     struct AudioRecordState {
