@@ -12,9 +12,9 @@
 #include "ui/Font.h"
 #endif
 #include "ui/Theme.h"
-#include "audio/AudioEngine.h"
-#include "audio/Clip.h"
 #include "app/Project.h"
+
+namespace yawn { namespace audio { class AudioEngine; class Clip; } }
 #include "core/Constants.h"
 #include <cstdio>
 #include <cmath>

@@ -5,6 +5,7 @@
 #include "PianoRollPanel.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "util/Logger.h"
 
 namespace yawn {
 namespace ui {
@@ -89,7 +90,7 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
     }
 
     if (my >= m_py + kHandleHeight && my < m_py + kHandleHeight + kToolbarH) {
-        std::printf("[PianoRoll] Toolbar click at (%.0f, %.0f) py=%.0f toolbarH=%.0f\n",
+        LOG_DEBUG("UI", "PianoRoll toolbar click at (%.0f, %.0f) py=%.0f toolbarH=%.0f",
                     mx, my, m_py, kToolbarH);
         return handleToolbarClick(mx, my);
     }

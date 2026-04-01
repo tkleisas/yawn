@@ -1,7 +1,7 @@
 #include "util/FileIO.h"
+#include "util/Logger.h"
 #include <sndfile.h>
 #include <vector>
-#include <cstdio>
 #include <cmath>
 
 namespace yawn {
@@ -16,13 +16,13 @@ std::shared_ptr<audio::AudioBuffer> loadAudioFile(
 
     SNDFILE* file = sf_open(path.c_str(), SFM_READ, &sfInfo);
     if (!file) {
-        std::fprintf(stderr, "Failed to open audio file '%s': %s\n",
+        LOG_ERROR("File", "Failed to open audio file '%s': %s",
             path.c_str(), sf_strerror(nullptr));
         return nullptr;
     }
 
     if (sfInfo.frames <= 0 || sfInfo.channels <= 0) {
-        std::fprintf(stderr, "Invalid audio file '%s': %lld frames, %d channels\n",
+        LOG_ERROR("File", "Invalid audio file '%s': %lld frames, %d channels",
             path.c_str(), static_cast<long long>(sfInfo.frames), sfInfo.channels);
         sf_close(file);
         return nullptr;
@@ -34,7 +34,7 @@ std::shared_ptr<audio::AudioBuffer> loadAudioFile(
     sf_close(file);
 
     if (framesRead <= 0) {
-        std::fprintf(stderr, "Failed to read audio data from '%s'\n", path.c_str());
+        LOG_ERROR("File", "Failed to read audio data from '%s'", path.c_str());
         return nullptr;
     }
 
@@ -63,7 +63,7 @@ std::shared_ptr<audio::AudioBuffer> loadAudioFile(
         }
     }
 
-    std::printf("Loaded '%s': %lld frames, %d ch, %d Hz\n",
+    LOG_INFO("File", "Loaded '%s': %lld frames, %d ch, %d Hz",
         path.c_str(), static_cast<long long>(framesRead),
         sfInfo.channels, sfInfo.samplerate);
 
@@ -117,7 +117,7 @@ bool saveAudioFile(const std::string& path,
 
     SNDFILE* file = sf_open(path.c_str(), SFM_WRITE, &sfInfo);
     if (!file) {
-        std::fprintf(stderr, "Failed to create audio file '%s': %s\n",
+        LOG_ERROR("File", "Failed to create audio file '%s': %s",
             path.c_str(), sf_strerror(nullptr));
         return false;
     }

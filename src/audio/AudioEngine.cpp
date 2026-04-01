@@ -1,5 +1,5 @@
 #include "audio/AudioEngine.h"
-#include <cstdio>
+#include "util/Logger.h"
 #include <cstring>
 #include <cmath>
 
@@ -52,7 +52,7 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     PaError err = Pa_Initialize();
     if (err != paNoError) {
-        std::fprintf(stderr, "PortAudio init failed: %s\n", Pa_GetErrorText(err));
+        LOG_ERROR("Audio", "PortAudio init failed: %s", Pa_GetErrorText(err));
         return false;
     }
     m_paInitialized = true;
@@ -98,7 +98,7 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
         ? static_cast<PaDeviceIndex>(config.outputDevice)
         : Pa_GetDefaultOutputDevice();
     if (outputParams.device == paNoDevice) {
-        std::fprintf(stderr, "No default audio output device found\n");
+        LOG_ERROR("Audio", "No default audio output device found");
         return false;
     }
 
@@ -140,7 +140,7 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     if (err != paNoError && inputParamsPtr) {
         // Full-duplex failed, fall back to output-only
-        std::fprintf(stderr, "Full-duplex failed (%s), falling back to output-only\n",
+        LOG_WARN("Audio", "Full-duplex failed (%s), falling back to output-only",
                      Pa_GetErrorText(err));
         inputParamsPtr = nullptr;
         err = Pa_OpenStream(
@@ -156,21 +156,21 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     }
 
     if (err != paNoError) {
-        std::fprintf(stderr, "PortAudio open stream failed: %s\n", Pa_GetErrorText(err));
+        LOG_ERROR("Audio", "PortAudio open stream failed: %s", Pa_GetErrorText(err));
         return false;
     }
 
     m_hasInputDevice = (inputParamsPtr != nullptr);
 
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
-    std::printf("Output device: %s\n", devInfo->name);
+    LOG_INFO("Audio", "Output device: %s", devInfo->name);
     if (m_hasInputDevice) {
         const PaDeviceInfo* inDevInfo = Pa_GetDeviceInfo(inputParams.device);
-        std::printf("Input device: %s (%d ch)\n", inDevInfo->name, config.inputChannels);
+        LOG_INFO("Audio", "Input device: %s (%d ch)", inDevInfo->name, config.inputChannels);
     } else {
-        std::printf("No audio input device (recording disabled)\n");
+        LOG_INFO("Audio", "No audio input device (recording disabled)");
     }
-    std::printf("Sample rate: %.0f Hz, Buffer: %d frames, Channels: %d\n",
+    LOG_INFO("Audio", "Sample rate: %.0f Hz, Buffer: %d frames, Channels: %d",
         config.sampleRate, config.framesPerBuffer, config.outputChannels);
 
     return true;
@@ -181,12 +181,12 @@ bool AudioEngine::start() {
 
     PaError err = Pa_StartStream(m_stream);
     if (err != paNoError) {
-        std::fprintf(stderr, "PortAudio start stream failed: %s\n", Pa_GetErrorText(err));
+        LOG_ERROR("Audio", "PortAudio start stream failed: %s", Pa_GetErrorText(err));
         return false;
     }
 
     m_running.store(true, std::memory_order_release);
-    std::printf("Audio engine started\n");
+    LOG_INFO("Audio", "Audio engine started");
     return true;
 }
 
@@ -194,7 +194,7 @@ void AudioEngine::stop() {
     if (m_stream && m_running.load(std::memory_order_acquire)) {
         Pa_StopStream(m_stream);
         m_running.store(false, std::memory_order_release);
-        std::printf("Audio engine stopped\n");
+        LOG_INFO("Audio", "Audio engine stopped");
     }
 }
 
@@ -562,14 +562,14 @@ void AudioEngine::processCommands() {
                     // Also store for recording capture (virtual keyboard input)
                     m_liveInputMidi[msg.trackIndex].addMessage(m);
                     if (m.isNoteOn())
-                        std::printf("[MIDI] NoteOn track=%d note=%d vel=%d inst=%s\n",
+                        LOG_DEBUG("MIDI", "NoteOn track=%d note=%d vel=%d inst=%s",
                                     msg.trackIndex, msg.note, msg.velocity,
                                     m_instruments[msg.trackIndex] ? m_instruments[msg.trackIndex]->name() : "NONE");
                 }
             }
             else if constexpr (std::is_same_v<T, LaunchMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
-                    std::printf("[MIDI] LaunchMidiClip track=%d scene=%d clip=%p len=%.2f\n",
+                    LOG_DEBUG("MIDI", "LaunchMidiClip track=%d scene=%d clip=%p len=%.2f",
                                 msg.trackIndex, msg.sceneIndex, (const void*)msg.clip,
                                 msg.clip ? msg.clip->lengthBeats() : 0.0);
                     m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize);

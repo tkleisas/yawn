@@ -3,6 +3,8 @@
 // This file is only compiled in the main exe build (not test builds).
 
 #include "SessionPanel.h"
+#include "audio/AudioEngine.h"
+#include "audio/Clip.h"
 #include "../Renderer.h"
 #include "../Font.h"
 

@@ -1,10 +1,10 @@
 #pragma once
 
 #include "audio/ClipEngine.h"
+#include "util/Logger.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
-#include <cstdio>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -63,7 +63,7 @@ struct AppSettings {
                     s.enabledMidiOutputs.push_back(v.get<int>());
             }
         } catch (...) {
-            std::fprintf(stderr, "Warning: Failed to parse settings file\n");
+            LOG_WARN("App", "Failed to parse settings file");
         }
         return s;
     }
@@ -85,7 +85,7 @@ struct AppSettings {
                 out << j.dump(2);
             }
         } catch (...) {
-            std::fprintf(stderr, "Warning: Failed to save settings file\n");
+            LOG_WARN("App", "Failed to save settings file");
         }
     }
 };

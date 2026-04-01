@@ -22,9 +22,9 @@
 #include "midi/MidiRandom.h"
 #include "midi/MidiPitch.h"
 #include "util/ProjectSerializer.h"
+#include "util/Logger.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
-#include <cstdio>
 #include <cinttypes>
 #include <cstring>
 
@@ -53,7 +53,7 @@ bool App::loadFont() {
         if (m_font.load(path, 48.0f)) return true;
     }
 
-    std::fprintf(stderr, "Warning: Could not find a system font. Text will not render.\n");
+    LOG_WARN("UI", "Could not find a system font. Text will not render.");
     return false;
 }
 
@@ -113,7 +113,7 @@ void App::setupMenuBar() {
             m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
             m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
             markDirty();
-            std::printf("Added Audio track %d\n", m_project.numTracks());
+            LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
         }},
         {"Add MIDI Track",   "",  [this]() {
             int idx = m_project.numTracks();
@@ -121,7 +121,7 @@ void App::setupMenuBar() {
             m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
             m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
             markDirty();
-            std::printf("Added MIDI track %d (with SubSynth)\n", m_project.numTracks());
+            LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
         }},
         {"Delete Track",     "",  nullptr, true},
         {"Rename Track",     "",  nullptr},
@@ -569,7 +569,7 @@ void App::updateDetailForSelectedTrack() {
 
 bool App::init() {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-        std::fprintf(stderr, "Failed to initialize SDL: %s\n", SDL_GetError());
+        LOG_ERROR("App", "Failed to initialize SDL: %s", SDL_GetError());
         return false;
     }
 
@@ -593,7 +593,7 @@ bool App::init() {
     if (displayScale > 0.0f) ui::Theme::scaleFactor = displayScale;
 
     if (!m_renderer.init()) {
-        std::fprintf(stderr, "Failed to initialize 2D renderer\n");
+        LOG_ERROR("UI", "Failed to initialize 2D renderer");
         return false;
     }
 
@@ -619,9 +619,9 @@ bool App::init() {
     audioConfig.inputDevice = m_settings.inputDevice;
 
     if (!m_audioEngine.init(audioConfig)) {
-        std::fprintf(stderr, "Warning: Audio engine failed to initialize\n");
+        LOG_WARN("Audio", "Audio engine failed to initialize");
     } else if (!m_audioEngine.start()) {
-        std::fprintf(stderr, "Warning: Audio engine failed to start\n");
+        LOG_WARN("Audio", "Audio engine failed to start");
     }
 
     // Wire MidiEngine: scan ports, open inputs, connect to AudioEngine
@@ -671,11 +671,11 @@ bool App::init() {
                     m_selectedTrack,
                     (uint8_t)midi::MidiMessage::Type::ControlChange,
                     0, 0, 0, 0, 123});
-                std::printf("Removed MIDI effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
+                LOG_INFO("MIDI", "Removed MIDI effect %d from track %d", chainIndex, m_selectedTrack + 1);
                 break;
             case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
                 m_audioEngine.mixer().trackEffects(m_selectedTrack).remove(chainIndex);
-                std::printf("Removed audio effect %d from track %d\n", chainIndex, m_selectedTrack + 1);
+                LOG_INFO("Audio", "Removed audio effect %d from track %d", chainIndex, m_selectedTrack + 1);
                 break;
             default:
                 break;
@@ -684,14 +684,14 @@ bool App::init() {
         markDirty();
     });
 
-    std::printf("\nY.A.W.N initialized successfully\n");
-    std::printf("  [Space] Play/Stop        [Up/Down] BPM +/-\n");
-    std::printf("  [Home] Reset position    [M] Toggle mixer\n");
-    std::printf("  [D] Toggle detail panel\n");
-    std::printf("  Virtual keyboard: Q2W3ER5T6Y7UI9O0P  [Z/X] Octave down/up\n");
-    std::printf("  Click clip slots to launch/stop\n");
-    std::printf("  Drag & drop audio files to load clips\n");
-    std::printf("  [Esc] Quit\n\n");
+    LOG_INFO("App", "Y.A.W.N initialized successfully");
+    LOG_INFO("App", "  [Space] Play/Stop        [Up/Down] BPM +/-");
+    LOG_INFO("App", "  [Home] Reset position    [M] Toggle mixer");
+    LOG_INFO("App", "  [D] Toggle detail panel");
+    LOG_INFO("App", "  Virtual keyboard: Q2W3ER5T6Y7UI9O0P  [Z/X] Octave down/up");
+    LOG_INFO("App", "  Click clip slots to launch/stop");
+    LOG_INFO("App", "  Drag & drop audio files to load clips");
+    LOG_INFO("App", "  [Esc] Quit");
 
     updateWindowTitle();
     return true;
@@ -716,7 +716,7 @@ void App::shutdown() {
     m_font.destroy();
     m_mainWindow.destroy();
     SDL_Quit();
-    std::printf("Y.A.W.N shutdown complete\n");
+    LOG_INFO("App", "Y.A.W.N shutdown complete");
 }
 
 bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex) {
@@ -725,7 +725,7 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     if (!buffer) return false;
 
     if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
-        std::printf("Resampling from %d Hz to %.0f Hz...\n",
+        LOG_INFO("Audio", "Resampling from %d Hz to %.0f Hz...",
             info.sampleRate, m_audioEngine.sampleRate());
         buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
         if (!buffer) return false;
@@ -745,7 +745,7 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
 
     auto* clipPtr = m_project.setClip(trackIndex, sceneIndex, std::move(clip));
 
-    std::printf("Loaded '%s' -> Track %d, Scene %d\n",
+    LOG_INFO("File", "Loaded '%s' -> Track %d, Scene %d",
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
     m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr,
@@ -1414,7 +1414,7 @@ void App::update() {
                         clip->gain = 1.0f;
                         auto* clipPtr = m_project.setClip(ti, si, std::move(clip));
                         markDirty();
-                        std::printf("Audio recorded: Track %d, Scene %d, %" PRId64 " frames\n",
+                        LOG_INFO("Audio", "Audio recorded: Track %d, Scene %d, %" PRId64 " frames",
                                     ti + 1, si + 1, data.frameCount);
 
                         if (clipPtr) {
@@ -1530,7 +1530,7 @@ void App::newProject() {
         m_showDetailPanel = false;
         m_pianoRoll->close();
         updateWindowTitle();
-        std::printf("[Project] New project created\n");
+        LOG_INFO("Project", "New project created");
     };
 
     if (m_projectDirty) {
@@ -1591,9 +1591,9 @@ void App::doSaveProject(const std::filesystem::path& path) {
         m_projectPath = projectDir;
         m_projectDirty = false;
         updateWindowTitle();
-        std::printf("[Project] Saved to: %s\n", projectDir.string().c_str());
+        LOG_INFO("Project", "Saved to: %s", projectDir.string().c_str());
     } else {
-        std::fprintf(stderr, "[Project] Failed to save: %s\n", projectDir.string().c_str());
+        LOG_ERROR("Project", "Failed to save: %s", projectDir.string().c_str());
     }
 }
 
@@ -1603,7 +1603,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
 
     // Check for project.json inside the folder
     if (!fs::exists(projectDir / "project.json")) {
-        std::fprintf(stderr, "[Project] Not a valid project folder: %s\n",
+        LOG_ERROR("Project", "Not a valid project folder: %s",
                      projectDir.string().c_str());
         return;
     }
@@ -1629,9 +1629,9 @@ void App::doOpenProject(const std::filesystem::path& path) {
         m_showDetailPanel = false;
         m_pianoRoll->close();
         updateWindowTitle();
-        std::printf("[Project] Loaded: %s\n", projectDir.string().c_str());
+        LOG_INFO("Project", "Loaded: %s", projectDir.string().c_str());
     } else {
-        std::fprintf(stderr, "[Project] Failed to load: %s\n",
+        LOG_ERROR("Project", "Failed to load: %s",
                      projectDir.string().c_str());
     }
 }

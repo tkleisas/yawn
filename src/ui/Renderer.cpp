@@ -1,5 +1,5 @@
 #include "ui/Renderer.h"
-#include <cstdio>
+#include "util/Logger.h"
 #include <cstring>
 #include <cmath>
 
@@ -49,7 +49,7 @@ static GLuint compileShader(GLenum type, const char* source) {
     if (!success) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        std::fprintf(stderr, "Shader compile error: %s\n", log);
+        LOG_ERROR("UI", "Shader compile error: %s", log);
         glDeleteShader(shader);
         return 0;
     }
@@ -76,7 +76,7 @@ bool Renderer2D::init() {
     if (!success) {
         char log[512];
         glGetProgramInfoLog(m_shaderProgram, sizeof(log), nullptr, log);
-        std::fprintf(stderr, "Shader link error: %s\n", log);
+        LOG_ERROR("UI", "Shader link error: %s", log);
         return false;
     }
     glDeleteShader(vs);

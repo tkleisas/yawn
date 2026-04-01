@@ -1,10 +1,10 @@
 // MidiClipEngine.cpp — method implementations split from MidiClipEngine.h.
 
 #include "MidiClipEngine.h"
+#include "util/Logger.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 namespace yawn {
 namespace audio {
@@ -123,7 +123,7 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
     state.active = true;
     state.stopping = false;
     state.sceneIndex = sceneIndex;
-    std::printf("[MidiClipEngine] launchNow track=%d scene=%d notes=%d len=%.2f\n",
+    LOG_DEBUG("MIDI", "MidiClipEngine launchNow track=%d scene=%d notes=%d len=%.2f",
                 trackIndex, sceneIndex,
                 clip ? static_cast<int>(clip->noteCount()) : 0,
                 clip ? clip->lengthBeats() : 0.0);

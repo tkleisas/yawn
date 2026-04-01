@@ -3,6 +3,7 @@
 // This file is only compiled in the main exe build (not test builds).
 
 #include "TransportPanel.h"
+#include "app/Project.h"
 #include "../Renderer.h"
 #include "../Font.h"
 #include <SDL3/SDL.h>

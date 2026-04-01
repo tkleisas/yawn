@@ -13,7 +13,8 @@
 #endif
 #include "ui/Theme.h"
 #include "audio/AudioEngine.h"
-#include "app/Project.h"
+
+namespace yawn { class Project; }
 #include <cstdio>
 #include <cmath>
 #include <algorithm>

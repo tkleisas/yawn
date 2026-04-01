@@ -13,9 +13,10 @@
 #endif
 #include "ui/Theme.h"
 #include "audio/Mixer.h"
-#include "audio/AudioEngine.h"
-#include "midi/MidiEngine.h"
 #include "app/Project.h"
+
+namespace yawn { namespace audio { class AudioEngine; } }
+namespace yawn { namespace midi { class MidiEngine; } }
 #include "core/Constants.h"
 #include <cstdio>
 #include <cmath>

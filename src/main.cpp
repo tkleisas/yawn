@@ -1,4 +1,5 @@
 #include "app/App.h"
+#include "util/Logger.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -8,10 +9,9 @@ static FILE* g_logFile = nullptr;
 static void initLogging() {
     g_logFile = std::fopen("yawn.log", "w");
     if (g_logFile) {
-        // Duplicate log to file — we'll use freopen to redirect stderr/stdout
         std::freopen("yawn.log", "w", stdout);
         std::freopen("yawn.log", "a", stderr);
-        std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
         std::setvbuf(stderr, nullptr, _IONBF, 0);
     }
 }
@@ -19,21 +19,18 @@ static void initLogging() {
 int main(int /*argc*/, char* /*argv*/[]) {
     initLogging();
 
-    std::printf("Starting Y.A.W.N — Yet Another Audio Workstation New\n");
-    std::fflush(stdout);
+    LOG_INFO("App", "Starting Y.A.W.N — Yet Another Audio Workstation New");
 
     auto app = std::make_unique<yawn::App>();
 
     if (!app->init()) {
-        std::fprintf(stderr, "Failed to initialize application\n");
-        std::fflush(stderr);
+        LOG_ERROR("App", "Failed to initialize application");
         return 1;
     }
 
     app->run();
     app->shutdown();
 
-    std::printf("Y.A.W.N shutdown complete\n");
-    std::fflush(stdout);
+    LOG_INFO("App", "Y.A.W.N shutdown complete");
     return 0;
 }

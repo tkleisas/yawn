@@ -5,6 +5,7 @@
 #include "ui/Font.h"
 #include "ui/Theme.h"
 #include "ui/Renderer.h"
+#include "util/Logger.h"
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -22,7 +23,7 @@ bool Font::load(const std::string& path, float pixelHeight) {
     // Read font file
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) {
-        std::fprintf(stderr, "Failed to open font file: %s\n", path.c_str());
+        LOG_ERROR("UI", "Failed to open font file: %s", path.c_str());
         return false;
     }
 
@@ -46,7 +47,7 @@ bool Font::load(const std::string& path, float pixelHeight) {
         bitmap.data(), m_atlasWidth, m_atlasHeight, 32, 96, m_charData);
 
     if (result <= 0) {
-        std::fprintf(stderr, "Warning: Font atlas may be too small (result=%d)\n", result);
+        LOG_WARN("UI", "Font atlas may be too small (result=%d)", result);
     }
 
     // Upload to OpenGL texture
@@ -61,7 +62,7 @@ bool Font::load(const std::string& path, float pixelHeight) {
     GLint swizzle[] = {GL_ONE, GL_ONE, GL_ONE, GL_RED};
     glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 
-    std::printf("Font loaded: %s (%.0fpx)\n", path.c_str(), pixelHeight);
+    LOG_INFO("UI", "Font loaded: %s (%.0fpx)", path.c_str(), pixelHeight);
     return true;
 }
 

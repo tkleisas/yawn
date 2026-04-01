@@ -1,6 +1,6 @@
 #include "ui/Window.h"
+#include "util/Logger.h"
 #include <glad/gl.h>
-#include <cstdio>
 
 namespace yawn {
 namespace ui {
@@ -41,13 +41,13 @@ bool Window::create(const WindowConfig& config) {
     );
 
     if (!m_window) {
-        std::fprintf(stderr, "Failed to create SDL window: %s\n", SDL_GetError());
+        LOG_ERROR("UI", "Failed to create SDL window: %s", SDL_GetError());
         return false;
     }
 
     m_glContext = SDL_GL_CreateContext(m_window);
     if (!m_glContext) {
-        std::fprintf(stderr, "Failed to create GL context: %s\n", SDL_GetError());
+        LOG_ERROR("UI", "Failed to create GL context: %s", SDL_GetError());
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
         return false;
@@ -56,7 +56,7 @@ bool Window::create(const WindowConfig& config) {
     // Load OpenGL functions via glad
     int version = gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress);
     if (!version) {
-        std::fprintf(stderr, "Failed to load OpenGL functions via glad\n");
+        LOG_ERROR("UI", "Failed to load OpenGL functions via glad");
         SDL_GL_DestroyContext(m_glContext);
         SDL_DestroyWindow(m_window);
         m_glContext = nullptr;
@@ -64,7 +64,7 @@ bool Window::create(const WindowConfig& config) {
         return false;
     }
 
-    std::printf("OpenGL %d.%d loaded\n", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
+    LOG_INFO("UI", "OpenGL %d.%d loaded", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
     // Enable vsync
     SDL_GL_SetSwapInterval(1);

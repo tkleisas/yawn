@@ -7,11 +7,11 @@
 
 #include "midi/MidiTypes.h"
 #include "util/RingBuffer.h"
+#include "util/Logger.h"
 #include <RtMidi.h>
 #include <memory>
 #include <string>
 #include <vector>
-#include <cstdio>
 
 namespace yawn {
 namespace midi {
@@ -70,7 +70,7 @@ public:
                 ? inputPortName(portIndex) : outputPortName(portIndex);
             return true;
         } catch (const RtMidiError& e) {
-            std::fprintf(stderr, "MidiPort::open error: %s\n", e.getMessage().c_str());
+            LOG_ERROR("MIDI", "MidiPort::open error: %s", e.getMessage().c_str());
             close();
             return false;
         }
@@ -92,7 +92,7 @@ public:
             m_portName = name;
             return true;
         } catch (const RtMidiError& e) {
-            std::fprintf(stderr, "MidiPort::openVirtual error: %s\n", e.getMessage().c_str());
+            LOG_ERROR("MIDI", "MidiPort::openVirtual error: %s", e.getMessage().c_str());
             close();
             return false;
         }

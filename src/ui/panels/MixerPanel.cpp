@@ -3,6 +3,8 @@
 // This file is only compiled in the main exe build (not test builds).
 
 #include "MixerPanel.h"
+#include "audio/AudioEngine.h"
+#include "midi/MidiEngine.h"
 #include "../Renderer.h"
 #include "../Font.h"
 
