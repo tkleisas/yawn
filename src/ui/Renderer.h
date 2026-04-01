@@ -24,6 +24,9 @@ public:
     // Solid-color primitives
     void drawRect(float x, float y, float w, float h, Color color);
     void drawRectOutline(float x, float y, float w, float h, Color color, float thickness = 1.0f);
+    void drawTriangle(float x0, float y0, float x1, float y1, float x2, float y2, Color color);
+    void drawFilledCircle(float cx, float cy, float radius, Color color, int segments = 24);
+    void drawRoundedRect(float x, float y, float w, float h, float radius, Color color, int cornerSegs = 6);
 
     // Textured quad (for font glyphs) — binds the given texture
     void drawTexturedQuad(float x, float y, float w, float h,
@@ -49,6 +52,7 @@ private:
     void addQuad(float x0, float y0, float x1, float y1,
                  float u0, float v0, float u1, float v1,
                  Color color);
+    void addTriVert(float x, float y, Color color);
 
     static constexpr int kMaxVertices = 65536;
     static constexpr int kMaxIndices = kMaxVertices * 6 / 4;

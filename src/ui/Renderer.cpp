@@ -231,6 +231,86 @@ void Renderer2D::drawRectOutline(float x, float y, float w, float h,
     drawRect(x + w - t, y + t, t, h - 2 * t, color); // right
 }
 
+void Renderer2D::addTriVert(float x, float y, Color color) {
+    if (m_vertices.size() + 1 > kMaxVertices) flush();
+    m_vertices.push_back({x, y, 0.0f, 0.0f, color.r, color.g, color.b, color.a});
+}
+
+void Renderer2D::drawTriangle(float x0, float y0, float x1, float y1,
+                               float x2, float y2, Color color) {
+    if (m_currentTexture != m_whiteTexture) {
+        flush();
+        m_currentTexture = m_whiteTexture;
+        glBindTexture(GL_TEXTURE_2D, m_currentTexture);
+    }
+    if (m_vertices.size() + 3 > kMaxVertices) flush();
+    uint32_t base = static_cast<uint32_t>(m_vertices.size());
+    addTriVert(x0, y0, color);
+    addTriVert(x1, y1, color);
+    addTriVert(x2, y2, color);
+    m_indices.push_back(base + 0);
+    m_indices.push_back(base + 1);
+    m_indices.push_back(base + 2);
+}
+
+void Renderer2D::drawFilledCircle(float cx, float cy, float radius,
+                                   Color color, int segments) {
+    if (m_currentTexture != m_whiteTexture) {
+        flush();
+        m_currentTexture = m_whiteTexture;
+        glBindTexture(GL_TEXTURE_2D, m_currentTexture);
+    }
+    if (segments < 6) segments = 6;
+    if (m_vertices.size() + static_cast<size_t>(segments) + 1 > kMaxVertices) flush();
+    uint32_t base = static_cast<uint32_t>(m_vertices.size());
+    // Center vertex
+    addTriVert(cx, cy, color);
+    // Perimeter vertices
+    for (int i = 0; i <= segments; ++i) {
+        float angle = static_cast<float>(i) * 2.0f * 3.14159265f / static_cast<float>(segments);
+        addTriVert(cx + radius * std::cos(angle), cy + radius * std::sin(angle), color);
+    }
+    // Fan triangles
+    for (int i = 0; i < segments; ++i) {
+        m_indices.push_back(base);
+        m_indices.push_back(base + 1 + i);
+        m_indices.push_back(base + 2 + i);
+    }
+}
+
+void Renderer2D::drawRoundedRect(float x, float y, float w, float h,
+                                  float radius, Color color, int cornerSegs) {
+    if (m_currentTexture != m_whiteTexture) {
+        flush();
+        m_currentTexture = m_whiteTexture;
+        glBindTexture(GL_TEXTURE_2D, m_currentTexture);
+    }
+    if (radius <= 0 || cornerSegs < 1) { drawRect(x, y, w, h, color); return; }
+    if (radius > w * 0.5f) radius = w * 0.5f;
+    if (radius > h * 0.5f) radius = h * 0.5f;
+    // Inner body (3 rects)
+    drawRect(x + radius, y, w - 2 * radius, h, color);
+    drawRect(x, y + radius, radius, h - 2 * radius, color);
+    drawRect(x + w - radius, y + radius, radius, h - 2 * radius, color);
+    // 4 corner fans
+    float cx[4] = {x + radius, x + w - radius, x + w - radius, x + radius};
+    float cy[4] = {y + radius, y + radius, y + h - radius, y + h - radius};
+    float startAngle[4] = {3.14159265f, 1.5f * 3.14159265f, 0.0f, 0.5f * 3.14159265f};
+    for (int c = 0; c < 4; ++c) {
+        uint32_t base = static_cast<uint32_t>(m_vertices.size());
+        addTriVert(cx[c], cy[c], color);
+        for (int i = 0; i <= cornerSegs; ++i) {
+            float angle = startAngle[c] + static_cast<float>(i) * 0.5f * 3.14159265f / static_cast<float>(cornerSegs);
+            addTriVert(cx[c] + radius * std::cos(angle), cy[c] + radius * std::sin(angle), color);
+        }
+        for (int i = 0; i < cornerSegs; ++i) {
+            m_indices.push_back(base);
+            m_indices.push_back(base + 1 + i);
+            m_indices.push_back(base + 2 + i);
+        }
+    }
+}
+
 void Renderer2D::drawTexturedQuad(float x, float y, float w, float h,
                                    float u0, float v0, float u1, float v1,
                                    Color color, GLuint textureId) {

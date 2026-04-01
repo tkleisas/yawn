@@ -1,9 +1,9 @@
 #pragma once
 // TransportPanel — Standalone transport bar widget.
 //
-// Refactored to use framework widgets (FwButton, FwNumberInput, Label)
-// for BPM, time signature, tap tempo, and position display.
-// Play/stop/record buttons still use manual rendering for custom icons.
+// Ableton-style layout: BPM + TimeSig + TAP left, centered Stop|Play|Record,
+// Metronome toggle, position display right-aligned.
+// Uses proper triangle/circle renderer primitives for button icons.
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
@@ -15,10 +15,8 @@
 #include "audio/AudioEngine.h"
 
 namespace yawn { class Project; }
-#include <cstdio>
 #include <cmath>
 #include <algorithm>
-#include <cstdlib>
 #include <string>
 
 namespace yawn {
@@ -65,15 +63,23 @@ public:
                     audio::TransportSetTimeSignatureMsg{m_transportNumerator, val});
         });
 
-        m_posLabel.setAlign(TextAlign::Left);
-        m_countInLabel.setAlign(TextAlign::Left);
+        m_posLabel.setAlign(TextAlign::Right);
+        m_countInLabel.setAlign(TextAlign::Right);
         m_bpmLabel.setText("BPM");
         m_bpmLabel.setAlign(TextAlign::Left);
+
+        m_metroBtn.setLabel("MET");
+        m_metroBtn.setOnClick([this]() {
+            m_metronomeOn = !m_metronomeOn;
+            if (m_engine)
+                m_engine->sendCommand(audio::MetronomeToggleMsg{m_metronomeOn});
+        });
     }
 
     void init(Project* project, audio::AudioEngine* engine) {
         m_project = project;
         m_engine  = engine;
+        if (engine) m_metronomeOn = engine->metronome().enabled();
     }
 
     // ─── State updates (called from App) ────────────────────────────────
@@ -157,22 +163,18 @@ public:
 
 #ifdef YAWN_TEST_BUILD
     bool onMouseDown(MouseEvent&) override { return false; }
+    bool onMouseMove(MouseMoveEvent&) override { return false; }
 #else
     bool onMouseDown(MouseEvent& e) override;
+    bool onMouseMove(MouseMoveEvent& e) override;
 #endif
 
     bool onMouseUp(MouseEvent& e) override {
         m_tapBtn.onMouseUp(e);
+        m_metroBtn.onMouseUp(e);
         m_bpmInput.onMouseUp(e);
         m_tsNumInput.onMouseUp(e);
         m_tsDenInput.onMouseUp(e);
-        return false;
-    }
-
-    bool onMouseMove(MouseMoveEvent& e) override {
-        m_bpmInput.onMouseMove(e);
-        m_tsNumInput.onMouseMove(e);
-        m_tsDenInput.onMouseMove(e);
         return false;
     }
 
@@ -182,15 +184,15 @@ private:
         return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
     }
 
-#ifdef YAWN_TEST_BUILD
-    void paintTransportButtons(Renderer2D&) {}
-#else
-    void paintTransportButtons(Renderer2D& r);
-#endif
+    bool hitBtn(float bx, float by, float bw, float bh, float mx, float my) {
+        return mx >= bx && mx <= bx + bw && my >= by && my <= by + bh;
+    }
 
 #ifdef YAWN_TEST_BUILD
+    void paintTransportButtons(Renderer2D&) {}
     void tapTempo() {}
 #else
+    void paintTransportButtons(Renderer2D& r);
     void tapTempo();
 #endif
 
@@ -210,21 +212,24 @@ private:
     FwNumberInput m_tsNumInput;
     FwNumberInput m_tsDenInput;
     FwButton      m_tapBtn;
+    FwButton      m_metroBtn;
     Label         m_posLabel;
     Label         m_countInLabel;
     Label         m_bpmLabel;
     Label         m_slashLabel;
 
-    // Transport button positions (manual)
+    // Centered transport button positions
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;
     float m_playBtnX = 0, m_playBtnY = 0, m_playBtnW = 0, m_playBtnH = 0;
-    float m_recButtonX = 0, m_recButtonY = 0, m_recButtonW = 0, m_recButtonH = 0;
+    float m_recBtnX  = 0, m_recBtnY  = 0, m_recBtnW  = 0, m_recBtnH  = 0;
 
-    // Widget box positions (for double-click detection in App)
+    // Widget box positions (for double-click detection)
     float m_bpmBoxX = 0, m_bpmBoxY = 0, m_bpmBoxW = 0, m_bpmBoxH = 0;
     float m_tsNumBoxX = 0, m_tsNumBoxY = 0, m_tsNumBoxW = 0, m_tsNumBoxH = 0;
     float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
-    float m_tapButtonX = 0, m_tapButtonY = 0, m_tapButtonW = 0, m_tapButtonH = 0;
+
+    // Hover state
+    int m_hoveredBtn = -1;  // 0=stop, 1=play, 2=record, -1=none
 
     static constexpr int kTapHistorySize = 4;
     double m_tapTimes[kTapHistorySize] = {};
@@ -236,6 +241,7 @@ private:
     double m_countInProgress = 0.0;
     int    m_countInBars = 0;
     float  m_recPulse = 0.0f;
+    bool   m_metronomeOn = false;
 };
 
 } // namespace fw
