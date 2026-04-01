@@ -344,6 +344,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     if (m_transport.isRecording()) {
         double currentBeat = m_transport.positionInBeats();
         for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackType[t] != 1) continue; // MIDI tracks only
             auto& rs = m_trackRecordStates[t];
             if (!rs.recording || !m_trackArmed[t]) continue;
 
@@ -706,7 +707,13 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, SetTrackTypeMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
-                    m_trackType[msg.trackIndex] = msg.type;
+                    int t = msg.trackIndex;
+                    // Auto-stop any active recording when type changes
+                    if (m_audioRecordStates[t].recording)
+                        finalizeAudioRecord(t);
+                    if (m_trackRecordStates[t].recording)
+                        finalizeMidiRecord(t);
+                    m_trackType[t] = msg.type;
                 }
             }
             else if constexpr (std::is_same_v<T, SetTrackAudioInputChMsg>) {
@@ -780,6 +787,21 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
 
     // Discard empty MIDI recordings (no notes and no CCs)
     if (rs.recordedNotes.empty() && rs.recordedCCs.empty()) {
+        // Emit event with noteCount=0 so UI clears recording state
+        auto& xfer = m_recordedMidi[trackIndex];
+        xfer.trackIndex = trackIndex;
+        xfer.sceneIndex = rs.targetScene;
+        xfer.notes.clear();
+        xfer.ccs.clear();
+        xfer.lengthBeats = 0.0;
+        xfer.ready.store(true, std::memory_order_release);
+
+        MidiRecordCompleteEvent evt;
+        evt.trackIndex = trackIndex;
+        evt.sceneIndex = rs.targetScene;
+        evt.noteCount = 0;
+        m_eventQueue.push(evt);
+
         rs.recording = false;
         rs.pendingStopQuantize = QuantizeMode::None;
         maybeStopTransportRecording();
@@ -814,6 +836,20 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     // Minimum ~50ms at any sample rate
     static constexpr int64_t kMinRecordFrames = 2048;
     if (!ars.recording || ars.recordedFrames < kMinRecordFrames) {
+        // Emit event with frameCount=0 so UI clears recording state
+        auto& xfer = m_recordedAudio[trackIndex];
+        xfer.trackIndex = trackIndex;
+        xfer.sceneIndex = ars.targetScene;
+        xfer.frameCount = 0;
+        xfer.buffer.clear();
+        xfer.ready.store(true, std::memory_order_release);
+
+        AudioRecordCompleteEvent evt;
+        evt.trackIndex = trackIndex;
+        evt.sceneIndex = ars.targetScene;
+        evt.frameCount = 0;
+        m_eventQueue.push(evt);
+
         ars.buffer.clear();
         ars.buffer.shrink_to_fit();
         ars.recording = false;
@@ -881,6 +917,16 @@ void AudioEngine::emitClipStates() {
     for (int t = 0; t < kMaxTracks; ++t) {
         bool midiRec = m_trackRecordStates[t].recording;
         bool audioRec = m_audioRecordStates[t].recording;
+
+        // Safety: only one recording type should be active per track
+        if (midiRec && audioRec) {
+            LOG_ERROR("Audio", "Track %d has BOTH midi and audio recording!", t);
+            if (m_trackType[t] == 1)
+                { finalizeAudioRecord(t); audioRec = false; }
+            else
+                { finalizeMidiRecord(t); midiRec = false; }
+        }
+
         int midiRecScene = midiRec ? m_trackRecordStates[t].targetScene : -1;
         int audioRecScene = audioRec ? m_audioRecordStates[t].targetScene : -1;
 
@@ -912,11 +958,12 @@ void AudioEngine::emitClipStates() {
         }
 
         // Emit recording state even when no clip is loaded
-        if ((midiRec || audioRec) && !state.clip && !mstate.clip) {
+        if (!state.clip && !mstate.clip && (midiRec || audioRec)) {
             ClipStateUpdate csu;
             csu.trackIndex = t;
             csu.playing = false;
             csu.playPosition = 0;
+            csu.isMidi = midiRec;
             csu.recording = true;
             csu.recordingScene = midiRec ? midiRecScene : audioRecScene;
             m_eventQueue.push(csu);

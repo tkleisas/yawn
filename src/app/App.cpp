@@ -1365,7 +1365,7 @@ void App::update() {
                 auto& data = m_audioEngine.recordedMidiData(ti);
                 if (data.ready.load(std::memory_order_acquire)) {
                     int si = data.sceneIndex;
-                    if (ti >= 0 && si >= 0) {
+                    if (ti >= 0 && si >= 0 && (!data.notes.empty() || !data.ccs.empty())) {
                         auto* existingClip = m_project.getMidiClip(ti, si);
                         if (data.overdub && existingClip) {
                             for (auto& note : data.notes)
@@ -1383,16 +1383,18 @@ void App::update() {
                                 newClip->addCC(cc);
                             m_project.setMidiClip(ti, si, std::move(newClip));
                         }
+                        markDirty();
+
+                        auto* clipPtr = m_project.getMidiClip(ti, si);
+                        if (clipPtr) {
+                            auto* slot = m_project.getSlot(ti, si);
+                            auto lq = slot ? slot->launchQuantize : audio::QuantizeMode::NextBar;
+                            m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq});
+                        }
                     }
+                    // Always clear recording state in UI
                     m_sessionPanel->setTrackRecording(ti, false, -1);
                     data.ready.store(false, std::memory_order_release);
-
-                    auto* clipPtr = m_project.getMidiClip(ti, si);
-                    if (clipPtr) {
-                        auto* slot = m_project.getSlot(ti, si);
-                        auto lq = slot ? slot->launchQuantize : audio::QuantizeMode::NextBar;
-                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq});
-                    }
                 }
             }
             else if constexpr (std::is_same_v<T, audio::AudioRecordCompleteEvent>) {
