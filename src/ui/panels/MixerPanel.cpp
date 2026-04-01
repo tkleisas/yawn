@@ -361,7 +361,9 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.monBtn.setColor(monBg);
     s.monBtn.setTextColor((mode == Track::MonitorMode::In) ? Color{120, 230, 120}
                                                             : Theme::textSecondary);
-    s.monBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
+    float monX = ix + 4 + btnW + 2;
+    float monW = iw - 8 - btnW - 2;          // fill remaining row width
+    s.monBtn.layout(Rect{monX, curY, monW, kButtonHeight}, ctx);
     s.monBtn.paint(ctx);
 
     curY += kButtonHeight + 4;
