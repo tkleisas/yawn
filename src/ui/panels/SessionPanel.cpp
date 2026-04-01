@@ -321,39 +321,43 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     bool recFullyArmed = recReady && m_globalRecordArmed;
     bool isRecording = m_trackStates[ti].recording
                     && m_trackStates[ti].recordingScene == si;
+    bool isHovered = (m_hoveredTrack == ti && m_hoveredScene == si);
+    bool iconHovered = isHovered && m_hoveredIcon;
 
     Color bgCol = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
     r.drawRect(ix, iy, iw, ih, bgCol);
 
-    // Icon zone (left 16px)
-    float iconX = ix + 2;
+    // Icon zone (left side)
+    float iconCX = ix + kIconZoneW * 0.5f;
     float iconCY = iy + ih * 0.5f;
-    r.drawRect(ix, iy, kIconZoneW, ih, Color{30, 30, 33, 255});
+    Color iconBg = iconHovered ? Color{45, 45, 50, 255} : Color{30, 30, 33, 255};
+    r.drawRect(ix, iy, kIconZoneW, ih, iconBg);
 
     if (isRecording) {
+        // Pulsing record circle
         float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
         uint8_t a = static_cast<uint8_t>(150 + static_cast<int>(pulse * 105));
         Color recCol = Color{220, 40, 40, a};
-        r.drawRect(iconX + 2, iconCY - 4, 8, 8, recCol);
-        r.drawRect(iconX + 3, iconCY - 5, 6, 10, recCol);
-        r.drawRect(iconX + 4, iconCY - 5, 4, 10, recCol);
+        r.drawFilledCircle(iconCX, iconCY, 5.0f, recCol, 16);
     } else if (isPlaying) {
-        Color stopCol = Theme::playing;
-        r.drawRect(iconX + 3, iconCY - 4, 8, 8, stopCol);
+        // Stop square (green)
+        Color stopCol = iconHovered ? Color{100, 255, 100} : Theme::playing;
+        float half = 4.5f;
+        r.drawRect(iconCX - half, iconCY - half, half * 2, half * 2, stopCol);
     } else if (hasClip) {
+        // Play triangle
         Color trkCol = Theme::trackColors[
             m_project->track(ti).colorIndex % Theme::kNumTrackColors];
-        Color triCol = trkCol.withAlpha(180);
-        r.drawRect(iconX + 2, iconCY - 5, 2, 10, triCol);
-        r.drawRect(iconX + 4, iconCY - 4, 2, 8, triCol);
-        r.drawRect(iconX + 6, iconCY - 3, 2, 6, triCol);
-        r.drawRect(iconX + 8, iconCY - 2, 2, 4, triCol);
-        r.drawRect(iconX + 10, iconCY - 1, 2, 2, triCol);
+        Color triCol = iconHovered ? trkCol : trkCol.withAlpha(180);
+        r.drawTriangle(iconCX - 3.0f, iconCY - 5.5f,
+                        iconCX - 3.0f, iconCY + 5.5f,
+                        iconCX + 5.0f, iconCY, triCol);
     } else if (recReady) {
-        Color recCol = recFullyArmed ? Color{200, 40, 40} : Color{140, 50, 50};
-        r.drawRect(iconX + 3, iconCY - 3, 6, 6, recCol);
-        r.drawRect(iconX + 4, iconCY - 4, 4, 8, recCol);
-        r.drawRect(iconX + 2, iconCY - 2, 8, 4, recCol);
+        // Record-ready circle
+        Color recCol = recFullyArmed
+            ? (iconHovered ? Color{230, 50, 50} : Color{200, 40, 40})
+            : (iconHovered ? Color{170, 60, 60} : Color{140, 50, 50});
+        r.drawFilledCircle(iconCX, iconCY, 4.5f, recCol, 16);
     }
 
     // Clip content (right of icon zone)
@@ -435,14 +439,14 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
                 static_cast<uint8_t>(150 + pulse * 105));
             r.drawRectOutline(ix, iy, iw, ih, bc, 2.0f);
         }
+    }
 
-        // Recording border pulse
-        if (isRecording) {
-            float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
-            Color recCol = Color{220, 40, 40}.withAlpha(
-                static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
-            r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
-        }
+    // Recording border pulse (outside hasClip block for armed empty slots too)
+    if (isRecording) {
+        float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
+        Color recCol = Color{220, 40, 40}.withAlpha(
+            static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
+        r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
     }
 
     r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);

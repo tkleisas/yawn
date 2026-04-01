@@ -183,6 +183,30 @@ public:
         float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
         float sbY = gridY + gridH;
         m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW);
+
+        // Track hover over clip slot icon zone
+        if (my >= gridY && my < gridY + gridH && mx >= gridX) {
+            float cmx = mx + m_scrollX;
+            float cmy = my + m_scrollY;
+            int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
+            int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
+            float slotLocalX = cmx - gridX - ti * Theme::kTrackWidth;
+            if (ti >= 0 && ti < m_project->numTracks() &&
+                si >= 0 && si < m_project->numScenes()) {
+                m_hoveredTrack = ti;
+                m_hoveredScene = si;
+                m_hoveredIcon = (slotLocalX < kIconZoneW + Theme::kSlotPadding);
+            } else {
+                m_hoveredTrack = -1;
+                m_hoveredScene = -1;
+                m_hoveredIcon = false;
+            }
+        } else {
+            m_hoveredTrack = -1;
+            m_hoveredScene = -1;
+            m_hoveredIcon = false;
+        }
+
         return false;
     }
 
@@ -242,7 +266,7 @@ private:
     void paintHScrollbar(Renderer2D& r, float x, float y, float w);
 #endif
 
-    static constexpr float kIconZoneW = 16.0f;
+    static constexpr float kIconZoneW = 18.0f;
 
 #ifdef YAWN_TEST_BUILD
     void paintClipSlot(Renderer2D&, Font&, int, int, float, float, float, float) {}
@@ -275,6 +299,11 @@ private:
     int   m_lastRightClickScene = -1;
     float m_animTimer      = 0.0f;
     bool  m_globalRecordArmed = false;
+
+    // Hover tracking for clip slot icons
+    int   m_hoveredTrack = -1;
+    int   m_hoveredScene = -1;
+    bool  m_hoveredIcon  = false;
 
     std::function<void(float)> m_onScrollChanged;
 
