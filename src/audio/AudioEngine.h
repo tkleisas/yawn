@@ -126,7 +126,7 @@ private:
     void emitClipStates();
     void emitMeterUpdates();
     void maybeStopTransportRecording();
-    void checkPendingRecordStops();
+    void checkPendingRecordStops(int bufferSize);
     void finalizeMidiRecord(int trackIndex);
     void finalizeAudioRecord(int trackIndex);
 

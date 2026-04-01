@@ -322,7 +322,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Render each track's clip into its own buffer
     m_clipEngine.checkAndFirePending();
     m_midiClipEngine.checkAndFirePending();
-    checkPendingRecordStops();
+    checkPendingRecordStops(nf);
     for (int t = 0; t < kMaxTracks; ++t) {
         m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
     }
@@ -736,10 +736,11 @@ void AudioEngine::processCommands() {
     }
 }
 
-void AudioEngine::checkPendingRecordStops() {
+void AudioEngine::checkPendingRecordStops(int bufferSize) {
     if (!m_transport.isPlaying()) return;
 
     int64_t pos = m_transport.positionInSamples();
+    int64_t prevPos = pos - bufferSize;
     double spb = m_transport.samplesPerBar();
     double spBeat = m_transport.samplesPerBeat();
 
@@ -750,7 +751,7 @@ void AudioEngine::checkPendingRecordStops() {
             if (interval <= 0.0) continue;
             int64_t iInterval = static_cast<int64_t>(interval);
             if (iInterval <= 0) continue;
-            if ((pos / iInterval) != ((pos - 1) / iInterval) || !m_transport.isPlaying()) {
+            if ((pos / iInterval) != (prevPos / iInterval)) {
                 finalizeMidiRecord(t);
             }
         }
@@ -761,7 +762,7 @@ void AudioEngine::checkPendingRecordStops() {
             if (interval <= 0.0) continue;
             int64_t iInterval = static_cast<int64_t>(interval);
             if (iInterval <= 0) continue;
-            if ((pos / iInterval) != ((pos - 1) / iInterval) || !m_transport.isPlaying()) {
+            if ((pos / iInterval) != (prevPos / iInterval)) {
                 finalizeAudioRecord(t);
             }
         }
