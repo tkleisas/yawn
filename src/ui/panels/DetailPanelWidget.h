@@ -58,7 +58,7 @@ public:
 
     // Clip view layout constants
     static constexpr float kClipWaveformH    = 80.0f;
-    static constexpr float kClipPropsH       = 56.0f;
+    static constexpr float kClipPropsH       = 100.0f;
     static constexpr float kClipSectionGap   = 4.0f;
     static constexpr float kClipLabelW       = 60.0f;
     static constexpr float kClipValueW       = 80.0f;
@@ -115,6 +115,58 @@ public:
             if (mutableClip->originalBPM <= 0.0 && !mutableClip->transients.empty())
                 mutableClip->originalBPM = audio::TransientDetector::estimateBPM(
                     mutableClip->transients, static_cast<double>(m_clipSampleRate));
+        });
+
+        // Gain knob: 0 to ~+6dB, stored as linear gain in clip
+        m_gainKnob.setRange(0.0f, 2.0f);
+        m_gainKnob.setDefault(1.0f);
+        m_gainKnob.setValue(clip->gain);
+        m_gainKnob.setLabel("Gain");
+        m_gainKnob.setFormatCallback([](float v) -> std::string {
+            if (v < 0.001f) return "-inf dB";
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%.1f dB", 20.0f * std::log10f(v));
+            return buf;
+        });
+        m_gainKnob.setOnChange([this](float v) {
+            if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->gain = v;
+        });
+
+        // Transpose (semitones)
+        m_transposeInput.setRange(-48.0f, 48.0f);
+        m_transposeInput.setValue(static_cast<float>(clip->transposeSemitones));
+        m_transposeInput.setSuffix(" st");
+        m_transposeInput.setSensitivity(0.5f);
+        m_transposeInput.setOnChange([this](float v) {
+            if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->transposeSemitones = static_cast<int>(v);
+        });
+
+        // Detune (cents)
+        m_detuneInput.setRange(-50.0f, 50.0f);
+        m_detuneInput.setValue(static_cast<float>(clip->detuneCents));
+        m_detuneInput.setSuffix(" ct");
+        m_detuneInput.setSensitivity(0.3f);
+        m_detuneInput.setOnChange([this](float v) {
+            if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->detuneCents = static_cast<int>(v);
+        });
+
+        // BPM input
+        m_bpmInput.setRange(20.0f, 999.0f);
+        m_bpmInput.setValue(clip->originalBPM > 0 ? static_cast<float>(clip->originalBPM) : 120.0f);
+        m_bpmInput.setSuffix(" BPM");
+        m_bpmInput.setSensitivity(0.5f);
+        m_bpmInput.setOnChange([this](float v) {
+            if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->originalBPM = static_cast<double>(v);
+        });
+
+        // Loop toggle button
+        m_loopToggleBtn.setLabel(clip->looping ? "Loop: On" : "Loop: Off");
+        m_loopToggleBtn.setOnClick([this]() {
+            if (m_clipPtr) {
+                auto* mc = const_cast<audio::Clip*>(m_clipPtr);
+                mc->looping = !mc->looping;
+                m_loopToggleBtn.setLabel(mc->looping ? "Loop: On" : "Loop: Off");
+            }
         });
 
         saveExpandedStates();
@@ -403,6 +455,10 @@ public:
         }
         // Forward to waveform widget in audio clip view
         if (m_viewMode == ViewMode::AudioClip) {
+            // Forward to draggable number inputs (they don't capture the mouse)
+            if (m_transposeInput.onMouseMove(e)) return true;
+            if (m_detuneInput.onMouseMove(e)) return true;
+            if (m_bpmInput.onMouseMove(e)) return true;
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
@@ -434,6 +490,16 @@ public:
                 return m_detectBtn.onMouseUp(e);
             if (hitWidget(m_warpModeDropdown, e.x, e.y))
                 return m_warpModeDropdown.onMouseUp(e);
+            if (hitWidget(m_gainKnob, e.x, e.y))
+                return m_gainKnob.onMouseUp(e);
+            if (hitWidget(m_transposeInput, e.x, e.y))
+                return m_transposeInput.onMouseUp(e);
+            if (hitWidget(m_detuneInput, e.x, e.y))
+                return m_detuneInput.onMouseUp(e);
+            if (hitWidget(m_bpmInput, e.x, e.y))
+                return m_bpmInput.onMouseUp(e);
+            if (hitWidget(m_loopToggleBtn, e.x, e.y))
+                return m_loopToggleBtn.onMouseUp(e);
         }
         for (auto* dw : m_deviceWidgets) {
             auto& db = dw->bounds();
@@ -655,6 +721,11 @@ private:
     WaveformWidget m_waveformWidget;
     FwDropDown m_warpModeDropdown;
     FwButton m_detectBtn;
+    FwKnob m_gainKnob;
+    FwNumberInput m_transposeInput;
+    FwNumberInput m_detuneInput;
+    FwButton m_loopToggleBtn;
+    FwNumberInput m_bpmInput;
     float m_lastMouseX = 0, m_lastMouseY = 0;
 
     // ── Audio clip view rendering ──

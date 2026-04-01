@@ -141,6 +141,14 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
     // Compute warp speed ratio (how fast we advance through the source)
     double projectBPM = m_transport ? m_transport->bpm() : 120.0;
     double speedRatio = clip.warpSpeedRatio(projectBPM);
+
+    // Apply transpose (semitones + cents) as pitch shift via speed change
+    // For Repitch mode (or when warping), transpose changes playback speed
+    if (clip.transposeSemitones != 0 || clip.detuneCents != 0) {
+        double semitones = clip.transposeSemitones + clip.detuneCents / 100.0;
+        speedRatio *= std::pow(2.0, semitones / 12.0);
+    }
+
     bool warping = (speedRatio != 1.0);
 
     // For Repitch mode, speedRatio changes both speed and pitch (simple resampling)

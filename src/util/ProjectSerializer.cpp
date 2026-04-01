@@ -259,8 +259,10 @@ json serializeAudioClip(const audio::Clip& clip, const fs::path& samplesDir,
     j["loopEnd"] = clip.loopEnd;
     j["looping"] = clip.looping;
     j["gain"] = clip.gain;
+    j["transposeSemitones"] = clip.transposeSemitones;
+    j["detuneCents"] = clip.detuneCents;
 
-    if (clip.buffer && clip.buffer->numFrames() > 0) {
+    if (clip.buffer&& clip.buffer->numFrames() > 0) {
         std::string filename = "clip_" + std::to_string(sampleCounter++) + ".wav";
         fs::path samplePath = samplesDir / filename;
         FileIO::saveAudioBuffer(samplePath.string(), *clip.buffer, 44100);
@@ -278,8 +280,10 @@ std::unique_ptr<audio::Clip> deserializeAudioClip(const json& j,
     clip->loopEnd = j.value("loopEnd", (int64_t)-1);
     clip->looping = j.value("looping", true);
     clip->gain = j.value("gain", 1.0f);
+    clip->transposeSemitones = j.value("transposeSemitones", 0);
+    clip->detuneCents = j.value("detuneCents", 0);
 
-    if (j.contains("sampleFile")) {
+    if (j.contains("sampleFile")){
         fs::path samplePath = projectDir / j["sampleFile"].get<std::string>();
         auto buf = FileIO::loadAudioFile(samplePath.string());
         if (buf) clip->buffer = std::move(buf);

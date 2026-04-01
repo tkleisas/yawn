@@ -136,6 +136,21 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         // Detect button
         if (hitWidget(m_detectBtn, mx, my))
             return m_detectBtn.onMouseDown(e);
+        // Gain knob
+        if (hitWidget(m_gainKnob, mx, my))
+            return m_gainKnob.onMouseDown(e);
+        // Transpose input
+        if (hitWidget(m_transposeInput, mx, my))
+            return m_transposeInput.onMouseDown(e);
+        // Detune input
+        if (hitWidget(m_detuneInput, mx, my))
+            return m_detuneInput.onMouseDown(e);
+        // BPM input
+        if (hitWidget(m_bpmInput, mx, my))
+            return m_bpmInput.onMouseDown(e);
+        // Loop toggle
+        if (hitWidget(m_loopToggleBtn, mx, my))
+            return m_loopToggleBtn.onMouseDown(e);
     }
 
     if (m_deviceWidgets.empty()) return false;
@@ -236,27 +251,24 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     Color labelCol = Theme::textDim;
     Color valCol = Theme::textPrimary;
 
+    // Sync widget values from clip each frame
+    m_gainKnob.setValue(clip.gain);
+    m_transposeInput.setValue(static_cast<float>(clip.transposeSemitones));
+    m_detuneInput.setValue(static_cast<float>(clip.detuneCents));
+    if (clip.originalBPM > 0) m_bpmInput.setValue(static_cast<float>(clip.originalBPM));
+    m_loopToggleBtn.setLabel(clip.looping ? "Loop: On" : "Loop: Off");
+
+    // Row 1: Gain knob | BPM input | Warp dropdown + Detect button
     font.drawText(renderer, "Gain", col1X, propsY, labelScale, labelCol);
-    {
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "%.1f dB",
-                      20.0f * std::log10(std::max(clip.gain, 0.0001f)));
-        font.drawText(renderer, buf, col1X, propsY + propH, valScale, valCol);
-    }
+    m_gainKnob.layout(Rect{col1X, propsY + propH, 40.0f, 40.0f}, ctx);
+    m_gainKnob.paint(ctx);
 
     font.drawText(renderer, "BPM", col2X, propsY, labelScale, labelCol);
-    {
-        char buf[16];
-        if (clip.originalBPM > 0)
-            std::snprintf(buf, sizeof(buf), "%.1f", clip.originalBPM);
-        else
-            std::snprintf(buf, sizeof(buf), "---");
-        font.drawText(renderer, buf, col2X, propsY + propH, valScale, valCol);
-    }
+    m_bpmInput.layout(Rect{col2X, propsY + propH, 60.0f, 20.0f}, ctx);
+    m_bpmInput.paint(ctx);
 
     font.drawText(renderer, "Warp", col3X, propsY, labelScale, labelCol);
     {
-        // Warp mode dropdown
         m_warpModeDropdown.setSelected(static_cast<int>(clip.warpMode));
         float ddW = sectionW * 0.20f;
         float ddX = col3X;
@@ -264,7 +276,6 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         m_warpModeDropdown.layout(Rect{ddX, ddY, ddW, propH}, ctx);
         m_warpModeDropdown.paint(ctx);
 
-        // Detect button
         float btnX = ddX + ddW + 4.0f;
         float btnW = sectionW - (btnX - sectionX);
         if (btnW > 50.0f) btnW = 50.0f;
@@ -272,25 +283,35 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         m_detectBtn.paint(ctx);
     }
 
-    float row2Y = propsY + propH * 2 + propGap;
-    font.drawText(renderer, "Loop", col1X, row2Y, labelScale, labelCol);
-    font.drawText(renderer, clip.looping ? "On" : "Off",
-                   col1X, row2Y + propH, valScale,
-                   clip.looping ? Color{100, 255, 100, 255} : valCol);
+    // Row 2: Transpose input | Detune input | Loop toggle
+    float row2Y = propsY + propH + 42.0f + propGap;
+    font.drawText(renderer, "Transpose", col1X, row2Y, labelScale, labelCol);
+    m_transposeInput.layout(Rect{col1X, row2Y + propH, 60.0f, 20.0f}, ctx);
+    m_transposeInput.paint(ctx);
 
+    font.drawText(renderer, "Detune", col2X, row2Y, labelScale, labelCol);
+    m_detuneInput.layout(Rect{col2X, row2Y + propH, 60.0f, 20.0f}, ctx);
+    m_detuneInput.paint(ctx);
+
+    font.drawText(renderer, "Loop", col3X, row2Y, labelScale, labelCol);
+    m_loopToggleBtn.layout(Rect{col3X, row2Y + propH, 60.0f, 16.0f}, ctx);
+    m_loopToggleBtn.paint(ctx);
+
+    // Row 3: Channels + Rate (text only, if buffer exists)
     if (clip.buffer) {
-        font.drawText(renderer, "Channels", col2X, row2Y, labelScale, labelCol);
+        float row3Y = row2Y + propH + 22.0f + propGap;
+        font.drawText(renderer, "Channels", col1X, row3Y, labelScale, labelCol);
         {
             char buf[8];
             std::snprintf(buf, sizeof(buf), "%d", clip.buffer->numChannels());
-            font.drawText(renderer, buf, col2X, row2Y + propH, valScale, valCol);
+            font.drawText(renderer, buf, col1X, row3Y + propH, valScale, valCol);
         }
 
-        font.drawText(renderer, "Rate", col3X, row2Y, labelScale, labelCol);
+        font.drawText(renderer, "Rate", col2X, row3Y, labelScale, labelCol);
         {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%d Hz", m_clipSampleRate);
-            font.drawText(renderer, buf, col3X, row2Y + propH, valScale, valCol);
+            font.drawText(renderer, buf, col2X, row3Y + propH, valScale, valCol);
         }
     }
 

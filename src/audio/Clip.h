@@ -22,6 +22,8 @@ struct Clip {
     bool looping = true;
 
     float gain = 1.0f;
+    int transposeSemitones = 0;   // -48 to +48
+    int detuneCents = 0;          // -50 to +50
 
     // Audio warping
     WarpMode warpMode = WarpMode::Off;
@@ -55,6 +57,8 @@ struct Clip {
         c->loopEnd = loopEnd;
         c->looping = looping;
         c->gain = gain;
+        c->transposeSemitones = transposeSemitones;
+        c->detuneCents = detuneCents;
         c->warpMode = warpMode;
         c->originalBPM = originalBPM;
         c->warpMarkers = warpMarkers;
