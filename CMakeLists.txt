@@ -46,7 +46,10 @@ file(GLOB_RECURSE YAWN_SOURCES
 set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ClipEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiClipEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
 )
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
 target_include_directories(yawn_core PUBLIC
