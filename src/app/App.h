@@ -69,6 +69,7 @@ private:
     void saveProjectAs();
     void doSaveProject(const std::filesystem::path& path);
     void doOpenProject(const std::filesystem::path& path);
+    void syncTracksToEngine();
     void updateWindowTitle();
     void markDirty() { m_projectDirty = true; updateWindowTitle(); }
 

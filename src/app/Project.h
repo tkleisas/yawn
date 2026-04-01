@@ -24,7 +24,7 @@ struct Track {
     int midiInputChannel = -1; // -1 = all channels
     int midiOutputPort = -1;   // -1 = none
     int midiOutputChannel = -1; // -1 = all channels
-    int audioInputCh = 0;     // 0=none, 1=In1, 2=In2, 3=In1+2, 4=In3, 5=In3+4, etc.
+    int audioInputCh = 1;     // 1=In1, 2=In2, 3=In1+2, 4=In3, 5=In3+4, etc. (0=none)
     bool mono = false;
     bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;

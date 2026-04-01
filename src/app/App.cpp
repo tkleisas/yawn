@@ -112,6 +112,7 @@ void App::setupMenuBar() {
             int idx = m_project.numTracks();
             m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
             m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
+            m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{idx, m_project.track(idx).audioInputCh});
             markDirty();
             LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
         }},
@@ -636,6 +637,9 @@ bool App::init() {
     for (int i : m_settings.enabledMidiOutputs)
         m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
+
+    // Sync project track properties to the audio engine
+    syncTracksToEngine();
 
     // Wire mixer arm button to MidiEngine
     m_mixerPanel->setOnTrackArmedChanged([this](int trackIndex, bool armed) {
@@ -1549,6 +1553,8 @@ void App::newProject() {
         m_audioEngine.mixer().setMasterVolume(1.0f);
         m_audioEngine.sendCommand(audio::TransportSetBPMMsg{120.0});
 
+        syncTracksToEngine();
+
         m_projectPath.clear();
         m_projectDirty = false;
         m_selectedTrack = 0;
@@ -1648,6 +1654,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
     Project loadedProject;
     if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine)) {
         m_project = std::move(loadedProject);
+        syncTracksToEngine();
         m_projectPath = projectDir;
         m_projectDirty = false;
         m_selectedTrack = 0;
@@ -1658,6 +1665,23 @@ void App::doOpenProject(const std::filesystem::path& path) {
     } else {
         LOG_ERROR("Project", "Failed to load: %s",
                      projectDir.string().c_str());
+    }
+}
+
+void App::syncTracksToEngine() {
+    for (int i = 0; i < m_project.numTracks(); ++i) {
+        const auto& trk = m_project.track(i);
+        uint8_t type = (trk.type == Track::Type::Midi) ? 1 : 0;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, type});
+        m_audioEngine.sendCommand(audio::SetTrackArmedMsg{i, trk.armed});
+        m_audioEngine.sendCommand(audio::SetTrackMonitorMsg{i, static_cast<uint8_t>(trk.monitorMode)});
+        m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, trk.audioInputCh});
+        m_audioEngine.sendCommand(audio::SetTrackMonoMsg{i, trk.mono});
+        m_audioEngine.sendCommand(audio::SetTrackVolumeMsg{i, trk.volume});
+        m_audioEngine.sendCommand(audio::SetTrackMuteMsg{i, trk.muted});
+        m_audioEngine.sendCommand(audio::SetTrackSoloMsg{i, trk.soloed});
+        if (trk.midiOutputPort >= 0)
+            m_audioEngine.sendCommand(audio::SetTrackMidiOutputMsg{i, trk.midiOutputPort, trk.midiOutputChannel});
     }
 }
 
