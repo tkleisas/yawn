@@ -364,23 +364,7 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.monBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
     s.monBtn.paint(ctx);
 
-    // I/O Section (only when toggled on)
     curY += kButtonHeight + 4;
-
-    if (m_showIO) {
-        if (track.type == Track::Type::Audio) {
-            paintAudioIO(ctx, s, track, idx, ix, iw, curY);
-        } else {
-            paintMidiIO(ctx, s, track, idx, ix, iw, curY);
-        }
-
-        // Separator
-        if (track.type == Track::Type::Audio) {
-            curY += kIOHeight + 2 + 6;
-        } else {
-            curY += kIOHeight * 2 + 12.0f + 6;
-        }
-    }
 
     // Pan
     s.pan.setValue(ch.pan);
@@ -415,10 +399,21 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.fader.layout(Rect{ix + 4, curY, kFaderWidth, faderH}, ctx);
     s.fader.paint(ctx);
 
+    float meterX = ix + 4 + kFaderWidth + 3;
     s.meter.setPeak(m_trackMeters[idx].peakL, m_trackMeters[idx].peakR);
-    s.meter.layout(Rect{ix + 4 + kFaderWidth + 3, curY,
-                        kMeterWidth * 2, faderH}, ctx);
+    s.meter.layout(Rect{meterX, curY, kMeterWidth * 2, faderH}, ctx);
     s.meter.paint(ctx);
+
+    // I/O controls alongside fader (in space to the right of meter)
+    if (m_showIO) {
+        float ioX = meterX + kMeterWidth * 2 + 4;
+        float ioW = ix + iw - ioX - 2;
+        if (track.type == Track::Type::Audio) {
+            paintAudioIO(ctx, s, track, idx, ioX, ioW, curY, faderH);
+        } else {
+            paintMidiIO(ctx, s, track, idx, ioX, ioW, curY, faderH);
+        }
+    }
 
     float db = ch.volume > 0.001f ? 20.0f * std::log10(ch.volume) : -60.0f;
     char dbText[16];
@@ -435,7 +430,10 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 }
 
 void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
-                   int idx, float ix, float iw, float curY) {
+                   int idx, float ioX, float ioW, float ioY, float ioH) {
+    float dropH = kIOHeight;
+    float curY = ioY;
+
     // Audio input dropdown
     std::vector<std::string> inputItems = {"None", "In 1", "In 2", "In 1+2",
                                             "In 3", "In 3+4", "In 5", "In 5+6",
@@ -443,32 +441,31 @@ void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
     s.audioInputDrop.setItems(inputItems);
     int sel = std::clamp(track.audioInputCh, 0, static_cast<int>(inputItems.size()) - 1);
     s.audioInputDrop.setSelected(sel);
-    s.audioInputDrop.layout(Rect{ix + 4, curY, iw - 8, kIOHeight}, ctx);
+    s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.audioInputDrop.paint(ctx);
 
     // Mono toggle
-    curY += kIOHeight + 2;
+    curY += dropH + 2;
     s.monoBtn.setLabel(track.mono ? "Mono" : "Stereo");
     s.monoBtn.setColor(track.mono ? Color{60, 100, 60} : Theme::clipSlotEmpty);
     s.monoBtn.setTextColor(track.mono ? Color{140, 240, 140} : Theme::textSecondary);
-    s.monoBtn.layout(Rect{ix + 4, curY, iw - 8, kIOHeight}, ctx);
+    s.monoBtn.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.monoBtn.paint(ctx);
 }
 
 void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
-                  int idx, float ix, float iw, float curY) {
-    auto& r = *ctx.renderer;
-    auto& f = *ctx.font;
-    float halfW = (iw - 10) * 0.5f;
-    float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.5f;
-    float labelH = 12.0f;
+                  int idx, float ioX, float ioW, float ioY, float ioH) {
+    float dropH = kIOHeight;
+    float labelH = 10.0f;
+    float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.45f;
+    float curY = ioY;
 
-    // "MIDI RX" label
-    s.midiRxLabel.setText("MIDI RX");
+    // "RX" label
+    s.midiRxLabel.setText("RX");
     s.midiRxLabel.setColor(Theme::textDim);
     s.midiRxLabel.setFontScale(labelScale);
-    s.midiRxLabel.setAlign(TextAlign::Center);
-    s.midiRxLabel.layout(Rect{ix + 4, curY, iw - 8, labelH}, ctx);
+    s.midiRxLabel.setAlign(TextAlign::Left);
+    s.midiRxLabel.layout(Rect{ioX, curY, ioW, labelH}, ctx);
     s.midiRxLabel.paint(ctx);
     curY += labelH;
 
@@ -483,8 +480,9 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     if (track.midiInputPort == -2) inPortSel = 1;
     else if (track.midiInputPort >= 0) inPortSel = track.midiInputPort + 2;
     s.midiInDrop.setSelected(std::clamp(inPortSel, 0, static_cast<int>(inPortItems.size()) - 1));
-    s.midiInDrop.layout(Rect{ix + 4, curY, halfW, kIOHeight}, ctx);
+    s.midiInDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.midiInDrop.paint(ctx);
+    curY += dropH + 2;
 
     // MIDI Input channel
     std::vector<std::string> chItems = {"All"};
@@ -492,16 +490,16 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     s.midiInChDrop.setItems(chItems);
     int inChSel = (track.midiInputChannel < 0) ? 0 : track.midiInputChannel + 1;
     s.midiInChDrop.setSelected(std::clamp(inChSel, 0, 16));
-    s.midiInChDrop.layout(Rect{ix + 4 + halfW + 2, curY, halfW, kIOHeight}, ctx);
+    s.midiInChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.midiInChDrop.paint(ctx);
+    curY += dropH + 4;
 
-    // "MIDI TX" label
-    curY += kIOHeight + 2;
-    s.midiTxLabel.setText("MIDI TX");
+    // "TX" label
+    s.midiTxLabel.setText("TX");
     s.midiTxLabel.setColor(Theme::textDim);
     s.midiTxLabel.setFontScale(labelScale);
-    s.midiTxLabel.setAlign(TextAlign::Center);
-    s.midiTxLabel.layout(Rect{ix + 4, curY, iw - 8, labelH}, ctx);
+    s.midiTxLabel.setAlign(TextAlign::Left);
+    s.midiTxLabel.layout(Rect{ioX, curY, ioW, labelH}, ctx);
     s.midiTxLabel.paint(ctx);
     curY += labelH;
 
@@ -514,14 +512,15 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     s.midiOutDrop.setItems(outPortItems);
     int outPortSel = (track.midiOutputPort < 0) ? 0 : track.midiOutputPort + 1;
     s.midiOutDrop.setSelected(std::clamp(outPortSel, 0, static_cast<int>(outPortItems.size()) - 1));
-    s.midiOutDrop.layout(Rect{ix + 4, curY, halfW, kIOHeight}, ctx);
+    s.midiOutDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.midiOutDrop.paint(ctx);
+    curY += dropH + 2;
 
     // MIDI Output channel
     s.midiOutChDrop.setItems(chItems);
     int outChSel = (track.midiOutputChannel < 0) ? 0 : track.midiOutputChannel + 1;
     s.midiOutChDrop.setSelected(std::clamp(outChSel, 0, 16));
-    s.midiOutChDrop.layout(Rect{ix + 4 + halfW + 2, curY, halfW, kIOHeight}, ctx);
+    s.midiOutChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.midiOutChDrop.paint(ctx);
 }
 

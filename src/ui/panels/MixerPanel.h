@@ -196,17 +196,17 @@ private:
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void paintAudioIO(UIContext&, TrackStrip&, const Track&, int, float, float, float) {}
+    void paintAudioIO(UIContext&, TrackStrip&, const Track&, int, float, float, float, float) {}
 #else
     void paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
-                       int idx, float ix, float iw, float curY);
+                       int idx, float ioX, float ioW, float ioY, float ioH);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void paintMidiIO(UIContext&, TrackStrip&, const Track&, int, float, float, float) {}
+    void paintMidiIO(UIContext&, TrackStrip&, const Track&, int, float, float, float, float) {}
 #else
     void paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
-                      int idx, float ix, float iw, float curY);
+                      int idx, float ioX, float ioW, float ioY, float ioH);
 #endif
 
     // ─── Data ───────────────────────────────────────────────────────────
