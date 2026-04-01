@@ -118,6 +118,16 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     if (!m_open || m_deviceWidgets.empty()) return false;
 
+    // Forward to waveform widget in audio clip view
+    if (m_viewMode == ViewMode::AudioClip) {
+        auto& wb = m_waveformWidget.bounds();
+        if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
+            e.lx = mx - wb.x;
+            e.ly = my - wb.y;
+            if (m_waveformWidget.onMouseDown(e)) return true;
+        }
+    }
+
     if (m_scroll.onMouseDown(e)) return true;
 
     for (auto* dw : m_deviceWidgets) {
@@ -197,52 +207,11 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
                       hScale, Theme::textDim);
     }
 
+    // WaveformWidget: overview bar + scrollable/zoomable waveform
     float waveY = headerY + 20.0f;
-    float waveH = kClipWaveformH;
-    float waveW = sectionW;
-
-    renderer.drawRect(sectionX, waveY, waveW, waveH, Color{20, 20, 24, 255});
-    renderer.drawRectOutline(sectionX, waveY, waveW, waveH, Color{50, 50, 55, 255});
-    renderer.drawRect(sectionX, waveY + waveH * 0.5f - 0.5f, waveW, 1.0f,
-                      Color{50, 50, 55, 255});
-
-    if (clip.buffer && clip.buffer->numFrames() > 0) {
-        const float* samples = clip.buffer->channelData(0);
-        int sampleCount = clip.buffer->numFrames();
-        int64_t start = clip.loopStart;
-        int64_t end = clip.effectiveLoopEnd();
-        if (start < 0) start = 0;
-        if (end > sampleCount) end = sampleCount;
-        int visibleSamples = static_cast<int>(end - start);
-        if (visibleSamples > 0) {
-            int nch = clip.buffer->numChannels();
-            if (nch >= 2) {
-                renderer.drawWaveformStereo(
-                    clip.buffer->channelData(0) + start,
-                    clip.buffer->channelData(1) + start,
-                    visibleSamples,
-                    sectionX + 1, waveY + 1,
-                    waveW - 2, waveH - 2,
-                    Color{100, 180, 255, 200});
-            } else {
-                renderer.drawWaveform(samples + start, visibleSamples,
-                                      sectionX + 1, waveY + 1,
-                                      waveW - 2, waveH - 2,
-                                      Color{100, 180, 255, 200});
-            }
-        }
-
-        if (clip.loopStart > 0) {
-            float frac = static_cast<float>(clip.loopStart) / sampleCount;
-            float lx = sectionX + 1 + frac * (waveW - 2);
-            renderer.drawRect(lx, waveY, 1.0f, waveH, Color{255, 200, 0, 160});
-        }
-        if (clip.loopEnd > 0 && clip.loopEnd < clip.buffer->numFrames()) {
-            float frac = static_cast<float>(clip.loopEnd) / sampleCount;
-            float lx = sectionX + 1 + frac * (waveW - 2);
-            renderer.drawRect(lx, waveY, 1.0f, waveH, Color{255, 200, 0, 160});
-        }
-    }
+    float waveH = kClipWaveformH + WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+    m_waveformWidget.layout(Rect{sectionX, waveY, sectionW, waveH}, ctx);
+    m_waveformWidget.paint(ctx);
 
     float propsY = waveY + waveH + kClipSectionGap;
     float propH = 16.0f;

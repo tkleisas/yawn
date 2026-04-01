@@ -1277,7 +1277,10 @@ void App::processEvents() {
                     bool shift = (mod & SDL_KMOD_SHIFT) != 0;
                     m_pianoRoll->handleScroll(dx, dy, ctrl, shift, m_lastMouseX, m_lastMouseY);
                 } else if (m_showDetailPanel && m_lastMouseY >= db.y) {
-                    m_detailPanel->handleScroll(dx, dy);
+                    auto mod = SDL_GetModState();
+                    bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
+                    m_detailPanel->setLastMousePos(m_lastMouseX, m_lastMouseY);
+                    m_detailPanel->handleScroll(dx, dy, ctrl);
                 } else if (m_showMixer && m_lastMouseY >= mb.y && m_lastMouseY < mb.y + mb.h) {
                     ui::fw::ScrollEvent se;
                     se.dx = dx; se.dy = dy;
@@ -1349,6 +1352,13 @@ void App::update() {
                 m_sessionPanel->updateClipState(msg.trackIndex, msg.playing, msg.playPosition,
                                                 msg.playingScene, msg.isMidi, msg.clipLengthBeats);
                 m_sessionPanel->setTrackRecording(msg.trackIndex, msg.recording, msg.recordingScene);
+                // Forward playhead to detail panel waveform
+                if (msg.trackIndex == m_selectedTrack &&
+                    m_detailPanel->viewMode() == ui::fw::DetailPanelWidget::ViewMode::AudioClip &&
+                    !msg.isMidi) {
+                    m_detailPanel->setClipPlayPosition(msg.playPosition);
+                    m_detailPanel->setClipPlaying(msg.playing);
+                }
             }
             else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {
                 if (msg.trackIndex >= 0)

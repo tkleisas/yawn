@@ -11,6 +11,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/DeviceWidget.h"
 #include "ui/framework/SnapScrollContainer.h"
+#include "ui/framework/WaveformWidget.h"
 #include "ui/Theme.h"
 #include "audio/Clip.h"
 #include "instruments/Instrument.h"
@@ -90,6 +91,7 @@ public:
         m_viewMode = ViewMode::AudioClip;
         m_clipPtr = clip;
         m_clipSampleRate = sampleRate;
+        m_waveformWidget.setClip(clip);
 
         saveExpandedStates();
         m_scroll.removeAllChildren();
@@ -145,7 +147,15 @@ public:
     void clearClipView() {
         m_viewMode = ViewMode::Devices;
         m_clipPtr = nullptr;
+        m_waveformWidget.setClip(nullptr);
     }
+
+    // Forward playback state to the waveform widget
+    void setClipPlayPosition(int64_t pos) { m_waveformWidget.setPlayPosition(pos); }
+    void setClipPlaying(bool playing)     { m_waveformWidget.setPlaying(playing); }
+
+    WaveformWidget&       waveformWidget()       { return m_waveformWidget; }
+    const WaveformWidget& waveformWidget() const { return m_waveformWidget; }
 
     // Rebuild the device chain from current track state.
     void setDeviceChain(midi::MidiEffectChain* midiChain,
@@ -295,12 +305,28 @@ public:
 #endif
     }
 
-    void handleScroll(float dx, float dy) {
+    void handleScroll(float dx, float dy, bool ctrl = false) {
+        if (m_viewMode == ViewMode::AudioClip) {
+            auto& wb = m_waveformWidget.bounds();
+            if (m_lastMouseX >= wb.x && m_lastMouseX < wb.x + wb.w &&
+                m_lastMouseY >= wb.y && m_lastMouseY < wb.y + wb.h) {
+                ScrollEvent se;
+                se.x = m_lastMouseX; se.y = m_lastMouseY;
+                se.lx = m_lastMouseX - wb.x;
+                se.ly = m_lastMouseY - wb.y;
+                se.dx = dx; se.dy = dy;
+                se.mods.ctrl = ctrl;
+                m_waveformWidget.onScroll(se);
+                return;
+            }
+        }
         if (std::abs(dx) > 0.01f)
             m_scroll.handleScroll(dx, dy);
         else
             m_scroll.handleScroll(-dy, 0);
     }
+
+    void setLastMousePos(float mx, float my) { m_lastMouseX = mx; m_lastMouseY = my; }
 
 #ifdef YAWN_TEST_BUILD
     bool handleRightClick(float, float) { return false; }
@@ -351,6 +377,13 @@ public:
         if (Widget::capturedWidget()) {
             return Widget::capturedWidget()->onMouseMove(e);
         }
+        // Forward to waveform widget in audio clip view
+        if (m_viewMode == ViewMode::AudioClip) {
+            auto& wb = m_waveformWidget.bounds();
+            e.lx = e.x - wb.x;
+            e.ly = e.y - wb.y;
+            if (m_waveformWidget.onMouseMove(e)) return true;
+        }
         for (auto* dw : m_deviceWidgets) {
             if (dw->onMouseMove(e)) return true;
         }
@@ -367,11 +400,32 @@ public:
             bool handled = Widget::capturedWidget()->onMouseUp(e);
             return handled;
         }
+        // Forward to waveform widget
+        if (m_viewMode == ViewMode::AudioClip) {
+            auto& wb = m_waveformWidget.bounds();
+            e.lx = e.x - wb.x;
+            e.ly = e.y - wb.y;
+            if (m_waveformWidget.onMouseUp(e)) return true;
+        }
         for (auto* dw : m_deviceWidgets) {
             auto& db = dw->bounds();
             if (e.x >= db.x && e.x < db.x + db.w &&
                 e.y >= db.y && e.y < db.y + db.h) {
                 if (dw->onMouseUp(e)) return true;
+            }
+        }
+        return false;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        if (!m_open) return false;
+        if (m_viewMode == ViewMode::AudioClip) {
+            auto& wb = m_waveformWidget.bounds();
+            if (e.x >= wb.x && e.x < wb.x + wb.w &&
+                e.y >= wb.y && e.y < wb.y + wb.h) {
+                e.lx = e.x - wb.x;
+                e.ly = e.y - wb.y;
+                return m_waveformWidget.onScroll(e);
             }
         }
         return false;
@@ -565,6 +619,8 @@ private:
     ViewMode m_viewMode = ViewMode::Devices;
     const audio::Clip* m_clipPtr = nullptr;
     int m_clipSampleRate = 44100;
+    WaveformWidget m_waveformWidget;
+    float m_lastMouseX = 0, m_lastMouseY = 0;
 
     // ── Audio clip view rendering ──
 #ifdef YAWN_TEST_BUILD
