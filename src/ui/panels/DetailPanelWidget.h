@@ -125,7 +125,7 @@ public:
         m_gainKnob.setFormatCallback([](float v) -> std::string {
             if (v < 0.001f) return "-inf dB";
             char buf[16];
-            std::snprintf(buf, sizeof(buf), "%.1f dB", 20.0f * std::log10f(v));
+            std::snprintf(buf, sizeof(buf), "%.1f dB", 20.0f * std::log10(v));
             return buf;
         });
         m_gainKnob.setOnChange([this](float v) {
