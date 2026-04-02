@@ -15,6 +15,7 @@
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
 #include "instruments/Vocoder.h"
+#include "instruments/Multisampler.h"
 #include "instruments/InstrumentRack.h"
 
 #include "effects/AudioEffect.h"
@@ -56,6 +57,7 @@ inline std::unique_ptr<instruments::Instrument> createInstrument(const std::stri
         {"wavetable",  [] { return std::make_unique<instruments::WavetableSynth>(); }},
         {"granular",   [] { return std::make_unique<instruments::GranularSynth>(); }},
         {"vocoder",    [] { return std::make_unique<instruments::Vocoder>(); }},
+        {"multisampler",[] { return std::make_unique<instruments::Multisampler>(); }},
         {"instrack",   [] { return std::make_unique<instruments::InstrumentRack>(); }},
     };
     auto it = registry.find(id);

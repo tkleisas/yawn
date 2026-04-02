@@ -11,6 +11,7 @@
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
 #include "instruments/Vocoder.h"
+#include "instruments/Multisampler.h"
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -1346,4 +1347,153 @@ TEST(Vocoder, ParameterGetSet) {
 
     vc.setParameter(Vocoder::kFormantShift, -20.0f);
     EXPECT_FLOAT_EQ(vc.getParameter(Vocoder::kFormantShift), -12.0f);
+}
+
+// ─── Multisampler Tests ─────────────────────────────────────
+
+static std::vector<float> makeSineSample(int frames, float freq = 440.0f,
+                                          double sr = 44100.0) {
+    std::vector<float> data(frames);
+    for (int i = 0; i < frames; ++i)
+        data[i] = std::sin(2.0 * 3.14159265 * freq * i / sr);
+    return data;
+}
+
+TEST(Multisampler, InitAndReset) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(ms.parameterCount(), Multisampler::kParamCount);
+    EXPECT_STREQ(ms.name(), "Multisampler");
+    EXPECT_STREQ(ms.id(), "multisampler");
+    EXPECT_EQ(ms.zoneCount(), 0);
+    ms.reset();
+}
+
+TEST(Multisampler, SilenceWithoutZones) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    ms.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+    EXPECT_NEAR(rms(buf, kBlockSize * kChannels), 0.0f, 1e-10f);
+}
+
+TEST(Multisampler, SingleZonePlayback) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    auto sample = makeSineSample(44100, 440.0f);
+    int idx = ms.addZone(sample.data(), 44100, 1, 60, 0, 127);
+    EXPECT_EQ(idx, 0);
+    EXPECT_EQ(ms.zoneCount(), 1);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    ms.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+    EXPECT_GT(rms(buf, kBlockSize * kChannels), 1e-5f);
+}
+
+TEST(Multisampler, MultipleZonesKeyMapping) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    // Low zone: C2-B3 (36-59)
+    auto lowSample = makeSineSample(44100, 220.0f);
+    ms.addZone(lowSample.data(), 44100, 1, 48, 36, 59);
+
+    // High zone: C4-C6 (60-84)
+    auto highSample = makeSineSample(44100, 880.0f);
+    ms.addZone(highSample.data(), 44100, 1, 72, 60, 84);
+
+    EXPECT_EQ(ms.zoneCount(), 2);
+
+    // Play note in low zone
+    float buf1[kBlockSize * kChannels];
+    std::memset(buf1, 0, sizeof(buf1));
+    ms.process(buf1, kBlockSize, kChannels, makeNoteOn(48, 100));
+    float rms1 = rms(buf1, kBlockSize * kChannels);
+
+    // Reset and play note in high zone
+    ms.reset();
+    float buf2[kBlockSize * kChannels];
+    std::memset(buf2, 0, sizeof(buf2));
+    ms.process(buf2, kBlockSize, kChannels, makeNoteOn(72, 100));
+    float rms2 = rms(buf2, kBlockSize * kChannels);
+
+    EXPECT_GT(rms1, 1e-5f);
+    EXPECT_GT(rms2, 1e-5f);
+}
+
+TEST(Multisampler, VelocityLayers) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    auto softSample = makeSineSample(44100, 440.0f);
+    ms.addZone(softSample.data(), 44100, 1, 60, 0, 127, 0, 63);
+
+    auto loudSample = makeSineSample(44100, 880.0f);
+    ms.addZone(loudSample.data(), 44100, 1, 60, 0, 127, 64, 127);
+
+    // Soft velocity (vel7 ~= 40)
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    auto softNote = makeNoteOn(60, 40); // vel7=40 maps to low layer
+    ms.process(buf, kBlockSize, kChannels, softNote);
+    EXPECT_GT(rms(buf, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(Multisampler, NoteOffRelease) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    auto sample = makeSineSample(44100, 440.0f);
+    ms.addZone(sample.data(), 44100, 1, 60, 0, 127);
+    ms.setParameter(Multisampler::kAmpRelease, 0.001f);
+
+    // Note on
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    ms.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+    EXPECT_GT(rms(buf, kBlockSize * kChannels), 1e-5f);
+
+    // Note off + process several blocks for release
+    std::memset(buf, 0, sizeof(buf));
+    ms.process(buf, kBlockSize, kChannels, makeNoteOff(60));
+    // Process more blocks until voice dies
+    for (int i = 0; i < 20; ++i) {
+        std::memset(buf, 0, sizeof(buf));
+        ms.process(buf, kBlockSize, kChannels, makeEmpty());
+    }
+    // After very short release, should be silent
+    EXPECT_LT(rms(buf, kBlockSize * kChannels), 0.01f);
+}
+
+TEST(Multisampler, ParameterGetSet) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    ms.setParameter(Multisampler::kAmpAttack, 0.5f);
+    EXPECT_FLOAT_EQ(ms.getParameter(Multisampler::kAmpAttack), 0.5f);
+
+    ms.setParameter(Multisampler::kFilterCutoff, 5000.0f);
+    EXPECT_FLOAT_EQ(ms.getParameter(Multisampler::kFilterCutoff), 5000.0f);
+
+    // Clamp
+    ms.setParameter(Multisampler::kVolume, 5.0f);
+    EXPECT_FLOAT_EQ(ms.getParameter(Multisampler::kVolume), 1.0f);
+}
+
+TEST(Multisampler, ClearZones) {
+    Multisampler ms;
+    ms.init(kSampleRate, kBlockSize);
+
+    auto sample = makeSineSample(44100);
+    ms.addZone(sample.data(), 44100, 1, 60, 0, 127);
+    EXPECT_EQ(ms.zoneCount(), 1);
+
+    ms.clearZones();
+    EXPECT_EQ(ms.zoneCount(), 0);
 }
