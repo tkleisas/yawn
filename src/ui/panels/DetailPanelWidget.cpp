@@ -261,6 +261,7 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float inputH = 20.0f;
     float knobH = 40.0f;
     float gap = 14.0f;
+    float sectionGap = 24.0f;  // larger gap between control groups
     // Vertically center inputs with knob area
     float inputCenterY = widgetY + (knobH - inputH) * 0.5f;
 
@@ -271,14 +272,14 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     font.drawText(renderer, "Gain", cx, stripY, labelScale, Theme::textDim);
     m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
     m_gainKnob.paint(ctx);
-    cx += knobW + gap;
+    cx += knobW + sectionGap;
 
     // BPM
     float bpmW = 80.0f;
     font.drawText(renderer, "BPM", cx, stripY, labelScale, Theme::textDim);
     m_bpmInput.layout(Rect{cx, inputCenterY, bpmW, inputH}, ctx);
     m_bpmInput.paint(ctx);
-    cx += bpmW + gap;
+    cx += bpmW + sectionGap;
 
     // Transpose
     float transW = 70.0f;
@@ -292,7 +293,7 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     font.drawText(renderer, "Detune", cx, stripY, labelScale, Theme::textDim);
     m_detuneInput.layout(Rect{cx, inputCenterY, detW, inputH}, ctx);
     m_detuneInput.paint(ctx);
-    cx += detW + gap * 2;
+    cx += detW + sectionGap;
 
     // Warp dropdown
     float warpW = 90.0f;
@@ -306,7 +307,7 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float detectW = 52.0f;
     m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, ctx);
     m_detectBtn.paint(ctx);
-    cx += detectW + gap * 2;
+    cx += detectW + sectionGap;
 
     // Loop toggle
     font.drawText(renderer, "Loop", cx, stripY, labelScale, Theme::textDim);

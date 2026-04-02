@@ -81,14 +81,20 @@ public:
 
         if (!m_clip || !m_clip->buffer || m_clip->buffer->numFrames() <= 0) return;
 
-        // Auto-scroll to playhead
+        // Auto-scroll to follow playhead (only when view doesn't show entire clip)
         if (m_playing && m_followPlayhead) {
-            double playPx = (static_cast<double>(m_playPosition) - m_scrollOffset) / m_samplesPerPixel;
-            if (playPx < 0 || playPx > w * 0.85)
-                m_scrollOffset = static_cast<double>(m_playPosition) - w * 0.15 * m_samplesPerPixel;
+            double totalVisible = w * m_samplesPerPixel;
+            double totalSamples = static_cast<double>(m_clip->buffer->numFrames());
+            if (totalVisible < totalSamples * 0.99) {
+                double playPx = (static_cast<double>(m_playPosition) - m_scrollOffset) / m_samplesPerPixel;
+                if (playPx < 0 || playPx > w * 0.85)
+                    m_scrollOffset = static_cast<double>(m_playPosition) - w * 0.15 * m_samplesPerPixel;
+                clampScroll(w);
+            }
         }
 
         r.pushClip(x, waveY, w, waveH);
+        paintBeatGrid(r, *ctx.font, x, waveY, w, waveH);
         paintWaveform(r, x, waveY, w, waveH);
         paintLoopMarkers(r, x, waveY, w, waveH);
         paintTransients(r, *ctx.font, x, waveY, w, waveH);
@@ -390,6 +396,47 @@ public:
         r.drawRect(vx, y, vw, h, Color{255, 255, 255, 20});
     }
 
+    void paintBeatGrid(Renderer2D& r, Font& font, float x, float y, float w, float h) {
+        double bpm = m_clip->originalBPM;
+        if (bpm <= 0.0 || m_sampleRate <= 0) return;
+
+        double samplesPerBeat = (60.0 / bpm) * m_sampleRate;
+        int beatsPerBar = 4; // TODO: from time signature
+
+        // Visible sample range
+        double startSample = m_scrollOffset;
+        double endSample = m_scrollOffset + w * m_samplesPerPixel;
+
+        // Find first beat in visible range
+        int firstBeat = static_cast<int>(std::floor(startSample / samplesPerBeat));
+        if (firstBeat < 0) firstBeat = 0;
+        int lastBeat = static_cast<int>(std::ceil(endSample / samplesPerBeat));
+
+        // Skip if too many lines (zoomed too far out)
+        if (lastBeat - firstBeat > 2000) return;
+
+        float labelScale = 8.0f / Theme::kFontSize;
+
+        for (int beat = firstBeat; beat <= lastBeat; ++beat) {
+            double samplePos = beat * samplesPerBeat;
+            float px = x + static_cast<float>((samplePos - m_scrollOffset) / m_samplesPerPixel);
+            if (px < x || px > x + w) continue;
+
+            bool isBar = (beat % beatsPerBar == 0);
+            if (isBar) {
+                // Bar line: brighter, with label
+                r.drawRect(px, y, 1.0f, h, Color{60, 60, 70, 120});
+                int barNum = beat / beatsPerBar + 1;
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%d", barNum);
+                font.drawText(r, buf, px + 3, y + 1, labelScale, Color{90, 90, 100, 200});
+            } else {
+                // Beat subdivision: dimmer
+                r.drawRect(px, y, 0.5f, h, Color{45, 45, 52, 90});
+            }
+        }
+    }
+
     void paintWaveform(Renderer2D& r, float x, float y, float w, float h) {
         const auto& buf = *m_clip->buffer;
         int nch = buf.numChannels();
@@ -424,33 +471,32 @@ public:
 
     void paintLoopMarkers(Renderer2D& r, float x, float y, float, float h) {
         if (!m_clip->looping) return;
-        int64_t totalFrames = m_clip->buffer->numFrames();
         Color loopCol{255, 200, 0, 200};
         Color loopDrag{255, 255, 100, 255};
 
+        int64_t ls = m_clip->loopStart;
+        int64_t le = m_clip->effectiveLoopEnd();
+
         // Loop start marker
         {
-            float lx = x + sampleToPixel(m_clip->loopStart);
+            float lx = x + sampleToPixel(ls);
             Color col = (m_draggingLoopMarker == 1) ? loopDrag : loopCol;
             r.drawRect(lx, y, 1.5f, h, col);
-            // Handle bracket at top
             r.drawRect(lx, y, 8.0f, 2.0f, col);
             r.drawRect(lx, y, 2.0f, 10.0f, col);
         }
 
-        // Loop end marker
-        int64_t le = m_clip->effectiveLoopEnd();
-        if (le < totalFrames || m_clip->loopEnd >= 0) {
+        // Loop end marker (always drawn when looping)
+        {
             float lx = x + sampleToPixel(le);
             Color col = (m_draggingLoopMarker == 2) ? loopDrag : loopCol;
             r.drawRect(lx - 1.5f, y, 1.5f, h, col);
-            // Handle bracket at top
             r.drawRect(lx - 8.0f, y, 8.0f, 2.0f, col);
             r.drawRect(lx - 2.0f, y, 2.0f, 10.0f, col);
         }
 
         // Tint loop region
-        float startPx = x + sampleToPixel(m_clip->loopStart);
+        float startPx = x + sampleToPixel(ls);
         float endPx = x + sampleToPixel(le);
         if (endPx > startPx)
             r.drawRect(startPx, y, endPx - startPx, h, Color{255, 200, 0, 15});
