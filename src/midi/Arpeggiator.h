@@ -36,6 +36,7 @@ public:
         m_gateOffBeat = -1000.0;
         m_heldChannel = 0;
         m_freeRunSamples = -1;
+        m_wasPlaying = false;
     }
 
     void process(MidiBuffer& buffer, int numFrames,
@@ -49,13 +50,25 @@ public:
         double beatPos;
         if (transport.playing) {
             beatPos = transport.positionInBeats;
+            if (!m_wasPlaying) {
+                // Transport just started — re-anchor arp timing to new position
+                m_lastStepBeat = std::floor(beatPos / m_rate) * m_rate - m_rate;
+                m_gateOffBeat = -1000.0;
+            }
             m_freeRunSamples = -1;  // reset free-run when transport plays
         } else {
             // Free-running clock based on sample count
             if (m_freeRunSamples < 0) m_freeRunSamples = 0;
+            if (m_wasPlaying) {
+                // Transport just stopped — re-anchor to free-run start
+                m_freeRunSamples = 0;
+                m_lastStepBeat = -m_rate;
+                m_gateOffBeat = -1000.0;
+            }
             beatPos = (double)m_freeRunSamples / spb;
             m_freeRunSamples += numFrames;
         }
+        m_wasPlaying = transport.playing;
 
         // Phase 1: Consume input notes, pass through non-note messages
         for (int i = 0; i < buffer.count(); ++i) {
@@ -305,6 +318,7 @@ private:
     int    m_activeNote   = -1;
     uint32_t m_rng        = 12345;
     int64_t m_freeRunSamples = -1;
+    bool    m_wasPlaying     = false;
 };
 
 } // namespace midi
