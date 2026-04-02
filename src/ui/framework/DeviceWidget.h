@@ -8,6 +8,7 @@
 
 #include "DeviceHeaderWidget.h"
 #include "FwGrid.h"
+#include "InstrumentDisplayWidget.h"
 #include "Primitives.h"
 #include "VisualizerWidget.h"
 
@@ -80,6 +81,7 @@ public:
         delete m_visualizer;
         delete m_vizKnobGrid;
         if (m_customPanel) { removeChild(m_customPanel); delete m_customPanel; }
+        delete m_customBody;
     }
 
     // Non-copyable (owns heap-allocated children)
@@ -134,6 +136,14 @@ public:
 
     Widget* customPanel() const { return m_customPanel; }
 
+    // ─── Custom body (replaces knob grid entirely for instruments) ───────
+
+    void setCustomBody(CustomDeviceBody* body) {
+        delete m_customBody;
+        m_customBody = body;
+    }
+    CustomDeviceBody* customBody() const { return m_customBody; }
+
     // ─── State ──────────────────────────────────────────────────────────
 
     bool isExpanded() const { return m_expanded; }
@@ -157,6 +167,7 @@ public:
     }
 
     void updateParamValue(int index, float value) {
+        if (m_customBody) { m_customBody->updateParamValue(index, value); return; }
         for (auto* k : m_knobs)    if (k->name() == std::to_string(index)) { k->setValue(value); return; }
         for (auto* k : m_vizKnobs) if (k->name() == std::to_string(index)) { k->setValue(value); return; }
     }
@@ -178,6 +189,10 @@ public:
 
     float preferredWidth() const {
         if (!m_expanded) return kCollapsedW;
+        if (m_customBody) {
+            float w = m_customBody->preferredBodyWidth() + 16.0f;
+            return std::max(kMinExpandedW, w);
+        }
         int paramCount = static_cast<int>(m_knobs.size() + m_vizKnobs.size());
         if (m_isVisualizer) {
             int cols = paramCount == 0 ? 0
@@ -223,6 +238,8 @@ public:
             m_visualizer->layout({x + 4, bodyY + 2, w - 8, vizH - 4}, ctx);
             if (m_vizKnobGrid)
                 m_vizKnobGrid->layout({x + 8, bodyY + vizH + 2, w - 16, 64}, ctx);
+        } else if (m_customBody) {
+            m_customBody->layout({x + 4, bodyY + 2, w - 8, bodyH - 4}, ctx);
         } else {
             if (m_customPanel) {
                 m_customPanel->layout({x + 4, bodyY + 2, w - 8, m_customPanelH}, ctx);
@@ -270,6 +287,8 @@ public:
         if (m_isVisualizer && m_visualizer) {
             m_visualizer->paint(ctx);
             if (m_vizKnobGrid) m_vizKnobGrid->paint(ctx);
+        } else if (m_customBody) {
+            m_customBody->paint(ctx);
         } else {
             if (m_customPanel) m_customPanel->paint(ctx);
             m_knobGrid.paint(ctx);
@@ -292,6 +311,8 @@ public:
                         return k->onMouseDown(e);
                 }
             }
+        } else if (m_customBody) {
+            return m_customBody->onMouseDown(e);
         } else {
             if (m_knobGrid.bounds().contains(e.x, e.y)) {
                 for (auto* k : m_knobs) {
@@ -312,6 +333,8 @@ public:
         if (m_isVisualizer) {
             for (auto* k : m_vizKnobs)
                 if (k->bounds().contains(e.x, e.y)) return k->onMouseUp(e);
+        } else if (m_customBody) {
+            return m_customBody->onMouseUp(e);
         } else {
             for (auto* k : m_knobs)
                 if (k->bounds().contains(e.x, e.y)) return k->onMouseUp(e);
@@ -324,6 +347,8 @@ public:
         if (m_isVisualizer) {
             for (auto* k : m_vizKnobs)
                 if (k->onMouseMove(e)) return true;
+        } else if (m_customBody) {
+            return m_customBody->onMouseMove(e);
         } else {
             for (auto* k : m_knobs)
                 if (k->onMouseMove(e)) return true;
@@ -346,6 +371,8 @@ private:
     Widget*     m_customPanel  = nullptr;  // owned, instrument display panel
     float       m_customPanelH = 0;
     float       m_customMinW   = 0;
+
+    CustomDeviceBody* m_customBody = nullptr;  // owned, replaces knob grid for instruments
 
     RemoveCallback                    m_onRemove;
     ParamChangeCallback               m_onParamChange;

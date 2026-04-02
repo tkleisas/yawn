@@ -10,13 +10,16 @@
 //   - SubSynthDisplayPanel:  Composite panel for Subtractive Synth
 
 #include "Widget.h"
+#include "Primitives.h"
 #include "../Theme.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <string>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -583,6 +586,248 @@ private:
     OscDisplayWidget    m_osc1, m_osc2;
     FilterDisplayWidget m_filter;
     ADSRDisplayWidget   m_ampAdsr, m_filtAdsr;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CustomDeviceBody — Abstract base for custom instrument body layouts.
+// Replaces the flat knob grid in DeviceWidget when set.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class CustomDeviceBody : public Widget {
+public:
+    virtual ~CustomDeviceBody() = default;
+    virtual void updateParamValue(int index, float value) = 0;
+    virtual float preferredBodyWidth() const = 0;
+    virtual void setOnParamChange(std::function<void(int, float)> cb) = 0;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Utility: format a parameter value for display (matches DeviceWidget format)
+// ═══════════════════════════════════════════════════════════════════════════
+
+inline std::string formatParamValue(float value, const std::string& unit, bool isBoolean) {
+    if (isBoolean) return value > 0.5f ? "On" : "Off";
+    char buf[32];
+    if (unit == "Hz") {
+        if (value >= 1000.0f)
+            std::snprintf(buf, sizeof(buf), "%.1fk", value / 1000.0f);
+        else
+            std::snprintf(buf, sizeof(buf), "%.0f", value);
+    } else if (unit == "dB") {
+        std::snprintf(buf, sizeof(buf), "%.1f", value);
+    } else if (unit == "ms") {
+        std::snprintf(buf, sizeof(buf), "%.0f", value);
+    } else if (unit == "%") {
+        std::snprintf(buf, sizeof(buf), "%.0f%%", value * 100.0f);
+    } else if (unit == "s") {
+        if (value < 0.1f) std::snprintf(buf, sizeof(buf), "%.0fms", value * 1000.0f);
+        else              std::snprintf(buf, sizeof(buf), "%.2fs", value);
+    } else if (unit == "x") {
+        std::snprintf(buf, sizeof(buf), "%.1fx", value);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%.2f", value);
+    }
+    return buf;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GroupedKnobBody — Lays out knobs in named sections with an optional
+// inline display widget on the left.  Replaces the flat FwGrid for
+// instruments that benefit from visual grouping.
+//
+// Layout:  [Display?]  |  [Section1]  |  [Section2]  |  ...
+// Each section:  label at top, knobs in 2-row grid below, separator line.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class GroupedKnobBody : public CustomDeviceBody {
+public:
+    struct ParamDesc {
+        int index;
+        std::string name, unit;
+        float minVal, maxVal, defaultVal;
+        bool isBoolean;
+    };
+    struct SectionDef {
+        std::string label;
+        std::vector<int> paramIndices;
+    };
+    struct Config {
+        Widget* display = nullptr;    // optional left-side display (ownership transferred)
+        float displayWidth = 0;
+        std::vector<SectionDef> sections;
+    };
+
+    GroupedKnobBody() { setName("GroupedKnobBody"); }
+
+    ~GroupedKnobBody() {
+        for (auto& sec : m_sections)
+            for (auto& ke : sec.knobs)
+                delete ke.knob;
+        delete m_display;
+    }
+
+    void configure(const Config& config, const std::vector<ParamDesc>& allParams) {
+        m_display = config.display;
+        m_displayWidth = config.displayWidth;
+
+        for (auto& sd : config.sections) {
+            InternalSection sec;
+            sec.label = sd.label;
+            for (int idx : sd.paramIndices) {
+                if (idx < 0 || idx >= static_cast<int>(allParams.size())) continue;
+                auto& pd = allParams[idx];
+                auto* k = new FwKnob();
+                k->setName(std::to_string(pd.index));
+                k->setRange(pd.minVal, pd.maxVal);
+                k->setDefault(pd.defaultVal);
+                k->setValue(pd.defaultVal);
+                k->setLabel(pd.name);
+                k->setBoolean(pd.isBoolean);
+                k->setFormatCallback([unit = pd.unit, isBool = pd.isBoolean](float v) {
+                    return formatParamValue(v, unit, isBool);
+                });
+                k->setOnChange([this, pidx = pd.index](float v) {
+                    if (m_onParamChange) m_onParamChange(pidx, v);
+                });
+                sec.knobs.push_back({pd.index, k});
+            }
+            m_sections.push_back(std::move(sec));
+        }
+    }
+
+    void updateParamValue(int index, float value) override {
+        for (auto& sec : m_sections)
+            for (auto& ke : sec.knobs)
+                if (ke.paramIndex == index) { ke.knob->setValue(value); return; }
+    }
+
+    float preferredBodyWidth() const override {
+        float w = 0;
+        if (m_display) w += m_displayWidth + kSectionGap;
+        for (auto& sec : m_sections)
+            w += sectionWidth(sec) + kSectionGap;
+        return w;
+    }
+
+    void setOnParamChange(std::function<void(int, float)> cb) override {
+        m_onParamChange = std::move(cb);
+    }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({preferredBodyWidth(), c.maxH});
+    }
+
+    void layout(const Rect& bounds, const UIContext& ctx) override {
+        m_bounds = bounds;
+        float x = bounds.x;
+        float y = bounds.y;
+        float h = bounds.h;
+
+        if (m_display) {
+            m_display->layout({x, y, m_displayWidth, h}, ctx);
+            x += m_displayWidth + kSectionGap;
+        }
+
+        for (auto& sec : m_sections) {
+            int cols = sectionCols(sec);
+            float secW = sectionWidth(sec);
+            sec.x = x;
+            sec.w = secW;
+
+            float knobY = y + kLabelH;
+            for (size_t i = 0; i < sec.knobs.size(); ++i) {
+                int col = static_cast<int>(i) % cols;
+                int row = static_cast<int>(i) / cols;
+                float kx = x + kPadX + col * kCellW;
+                float ky = knobY + row * kRowH;
+                sec.knobs[i].knob->layout({kx, ky, kKnobW, kKnobH}, ctx);
+            }
+
+            x += secW + kSectionGap;
+        }
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        if (m_display) m_display->paint(ctx);
+
+        float lblScale = 8.0f / Theme::kFontSize;
+        bool first = true;
+        for (auto& sec : m_sections) {
+            // Section label
+            if (!sec.label.empty())
+                f.drawText(r, sec.label.c_str(),
+                           sec.x + kPadX, m_bounds.y + 1,
+                           lblScale, Color{120, 160, 220, 200});
+
+            // Separator line (left edge, skip first)
+            if (!first)
+                r.drawRect(sec.x - kSectionGap / 2, m_bounds.y + 2,
+                           1, m_bounds.h - 4, Color{55, 55, 65, 150});
+            first = false;
+
+            for (auto& ke : sec.knobs)
+                ke.knob->paint(ctx);
+        }
+#endif
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        for (auto& sec : m_sections)
+            for (auto& ke : sec.knobs)
+                if (ke.knob->bounds().contains(e.x, e.y))
+                    return ke.knob->onMouseDown(e);
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent& e) override {
+        for (auto& sec : m_sections)
+            for (auto& ke : sec.knobs)
+                if (ke.knob->bounds().contains(e.x, e.y))
+                    return ke.knob->onMouseUp(e);
+        return false;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        for (auto& sec : m_sections)
+            for (auto& ke : sec.knobs)
+                if (ke.knob->onMouseMove(e)) return true;
+        return false;
+    }
+
+private:
+    static constexpr float kKnobW      = 46.0f;
+    static constexpr float kKnobH      = 60.0f;
+    static constexpr float kCellW      = 54.0f;
+    static constexpr float kRowH       = 62.0f;
+    static constexpr float kLabelH     = 12.0f;
+    static constexpr float kSectionGap = 10.0f;
+    static constexpr float kPadX       = 4.0f;
+    static constexpr int   kMaxRows    = 2;
+
+    struct KnobEntry { int paramIndex; FwKnob* knob; };
+    struct InternalSection {
+        std::string label;
+        std::vector<KnobEntry> knobs;
+        float x = 0, w = 0;
+    };
+
+    Widget* m_display = nullptr;
+    float   m_displayWidth = 0;
+    std::vector<InternalSection> m_sections;
+    std::function<void(int, float)> m_onParamChange;
+
+    static int sectionCols(const InternalSection& s) {
+        int n = static_cast<int>(s.knobs.size());
+        return n <= kMaxRows ? 1 : (n + kMaxRows - 1) / kMaxRows;
+    }
+    static float sectionWidth(const InternalSection& s) {
+        return 2 * kPadX + sectionCols(s) * kCellW;
+    }
 };
 
 } // namespace fw

@@ -354,8 +354,8 @@ public:
             dw->setRemovable(false);
             dw->setExpanded(findPrevExpanded(static_cast<void*>(inst)));
             dw->setBypassed(inst->bypassed());
-            configureDeviceWidget(dw, ref);
-            setupInstrumentDisplay(dw, inst);
+            if (!setupInstrumentDisplay(dw, inst, ref))
+                configureDeviceWidget(dw, ref);
 
             snapPoints.push_back(xPos);
             xPos += dw->preferredWidth() + kDeviceGap;
@@ -715,44 +715,99 @@ private:
         }
     }
 
-    // ── Create instrument-specific display panel ──
-    void setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst) {
-        if (!inst) return;
+    // ── Create instrument-specific grouped layout (returns true if handled) ──
+    bool setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst,
+                                const DeviceRef& ref) {
+        if (!inst) return false;
         std::string nm = inst->name();
 
+        GroupedKnobBody::Config config;
+
         if (nm == "FM Synth") {
-            auto* w = new FMAlgorithmWidget();
-            dw->setCustomPanel(w, 60.0f);
-            m_displayUpdaters.push_back([w, inst]() {
-                w->setAlgorithm(static_cast<int>(inst->getParameter(0)));   // Algorithm
-                w->setFeedback(inst->getParameter(1));                      // Feedback
-                w->setOpLevels(inst->getParameter(2), inst->getParameter(6),  // Op1-4 Level
-                               inst->getParameter(10), inst->getParameter(14));
+            auto* algoW = new FMAlgorithmWidget();
+            config.display = algoW;
+            config.displayWidth = 110;
+            config.sections = {
+                {"",     {0, 1, 18}},         // Algorithm, Feedback, Volume
+                {"Op 1", {2, 3, 4, 5}},       // Level, Ratio, Attack, Release
+                {"Op 2", {6, 7, 8, 9}},
+                {"Op 3", {10, 11, 12, 13}},
+                {"Op 4", {14, 15, 16, 17}},
+            };
+            m_displayUpdaters.push_back([algoW, inst]() {
+                algoW->setAlgorithm(static_cast<int>(inst->getParameter(0)));
+                algoW->setFeedback(inst->getParameter(1));
+                algoW->setOpLevels(inst->getParameter(2), inst->getParameter(6),
+                                   inst->getParameter(10), inst->getParameter(14));
             });
         } else if (nm == "Subtractive Synth") {
             auto* panel = new SubSynthDisplayPanel();
-            dw->setCustomPanel(panel, 50.0f);
+            config.display = panel;
+            config.displayWidth = 150;
+            config.sections = {
+                {"Osc",      {0, 1, 2, 3, 4, 5, 6, 7}},
+                {"Filter",   {8, 9, 10, 11}},
+                {"Amp",      {12, 13, 14, 15}},
+                {"Filt Env", {16, 17, 18, 19}},
+                {"LFO",      {20, 21, 22}},
+            };
             m_displayUpdaters.push_back([panel, inst]() {
                 panel->updateFromParams(
-                    inst->getParameter(0),  inst->getParameter(1),   // Osc1 Wave, Level
-                    inst->getParameter(2),  inst->getParameter(3),   // Osc2 Wave, Level
-                    inst->getParameter(8),  inst->getParameter(9),   // Filter Cutoff, Reso
-                    inst->getParameter(10),                          // Filter Type
-                    inst->getParameter(12), inst->getParameter(13),  // Amp A, D
-                    inst->getParameter(14), inst->getParameter(15),  // Amp S, R
-                    inst->getParameter(16), inst->getParameter(17),  // Filt A, D
-                    inst->getParameter(18), inst->getParameter(19)); // Filt S, R
+                    inst->getParameter(0),  inst->getParameter(1),
+                    inst->getParameter(2),  inst->getParameter(3),
+                    inst->getParameter(8),  inst->getParameter(9),
+                    inst->getParameter(10),
+                    inst->getParameter(12), inst->getParameter(13),
+                    inst->getParameter(14), inst->getParameter(15),
+                    inst->getParameter(16), inst->getParameter(17),
+                    inst->getParameter(18), inst->getParameter(19));
             });
         } else if (nm == "Sampler") {
             auto* adsr = new ADSRDisplayWidget();
             adsr->setLabel("AMP");
             adsr->setColor(Color{80, 220, 100, 255});
-            dw->setCustomPanel(adsr, 50.0f);
+            config.display = adsr;
+            config.displayWidth = 100;
+            config.sections = {
+                {"Sample", {0}},
+                {"Amp",    {1, 2, 3, 4}},
+                {"Filter", {5, 6}},
+                {"",       {7}},
+            };
             m_displayUpdaters.push_back([adsr, inst]() {
-                adsr->setADSR(inst->getParameter(1), inst->getParameter(2),   // A, D
-                              inst->getParameter(3), inst->getParameter(4));   // S, R
+                adsr->setADSR(inst->getParameter(1), inst->getParameter(2),
+                              inst->getParameter(3), inst->getParameter(4));
             });
+        } else {
+            return false;
         }
+
+        // Build param descriptors
+        int count = inst->parameterCount();
+        std::vector<GroupedKnobBody::ParamDesc> params(count);
+        for (int p = 0; p < count; ++p) {
+            auto& info = inst->parameterInfo(p);
+            params[p] = {p, info.name, info.unit ? info.unit : "",
+                         info.minValue, info.maxValue, info.defaultValue, info.isBoolean};
+        }
+
+        auto* body = new GroupedKnobBody();
+        body->configure(config, params);
+        body->setOnParamChange([ref](int idx, float v) {
+            DeviceRef r = ref; r.setParam(idx, v);
+        });
+        dw->setCustomBody(body);
+
+        // Set initial values
+        for (int p = 0; p < count; ++p)
+            body->updateParamValue(p, ref.getParam(p));
+
+        // Bypass / remove callbacks
+        dw->setOnBypassToggle([ref](bool) { DeviceRef r = ref; r.toggleBypass(); });
+        dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
+            if (m_onRemoveDevice) m_onRemoveDevice(type, chainIdx);
+        });
+        return true;
     }
 
     // ── Right-click knob reset (matches old geometry-based hit-test) ──
