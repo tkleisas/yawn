@@ -714,6 +714,24 @@ bool App::init() {
         markDirty();
     });
 
+    m_detailPanel->setOnMoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int fromIdx, int toIdx) {
+        if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+        switch (type) {
+            case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
+                m_audioEngine.midiEffectChain(m_selectedTrack).moveEffect(fromIdx, toIdx);
+                LOG_INFO("MIDI", "Moved MIDI effect %d to %d on track %d", fromIdx, toIdx, m_selectedTrack + 1);
+                break;
+            case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
+                m_audioEngine.mixer().trackEffects(m_selectedTrack).moveEffect(fromIdx, toIdx);
+                LOG_INFO("Audio", "Moved audio effect %d to %d on track %d", fromIdx, toIdx, m_selectedTrack + 1);
+                break;
+            default:
+                break;
+        }
+        m_detailPanel->clear();  // Force rebuild on next frame
+        markDirty();
+    });
+
     LOG_INFO("App", "Y.A.W.N initialized successfully");
     LOG_INFO("App", "  [Space] Play/Stop        [Up/Down] BPM +/-");
     LOG_INFO("App", "  [Home] Reset position    [M] Toggle mixer");

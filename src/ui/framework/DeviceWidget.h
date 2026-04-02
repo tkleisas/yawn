@@ -184,6 +184,12 @@ public:
     void setOnParamChange(ParamChangeCallback cb) { m_onParamChange = std::move(cb); }
     void setOnBypassToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onBypassToggle = std::move(cb); }
     void setOnExpandToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onExpandToggle = std::move(cb); }
+    void setOnDragStart(DeviceHeaderWidget::ActionCallback cb) {
+        m_onDragStart = std::move(cb);
+        m_header.setOnDragStart([this]() {
+            if (m_onDragStart) m_onDragStart();
+        });
+    }
 
     // ─── Knob text-edit forwarding (for GroupedKnobBody) ────────────────
 
@@ -412,6 +418,7 @@ private:
     ParamChangeCallback               m_onParamChange;
     DeviceHeaderWidget::ToggleCallback m_onBypassToggle;
     DeviceHeaderWidget::ToggleCallback m_onExpandToggle;
+    DeviceHeaderWidget::ActionCallback m_onDragStart;
 
     // ─── Knob management ────────────────────────────────────────────────
 

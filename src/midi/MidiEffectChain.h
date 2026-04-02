@@ -44,6 +44,22 @@ public:
         return removed;
     }
 
+    // Move effect from one position to another, shifting others
+    void moveEffect(int fromIndex, int toIndex) {
+        if (fromIndex == toIndex) return;
+        if (fromIndex < 0 || fromIndex >= m_count) return;
+        if (toIndex < 0 || toIndex >= m_count) return;
+        auto fx = std::move(m_effects[fromIndex]);
+        if (fromIndex < toIndex) {
+            for (int i = fromIndex; i < toIndex; ++i)
+                m_effects[i] = std::move(m_effects[i + 1]);
+        } else {
+            for (int i = fromIndex; i > toIndex; --i)
+                m_effects[i] = std::move(m_effects[i - 1]);
+        }
+        m_effects[toIndex] = std::move(fx);
+    }
+
     MidiEffect* effect(int index) {
         return (index >= 0 && index < m_count) ? m_effects[index].get() : nullptr;
     }

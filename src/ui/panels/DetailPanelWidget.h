@@ -84,6 +84,9 @@ public:
     void setOnRemoveDevice(std::function<void(DeviceType, int)> cb) {
         m_onRemoveDevice = std::move(cb);
     }
+    void setOnMoveDevice(std::function<void(DeviceType, int, int)> cb) {
+        m_onMoveDevice = std::move(cb);
+    }
 
     ViewMode viewMode() const { return m_viewMode; }
 
@@ -518,6 +521,39 @@ public:
                 m_targetHeight = m_userPanelHeight;
             return true;
         }
+        // Handle drag-to-reorder (constrained to same device type)
+        if (m_dragReorderActive && m_dragSourceIdx >= 0 &&
+            m_dragSourceIdx < static_cast<int>(m_deviceRefs.size())) {
+            auto srcType = m_deviceRefs[m_dragSourceIdx].type;
+            // Find range of same-type devices
+            int groupFirst = -1, groupLast = -1;
+            for (size_t i = 0; i < m_deviceRefs.size(); ++i) {
+                if (m_deviceRefs[i].type == srcType) {
+                    if (groupFirst < 0) groupFirst = static_cast<int>(i);
+                    groupLast = static_cast<int>(i);
+                }
+            }
+            if (groupFirst < 0) { m_dragInsertIdx = m_dragSourceIdx; return true; }
+            // Find nearest gap within [groupFirst .. groupLast+1]
+            int best = groupFirst;
+            float bestDist = 1e9f;
+            for (int i = groupFirst; i <= groupLast + 1; ++i) {
+                float edgeX;
+                if (i < static_cast<int>(m_deviceWidgets.size()))
+                    edgeX = m_deviceWidgets[i]->bounds().x;
+                else {
+                    auto& last = m_deviceWidgets.back()->bounds();
+                    edgeX = last.x + last.w;
+                }
+                float dist = std::abs(e.x - edgeX);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = i;
+                }
+            }
+            m_dragInsertIdx = best;
+            return true;
+        }
         // Captured widget receives moves regardless of position
         if (Widget::capturedWidget()) {
             return Widget::capturedWidget()->onMouseMove(e);
@@ -548,6 +584,30 @@ public:
         if (m_handleDragActive) {
             m_handleDragActive = false;
             releaseMouse();
+            return true;
+        }
+        // Handle drag-to-reorder drop
+        if (m_dragReorderActive) {
+            m_dragReorderActive = false;
+            releaseMouse();
+            int src = m_dragSourceIdx;
+            int ins = m_dragInsertIdx;
+            m_dragSourceIdx = -1;
+            m_dragInsertIdx = -1;
+            // Compute target chain index from widget-level insertion gap.
+            // Count same-type devices before insertion point (excluding source).
+            if (src >= 0 && ins >= 0 && src < static_cast<int>(m_deviceRefs.size())) {
+                auto srcType = m_deviceRefs[src].type;
+                int fromChain = m_deviceRefs[src].chainIndex;
+                int targetChain = 0;
+                for (int i = 0; i < ins; ++i) {
+                    if (i != src && i < static_cast<int>(m_deviceRefs.size()) &&
+                        m_deviceRefs[i].type == srcType)
+                        ++targetChain;
+                }
+                if (targetChain != fromChain && m_onMoveDevice)
+                    m_onMoveDevice(srcType, fromChain, targetChain);
+            }
             return true;
         }
         if (Widget::capturedWidget()) {
@@ -698,6 +758,20 @@ private:
 
         dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
             if (m_onRemoveDevice) m_onRemoveDevice(type, chainIdx);
+        });
+
+        // Wire drag-to-reorder: find this device's index in m_deviceWidgets
+        dw->setOnDragStart([this, dw]() {
+            for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
+                if (m_deviceWidgets[i] == dw) {
+                    m_dragReorderActive = true;
+                    m_dragSourceIdx = static_cast<int>(i);
+                    m_dragInsertIdx = static_cast<int>(i);
+                    m_dragStartX = m_lastMouseX;
+                    captureMouse();
+                    return;
+                }
+            }
         });
     }
 
@@ -927,6 +1001,13 @@ private:
     }
 
     std::function<void(DeviceType, int)> m_onRemoveDevice;
+    std::function<void(DeviceType, int, int)> m_onMoveDevice;
+
+    // Drag-to-reorder state
+    bool  m_dragReorderActive = false;
+    int   m_dragSourceIdx     = -1;
+    int   m_dragInsertIdx     = -1;
+    float m_dragStartX        = 0;
 
     // Fingerprint cache for setDeviceChain
     midi::MidiEffectChain*   m_lastMidiChain = nullptr;

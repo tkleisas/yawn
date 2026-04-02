@@ -88,6 +88,21 @@ void DetailPanelWidget::paint(UIContext& ctx) {
             updateParamValues();
             updateVisualizerData();
             m_scroll.paint(ctx);
+
+            // Draw drag-to-reorder insertion indicator
+            if (m_dragReorderActive && m_dragInsertIdx >= 0 &&
+                !m_deviceWidgets.empty()) {
+                float ix;
+                if (m_dragInsertIdx < static_cast<int>(m_deviceWidgets.size()))
+                    ix = m_deviceWidgets[m_dragInsertIdx]->bounds().x - 1.0f;
+                else {
+                    auto& last = m_deviceWidgets.back()->bounds();
+                    ix = last.x + last.w + 1.0f;
+                }
+                float iy = bodyY + 2.0f;
+                float ih = bodyH - 4.0f;
+                renderer.drawRect(ix - 1.5f, iy, 3.0f, ih, Color{0, 200, 255, 200});
+            }
         }
     }
 

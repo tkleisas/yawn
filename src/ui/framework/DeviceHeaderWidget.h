@@ -41,6 +41,7 @@ public:
     void setOnExpandToggle(ToggleCallback cb) { m_onExpandToggle = std::move(cb); }
     void setOnBypassToggle(ToggleCallback cb) { m_onBypassToggle = std::move(cb); }
     void setOnRemove(ActionCallback cb) { m_onRemove = std::move(cb); }
+    void setOnDragStart(ActionCallback cb) { m_onDragStart = std::move(cb); }
 
     // Device type color
     Color deviceColor() const {
@@ -149,6 +150,11 @@ public:
             if (m_onRemove) m_onRemove();
             return true;
         }
+        // Click on header name area → start drag reorder
+        if (m_onDragStart) {
+            m_onDragStart();
+            return true;
+        }
         return false;
     }
 
@@ -162,6 +168,7 @@ private:
     ToggleCallback m_onExpandToggle;
     ToggleCallback m_onBypassToggle;
     ActionCallback m_onRemove;
+    ActionCallback m_onDragStart;
 
     // Hit-test regions (computed in layout)
     Rect m_expandBtn{};

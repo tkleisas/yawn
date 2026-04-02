@@ -61,6 +61,22 @@ public:
         return fx;
     }
 
+    // Move effect from one slot to another, shifting others to fill the gap
+    void moveEffect(int fromSlot, int toSlot) {
+        if (fromSlot == toSlot) return;
+        if (fromSlot < 0 || fromSlot >= m_count) return;
+        if (toSlot < 0 || toSlot >= m_count) return;
+        auto fx = std::move(m_slots[fromSlot]);
+        if (fromSlot < toSlot) {
+            for (int i = fromSlot; i < toSlot; ++i)
+                m_slots[i] = std::move(m_slots[i + 1]);
+        } else {
+            for (int i = fromSlot; i > toSlot; --i)
+                m_slots[i] = std::move(m_slots[i - 1]);
+        }
+        m_slots[toSlot] = std::move(fx);
+    }
+
     void clear() {
         for (auto& slot : m_slots) slot.reset();
         m_count = 0;
