@@ -301,6 +301,7 @@ public:
     void setFormatCallback(FormatCallback cb) { m_formatCb = std::move(cb); }
 
     bool isEditing() const { return m_editing; }
+    bool isDragging() const { return m_dragging; }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({40.0f, 50.0f});

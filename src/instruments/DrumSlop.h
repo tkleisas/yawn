@@ -109,8 +109,10 @@ public:
             const auto& msg = midi[i];
             if (msg.isNoteOn()) {
                 int padIdx = (msg.note & 0x7F) - m_baseNote;
-                if (padIdx >= 0 && padIdx < kNumPads && padIdx < m_sliceCount)
+                if (padIdx >= 0 && padIdx < kNumPads && padIdx < m_sliceCount) {
+                    m_selectedPad = padIdx;
                     triggerPad(padIdx, msg.velocity);
+                }
             } else if (msg.isNoteOff()) {
                 int padIdx = (msg.note & 0x7F) - m_baseNote;
                 if (padIdx >= 0 && padIdx < kNumPads && padIdx < m_sliceCount)

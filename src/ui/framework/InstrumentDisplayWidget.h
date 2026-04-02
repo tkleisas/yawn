@@ -1160,7 +1160,10 @@ public:
     void updateParamValue(int index, float value) override {
         for (auto& sec : m_sections)
             for (auto& ke : sec.knobs)
-                if (ke.paramIndex == index) { ke.knob->setValue(value); return; }
+                if (ke.paramIndex == index) {
+                    if (!ke.knob->isDragging()) ke.knob->setValue(value);
+                    return;
+                }
     }
 
     float preferredBodyWidth() const override {
@@ -1239,6 +1242,9 @@ public:
     }
 
     bool onMouseDown(MouseEvent& e) override {
+        // Forward to display widget first (e.g. DrumSlop pad grid)
+        if (m_display && m_display->bounds().contains(e.x, e.y))
+            if (m_display->onMouseDown(e)) return true;
         for (auto& sec : m_sections)
             for (auto& ke : sec.knobs)
                 if (ke.knob->bounds().contains(e.x, e.y))
