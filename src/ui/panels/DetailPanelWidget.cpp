@@ -145,14 +145,14 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         if (hitWidget(m_gainKnob, mx, my))
             return m_gainKnob.onMouseDown(e);
         // Transpose input
-        if (hitWidget(m_transposeInput, mx, my))
-            return m_transposeInput.onMouseDown(e);
+        if (hitWidget(m_transposeKnob, mx, my))
+            return m_transposeKnob.onMouseDown(e);
         // Detune input
-        if (hitWidget(m_detuneInput, mx, my))
-            return m_detuneInput.onMouseDown(e);
+        if (hitWidget(m_detuneKnob, mx, my))
+            return m_detuneKnob.onMouseDown(e);
         // BPM input
-        if (hitWidget(m_bpmInput, mx, my))
-            return m_bpmInput.onMouseDown(e);
+        if (hitWidget(m_bpmKnob, mx, my))
+            return m_bpmKnob.onMouseDown(e);
         // Loop toggle
         if (hitWidget(m_loopToggleBtn, mx, my))
             return m_loopToggleBtn.onMouseDown(e);
@@ -246,11 +246,14 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     m_waveformWidget.layout(Rect{sectionX, waveY, sectionW, waveH}, ctx);
     m_waveformWidget.paint(ctx);
 
-    // Sync widget values from clip each frame
+    // Sync widget values from clip each frame (skip if user is editing)
     m_gainKnob.setValue(clip.gain);
-    m_transposeInput.setValue(static_cast<float>(clip.transposeSemitones));
-    m_detuneInput.setValue(static_cast<float>(clip.detuneCents));
-    if (clip.originalBPM > 0) m_bpmInput.setValue(static_cast<float>(clip.originalBPM));
+    if (!m_transposeKnob.isEditing())
+        m_transposeKnob.setValue(static_cast<float>(clip.transposeSemitones));
+    if (!m_detuneKnob.isEditing())
+        m_detuneKnob.setValue(static_cast<float>(clip.detuneCents));
+    if (clip.originalBPM > 0 && !m_bpmKnob.isEditing())
+        m_bpmKnob.setValue(static_cast<float>(clip.originalBPM));
     m_loopToggleBtn.setLabel(clip.looping ? "On" : "Off");
 
     // ── Horizontal control strip ──
@@ -258,42 +261,39 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float labelScale = 10.0f / Theme::kFontSize;
     float labelH = 13.0f;
     float widgetY = stripY + labelH + 2.0f;
-    float inputH = 20.0f;
     float knobH = 40.0f;
+    float knobW = 44.0f;
     float gap = 14.0f;
-    float sectionGap = 24.0f;  // larger gap between control groups
-    // Vertically center inputs with knob area
+    float sectionGap = 24.0f;
+    float inputH = 20.0f;
+    // Vertically center non-knob inputs with knob area
     float inputCenterY = widgetY + (knobH - inputH) * 0.5f;
 
     float cx = sectionX;
 
     // Gain knob
-    float knobW = 44.0f;
     font.drawText(renderer, "Gain", cx, stripY, labelScale, Theme::textDim);
     m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
     m_gainKnob.paint(ctx);
     cx += knobW + sectionGap;
 
-    // BPM
-    float bpmW = 80.0f;
+    // BPM knob
     font.drawText(renderer, "BPM", cx, stripY, labelScale, Theme::textDim);
-    m_bpmInput.layout(Rect{cx, inputCenterY, bpmW, inputH}, ctx);
-    m_bpmInput.paint(ctx);
-    cx += bpmW + sectionGap;
+    m_bpmKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_bpmKnob.paint(ctx);
+    cx += knobW + sectionGap;
 
-    // Transpose
-    float transW = 70.0f;
+    // Transpose knob
     font.drawText(renderer, "Transpose", cx, stripY, labelScale, Theme::textDim);
-    m_transposeInput.layout(Rect{cx, inputCenterY, transW, inputH}, ctx);
-    m_transposeInput.paint(ctx);
-    cx += transW + gap;
+    m_transposeKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_transposeKnob.paint(ctx);
+    cx += knobW + gap;
 
-    // Detune
-    float detW = 70.0f;
+    // Detune knob
     font.drawText(renderer, "Detune", cx, stripY, labelScale, Theme::textDim);
-    m_detuneInput.layout(Rect{cx, inputCenterY, detW, inputH}, ctx);
-    m_detuneInput.paint(ctx);
-    cx += detW + sectionGap;
+    m_detuneKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_detuneKnob.paint(ctx);
+    cx += knobW + sectionGap;
 
     // Warp dropdown
     float warpW = 90.0f;

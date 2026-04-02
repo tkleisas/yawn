@@ -907,6 +907,12 @@ void App::processEvents() {
                         break;
                 }
 
+                // Detail panel knob text-edit mode
+                if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
+                    if (m_detailPanel->forwardKeyDown(static_cast<int>(event.key.key)))
+                        break;
+                }
+
                 // Piano roll keyboard shortcuts
                 if (m_pianoRoll->isOpen()) {
                     if (m_pianoRoll->handleKeyDown(static_cast<int>(event.key.key))) {
@@ -1001,6 +1007,11 @@ void App::processEvents() {
                 // Transport editing (BPM / time sig)
                 if (m_transportPanel->isEditing()) {
                     m_transportPanel->handleTextInput(event.text.text);
+                    break;
+                }
+                // Detail panel knob text-edit mode
+                if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
+                    m_detailPanel->forwardTextInput(event.text.text);
                     break;
                 }
                 if (m_inputState.focused()) {

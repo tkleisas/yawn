@@ -186,9 +186,20 @@ void FwKnob::paint(UIContext& ctx) {
     float dotY = cy + std::sin(angle) * r * 0.65f - 2;
     ctx.renderer->drawRect(dotX, dotY, 4, 4, Theme::textPrimary);
 
-    // Value text (from format callback)
+    // Value text (from format callback) — or edit text when editing
     float valScale = 10.0f / Theme::kFontSize;
-    if (m_formatCb) {
+    if (m_editing) {
+        // Show editable text with cursor
+        std::string editStr = std::string(m_editText) + "|";
+        float vw = ctx.font->textWidth(editStr, valScale);
+        float vy = m_bounds.y + m_bounds.h * 0.72f;
+        // Background highlight for edit mode
+        ctx.renderer->drawRect(m_bounds.x + 2, vy - 1, m_bounds.w - 4, 14.0f,
+                               Color{40, 40, 50, 200});
+        ctx.font->drawText(*ctx.renderer, editStr.c_str(),
+                           m_bounds.x + (m_bounds.w - vw) * 0.5f,
+                           vy, valScale, Color{255, 255, 255, 255});
+    } else if (m_formatCb) {
         std::string valStr = m_formatCb(m_value);
         float vw = ctx.font->textWidth(valStr, valScale);
         ctx.font->drawText(*ctx.renderer, valStr.c_str(),

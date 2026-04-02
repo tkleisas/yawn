@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -286,6 +287,7 @@ public:
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
     void setLabel(const std::string& l) { m_label = l; }
     void setSensitivity(float s) { m_sensitivity = s; }
+    void setStep(float s) { m_step = s; }  // snap to step (0 = continuous)
 
     // Boolean mode: renders as full on/off circle instead of arc sweep
     void setBoolean(bool b) { m_boolean = b; }
@@ -297,6 +299,8 @@ public:
 
     // Value format callback for displaying value + unit below knob
     void setFormatCallback(FormatCallback cb) { m_formatCb = std::move(cb); }
+
+    bool isEditing() const { return m_editing; }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({40.0f, 50.0f});
@@ -316,11 +320,20 @@ public:
 
     bool onMouseDown(MouseEvent& e) override {
         if (e.button == MouseButton::Left) {
+            if (m_editing) return true; // let key events handle edit mode
             if (m_boolean) {
-                // Toggle on click
                 float mid = (m_min + m_max) * 0.5f;
                 m_value = (m_value > mid) ? m_min : m_max;
                 if (m_onChange) m_onChange(m_value);
+                return true;
+            }
+            // Double-click detection → enter edit mode
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - m_lastClickTime).count();
+            m_lastClickTime = now;
+            if (elapsed < 300) {
+                startEditing();
                 return true;
             }
             m_dragging = true;
@@ -329,6 +342,7 @@ public:
             return true;
         }
         if (e.button == MouseButton::Right) {
+            if (m_editing) { cancelEdit(); return true; }
             m_value = m_default;
             if (m_onChange) m_onChange(m_value);
             return true;
@@ -349,6 +363,7 @@ public:
         float range = m_max - m_min;
         float delta = -dy * m_sensitivity * range / 200.0f;
         float newVal = detail::cclamp(m_value + delta, m_min, m_max);
+        if (m_step > 0) newVal = std::round(newVal / m_step) * m_step;
         if (newVal != m_value) {
             m_value = newVal;
             if (m_onChange) m_onChange(m_value);
@@ -356,7 +371,53 @@ public:
         return true;
     }
 
+    bool onKeyDown(KeyEvent& e) override {
+        if (!m_editing) return false;
+        if (e.isEnter()) { commitEdit(); return true; }
+        if (e.isEscape()) { cancelEdit(); return true; }
+        if (e.isBackspace() && m_editLen > 0) {
+            m_editText[--m_editLen] = '\0';
+            return true;
+        }
+        return true;
+    }
+
+    bool onTextInput(TextInputEvent& e) override {
+        if (!m_editing) return false;
+        for (const char* p = e.text; *p && m_editLen < 15; ++p) {
+            char c = *p;
+            if ((c >= '0' && c <= '9') || c == '.' || c == '-') {
+                m_editText[m_editLen++] = c;
+                m_editText[m_editLen] = '\0';
+            }
+        }
+        return true;
+    }
+
+    void onFocusChanged(FocusEvent& e) override {
+        if (!e.gained && m_editing) commitEdit();
+    }
+
 private:
+    void startEditing() {
+        m_editing = true;
+        m_editLen = 0;
+        m_editText[0] = '\0';
+    }
+
+    void commitEdit() {
+        m_editing = false;
+        if (m_editLen > 0) {
+            float v = static_cast<float>(std::atof(m_editText));
+            v = detail::cclamp(v, m_min, m_max);
+            if (m_step > 0) v = std::round(v / m_step) * m_step;
+            m_value = v;
+            if (m_onChange) m_onChange(m_value);
+        }
+    }
+
+    void cancelEdit() { m_editing = false; }
+
 #ifndef YAWN_TEST_BUILD
     void renderArc(Renderer2D& renderer, float cx, float cy, float r,
                    float startNorm, float endNorm, Color color);
@@ -366,6 +427,7 @@ private:
     float m_min = 0.0f, m_max = 1.0f;
     float m_default = 0.0f;
     float m_sensitivity = 1.0f;
+    float m_step = 0.0f;  // 0 = continuous
     bool m_dragging = false;
     float m_lastY = 0;
     ValueCallback m_onChange;
@@ -381,6 +443,12 @@ private:
     bool m_customColor = false;
     Color m_arcColor{0, 200, 255, 255};
     Color m_arcColorActive{0, 255, 255, 255};
+
+    // Edit mode (double-click to type exact value)
+    bool m_editing = false;
+    char m_editText[16]{};
+    int m_editLen = 0;
+    std::chrono::steady_clock::time_point m_lastClickTime{};
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

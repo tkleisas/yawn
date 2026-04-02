@@ -84,6 +84,32 @@ public:
 
     ViewMode viewMode() const { return m_viewMode; }
 
+    // Check if any clip-property knob is in text-edit mode
+    bool hasEditingKnob() const {
+        return m_transposeKnob.isEditing() || m_detuneKnob.isEditing() || m_bpmKnob.isEditing();
+    }
+
+    // Forward key events to the editing knob
+    bool forwardKeyDown(int key) {
+        KeyEvent ke;
+        ke.keyCode = key;
+        if (m_transposeKnob.isEditing()) return m_transposeKnob.onKeyDown(ke);
+        if (m_detuneKnob.isEditing()) return m_detuneKnob.onKeyDown(ke);
+        if (m_bpmKnob.isEditing()) return m_bpmKnob.onKeyDown(ke);
+        return false;
+    }
+
+    // Forward text input to the editing knob
+    bool forwardTextInput(const char* text) {
+        TextInputEvent te;
+        std::strncpy(te.text, text, sizeof(te.text) - 1);
+        te.text[sizeof(te.text) - 1] = '\0';
+        if (m_transposeKnob.isEditing()) return m_transposeKnob.onTextInput(te);
+        if (m_detuneKnob.isEditing()) return m_detuneKnob.onTextInput(te);
+        if (m_bpmKnob.isEditing()) return m_bpmKnob.onTextInput(te);
+        return false;
+    }
+
     // Show audio clip view: waveform + properties + effect chain
     void setAudioClip(const audio::Clip* clip, effects::EffectChain* fxChain,
                       int sampleRate = 44100) {
@@ -133,30 +159,50 @@ public:
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->gain = v;
         });
 
-        // Transpose (semitones)
-        m_transposeInput.setRange(-48.0f, 48.0f);
-        m_transposeInput.setValue(static_cast<float>(clip->transposeSemitones));
-        m_transposeInput.setSuffix(" st");
-        m_transposeInput.setSensitivity(0.5f);
-        m_transposeInput.setOnChange([this](float v) {
+        // Transpose (semitones) — knob with integer step
+        m_transposeKnob.setRange(-48.0f, 48.0f);
+        m_transposeKnob.setDefault(0.0f);
+        m_transposeKnob.setValue(static_cast<float>(clip->transposeSemitones));
+        m_transposeKnob.setStep(1.0f);
+        m_transposeKnob.setSensitivity(0.5f);
+        m_transposeKnob.setLabel("");
+        m_transposeKnob.setFormatCallback([](float v) -> std::string {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%+d st", static_cast<int>(v));
+            return buf;
+        });
+        m_transposeKnob.setOnChange([this](float v) {
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->transposeSemitones = static_cast<int>(v);
         });
 
-        // Detune (cents)
-        m_detuneInput.setRange(-50.0f, 50.0f);
-        m_detuneInput.setValue(static_cast<float>(clip->detuneCents));
-        m_detuneInput.setSuffix(" ct");
-        m_detuneInput.setSensitivity(0.3f);
-        m_detuneInput.setOnChange([this](float v) {
+        // Detune (cents) — knob with integer step
+        m_detuneKnob.setRange(-50.0f, 50.0f);
+        m_detuneKnob.setDefault(0.0f);
+        m_detuneKnob.setValue(static_cast<float>(clip->detuneCents));
+        m_detuneKnob.setStep(1.0f);
+        m_detuneKnob.setSensitivity(0.3f);
+        m_detuneKnob.setLabel("");
+        m_detuneKnob.setFormatCallback([](float v) -> std::string {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%+d ct", static_cast<int>(v));
+            return buf;
+        });
+        m_detuneKnob.setOnChange([this](float v) {
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->detuneCents = static_cast<int>(v);
         });
 
-        // BPM input
-        m_bpmInput.setRange(20.0f, 999.0f);
-        m_bpmInput.setValue(clip->originalBPM > 0 ? static_cast<float>(clip->originalBPM) : 120.0f);
-        m_bpmInput.setSuffix("");
-        m_bpmInput.setSensitivity(0.5f);
-        m_bpmInput.setOnChange([this](float v) {
+        // BPM — knob with continuous value
+        m_bpmKnob.setRange(20.0f, 999.0f);
+        m_bpmKnob.setDefault(120.0f);
+        m_bpmKnob.setValue(clip->originalBPM > 0 ? static_cast<float>(clip->originalBPM) : 120.0f);
+        m_bpmKnob.setSensitivity(0.5f);
+        m_bpmKnob.setLabel("");
+        m_bpmKnob.setFormatCallback([](float v) -> std::string {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%.1f", v);
+            return buf;
+        });
+        m_bpmKnob.setOnChange([this](float v) {
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->originalBPM = static_cast<double>(v);
         });
 
@@ -462,9 +508,9 @@ public:
                 return true;
             }
             // Forward to draggable number inputs (they don't capture the mouse)
-            if (m_transposeInput.onMouseMove(e)) return true;
-            if (m_detuneInput.onMouseMove(e)) return true;
-            if (m_bpmInput.onMouseMove(e)) return true;
+            if (m_transposeKnob.onMouseMove(e)) return true;
+            if (m_detuneKnob.onMouseMove(e)) return true;
+            if (m_bpmKnob.onMouseMove(e)) return true;
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
@@ -501,9 +547,9 @@ public:
             if (hitWidget(m_gainKnob, e.x, e.y))
                 return m_gainKnob.onMouseUp(e);
             // Number inputs: always forward mouseUp (drag may leave bounds)
-            if (m_transposeInput.onMouseUp(e)) return true;
-            if (m_detuneInput.onMouseUp(e)) return true;
-            if (m_bpmInput.onMouseUp(e)) return true;
+            if (m_transposeKnob.onMouseUp(e)) return true;
+            if (m_detuneKnob.onMouseUp(e)) return true;
+            if (m_bpmKnob.onMouseUp(e)) return true;
             if (hitWidget(m_loopToggleBtn, e.x, e.y))
                 return m_loopToggleBtn.onMouseUp(e);
         }
@@ -728,10 +774,10 @@ private:
     FwDropDown m_warpModeDropdown;
     FwButton m_detectBtn;
     FwKnob m_gainKnob;
-    FwNumberInput m_transposeInput;
-    FwNumberInput m_detuneInput;
+    FwKnob m_transposeKnob;
+    FwKnob m_detuneKnob;
     FwButton m_loopToggleBtn;
-    FwNumberInput m_bpmInput;
+    FwKnob m_bpmKnob;
     float m_lastMouseX = 0, m_lastMouseY = 0;
 
     // ── Audio clip view rendering ──
