@@ -24,10 +24,10 @@
 
 ### Audio Engine
 - **Real-time Audio Engine** — Lock-free audio thread with PortAudio (ASIO/WASAPI/ALSA)
-- **Clip Playback** — Audio files (WAV, FLAC, OGG, AIFF), looping, gain, fade-in/out
+- **Clip Playback** — Audio files (WAV, FLAC, OGG, AIFF, MP3), looping, gain, fade-in/out
 - **Quantized Launching** — Launch clips on beat or bar boundaries
 - **Transport** — Play/stop, BPM control, beat-synced position tracking
-- **Metronome** — Synthesized click track with accent on downbeats, configurable volume & time signature
+- **Metronome** — Synthesized click track with accent on downbeats, configurable volume & time signature, count-in, recording/playback mode selection
 
 ### Mixer & Routing
 - **64-track Mixer** — Per-track volume, pan, mute, solo
@@ -67,9 +67,10 @@
 - **Device Chain Panel** — Composite widget architecture: DeviceWidget (header + grid + knobs + visualizer), SnapScrollContainer, neon arc knobs with 24-segment rendering
 - **Grouped Instrument Layouts** — Instruments display knobs in logical sections (Global, Op 1–4, Filter, Amp, etc.) with inline graphical displays instead of flat grids
 - **Instrument Display Widgets** — FM algorithm routing diagram, ADSR envelope curves, oscillator waveform previews, filter response curves, composite synth panels
-- **Piano Roll Editor** — MIDI note editing with draw/select/erase tools, zoom/scroll, velocity, snap-to-grid, follow-playhead mode
+- **MIDI Recording** — Record from hardware MIDI keyboards to MIDI clips with proper finalization on transport stop
+- **Piano Roll Editor** — MIDI note editing with draw/select/erase tools, zoom/scroll, velocity, snap-to-grid, follow-playhead mode, clip operations (duplicate, double, halve, reverse, clear, set 1.1.1 here)
 - **Primitive Widgets** — FwButton, FwToggle, FwKnob (with double-click text entry, step snapping, format callbacks), FwFader, Label, FwTextInput, FwNumberInput, FwDropDown with hover animations
-- **Dialog System** — fw::Dialog base class with title bar, OK/Cancel, drag-to-move, Escape/Enter handling; AboutDialog, ConfirmDialog
+- **Dialog System** — fw::Dialog base class with title bar, OK/Cancel, drag-to-move, Escape/Enter handling; AboutDialog, ConfirmDialog, PreferencesDialog (Audio, Defaults, Metronome tabs)
 - **Menu Bar** — File, Edit, View, Track, MIDI, Help menus with keyboard accelerators
 - **Context Menus** — Right-click track headers to set type, add instruments/effects
 - **DPI Scaling** — Auto-detect display scale (SDL3), user override, scaled() helper for all layout constants
@@ -82,7 +83,7 @@
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 612 unit & integration tests via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 628 unit & integration tests via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
@@ -317,12 +318,13 @@ yawn/
 │   │       ├── SessionPanel.h      # Session view (clip grid, transport)
 │   │       ├── MixerPanel.h        # Mixer view (faders, metering)
 │   │       ├── DetailPanelWidget.h  # Device chain panel (composite widgets)
-│   │       └── PianoRollPanel.h     # MIDI piano roll editor
+│   │       ├── PianoRollPanel.h     # MIDI piano roll editor
+│   │       └── PreferencesDialog.cpp # Preferences (Audio, Defaults, Metronome)
 │   └── util/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 612 unit & integration tests (Google Test)
+├── tests/                      # 628 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
@@ -452,7 +454,7 @@ while (true) {
 2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
 3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
 4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
-5. **612 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
+5. **628 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
 6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
