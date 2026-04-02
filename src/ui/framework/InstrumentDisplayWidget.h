@@ -626,6 +626,18 @@ public:
         m_sampleChannels = channels;
     }
 
+    void setLoopPoints(float start, float end) {
+        m_loopStart = start;
+        m_loopEnd = end;
+    }
+
+    void setPlayhead(float pos, bool playing) {
+        m_playhead = pos;
+        m_playing = playing;
+    }
+
+    void setReverse(bool rev) { m_reverse = rev; }
+
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({c.maxW, 96.0f});
     }
@@ -652,7 +664,8 @@ public:
                           Color{50, 50, 60, 255});
 
         float lblScale = 7.0f / Theme::kFontSize;
-        f.drawText(r, "SAMPLE", m_waveRect.x + 3, m_waveRect.y + 1,
+        const char* label = m_reverse ? "SAMPLE \xe2\x97\x80" : "SAMPLE";
+        f.drawText(r, label, m_waveRect.x + 3, m_waveRect.y + 1,
                    lblScale, Theme::textDim);
 
         if (m_sampleData && m_sampleFrames > 0) {
@@ -661,6 +674,21 @@ public:
             float pw = m_waveRect.w - 4;
             float ph = m_waveRect.h - 12;
             if (pw > 10 && ph > 6) {
+                // Loop region highlight
+                float lsX = px + m_loopStart * pw;
+                float leX = px + m_loopEnd * pw;
+                bool hasLoop = (m_loopStart > 0.001f || m_loopEnd < 0.999f);
+                if (hasLoop) {
+                    // Dim outside loop
+                    if (lsX > px)
+                        r.drawRect(px, py, lsX - px, ph, Color{10, 10, 14, 150});
+                    if (leX < px + pw)
+                        r.drawRect(leX, py, px + pw - leX, ph, Color{10, 10, 14, 150});
+                    // Loop boundaries
+                    r.drawRect(lsX, py, 1, ph, Color{255, 200, 50, 160});
+                    r.drawRect(leX, py, 1, ph, Color{255, 200, 50, 160});
+                }
+
                 // Draw waveform envelope (first channel)
                 float midY = py + ph * 0.5f;
                 float halfH = ph * 0.5f;
@@ -684,6 +712,14 @@ public:
                 }
                 // Center line
                 r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 100});
+
+                // Playhead
+                if (m_playing && m_playhead > 0.0f) {
+                    float phX = px + m_playhead * pw;
+                    if (phX >= px && phX <= px + pw) {
+                        r.drawRect(phX, py, 1.5f, ph, Color{255, 255, 255, 200});
+                    }
+                }
             }
         } else {
             // "Drop Sample" placeholder
@@ -705,6 +741,10 @@ private:
     const float* m_sampleData = nullptr;
     int m_sampleFrames = 0;
     int m_sampleChannels = 1;
+    float m_loopStart = 0.0f, m_loopEnd = 1.0f;
+    float m_playhead = 0.0f;
+    bool m_playing = false;
+    bool m_reverse = false;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -800,6 +840,9 @@ inline std::string shortenLabel(const std::string& name) {
     if (s == "Filt Decay")    return "Dcy";
     if (s == "Filt Sustain")  return "Sus";
     if (s == "Filt Release")  return "Rel";
+    if (s == "Loop Start")    return "Start";
+    if (s == "Loop End")      return "End";
+    if (s == "Sample Gain")   return "Gain";
     return s;
 }
 

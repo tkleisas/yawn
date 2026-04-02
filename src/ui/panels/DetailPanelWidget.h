@@ -777,7 +777,8 @@ private:
             config.display = samplerPanel;
             config.displayWidth = 130;
             config.sections = {
-                {"Sample", {0}},
+                {"Sample", {0, 10, 11}},
+                {"Loop",   {8, 9}},
                 {"Amp",    {1, 2, 3, 4}},
                 {"Filter", {5, 6}},
                 {"",       {7}},
@@ -785,11 +786,17 @@ private:
             m_displayUpdaters.push_back([samplerPanel, inst]() {
                 samplerPanel->setADSR(inst->getParameter(1), inst->getParameter(2),
                                       inst->getParameter(3), inst->getParameter(4));
+                samplerPanel->setLoopPoints(inst->getParameter(8), inst->getParameter(9));
+                samplerPanel->setReverse(inst->getParameter(10) > 0.5f);
                 auto* sampler = dynamic_cast<instruments::Sampler*>(inst);
-                if (sampler && sampler->hasSample())
-                    samplerPanel->setSampleData(sampler->sampleData(),
-                                                sampler->sampleFrames(),
-                                                sampler->sampleChannels());
+                if (sampler) {
+                    if (sampler->hasSample())
+                        samplerPanel->setSampleData(sampler->sampleData(),
+                                                    sampler->sampleFrames(),
+                                                    sampler->sampleChannels());
+                    samplerPanel->setPlayhead(sampler->playheadPosition(),
+                                              sampler->isPlaying());
+                }
             });
         } else {
             return false;

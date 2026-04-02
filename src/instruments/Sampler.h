@@ -18,6 +18,7 @@ public:
     enum Params {
         kRootNote = 0, kAttack, kDecay, kSustain, kRelease,
         kFilterCutoff, kFilterResonance, kVolume,
+        kLoopStart, kLoopEnd, kReverse, kSampleGain,
         kNumParams
     };
 
@@ -43,12 +44,33 @@ public:
         m_sampleFrames = numFrames;
         m_sampleChannels = numChannels;
         m_rootNote = rootNote;
+        m_loopStart = 0.0f;
+        m_loopEnd = 1.0f;
     }
 
     bool hasSample() const { return m_sampleFrames > 0; }
     const float* sampleData() const { return m_sampleData.data(); }
     int sampleFrames() const { return m_sampleFrames; }
     int sampleChannels() const { return m_sampleChannels; }
+
+    // Normalized playhead position (0..1) of the most recently triggered voice
+    float playheadPosition() const {
+        int best = -1;
+        int64_t bestOrder = -1;
+        for (int i = 0; i < kMaxVoices; ++i) {
+            if (m_voices[i].active && m_voices[i].startOrder > bestOrder) {
+                best = i; bestOrder = m_voices[i].startOrder;
+            }
+        }
+        if (best < 0 || m_sampleFrames <= 0) return 0.0f;
+        return std::clamp(static_cast<float>(m_voices[best].playPos / m_sampleFrames), 0.0f, 1.0f);
+    }
+
+    bool isPlaying() const {
+        for (int i = 0; i < kMaxVoices; ++i)
+            if (m_voices[i].active) return true;
+        return false;
+    }
 
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override {
@@ -64,17 +86,40 @@ public:
             }
         }
 
+        // Compute loop boundaries in frames
+        int loopStartFrame = static_cast<int>(m_loopStart * m_sampleFrames);
+        int loopEndFrame   = static_cast<int>(m_loopEnd * m_sampleFrames);
+        if (loopEndFrame <= loopStartFrame) loopEndFrame = m_sampleFrames;
+        bool looping = (m_loopStart > 0.001f || m_loopEnd < 0.999f);
+
         for (int v = 0; v < kMaxVoices; ++v) {
             auto& voice = m_voices[v];
             if (!voice.active) continue;
 
             for (int i = 0; i < numFrames; ++i) {
                 int pos0 = (int)voice.playPos;
-                if (pos0 >= m_sampleFrames) {
-                    voice.active = false; break;
+
+                // Handle loop/end boundaries
+                if (looping) {
+                    if (!m_reverse && pos0 >= loopEndFrame) {
+                        voice.playPos = loopStartFrame;
+                        pos0 = loopStartFrame;
+                    } else if (m_reverse && pos0 < loopStartFrame) {
+                        voice.playPos = loopEndFrame - 1;
+                        pos0 = loopEndFrame - 1;
+                    }
+                } else {
+                    if (!m_reverse && pos0 >= m_sampleFrames) {
+                        voice.active = false; break;
+                    } else if (m_reverse && pos0 < 0) {
+                        voice.active = false; break;
+                    }
                 }
-                int pos1 = std::min(pos0 + 1, m_sampleFrames - 1);
+
+                pos0 = std::clamp(pos0, 0, m_sampleFrames - 1);
+                int pos1 = std::clamp(pos0 + (m_reverse ? -1 : 1), 0, m_sampleFrames - 1);
                 float frac = (float)(voice.playPos - pos0);
+                if (frac < 0) frac = -frac;
 
                 // Linear interpolation
                 float sL = m_sampleData[pos0 * m_sampleChannels] * (1.0f - frac)
@@ -84,6 +129,10 @@ public:
                     sR = m_sampleData[pos0 * m_sampleChannels + 1] * (1.0f - frac)
                        + m_sampleData[pos1 * m_sampleChannels + 1] * frac;
                 }
+
+                // Apply sample gain
+                sL *= m_sampleGain;
+                sR *= m_sampleGain;
 
                 // SVF filter
                 float f = std::min(2.0f * m_filterCutoff / (float)m_sampleRate, 0.99f);
@@ -107,10 +156,10 @@ public:
                 if (numChannels > 1)
                     buffer[i * numChannels + 1] += sR * gain;
 
-                voice.playPos += voice.playSpeed;
+                voice.playPos += m_reverse ? -voice.playSpeed : voice.playSpeed;
             }
 
-            if (voice.env.isIdle() || voice.playPos >= m_sampleFrames)
+            if (voice.env.isIdle())
                 voice.active = false;
         }
     }
@@ -130,6 +179,10 @@ public:
             {"Filter Cut",  20, 20000, 20000, "Hz", false},
             {"Filter Reso", 0, 1, 0, "", false},
             {"Volume",      0, 1, 0.8f, "", false},
+            {"Loop Start",  0, 1, 0, "", false},
+            {"Loop End",    0, 1, 1, "", false},
+            {"Reverse",     0, 1, 0, "", true},
+            {"Sample Gain", 0, 2, 1, "x", false},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }
@@ -144,6 +197,10 @@ public:
             case kFilterCutoff:    return m_filterCutoff;
             case kFilterResonance: return m_filterResonance;
             case kVolume:          return m_volume;
+            case kLoopStart:       return m_loopStart;
+            case kLoopEnd:         return m_loopEnd;
+            case kReverse:         return m_reverse ? 1.0f : 0.0f;
+            case kSampleGain:      return m_sampleGain;
             default:               return 0.0f;
         }
     }
@@ -158,6 +215,10 @@ public:
             case kFilterCutoff:    m_filterCutoff = std::clamp(value, 20.0f, 20000.0f); break;
             case kFilterResonance: m_filterResonance = std::clamp(value, 0.0f, 1.0f); break;
             case kVolume:          m_volume = std::clamp(value, 0.0f, 1.0f); break;
+            case kLoopStart:       m_loopStart = std::clamp(value, 0.0f, m_loopEnd - 0.001f); break;
+            case kLoopEnd:         m_loopEnd = std::clamp(value, m_loopStart + 0.001f, 1.0f); break;
+            case kReverse:         m_reverse = value > 0.5f; break;
+            case kSampleGain:      m_sampleGain = std::clamp(value, 0.0f, 2.0f); break;
         }
     }
 
@@ -178,7 +239,11 @@ private:
         v.active = true;
         v.note = note; v.channel = ch;
         v.velocity = velocityToGain(vel16);
-        v.playPos = 0.0;
+        // Start from loop end if reversed, loop start otherwise
+        if (m_reverse)
+            v.playPos = static_cast<double>(m_loopEnd * m_sampleFrames) - 1.0;
+        else
+            v.playPos = static_cast<double>(m_loopStart * m_sampleFrames);
         v.playSpeed = std::pow(2.0, ((int)note - m_rootNote) / 12.0);
         v.startOrder = m_voiceCounter++;
         v.filterLow = v.filterBand = 0.0f;
@@ -218,6 +283,9 @@ private:
     float m_attack = 0.005f, m_decay = 0.1f, m_sustain = 1.0f, m_release = 0.1f;
     float m_filterCutoff = 20000.0f, m_filterResonance = 0.0f;
     float m_volume = 0.8f;
+    float m_loopStart = 0.0f, m_loopEnd = 1.0f;
+    bool  m_reverse = false;
+    float m_sampleGain = 1.0f;
 };
 
 } // namespace instruments
