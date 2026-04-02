@@ -1355,18 +1355,30 @@ void App::processEvents() {
             case SDL_EVENT_DROP_FILE: {
                 const char* file = event.drop.data;
                 if (file) {
-                    // Try to determine target track/scene from mouse position
+                    float dropX = event.drop.x;
+                    float dropY = event.drop.y;
+
+                    // Check if drop is over the detail panel (for Sampler waveform area)
+                    auto db = m_detailPanel->bounds();
+                    if (m_detailPanel->isOpen() && dropY >= db.y && dropY < db.y + db.h
+                        && dropX >= db.x && dropX < db.x + db.w) {
+                        // Drop on detail panel — load into Sampler if selected track has one
+                        loadSampleToSampler(file, m_selectedTrack);
+                        break;
+                    }
+
+                    // Try to determine target track/scene from drop position
                     auto sb = m_sessionPanel->bounds();
                     float headerY = sb.y + ui::Theme::kTrackHeaderHeight;
-                    float gridX = ui::Theme::kSceneLabelWidth;
+                    float gridX = sb.x + ui::Theme::kSceneLabelWidth;
                     int targetTrack = m_selectedTrack;
                     int targetScene = m_nextDropScene;
 
-                    if (m_lastMouseY >= headerY && m_lastMouseX >= gridX) {
-                        float contentMX = m_lastMouseX + m_sessionPanel->scrollX();
-                        float contentMY = m_lastMouseY + m_sessionPanel->scrollY();
-                        int t = static_cast<int>((contentMX - gridX) / ui::Theme::kTrackWidth);
-                        int s = static_cast<int>((contentMY - headerY) / ui::Theme::kClipSlotHeight);
+                    if (dropY >= headerY && dropX >= gridX) {
+                        float contentMX = (dropX - gridX) + m_sessionPanel->scrollX();
+                        float contentMY = (dropY - headerY) + m_sessionPanel->scrollY();
+                        int t = static_cast<int>(contentMX / ui::Theme::kTrackWidth);
+                        int s = static_cast<int>(contentMY / ui::Theme::kClipSlotHeight);
                         if (t >= 0 && t < m_project.numTracks()) targetTrack = t;
                         if (s >= 0 && s < m_project.numScenes()) targetScene = s;
                     }
