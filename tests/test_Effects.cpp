@@ -9,6 +9,7 @@
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
+#include "effects/TapeEmulation.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include <cmath>
@@ -619,4 +620,178 @@ TEST(SpectrumAnalyzer, Parameters) {
 
     spec.setParameter(SpectrumAnalyzer::kGain, 5.0f);
     EXPECT_FLOAT_EQ(spec.getParameter(SpectrumAnalyzer::kGain), 5.0f);
+}
+
+// ===========================================================================
+// TapeEmulation Tests
+// ===========================================================================
+
+TEST(TapeEmulation, Init) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(tape.parameterCount(), TapeEmulation::kParamCount);
+    EXPECT_STREQ(tape.name(), "Tape Emulation");
+    EXPECT_STREQ(tape.id(), "tape");
+}
+
+TEST(TapeEmulation, SaturationAddsHarmonics) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+    tape.setParameter(TapeEmulation::kSaturation, 0.9f);
+    tape.setParameter(TapeEmulation::kWow, 0.0f);
+    tape.setParameter(TapeEmulation::kFlutter, 0.0f);
+    tape.setParameter(TapeEmulation::kHiss, 0.0f);
+    tape.setParameter(TapeEmulation::kWetDry, 1.0f);
+
+    // Process two blocks to get past the delay line latency
+    const int frames = 1024;
+    std::vector<float> buf(frames * 2);
+    fillSine(buf.data(), frames, 2, 440.0f, 0.8f, kSampleRate);
+    tape.process(buf.data(), frames, 2);
+
+    // The output should have signal (not silent)
+    EXPECT_TRUE(hasSignal(buf.data() + 512, frames - 256, 2));
+}
+
+TEST(TapeEmulation, BypassPassesThrough) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+    tape.setBypassed(true);
+
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    auto orig = buf;
+    tape.process(buf.data(), kBlockSize, 2);
+
+    for (int i = 0; i < kBlockSize * 2; ++i)
+        EXPECT_FLOAT_EQ(buf[i], orig[i]);
+}
+
+TEST(TapeEmulation, WowModulatesPitch) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+    tape.setParameter(TapeEmulation::kSaturation, 0.0f);
+    tape.setParameter(TapeEmulation::kWow, 1.0f);
+    tape.setParameter(TapeEmulation::kFlutter, 0.0f);
+    tape.setParameter(TapeEmulation::kHiss, 0.0f);
+    tape.setParameter(TapeEmulation::kWetDry, 1.0f);
+
+    const int frames = 2048;
+    std::vector<float> buf(frames * 2);
+    fillSine(buf.data(), frames, 2, 440.0f, 0.5f, kSampleRate);
+    tape.process(buf.data(), frames, 2);
+
+    // With wow, output should differ from a clean sine (pitch modulation)
+    std::vector<float> clean(frames * 2);
+    fillSine(clean.data(), frames, 2, 440.0f, 0.5f, kSampleRate);
+
+    float diffSum = 0.0f;
+    // Check second half (past delay latency)
+    for (int i = frames; i < frames * 2; ++i)
+        diffSum += std::abs(buf[i] - clean[i]);
+    EXPECT_GT(diffSum, 0.01f);
+}
+
+TEST(TapeEmulation, HissAddsNoise) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+    tape.setParameter(TapeEmulation::kSaturation, 0.0f);
+    tape.setParameter(TapeEmulation::kWow, 0.0f);
+    tape.setParameter(TapeEmulation::kFlutter, 0.0f);
+    tape.setParameter(TapeEmulation::kHiss, 1.0f);
+    tape.setParameter(TapeEmulation::kWetDry, 1.0f);
+
+    // Process silence over several blocks to let filter warm up
+    const int frames = 2048;
+    std::vector<float> buf(frames * 2, 0.0f);
+    tape.process(buf.data(), frames, 2);
+
+    // Hiss is added after the delay line, so output should have signal
+    EXPECT_TRUE(hasSignal(buf.data(), frames, 2));
+}
+
+TEST(TapeEmulation, DryMixPassesOriginal) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+    tape.setParameter(TapeEmulation::kWetDry, 0.0f);
+
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    auto orig = buf;
+    tape.process(buf.data(), kBlockSize, 2);
+
+    for (int i = 0; i < kBlockSize * 2; ++i)
+        EXPECT_FLOAT_EQ(buf[i], orig[i]);
+}
+
+TEST(TapeEmulation, Parameters) {
+    TapeEmulation tape;
+    tape.init(kSampleRate, kBlockSize);
+
+    tape.setParameter(TapeEmulation::kSaturation, 0.7f);
+    EXPECT_FLOAT_EQ(tape.getParameter(TapeEmulation::kSaturation), 0.7f);
+
+    tape.setParameter(TapeEmulation::kTone, 4000.0f);
+    EXPECT_FLOAT_EQ(tape.getParameter(TapeEmulation::kTone), 4000.0f);
+
+    // Defaults
+    TapeEmulation tape2;
+    tape2.init(kSampleRate, kBlockSize);
+    EXPECT_FLOAT_EQ(tape2.getParameter(TapeEmulation::kSaturation),
+                    tape2.parameterInfo(TapeEmulation::kSaturation).defaultValue);
+}
+
+// ===========================================================================
+// EffectChain MoveEffect Tests
+// ===========================================================================
+
+TEST(EffectChain, MoveEffectForward) {
+    EffectChain chain;
+    chain.init(kSampleRate, kBlockSize);
+    auto d = std::make_unique<Delay>();
+    auto c = std::make_unique<Chorus>();
+    auto r = std::make_unique<Reverb>();
+    auto* dp = d.get(); auto* cp = c.get(); auto* rp = r.get();
+    chain.append(std::move(d));
+    chain.append(std::move(c));
+    chain.append(std::move(r));
+    EXPECT_EQ(chain.count(), 3);
+
+    // Move first to last: [D,C,R] -> [C,R,D]
+    chain.moveEffect(0, 2);
+    EXPECT_EQ(chain.effectAt(0), cp);
+    EXPECT_EQ(chain.effectAt(1), rp);
+    EXPECT_EQ(chain.effectAt(2), dp);
+}
+
+TEST(EffectChain, MoveEffectBackward) {
+    EffectChain chain;
+    chain.init(kSampleRate, kBlockSize);
+    auto d = std::make_unique<Delay>();
+    auto c = std::make_unique<Chorus>();
+    auto r = std::make_unique<Reverb>();
+    auto* dp = d.get(); auto* cp = c.get(); auto* rp = r.get();
+    chain.append(std::move(d));
+    chain.append(std::move(c));
+    chain.append(std::move(r));
+
+    // Move last to first: [D,C,R] -> [R,D,C]
+    chain.moveEffect(2, 0);
+    EXPECT_EQ(chain.effectAt(0), rp);
+    EXPECT_EQ(chain.effectAt(1), dp);
+    EXPECT_EQ(chain.effectAt(2), cp);
+}
+
+TEST(EffectChain, MoveEffectSamePos) {
+    EffectChain chain;
+    chain.init(kSampleRate, kBlockSize);
+    auto d = std::make_unique<Delay>();
+    auto c = std::make_unique<Chorus>();
+    auto* dp = d.get(); auto* cp = c.get();
+    chain.append(std::move(d));
+    chain.append(std::move(c));
+
+    chain.moveEffect(0, 0); // no-op
+    EXPECT_EQ(chain.effectAt(0), dp);
+    EXPECT_EQ(chain.effectAt(1), cp);
 }
