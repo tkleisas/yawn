@@ -5,6 +5,7 @@
 #include "instruments/Sampler.h"
 #include "instruments/DrumRack.h"
 #include "instruments/DrumSlop.h"
+#include "instruments/KarplusStrong.h"
 #include "instruments/InstrumentRack.h"
 #include "effects/Reverb.h"
 #include "effects/Delay.h"
@@ -359,6 +360,12 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::DrumSlop>());
+        markDirty();
+    }});
+    instrItems.push_back({"Karplus-Strong", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::KarplusStrong>());
         markDirty();
     }});
     instrItems.push_back({"Instrument Rack", [this, trackIndex]() {

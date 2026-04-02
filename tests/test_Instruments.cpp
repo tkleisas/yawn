@@ -7,6 +7,7 @@
 #include "instruments/InstrumentRack.h"
 #include "instruments/DrumRack.h"
 #include "instruments/DrumSlop.h"
+#include "instruments/KarplusStrong.h"
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -884,4 +885,139 @@ TEST(DrumSlop, PerPadParameterAPI) {
     // isPerVoice flag is set on per-pad params
     EXPECT_TRUE(ds.parameterInfo(DrumSlop::kPadVolume).isPerVoice);
     EXPECT_FALSE(ds.parameterInfo(DrumSlop::kVolume).isPerVoice);
+}
+
+// ========================= KarplusStrong =========================
+
+TEST(KarplusStrong, InitAndReset) {
+    KarplusStrong ks;
+    ks.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(ks.parameterCount(), KarplusStrong::kParamCount);
+    EXPECT_STREQ(ks.name(), "Karplus-Strong");
+    EXPECT_STREQ(ks.id(), "karplus");
+    ks.reset();
+}
+
+TEST(KarplusStrong, NoteOnProducesOutput) {
+    KarplusStrong ks;
+    ks.init(kSampleRate, kBlockSize);
+
+    // Process several blocks with note on to let the string ring
+    float buf[kBlockSize * kChannels];
+    auto noteOn = makeNoteOn(60, 100);
+    std::memset(buf, 0, sizeof(buf));
+    ks.process(buf, kBlockSize, kChannels, noteOn);
+
+    // Second block should have signal from the ringing string
+    float buf2[kBlockSize * kChannels];
+    std::memset(buf2, 0, sizeof(buf2));
+    ks.process(buf2, kBlockSize, kChannels, makeEmpty());
+
+    float r = rms(buf2, kBlockSize * kChannels);
+    EXPECT_GT(r, 1e-5f);
+}
+
+TEST(KarplusStrong, SilenceWhenNoNotes) {
+    KarplusStrong ks;
+    ks.init(kSampleRate, kBlockSize);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    ks.process(buf, kBlockSize, kChannels, makeEmpty());
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_NEAR(r, 0.0f, 1e-10f);
+}
+
+TEST(KarplusStrong, DifferentPitchesDiffer) {
+    KarplusStrong ks;
+    ks.init(kSampleRate, kBlockSize);
+
+    // Note C4 (60)
+    float buf1[kBlockSize * kChannels];
+    std::memset(buf1, 0, sizeof(buf1));
+    ks.process(buf1, kBlockSize, kChannels, makeNoteOn(60, 100));
+    std::memset(buf1, 0, sizeof(buf1));
+    ks.process(buf1, kBlockSize, kChannels, makeEmpty());
+
+    ks.reset();
+
+    // Note C5 (72)
+    float buf2[kBlockSize * kChannels];
+    std::memset(buf2, 0, sizeof(buf2));
+    ks.process(buf2, kBlockSize, kChannels, makeNoteOn(72, 100));
+    std::memset(buf2, 0, sizeof(buf2));
+    ks.process(buf2, kBlockSize, kChannels, makeEmpty());
+
+    // Outputs should differ (different frequencies)
+    float diffSum = 0.0f;
+    for (int i = 0; i < kBlockSize * kChannels; ++i)
+        diffSum += std::abs(buf1[i] - buf2[i]);
+    EXPECT_GT(diffSum, 0.01f);
+}
+
+TEST(KarplusStrong, NoteOffDecays) {
+    KarplusStrong ks;
+    ks.init(kSampleRate, kBlockSize);
+
+    // Note on
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    ks.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+    // Let it ring for a bit
+    for (int b = 0; b < 4; ++b) {
+        std::memset(buf, 0, sizeof(buf));
+        ks.process(buf, kBlockSize, kChannels, makeEmpty());
+    }
+    float rmsBeforeOff = rms(buf, kBlockSize * kChannels);
+
+    // Note off
+    std::memset(buf, 0, sizeof(buf));
+    ks.process(buf, kBlockSize, kChannels, makeNoteOff(60));
+
+    // Wait for release
+    for (int b = 0; b < 20; ++b) {
+        std::memset(buf, 0, sizeof(buf));
+        ks.process(buf, kBlockSize, kChannels, makeEmpty());
+    }
+    float rmsAfterRelease = rms(buf, kBlockSize * kChannels);
+
+    EXPECT_LT(rmsAfterRelease, rmsBeforeOff);
+}
+
+TEST(KarplusStrong, AllExcitersProduceOutput) {
+    for (int excType = 0; excType < 4; ++excType) {
+        KarplusStrong ks;
+        ks.init(kSampleRate, kBlockSize);
+        ks.setParameter(KarplusStrong::kExciter, static_cast<float>(excType));
+
+        float buf[kBlockSize * kChannels];
+        std::memset(buf, 0, sizeof(buf));
+        ks.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+        // Process another block
+        std::memset(buf, 0, sizeof(buf));
+        ks.process(buf, kBlockSize, kChannels, makeEmpty());
+
+        float r = rms(buf, kBlockSize * kChannels);
+        EXPECT_GT(r, 1e-6f) << "Exciter type " << excType << " produced silence";
+    }
+}
+
+TEST(KarplusStrong, ParameterGetSet) {
+    KarplusStrong ks;
+    ks.init(kSampleRate, kBlockSize);
+
+    ks.setParameter(KarplusStrong::kDamping, 0.6f);
+    EXPECT_FLOAT_EQ(ks.getParameter(KarplusStrong::kDamping), 0.6f);
+
+    ks.setParameter(KarplusStrong::kDecay, 0.95f);
+    EXPECT_FLOAT_EQ(ks.getParameter(KarplusStrong::kDecay), 0.95f);
+
+    // Defaults
+    KarplusStrong ks2;
+    ks2.init(kSampleRate, kBlockSize);
+    EXPECT_FLOAT_EQ(ks2.getParameter(KarplusStrong::kVolume),
+                    ks2.parameterInfo(KarplusStrong::kVolume).defaultValue);
 }
