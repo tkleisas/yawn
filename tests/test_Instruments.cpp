@@ -8,6 +8,7 @@
 #include "instruments/DrumRack.h"
 #include "instruments/DrumSlop.h"
 #include "instruments/KarplusStrong.h"
+#include "instruments/WavetableSynth.h"
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -1020,4 +1021,90 @@ TEST(KarplusStrong, ParameterGetSet) {
     ks2.init(kSampleRate, kBlockSize);
     EXPECT_FLOAT_EQ(ks2.getParameter(KarplusStrong::kVolume),
                     ks2.parameterInfo(KarplusStrong::kVolume).defaultValue);
+}
+
+// ========================= WavetableSynth =========================
+
+TEST(WavetableSynth, InitAndReset) {
+    WavetableSynth wt;
+    wt.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(wt.parameterCount(), WavetableSynth::kParamCount);
+    EXPECT_STREQ(wt.name(), "Wavetable Synth");
+    EXPECT_STREQ(wt.id(), "wavetable");
+    wt.reset();
+}
+
+TEST(WavetableSynth, NoteOnProducesOutput) {
+    WavetableSynth wt;
+    wt.init(kSampleRate, kBlockSize);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    wt.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_GT(r, 1e-5f);
+}
+
+TEST(WavetableSynth, SilenceWhenNoNotes) {
+    WavetableSynth wt;
+    wt.init(kSampleRate, kBlockSize);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    wt.process(buf, kBlockSize, kChannels, makeEmpty());
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_NEAR(r, 0.0f, 1e-10f);
+}
+
+TEST(WavetableSynth, AllTablesProduceOutput) {
+    for (int t = 0; t < WavetableSynth::kNumTables; ++t) {
+        WavetableSynth wt;
+        wt.init(kSampleRate, kBlockSize);
+        wt.setParameter(WavetableSynth::kTable, static_cast<float>(t));
+
+        float buf[kBlockSize * kChannels];
+        std::memset(buf, 0, sizeof(buf));
+        wt.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+        float r = rms(buf, kBlockSize * kChannels);
+        EXPECT_GT(r, 1e-6f) << "Table " << t << " produced silence";
+    }
+}
+
+TEST(WavetableSynth, PositionMorphsSound) {
+    WavetableSynth wt1, wt2;
+    wt1.init(kSampleRate, kBlockSize);
+    wt2.init(kSampleRate, kBlockSize);
+
+    wt1.setParameter(WavetableSynth::kPosition, 0.0f);
+    wt2.setParameter(WavetableSynth::kPosition, 1.0f);
+
+    float buf1[kBlockSize * kChannels], buf2[kBlockSize * kChannels];
+    std::memset(buf1, 0, sizeof(buf1));
+    std::memset(buf2, 0, sizeof(buf2));
+    wt1.process(buf1, kBlockSize, kChannels, makeNoteOn(60, 100));
+    wt2.process(buf2, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+    float diffSum = 0.0f;
+    for (int i = 0; i < kBlockSize * kChannels; ++i)
+        diffSum += std::abs(buf1[i] - buf2[i]);
+    EXPECT_GT(diffSum, 0.01f);
+}
+
+TEST(WavetableSynth, ParameterGetSet) {
+    WavetableSynth wt;
+    wt.init(kSampleRate, kBlockSize);
+
+    wt.setParameter(WavetableSynth::kPosition, 0.5f);
+    EXPECT_FLOAT_EQ(wt.getParameter(WavetableSynth::kPosition), 0.5f);
+
+    wt.setParameter(WavetableSynth::kFilterCutoff, 2000.0f);
+    EXPECT_FLOAT_EQ(wt.getParameter(WavetableSynth::kFilterCutoff), 2000.0f);
+
+    WavetableSynth wt2;
+    wt2.init(kSampleRate, kBlockSize);
+    EXPECT_FLOAT_EQ(wt2.getParameter(WavetableSynth::kVolume),
+                    wt2.parameterInfo(WavetableSynth::kVolume).defaultValue);
 }
