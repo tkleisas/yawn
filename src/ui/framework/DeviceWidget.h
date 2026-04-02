@@ -79,6 +79,7 @@ public:
         clearKnobs();
         delete m_visualizer;
         delete m_vizKnobGrid;
+        if (m_customPanel) { removeChild(m_customPanel); delete m_customPanel; }
     }
 
     // Non-copyable (owns heap-allocated children)
@@ -120,6 +121,18 @@ public:
             if (m_vizKnobGrid) { removeChild(m_vizKnobGrid); delete m_vizKnobGrid; m_vizKnobGrid = nullptr; }
         }
     }
+
+    // ─── Custom instrument display panel ────────────────────────────────
+
+    void setCustomPanel(Widget* panel, float height, float minWidth = 0) {
+        if (m_customPanel) { removeChild(m_customPanel); delete m_customPanel; }
+        m_customPanel = panel;
+        m_customPanelH = height;
+        m_customMinW = minWidth;
+        if (panel) addChild(panel);
+    }
+
+    Widget* customPanel() const { return m_customPanel; }
 
     // ─── State ──────────────────────────────────────────────────────────
 
@@ -176,6 +189,8 @@ public:
                    : static_cast<int>(std::ceil(static_cast<float>(paramCount)
                                                 / static_cast<float>(kMaxKnobRows)));
         float w = cols * (kKnobSize + kKnobSpacing) + 24.0f;
+        if (m_customPanel && m_customMinW > 0)
+            w = std::max(w, m_customMinW);
         return std::max(kMinExpandedW, w);
     }
 
@@ -209,6 +224,12 @@ public:
             if (m_vizKnobGrid)
                 m_vizKnobGrid->layout({x + 8, bodyY + vizH + 2, w - 16, 64}, ctx);
         } else {
+            if (m_customPanel) {
+                m_customPanel->layout({x + 4, bodyY + 2, w - 8, m_customPanelH}, ctx);
+                float used = m_customPanelH + 4;
+                bodyY += used;
+                bodyH -= used;
+            }
             m_knobGrid.layout({x + 8, bodyY + 4, w - 16, bodyH - 8}, ctx);
         }
     }
@@ -250,6 +271,7 @@ public:
             m_visualizer->paint(ctx);
             if (m_vizKnobGrid) m_vizKnobGrid->paint(ctx);
         } else {
+            if (m_customPanel) m_customPanel->paint(ctx);
             m_knobGrid.paint(ctx);
         }
 #endif
@@ -320,6 +342,10 @@ private:
     bool        m_isVisualizer = false;
     bool        m_expanded     = true;
     std::string m_deviceName;
+
+    Widget*     m_customPanel  = nullptr;  // owned, instrument display panel
+    float       m_customPanelH = 0;
+    float       m_customMinW   = 0;
 
     RemoveCallback                    m_onRemove;
     ParamChangeCallback               m_onParamChange;

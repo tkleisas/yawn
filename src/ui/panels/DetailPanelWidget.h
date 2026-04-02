@@ -10,6 +10,7 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/DeviceWidget.h"
+#include "ui/framework/InstrumentDisplayWidget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/WaveformWidget.h"
@@ -309,6 +310,7 @@ public:
         for (auto* dw : m_deviceWidgets) delete dw;
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
+        m_displayUpdaters.clear();
 
         std::vector<float> snapPoints;
         float xPos = 0;
@@ -353,6 +355,7 @@ public:
             dw->setExpanded(findPrevExpanded(static_cast<void*>(inst)));
             dw->setBypassed(inst->bypassed());
             configureDeviceWidget(dw, ref);
+            setupInstrumentDisplay(dw, inst);
 
             snapPoints.push_back(xPos);
             xPos += dw->preferredWidth() + kDeviceGap;
@@ -411,6 +414,7 @@ public:
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
         m_expandStates.clear();
+        m_displayUpdaters.clear();
         m_lastMidiChain = nullptr;
         m_lastInst      = nullptr;
         m_lastFxChain   = nullptr;
@@ -695,6 +699,8 @@ private:
             for (int p = 0; p < count; ++p)
                 m_deviceWidgets[i]->updateParamValue(p, ref.getParam(p));
         }
+        for (auto& upd : m_displayUpdaters)
+            if (upd) upd();
     }
 
     // ── Feed live visualizer data ──
@@ -706,6 +712,46 @@ private:
                 int size = ref.audioEffect->displaySize();
                 m_deviceWidgets[i]->setVisualizerData(data, size);
             }
+        }
+    }
+
+    // ── Create instrument-specific display panel ──
+    void setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst) {
+        if (!inst) return;
+        std::string nm = inst->name();
+
+        if (nm == "FM Synth") {
+            auto* w = new FMAlgorithmWidget();
+            dw->setCustomPanel(w, 60.0f);
+            m_displayUpdaters.push_back([w, inst]() {
+                w->setAlgorithm(static_cast<int>(inst->getParameter(0)));   // Algorithm
+                w->setFeedback(inst->getParameter(1));                      // Feedback
+                w->setOpLevels(inst->getParameter(2), inst->getParameter(6),  // Op1-4 Level
+                               inst->getParameter(10), inst->getParameter(14));
+            });
+        } else if (nm == "Subtractive Synth") {
+            auto* panel = new SubSynthDisplayPanel();
+            dw->setCustomPanel(panel, 50.0f);
+            m_displayUpdaters.push_back([panel, inst]() {
+                panel->updateFromParams(
+                    inst->getParameter(0),  inst->getParameter(1),   // Osc1 Wave, Level
+                    inst->getParameter(2),  inst->getParameter(3),   // Osc2 Wave, Level
+                    inst->getParameter(8),  inst->getParameter(9),   // Filter Cutoff, Reso
+                    inst->getParameter(10),                          // Filter Type
+                    inst->getParameter(12), inst->getParameter(13),  // Amp A, D
+                    inst->getParameter(14), inst->getParameter(15),  // Amp S, R
+                    inst->getParameter(16), inst->getParameter(17),  // Filt A, D
+                    inst->getParameter(18), inst->getParameter(19)); // Filt S, R
+            });
+        } else if (nm == "Sampler") {
+            auto* adsr = new ADSRDisplayWidget();
+            adsr->setLabel("AMP");
+            adsr->setColor(Color{80, 220, 100, 255});
+            dw->setCustomPanel(adsr, 50.0f);
+            m_displayUpdaters.push_back([adsr, inst]() {
+                adsr->setADSR(inst->getParameter(1), inst->getParameter(2),   // A, D
+                              inst->getParameter(3), inst->getParameter(4));   // S, R
+            });
         }
     }
 
@@ -740,6 +786,7 @@ private:
     std::vector<DeviceWidget*> m_deviceWidgets;  // owned
     std::vector<DeviceRef>     m_deviceRefs;     // parallel to m_deviceWidgets
     std::vector<ExpandState>   m_expandStates;
+    std::vector<std::function<void()>> m_displayUpdaters;  // instrument display updaters
 
     bool m_open         = false;
     bool m_panelFocused = false;
