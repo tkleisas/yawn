@@ -57,6 +57,7 @@ void FwButton::paint(UIContext& ctx) {
         float tw = ctx.font->textWidth(m_label, scale);
         float lh = ctx.font->lineHeight(scale);
         float tx = m_bounds.x + (m_bounds.w - tw) * 0.5f;
+        if (tx < m_bounds.x + 2.0f) tx = m_bounds.x + 2.0f;
         float ty = m_bounds.y + (m_bounds.h - lh) * 0.5f - lh * 0.15f;
         if (m_pressed) ty += 1.0f;
         Color tc = m_customTextColor ? m_textColor

@@ -304,7 +304,7 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     cx += warpW + gap;
 
     // Detect button
-    float detectW = 60.0f;
+    float detectW = 70.0f;
     m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, ctx);
     m_detectBtn.paint(ctx);
     cx += detectW + sectionGap;
