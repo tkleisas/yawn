@@ -68,6 +68,15 @@ public:
     bool hasSample() const { return m_sampleFrames > 0; }
     int sampleFrames() const { return m_sampleFrames; }
     int sampleChannels() const { return m_sampleChannels; }
+    const float* sampleData() const { return m_sampleData.empty() ? nullptr : m_sampleData.data(); }
+
+    // Grain position info for UI playhead
+    float scanPosition() const { return static_cast<float>(m_scanPos); }
+    float currentPosition() const { return m_params[kPosition]; }
+    bool isPlaying() const {
+        for (auto& v : m_voices) if (v.active) return true;
+        return false;
+    }
 
     int parameterCount() const override { return kParamCount; }
 

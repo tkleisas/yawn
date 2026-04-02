@@ -20,6 +20,9 @@
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
 #include "instruments/DrumSlop.h"
+#include "instruments/WavetableSynth.h"
+#include "instruments/GranularSynth.h"
+#include "instruments/Vocoder.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
 #include "midi/MidiEffect.h"
@@ -911,6 +914,96 @@ private:
 
                 for (int i = 0; i < instruments::DrumSlop::kNumPads; ++i)
                     dsPanel->setPadPlaying(i, ds->isPadPlaying(i));
+            });
+        } else if (nm == "Wavetable Synth") {
+            auto* wtPanel = new WavetableDisplayPanel();
+            config.display = wtPanel;
+            config.displayWidth = 130;
+            config.sections = {
+                {"Osc",      {0, 1, 14, 15, 16}},
+                {"Amp",      {5, 6, 7, 8}},
+                {"Filter",   {2, 3, 4}},
+                {"Filt Env", {9, 10, 11, 12}},
+                {"",         {13, 17}},
+            };
+            static const char* tableNames[] = {
+                "Basic", "PWM", "Formant", "Harmonic", "Digital"
+            };
+            m_displayUpdaters.push_back([wtPanel, inst]() {
+                auto* wt = dynamic_cast<instruments::WavetableSynth*>(inst);
+                if (!wt) return;
+                int table = wt->currentTable();
+                float pos = wt->getParameter(instruments::WavetableSynth::kPosition);
+                int numFrames = wt->frameCount(table);
+                if (numFrames > 0) {
+                    // Compute morphed waveform at current position
+                    static float morphBuf[instruments::WavetableSynth::kFrameSize];
+                    float framePos = pos * (numFrames - 1);
+                    int f0 = static_cast<int>(framePos);
+                    int f1 = std::min(f0 + 1, numFrames - 1);
+                    float frac = framePos - f0;
+                    const float* d0 = wt->frameData(table, f0);
+                    const float* d1 = wt->frameData(table, f1);
+                    if (d0 && d1) {
+                        for (int s = 0; s < instruments::WavetableSynth::kFrameSize; ++s)
+                            morphBuf[s] = d0[s] * (1.0f - frac) + d1[s] * frac;
+                        wtPanel->setWaveformData(morphBuf,
+                                                 instruments::WavetableSynth::kFrameSize);
+                    }
+                }
+                wtPanel->setPosition(pos);
+                if (table >= 0 && table < 5)
+                    wtPanel->setTableName(tableNames[table]);
+            });
+        } else if (nm == "Granular Synth") {
+            auto* grPanel = new GranularDisplayPanel();
+            config.display = grPanel;
+            config.displayWidth = 130;
+            config.sections = {
+                {"Grain",    {0, 1, 2, 3}},
+                {"Pitch",    {4, 5, 14}},
+                {"Shape",    {6, 7, 12, 13}},
+                {"Filter",   {8, 9}},
+                {"Env",      {10, 11}},
+                {"",         {15}},
+            };
+            m_displayUpdaters.push_back([grPanel, inst]() {
+                auto* gr = dynamic_cast<instruments::GranularSynth*>(inst);
+                if (!gr) return;
+                if (gr->hasSample())
+                    grPanel->setSampleData(gr->sampleData(), gr->sampleFrames(),
+                                           gr->sampleChannels());
+                grPanel->setPosition(gr->currentPosition());
+                grPanel->setScanPosition(gr->scanPosition());
+                grPanel->setPlaying(gr->isPlaying());
+                // Normalize grain size for display (100ms / total length)
+                float grainMs = gr->getParameter(instruments::GranularSynth::kGrainSize);
+                float totalMs = gr->sampleFrames() > 0
+                    ? 1000.0f * gr->sampleFrames() / 44100.0f : 1.0f;
+                grPanel->setGrainSize(grainMs / totalMs);
+            });
+        } else if (nm == "Vocoder") {
+            auto* vocPanel = new VocoderDisplayPanel();
+            config.display = vocPanel;
+            config.displayWidth = 130;
+            config.sections = {
+                {"Source",   {1, 2}},
+                {"Bands",    {0, 3, 6}},
+                {"Envelope", {4, 5}},
+                {"Mix",      {7, 8, 9}},
+                {"Amp",      {10, 11}},
+                {"",         {12, 13}},
+            };
+            m_displayUpdaters.push_back([vocPanel, inst]() {
+                auto* voc = dynamic_cast<instruments::Vocoder*>(inst);
+                if (!voc) return;
+                if (voc->hasModulatorSample())
+                    vocPanel->setModulatorData(voc->modulatorData(),
+                                               voc->modulatorFrames());
+                vocPanel->setPlayhead(voc->modulatorPlayhead());
+                vocPanel->setPlaying(voc->isPlaying());
+                vocPanel->setBandCount(
+                    static_cast<int>(voc->getParameter(instruments::Vocoder::kBands)));
             });
         } else {
             return false;

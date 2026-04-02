@@ -198,6 +198,19 @@ public:
         }
     }
 
+    // Wavetable data accessors for UI display
+    int currentTable() const { return std::clamp(static_cast<int>(m_params[kTable]), 0, kNumTables - 1); }
+    int frameCount(int table) const {
+        if (table < 0 || table >= kNumTables) return 0;
+        return m_tableFrameCounts[table];
+    }
+    int frameSize() const { return kFrameSize; }
+    const float* frameData(int table, int frame) const {
+        if (!m_tableData || table < 0 || table >= kNumTables) return nullptr;
+        if (frame < 0 || frame >= m_tableFrameCounts[table]) return nullptr;
+        return m_tableData->tables[table][frame];
+    }
+
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {

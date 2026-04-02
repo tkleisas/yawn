@@ -920,6 +920,78 @@ bool App::loadLoopToDrumSlop(const std::string& path, int trackIndex) {
     return true;
 }
 
+bool App::loadSampleToGranular(const std::string& path, int trackIndex) {
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* granular = dynamic_cast<instruments::GranularSynth*>(inst);
+    if (!granular) return false;
+
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    int frames = buffer->numFrames();
+    int channels = buffer->numChannels();
+    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
+    for (int ch = 0; ch < channels; ++ch) {
+        const float* src = buffer->channelData(ch);
+        for (int i = 0; i < frames; ++i)
+            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
+    }
+
+    granular->loadSample(interleaved.data(), frames, channels);
+
+    std::string name = path;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    LOG_INFO("File", "Loaded sample '%s' into Granular Synth on Track %d",
+        name.c_str(), trackIndex + 1);
+
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
+bool App::loadModulatorToVocoder(const std::string& path, int trackIndex) {
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* vocoder = dynamic_cast<instruments::Vocoder*>(inst);
+    if (!vocoder) return false;
+
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    int frames = buffer->numFrames();
+    int channels = buffer->numChannels();
+    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
+    for (int ch = 0; ch < channels; ++ch) {
+        const float* src = buffer->channelData(ch);
+        for (int i = 0; i < frames; ++i)
+            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
+    }
+
+    vocoder->loadModulatorSample(interleaved.data(), frames, channels);
+
+    std::string name = path;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    LOG_INFO("File", "Loaded modulator '%s' into Vocoder on Track %d",
+        name.c_str(), trackIndex + 1);
+
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
 void App::processEvents() {
     computeLayout();  // ensure widget bounds are current for hit-testing
 
@@ -1483,12 +1555,14 @@ void App::processEvents() {
                     float dropX = event.drop.x;
                     float dropY = event.drop.y;
 
-                    // Check if drop is over the detail panel (for Sampler/DrumSlop)
+                    // Check if drop is over the detail panel (for sample-based instruments)
                     auto db = m_detailPanel->bounds();
                     if (m_detailPanel->isOpen() && dropY >= db.y && dropY < db.y + db.h
                         && dropX >= db.x && dropX < db.x + db.w) {
                         if (!loadSampleToSampler(file, m_selectedTrack))
-                            loadLoopToDrumSlop(file, m_selectedTrack);
+                            if (!loadLoopToDrumSlop(file, m_selectedTrack))
+                                if (!loadSampleToGranular(file, m_selectedTrack))
+                                    loadModulatorToVocoder(file, m_selectedTrack);
                         break;
                     }
 
@@ -1508,11 +1582,15 @@ void App::processEvents() {
                         if (s >= 0 && s < m_project.numScenes()) targetScene = s;
                     }
 
-                    // If the target track has a Sampler or DrumSlop, load sample/loop
+                    // If the target track has a sample-based instrument, load sample
                     if (loadSampleToSampler(file, targetTrack)) {
                         // Sample loaded into Sampler — done
                     } else if (loadLoopToDrumSlop(file, targetTrack)) {
                         // Loop loaded into DrumSlop — done
+                    } else if (loadSampleToGranular(file, targetTrack)) {
+                        // Sample loaded into Granular Synth — done
+                    } else if (loadModulatorToVocoder(file, targetTrack)) {
+                        // Modulator loaded into Vocoder — done
                     } else {
                         loadClipToSlot(file, targetTrack, targetScene);
                         // Advance scene for next drop on same track

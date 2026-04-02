@@ -68,6 +68,16 @@ public:
     }
 
     bool hasModulatorSample() const { return m_modSampleFrames > 0; }
+    int modulatorFrames() const { return m_modSampleFrames; }
+    const float* modulatorData() const { return m_modSample.empty() ? nullptr : m_modSample.data(); }
+    float modulatorPlayhead() const {
+        if (m_modSampleFrames <= 0) return 0.0f;
+        return static_cast<float>(m_modPlayPos / m_modSampleFrames);
+    }
+    bool isPlaying() const {
+        for (auto& v : m_voices) if (v.active) return true;
+        return false;
+    }
 
     int parameterCount() const override { return kParamCount; }
 

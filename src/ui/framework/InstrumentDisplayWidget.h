@@ -957,6 +957,332 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// WavetableDisplayPanel — Shows the current wavetable frame waveform.
+// Updates dynamically as Table/Position parameters change.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class WavetableDisplayPanel : public Widget {
+public:
+    WavetableDisplayPanel() { setName("WavetableDisplay"); }
+
+    void setWaveformData(const float* data, int size) {
+        m_waveData = data;
+        m_waveSize = size;
+    }
+
+    void setPosition(float pos) { m_position = std::clamp(pos, 0.0f, 1.0f); }
+    void setTableName(const char* name) { m_tableName = name ? name : ""; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 80.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext&) override {
+        m_bounds = bounds;
+        m_waveRect = {bounds.x + 2, bounds.y + 12, bounds.w - 4, bounds.h - 14};
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        float lblScale = 7.0f / Theme::kFontSize;
+
+        // Background
+        r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                   Color{20, 20, 26, 255});
+        r.drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                          Color{50, 50, 60, 255});
+
+        // Label
+        f.drawText(r, m_tableName.empty() ? "WAVETABLE" : m_tableName.c_str(),
+                   m_bounds.x + 3, m_bounds.y + 1, lblScale, Theme::textDim);
+
+        float px = m_waveRect.x, py = m_waveRect.y;
+        float pw = m_waveRect.w, ph = m_waveRect.h;
+
+        if (m_waveData && m_waveSize > 0 && pw > 4 && ph > 4) {
+            float midY = py + ph * 0.5f;
+            float halfH = ph * 0.45f;
+
+            // Center line
+            r.drawRect(px, midY, pw, 1, Color{40, 40, 50, 100});
+
+            // Draw waveform as connected line segments
+            Color waveCol{100, 200, 255, 220};
+            int numPts = static_cast<int>(pw);
+            if (numPts < 2) numPts = 2;
+            for (int i = 0; i < numPts; ++i) {
+                float t = static_cast<float>(i) / (numPts - 1);
+                float sampleIdx = t * (m_waveSize - 1);
+                int idx0 = static_cast<int>(sampleIdx);
+                int idx1 = std::min(idx0 + 1, m_waveSize - 1);
+                float frac = sampleIdx - idx0;
+                float val = m_waveData[idx0] * (1.0f - frac) + m_waveData[idx1] * frac;
+                val = std::clamp(val, -1.0f, 1.0f);
+
+                float x = px + i;
+                float y = midY - val * halfH;
+                r.drawRect(x, y - 0.5f, 1.0f, 1.5f, waveCol);
+            }
+
+            // Position indicator bar at bottom
+            float posX = px + m_position * pw;
+            r.drawRect(posX - 0.5f, py + ph - 3, 2, 3, Color{255, 200, 50, 200});
+        } else {
+            const char* msg = "No Table";
+            float tw = f.textWidth(msg, lblScale);
+            float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
+            float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
+            f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
+        }
+#endif
+    }
+
+private:
+    Rect m_waveRect{};
+    const float* m_waveData = nullptr;
+    int m_waveSize = 0;
+    float m_position = 0.0f;
+    std::string m_tableName;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GranularDisplayPanel — Sample waveform display for Granular Synth.
+// Shows loaded sample waveform with grain position indicator and scan marker.
+// Displays "Drop Sample" placeholder when no sample is loaded.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class GranularDisplayPanel : public Widget {
+public:
+    GranularDisplayPanel() { setName("GranularDisplay"); }
+
+    void setSampleData(const float* data, int frames, int channels) {
+        m_sampleData = data;
+        m_sampleFrames = frames;
+        m_sampleChannels = channels;
+    }
+
+    void setPosition(float pos) { m_position = std::clamp(pos, 0.0f, 1.0f); }
+    void setScanPosition(float scan) { m_scanPos = scan - std::floor(scan); }
+    void setPlaying(bool playing) { m_playing = playing; }
+    void setGrainSize(float sizeNorm) { m_grainSizeNorm = std::clamp(sizeNorm, 0.0f, 1.0f); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 80.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext&) override {
+        m_bounds = bounds;
+        m_waveRect = {bounds.x + 2, bounds.y + 12, bounds.w - 4, bounds.h - 14};
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        float lblScale = 7.0f / Theme::kFontSize;
+
+        // Background
+        r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                   Color{20, 20, 26, 255});
+        r.drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                          Color{50, 50, 60, 255});
+
+        // Label
+        f.drawText(r, "GRAINS", m_bounds.x + 3, m_bounds.y + 1, lblScale, Theme::textDim);
+
+        float px = m_waveRect.x, py = m_waveRect.y;
+        float pw = m_waveRect.w, ph = m_waveRect.h;
+
+        if (m_sampleData && m_sampleFrames > 0 && pw > 4 && ph > 4) {
+            float midY = py + ph * 0.5f;
+            float halfH = ph * 0.5f;
+
+            // Draw waveform envelope (min/max)
+            int numBars = static_cast<int>(pw);
+            if (numBars < 1) numBars = 1;
+            Color waveCol{0, 180, 230, 180};
+            for (int i = 0; i < numBars; ++i) {
+                int startFrame = (i * m_sampleFrames) / numBars;
+                int endFrame = ((i + 1) * m_sampleFrames) / numBars;
+                float minVal = 0.0f, maxVal = 0.0f;
+                for (int s = startFrame; s < endFrame; ++s) {
+                    float v = m_sampleData[s * m_sampleChannels];
+                    if (v < minVal) minVal = v;
+                    if (v > maxVal) maxVal = v;
+                }
+                float top = midY - maxVal * halfH;
+                float bot = midY - minVal * halfH;
+                float barH = bot - top;
+                if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
+                r.drawRect(px + i, top, 1, barH, waveCol);
+            }
+
+            // Center line
+            r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 80});
+
+            // Grain region highlight (position ± grain size)
+            if (m_playing) {
+                float posX = px + m_position * pw;
+                float scanX = px + m_scanPos * pw;
+                float combinedPos = m_position + m_scanPos;
+                combinedPos -= std::floor(combinedPos);
+                float cpX = px + combinedPos * pw;
+                float grainW = m_grainSizeNorm * pw;
+                float regionStart = cpX - grainW * 0.5f;
+                float regionEnd = cpX + grainW * 0.5f;
+                if (regionStart < px) regionStart = px;
+                if (regionEnd > px + pw) regionEnd = px + pw;
+                r.drawRect(regionStart, py, regionEnd - regionStart, ph,
+                           Color{255, 150, 50, 40});
+
+                // Position playhead
+                r.drawRect(cpX - 0.5f, py, 2, ph, Color{255, 200, 50, 200});
+            }
+        } else {
+            const char* msg = "Drop Sample";
+            float tw = f.textWidth(msg, lblScale);
+            float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
+            float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
+            f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
+        }
+#endif
+    }
+
+private:
+    Rect m_waveRect{};
+    const float* m_sampleData = nullptr;
+    int m_sampleFrames = 0;
+    int m_sampleChannels = 1;
+    float m_position = 0.5f;
+    float m_scanPos = 0.0f;
+    bool m_playing = false;
+    float m_grainSizeNorm = 0.1f;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VocoderDisplayPanel — Modulator sample waveform display for Vocoder.
+// Shows loaded modulator waveform with playhead, or "Drop Modulator" text.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class VocoderDisplayPanel : public Widget {
+public:
+    VocoderDisplayPanel() { setName("VocoderDisplay"); }
+
+    void setModulatorData(const float* data, int frames) {
+        m_modData = data;
+        m_modFrames = frames;
+    }
+
+    void setPlayhead(float pos) { m_playhead = std::clamp(pos, 0.0f, 1.0f); }
+    void setPlaying(bool playing) { m_playing = playing; }
+    void setBandCount(int bands) { m_bandCount = std::clamp(bands, 4, 32); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 80.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext&) override {
+        m_bounds = bounds;
+        float bandH = 10.0f;
+        m_waveRect = {bounds.x + 2, bounds.y + 12,
+                      bounds.w - 4, bounds.h - 14 - bandH - 2};
+        m_bandRect = {bounds.x + 2, bounds.y + bounds.h - bandH - 2,
+                      bounds.w - 4, bandH};
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        float lblScale = 7.0f / Theme::kFontSize;
+
+        // Background
+        r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                   Color{20, 20, 26, 255});
+        r.drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                          Color{50, 50, 60, 255});
+
+        // Label
+        f.drawText(r, "MODULATOR", m_bounds.x + 3, m_bounds.y + 1,
+                   lblScale, Theme::textDim);
+
+        float px = m_waveRect.x, py = m_waveRect.y;
+        float pw = m_waveRect.w, ph = m_waveRect.h;
+
+        if (m_modData && m_modFrames > 0 && pw > 4 && ph > 4) {
+            float midY = py + ph * 0.5f;
+            float halfH = ph * 0.5f;
+
+            // Draw waveform envelope (min/max, mono)
+            int numBars = static_cast<int>(pw);
+            if (numBars < 1) numBars = 1;
+            Color waveCol{200, 120, 255, 200};
+            for (int i = 0; i < numBars; ++i) {
+                int startFrame = (i * m_modFrames) / numBars;
+                int endFrame = ((i + 1) * m_modFrames) / numBars;
+                float minVal = 0.0f, maxVal = 0.0f;
+                for (int s = startFrame; s < endFrame; ++s) {
+                    float v = m_modData[s];
+                    if (v < minVal) minVal = v;
+                    if (v > maxVal) maxVal = v;
+                }
+                float top = midY - maxVal * halfH;
+                float bot = midY - minVal * halfH;
+                float barH = bot - top;
+                if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
+                r.drawRect(px + i, top, 1, barH, waveCol);
+            }
+
+            // Center line
+            r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 80});
+
+            // Playhead
+            if (m_playing && m_playhead > 0.0f) {
+                float phX = px + m_playhead * pw;
+                if (phX >= px && phX <= px + pw)
+                    r.drawRect(phX, py, 1.5f, ph, Color{255, 255, 255, 200});
+            }
+        } else {
+            const char* msg = "Drop Modulator";
+            float tw = f.textWidth(msg, lblScale);
+            float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
+            float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
+            f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
+        }
+
+        // Band visualizer (small bar at bottom showing band count)
+        if (m_bandRect.w > 4 && m_bandRect.h > 2) {
+            float barW = m_bandRect.w / m_bandCount;
+            for (int b = 0; b < m_bandCount; ++b) {
+                float bx = m_bandRect.x + b * barW;
+                float t = static_cast<float>(b) / std::max(1, m_bandCount - 1);
+                uint8_t cr = static_cast<uint8_t>(80 + t * 150);
+                uint8_t cg = static_cast<uint8_t>(180 - t * 120);
+                r.drawRect(bx + 0.5f, m_bandRect.y, barW - 1, m_bandRect.h,
+                           Color{cr, cg, 220, 160});
+            }
+        }
+#endif
+    }
+
+private:
+    Rect m_waveRect{}, m_bandRect{};
+    const float* m_modData = nullptr;
+    int m_modFrames = 0;
+    float m_playhead = 0.0f;
+    bool m_playing = false;
+    int m_bandCount = 16;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CustomDeviceBody — Abstract base for custom instrument body layouts.
 // Replaces the flat knob grid in DeviceWidget when set.
 // ═══════════════════════════════════════════════════════════════════════════
