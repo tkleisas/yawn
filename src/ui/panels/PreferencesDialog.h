@@ -25,10 +25,15 @@ public:
         audio::QuantizeMode defaultRecordQuantize = audio::QuantizeMode::NextBar;
         std::vector<int> enabledMidiInputs;
         std::vector<int> enabledMidiOutputs;
+
+        // Metronome
+        float metronomeVolume = 0.7f;
+        int metronomeMode = 0;    // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
+        int countInBars = 0;      // 0, 1, 2, or 4
     };
 
     PreferencesDialog()
-        : Dialog("Preferences", 540, 420)
+        : Dialog("Preferences", 540, 460)
     {
         m_showClose = true;
         m_showOKCancel = true;
@@ -166,6 +171,24 @@ private:
                              float dropX, float dropW, float rh);
 #endif
 
+    // ─── Metronome Tab ─────────────────────────────────────────────────
+
+#ifdef YAWN_TEST_BUILD
+    void paintMetronomeTab(UIContext&, float, float, float, float,
+                           float, float) {}
+#else
+    void paintMetronomeTab(UIContext& ctx, float cx, float cy, float cw, float rh,
+                           float ts, float th);
+#endif
+
+#ifdef YAWN_TEST_BUILD
+    void handleMetronomeClick(float, float, float, float,
+                              float, float, float) {}
+#else
+    void handleMetronomeClick(float mx, float my, float cx, float cy,
+                              float dropX, float dropW, float rh);
+#endif
+
     // ─── Drawing Helpers ────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
@@ -180,24 +203,25 @@ private:
     void drawDropdown(Renderer2D&, Font&, float, float, float,
                       float, float, float,
                       const char*[], int, int,
-                      bool*) {}
+                      bool*, bool = false) {}
 #else
     void drawDropdown(Renderer2D& r, Font& f, float x, float y, float w,
                       float rh, float th, float ts,
                       const char* items[], int count, int selected,
-                      bool* isOpen);
+                      bool* isOpen, bool overlayPass = false);
 #endif
 
 #ifdef YAWN_TEST_BUILD
     void drawDeviceDropdown(Renderer2D&, Font&, float, float, float,
                             float, float, float,
                             const std::vector<audio::AudioDevice>&,
-                            int, bool, bool*) {}
+                            int, bool, bool*, bool = false) {}
 #else
     void drawDeviceDropdown(Renderer2D& r, Font& f, float x, float y, float w,
                             float rh, float th, float ts,
                             const std::vector<audio::AudioDevice>& devices,
-                            int selected, bool outputOnly, bool* isOpen);
+                            int selected, bool outputOnly, bool* isOpen,
+                            bool overlayPass = false);
 #endif
 
     bool handleDropdownClick(float mx, float my, float x, float y,
@@ -273,6 +297,9 @@ private:
     bool m_bufferSizeOpen = false;
     bool m_launchQOpen = false;
     bool m_recordQOpen = false;
+    bool m_metroModeOpen = false;
+    bool m_metroVolumeOpen = false;
+    bool m_countInOpen = false;
 };
 
 } // namespace fw

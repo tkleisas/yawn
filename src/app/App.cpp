@@ -92,6 +92,9 @@ void App::setupMenuBar() {
                     state.enabledMidiInputs.push_back(i);
             }
             state.enabledMidiOutputs = m_settings.enabledMidiOutputs;
+            state.metronomeVolume = m_settings.metronomeVolume;
+            state.metronomeMode = m_settings.metronomeMode;
+            state.countInBars = m_settings.countInBars;
             m_preferencesDialog->open(state, &m_audioEngine, &m_midiEngine);
         }},
     });
@@ -214,6 +217,16 @@ void App::buildWidgetTree() {
             m_settings.defaultRecordQuantize = static_cast<int>(s.defaultRecordQuantize);
             m_settings.enabledMidiInputs = s.enabledMidiInputs;
             m_settings.enabledMidiOutputs = s.enabledMidiOutputs;
+            m_settings.metronomeVolume = s.metronomeVolume;
+            m_settings.metronomeMode = s.metronomeMode;
+            m_settings.countInBars = s.countInBars;
+
+            // Apply metronome settings to audio engine
+            m_audioEngine.sendCommand(audio::MetronomeSetVolumeMsg{s.metronomeVolume});
+            m_audioEngine.sendCommand(audio::MetronomeSetModeMsg{s.metronomeMode});
+            m_audioEngine.sendCommand(audio::TransportSetCountInMsg{s.countInBars});
+            m_transportPanel->setCountInBars(s.countInBars);
+
             util::AppSettings::save(m_settings);
         }
     });
@@ -644,6 +657,12 @@ bool App::init() {
     for (int i : m_settings.enabledMidiOutputs)
         m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
+
+    // Apply metronome settings from saved preferences
+    m_audioEngine.sendCommand(audio::MetronomeSetVolumeMsg{m_settings.metronomeVolume});
+    m_audioEngine.sendCommand(audio::MetronomeSetModeMsg{m_settings.metronomeMode});
+    m_audioEngine.sendCommand(audio::TransportSetCountInMsg{m_settings.countInBars});
+    m_transportPanel->setCountInBars(m_settings.countInBars);
 
     // Sync project track properties to the audio engine
     syncTracksToEngine();
@@ -1608,6 +1627,7 @@ void App::update() {
                                      m_audioEngine.transport().bpm(),
                                      m_audioEngine.transport().numerator(),
                                      m_audioEngine.transport().denominator());
+    m_transportPanel->setSelectedScene(m_selectedScene);
 
     // Keep detail panel synced with selected track
     if (m_showDetailPanel) {

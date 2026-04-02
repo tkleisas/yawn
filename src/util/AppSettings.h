@@ -27,6 +27,11 @@ struct AppSettings {
     std::vector<int> enabledMidiInputs;
     std::vector<int> enabledMidiOutputs;
 
+    // Metronome
+    float metronomeVolume = 0.7f;   // 0.0–1.0
+    int metronomeMode = 0;          // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
+    int countInBars = 0;            // 0, 1, 2, or 4
+
     static std::filesystem::path settingsPath() {
 #ifdef _WIN32
         char appData[MAX_PATH];
@@ -62,6 +67,9 @@ struct AppSettings {
                 for (auto& v : j["enabledMidiOutputs"])
                     s.enabledMidiOutputs.push_back(v.get<int>());
             }
+            s.metronomeVolume = j.value("metronomeVolume", 0.7f);
+            s.metronomeMode = j.value("metronomeMode", 0);
+            s.countInBars = j.value("countInBars", 0);
         } catch (...) {
             LOG_WARN("App", "Failed to parse settings file");
         }
@@ -80,6 +88,9 @@ struct AppSettings {
             j["defaultRecordQuantize"] = s.defaultRecordQuantize;
             j["enabledMidiInputs"] = s.enabledMidiInputs;
             j["enabledMidiOutputs"] = s.enabledMidiOutputs;
+            j["metronomeVolume"] = s.metronomeVolume;
+            j["metronomeMode"] = s.metronomeMode;
+            j["countInBars"] = s.countInBars;
             std::ofstream out(path);
             if (out.is_open()) {
                 out << j.dump(2);

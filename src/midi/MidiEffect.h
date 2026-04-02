@@ -25,6 +25,7 @@ struct MidiEffectParameterInfo {
     float defaultValue  = 0.0f;
     const char* unit    = "";
     bool isBoolean      = false;
+    bool isPerVoice     = false;
 };
 
 // Abstract base class for all MIDI effects.

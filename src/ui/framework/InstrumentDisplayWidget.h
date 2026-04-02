@@ -781,7 +781,7 @@ public:
     void setOnPadClick(std::function<void(int)> cb) { m_onPadClick = std::move(cb); }
 
     Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, 120.0f});
+        return c.constrain({c.maxW, 160.0f});
     }
 
     void layout(const Rect& bounds, const UIContext& ctx) override {
@@ -800,7 +800,7 @@ public:
         // Check if click is in the pad grid
         if (mx >= m_gridRect.x && mx < m_gridRect.x + m_gridRect.w &&
             my >= m_gridRect.y && my < m_gridRect.y + m_gridRect.h) {
-            int cols = 8, rows = 2;
+            int cols = 4, rows = 4;
             float cellW = m_gridRect.w / cols;
             float cellH = m_gridRect.h / rows;
             int col = static_cast<int>((mx - m_gridRect.x) / cellW);
@@ -881,8 +881,8 @@ public:
             f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
         }
 
-        // ─── Pad grid (2 rows × 8 cols) ───
-        int cols = 8, rows = 2;
+        // ─── Pad grid (4 rows × 4 cols) ───
+        int cols = 4, rows = 4;
         float cellW = m_gridRect.w / cols;
         float cellH = m_gridRect.h / rows;
         float lblScale = 6.5f / Theme::kFontSize;
@@ -1060,6 +1060,17 @@ inline std::string shortenLabel(const std::string& name) {
     if (s == "Filter Cut")    return "Cut";
     if (s == "Filter Reso")   return "Reso";
     if (s == "Start Offset")  return "Offs";
+    // DrumSlop per-pad
+    if (s == "Pad Vol")       return "Vol";
+    if (s == "Pad Pan")       return "Pan";
+    if (s == "Pad Pitch")     return "Pitch";
+    if (s == "Pad Rev")       return "Rev";
+    if (s == "Pad Cutoff")    return "Cut";
+    if (s == "Pad Reso")      return "Reso";
+    if (s == "Pad Atk")       return "Atk";
+    if (s == "Pad Dec")       return "Dcy";
+    if (s == "Pad Sus")       return "Sus";
+    if (s == "Pad Rel")       return "Rel";
     return s;
 }
 

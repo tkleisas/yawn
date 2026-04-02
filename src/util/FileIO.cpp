@@ -3,19 +3,85 @@
 #include <sndfile.h>
 #include <vector>
 #include <cmath>
+#include <algorithm>
+#include <cctype>
+
+#define MINIMP3_IMPLEMENTATION
+#include "minimp3_ex.h"
 
 namespace yawn {
 namespace util {
+
+// Helper: case-insensitive extension check
+static bool hasExtension(const std::string& path, const std::string& ext) {
+    if (path.size() < ext.size()) return false;
+    std::string tail = path.substr(path.size() - ext.size());
+    std::transform(tail.begin(), tail.end(), tail.begin(),
+                   [](unsigned char c){ return (char)std::tolower(c); });
+    return tail == ext;
+}
+
+// Load MP3 via minimp3
+static std::shared_ptr<audio::AudioBuffer> loadMP3(
+    const std::string& path, AudioFileInfo* outInfo)
+{
+    mp3dec_t mp3d;
+    mp3dec_file_info_t info{};
+    if (mp3dec_load(&mp3d, path.c_str(), &info, nullptr, nullptr)) {
+        LOG_ERROR("File", "Failed to decode MP3 '%s'", path.c_str());
+        return nullptr;
+    }
+    if (info.samples == 0 || info.channels == 0) {
+        if (info.buffer) free(info.buffer);
+        LOG_ERROR("File", "Empty MP3 '%s'", path.c_str());
+        return nullptr;
+    }
+
+    int frames = static_cast<int>(info.samples / info.channels);
+    auto buffer = std::make_shared<audio::AudioBuffer>(info.channels, frames);
+
+    // minimp3 produces interleaved int16-range floats (actually mp3dec_f32)
+    // mp3dec_load with mp3dec_file_info_t gives interleaved int16 samples
+    // Convert interleaved int16 → non-interleaved float
+    for (int ch = 0; ch < info.channels; ++ch) {
+        float* dst = buffer->channelData(ch);
+        for (int i = 0; i < frames; ++i) {
+            dst[i] = info.buffer[i * info.channels + ch] / 32768.0f;
+        }
+    }
+
+    if (outInfo) {
+        outInfo->sampleRate = info.hz;
+        outInfo->channels = info.channels;
+        outInfo->frames = frames;
+        outInfo->format = "MP3";
+    }
+
+    LOG_INFO("File", "Loaded MP3 '%s': %d frames, %d ch, %d Hz",
+             path.c_str(), frames, info.channels, info.hz);
+
+    free(info.buffer);
+    return buffer;
+}
 
 std::shared_ptr<audio::AudioBuffer> loadAudioFile(
     const std::string& path,
     AudioFileInfo* outInfo)
 {
+    // Try MP3 path first for .mp3 files (libsndfile doesn't support MP3)
+    if (hasExtension(path, ".mp3")) {
+        return loadMP3(path, outInfo);
+    }
+
     SF_INFO sfInfo;
     sfInfo.format = 0;
 
     SNDFILE* file = sf_open(path.c_str(), SFM_READ, &sfInfo);
     if (!file) {
+        // Fallback: try MP3 decoder for unknown formats
+        auto mp3Result = loadMP3(path, outInfo);
+        if (mp3Result) return mp3Result;
+
         LOG_ERROR("File", "Failed to open audio file '%s': %s",
             path.c_str(), sf_strerror(nullptr));
         return nullptr;

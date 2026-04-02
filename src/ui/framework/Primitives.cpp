@@ -172,7 +172,9 @@ void FwKnob::paint(UIContext& ctx) {
     // Background arc
     renderArc(*ctx.renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
 
-    float norm = (m_value - m_min) / (m_max - m_min);
+    // Use raw (unsnapped) value for smooth arc during discrete knob drag
+    float displayVal = (m_dragging && m_step > 0) ? m_rawValue : m_value;
+    float norm = (displayVal - m_min) / (m_max - m_min);
     norm = detail::cclamp(norm, 0.0f, 1.0f);
 
     // Value arc — neon palette

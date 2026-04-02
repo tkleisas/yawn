@@ -115,6 +115,10 @@ struct MetronomeSetBeatsPerBarMsg {
     int beatsPerBar;
 };
 
+struct MetronomeSetModeMsg {
+    int mode; // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
+};
+
 // Send a MIDI message to a specific track's instrument
 struct SendMidiToTrackMsg {
     int trackIndex;
@@ -142,6 +146,7 @@ struct StopMidiClipMsg {
 // Recording
 struct TransportRecordMsg {
     bool arm;
+    int sceneIndex = 0;  // target scene for armed-track recording
 };
 
 struct TransportSetCountInMsg {
@@ -227,6 +232,7 @@ using AudioCommand = std::variant<
     MetronomeToggleMsg,
     MetronomeSetVolumeMsg,
     MetronomeSetBeatsPerBarMsg,
+    MetronomeSetModeMsg,
     SendMidiToTrackMsg,
     LaunchMidiClipMsg,
     StopMidiClipMsg,

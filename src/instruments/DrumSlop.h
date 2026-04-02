@@ -31,8 +31,14 @@ public:
     enum Params {
         kSliceCount = 0, kSliceMode, kOriginalBPM,
         kBaseNote, kSwing, kVolume,
+        kNumGlobalParams,
+        // Per-pad params (operate on selectedPad)
+        kPadVolume = kNumGlobalParams, kPadPan, kPadPitch, kPadReverse,
+        kPadFilterCutoff, kPadFilterReso,
+        kPadAttack, kPadDecay, kPadSustain, kPadRelease,
         kNumParams
     };
+    static constexpr int kNumPadParams = kNumParams - kNumGlobalParams;
 
     // ---------- per-pad data ----------
     struct Pad {
@@ -207,12 +213,24 @@ public:
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
         static const InstrumentParameterInfo p[kNumParams] = {
-            {"Slice Count", 2,  16, 8,   "",    false},
-            {"Slice Mode",  0,   2, 0,   "",    false},
-            {"Orig BPM",   30, 300, 120, "BPM", false},
-            {"Base Note",   0, 112, 36,  "",    false},
-            {"Swing",       0,   1, 0,   "",    false},
-            {"Volume",      0,   1, 0.8f,"",    false},
+            // Global
+            {"Slice Count", 2,  16, 8,       "",    false, false},
+            {"Slice Mode",  0,   2, 0,       "",    false, false},
+            {"Orig BPM",   30, 300, 120,     "BPM", false, false},
+            {"Base Note",   0, 112, 36,      "",    false, false},
+            {"Swing",       0,   1, 0,       "",    false, false},
+            {"Volume",      0,   1, 0.8f,    "",    false, false},
+            // Per-pad (isPerVoice = true)
+            {"Pad Vol",     0,     2,     1.0f,     "x",  false, true},
+            {"Pad Pan",    -1,     1,     0.0f,     "%",  false, true},
+            {"Pad Pitch", -24,    24,     0.0f,     "st", false, true},
+            {"Pad Rev",     0,     1,     0.0f,     "",  true,  true},
+            {"Pad Cutoff", 20, 20000, 20000.0f,     "Hz", false, true},
+            {"Pad Reso",    0,     1,     0.0f,     "",  false, true},
+            {"Pad Atk",     0.001f, 2.0f, 0.001f,  "s", false, true},
+            {"Pad Dec",     0.001f, 2.0f, 0.05f,   "s", false, true},
+            {"Pad Sus",     0,     1,     1.0f,     "",  false, true},
+            {"Pad Rel",     0.001f, 2.0f, 0.05f,   "s", false, true},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }
@@ -225,6 +243,17 @@ public:
             case kBaseNote:    return (float)m_baseNote;
             case kSwing:       return m_swing;
             case kVolume:      return m_volume;
+            // Per-pad (selected pad)
+            case kPadVolume:       return m_pads[m_selectedPad].volume;
+            case kPadPan:          return m_pads[m_selectedPad].pan;
+            case kPadPitch:        return m_pads[m_selectedPad].pitch;
+            case kPadReverse:      return m_pads[m_selectedPad].reverse ? 1.0f : 0.0f;
+            case kPadFilterCutoff: return m_pads[m_selectedPad].filterCutoff;
+            case kPadFilterReso:   return m_pads[m_selectedPad].filterReso;
+            case kPadAttack:       return m_pads[m_selectedPad].attack;
+            case kPadDecay:        return m_pads[m_selectedPad].decay;
+            case kPadSustain:      return m_pads[m_selectedPad].sustain;
+            case kPadRelease:      return m_pads[m_selectedPad].release;
             default:           return 0.0f;
         }
     }
@@ -251,6 +280,17 @@ public:
             case kVolume:
                 m_volume = std::clamp(value, 0.0f, 1.0f);
                 break;
+            // Per-pad (selected pad)
+            case kPadVolume:       setPadVolume(m_selectedPad, value); break;
+            case kPadPan:          setPadPan(m_selectedPad, value); break;
+            case kPadPitch:        setPadPitch(m_selectedPad, value); break;
+            case kPadReverse:      setPadReverse(m_selectedPad, value > 0.5f); break;
+            case kPadFilterCutoff: setPadFilterCutoff(m_selectedPad, value); break;
+            case kPadFilterReso:   setPadFilterReso(m_selectedPad, value); break;
+            case kPadAttack:       setPadAttack(m_selectedPad, value); break;
+            case kPadDecay:        setPadDecay(m_selectedPad, value); break;
+            case kPadSustain:      setPadSustain(m_selectedPad, value); break;
+            case kPadRelease:      setPadRelease(m_selectedPad, value); break;
         }
     }
 

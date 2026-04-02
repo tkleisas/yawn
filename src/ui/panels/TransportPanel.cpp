@@ -314,7 +314,7 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
             m_engine->sendCommand(audio::TransportSetCountInMsg{m_countInBars});
         } else {
             bool newState = !m_recording;
-            m_engine->sendCommand(audio::TransportRecordMsg{newState});
+            m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
         }
         return true;
     }

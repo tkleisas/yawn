@@ -54,6 +54,7 @@ set(YAWN_CORE_SOURCES
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
 target_include_directories(yawn_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${minimp3_SOURCE_DIR}
 )
 target_compile_definitions(yawn_core PUBLIC YAWN_CORE_BUILD)
 target_link_libraries(yawn_core PUBLIC

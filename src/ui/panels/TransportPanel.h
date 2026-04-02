@@ -97,6 +97,9 @@ public:
         m_countInProgress = progress;
     }
 
+    void setSelectedScene(int scene) { m_selectedScene = scene; }
+    void setCountInBars(int bars) { m_countInBars = bars; }
+
     bool isEditing() const {
         return m_bpmInput.isEditing() || m_tsNumInput.isEditing() || m_tsDenInput.isEditing();
     }
@@ -200,6 +203,7 @@ private:
 
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
+    int                 m_selectedScene = 0;
 
     bool   m_transportPlaying     = false;
     double m_transportBeats       = 0.0;

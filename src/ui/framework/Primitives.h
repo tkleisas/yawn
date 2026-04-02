@@ -280,7 +280,7 @@ public:
 
     FwKnob() = default;
 
-    void setValue(float v) { m_value = detail::cclamp(v, m_min, m_max); }
+    void setValue(float v) { m_value = detail::cclamp(v, m_min, m_max); m_rawValue = m_value; }
     float value() const { return m_value; }
     void setRange(float mn, float mx) { m_min = mn; m_max = mx; }
     void setDefault(float d) { m_default = d; }
@@ -338,6 +338,7 @@ public:
             }
             m_dragging = true;
             m_lastY = e.y;
+            m_rawValue = m_value;  // sync raw tracker on drag start
             captureMouse();
             return true;
         }
@@ -351,6 +352,10 @@ public:
     }
 
     bool onMouseUp(MouseEvent&) override {
+        if (m_dragging && m_step > 0) {
+            // Snap visual to final discrete value on release
+            m_rawValue = m_value;
+        }
         m_dragging = false;
         releaseMouse();
         return true;
@@ -362,11 +367,22 @@ public:
         m_lastY = e.y;
         float range = m_max - m_min;
         float delta = -dy * m_sensitivity * range / 120.0f;
-        float newVal = detail::cclamp(m_value + delta, m_min, m_max);
-        if (m_step > 0) newVal = std::round(newVal / m_step) * m_step;
-        if (newVal != m_value) {
-            m_value = newVal;
-            if (m_onChange) m_onChange(m_value);
+
+        if (m_step > 0) {
+            // Smooth drag: track raw position, snap value for parameter
+            m_rawValue = detail::cclamp(m_rawValue + delta, m_min, m_max);
+            float snapped = std::round(m_rawValue / m_step) * m_step;
+            snapped = detail::cclamp(snapped, m_min, m_max);
+            if (snapped != m_value) {
+                m_value = snapped;
+                if (m_onChange) m_onChange(m_value);
+            }
+        } else {
+            float newVal = detail::cclamp(m_value + delta, m_min, m_max);
+            if (newVal != m_value) {
+                m_value = newVal;
+                if (m_onChange) m_onChange(m_value);
+            }
         }
         return true;
     }
@@ -424,6 +440,7 @@ private:
 #endif
 
     float m_value = 0.0f;
+    float m_rawValue = 0.0f;  // unsnapped tracking value for smooth discrete drag
     float m_min = 0.0f, m_max = 1.0f;
     float m_default = 0.0f;
     float m_sensitivity = 1.0f;

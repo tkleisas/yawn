@@ -86,17 +86,22 @@ void MidiClipEngine::process(midi::MidiBuffer* trackMidiBuffers, int numFrames) 
         double bufStartBeat = state.playPositionBeats;
         double bufEndBeat = bufStartBeat + beatsPerBuffer;
 
+        double loopStart = clip->loopStartBeat();
+
         // Handle looping: may need to scan across loop boundary
         if (clip->loop() && bufEndBeat > clipLen) {
             // First segment: bufStartBeat .. clipLen
             scanAndEmit(trackMidiBuffers[t], clip, bufStartBeat, clipLen,
                         bufStartBeat, samplesPerBeat, numFrames);
-            // Second segment: 0 .. remainder
-            double remainder = bufEndBeat - clipLen;
-            scanAndEmit(trackMidiBuffers[t], clip, 0.0, remainder,
-                        bufStartBeat - clipLen, samplesPerBeat, numFrames);
+            // Second segment: wrap to loopStart (not 0)
+            double loopLen = clipLen - loopStart;
+            if (loopLen <= 0) loopLen = clipLen; // safety
+            double overshoot = bufEndBeat - clipLen;
+            scanAndEmit(trackMidiBuffers[t], clip, loopStart,
+                        loopStart + std::min(overshoot, loopLen),
+                        bufStartBeat - clipLen + loopStart, samplesPerBeat, numFrames);
 
-            state.playPositionBeats = std::fmod(bufEndBeat, clipLen);
+            state.playPositionBeats = loopStart + std::fmod(overshoot, loopLen);
         } else if (!clip->loop() && bufEndBeat > clipLen) {
             // Play to end then stop
             scanAndEmit(trackMidiBuffers[t], clip, bufStartBeat, clipLen,

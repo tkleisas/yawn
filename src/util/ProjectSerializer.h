@@ -40,7 +40,9 @@ template<typename T>
 inline json serializeParams(const T& obj) {
     json params = json::object();
     for (int i = 0; i < obj.parameterCount(); ++i) {
-        params[obj.parameterInfo(i).name] = obj.getParameter(i);
+        auto& info = obj.parameterInfo(i);
+        if (info.isPerVoice) continue;  // per-voice params serialized separately
+        params[info.name] = obj.getParameter(i);
     }
     return params;
 }
@@ -48,9 +50,10 @@ inline json serializeParams(const T& obj) {
 template<typename T>
 inline void deserializeParams(T& obj, const json& params) {
     for (int i = 0; i < obj.parameterCount(); ++i) {
-        const char* name = obj.parameterInfo(i).name;
-        if (params.contains(name)) {
-            obj.setParameter(i, params[name].get<float>());
+        auto& info = obj.parameterInfo(i);
+        if (info.isPerVoice) continue;  // per-voice params deserialized separately
+        if (params.contains(info.name)) {
+            obj.setParameter(i, params[info.name].get<float>());
         }
     }
 }

@@ -238,3 +238,38 @@ TEST_F(MidiClipEngineTest, NoteFrameOffsetIsReasonable) {
         }
     }
 }
+
+TEST_F(MidiClipEngineTest, LoopRespectsLoopStartBeat) {
+    // Clip: 4 beats, loopStart=2. Notes at beat 0 and beat 2.5.
+    // After first play-through reaches beat 4, it should wrap to beat 2 (not 0).
+    // So on subsequent loops, only the note at beat 2.5 should fire (not beat 0).
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    clip.setLoop(true);
+    clip.setLoopStartBeat(2.0);
+    clip.addNote({0.0, 0.25, 60, 0, 32000, 0, 0, 0, 0});  // intro-only note
+    clip.addNote({2.5, 0.25, 72, 0, 32000, 0, 0, 0, 0});  // loop-region note
+
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
+    m_engine.checkAndFirePending();
+    m_transport.play();
+
+    // At 120 BPM, 1 beat = 22050 samples. 4 beats = 88200 samples.
+    // Process enough to cover several loops.
+    int noteOn60 = 0, noteOn72 = 0;
+    for (int buf = 0; buf < 200; ++buf) {
+        m_buffers[0].clear();
+        m_engine.process(m_buffers, 4096);
+        m_transport.advance(4096);
+        for (int i = 0; i < m_buffers[0].count(); ++i) {
+            if (m_buffers[0][i].type == MidiMessage::Type::NoteOn) {
+                if (m_buffers[0][i].note == 60) noteOn60++;
+                if (m_buffers[0][i].note == 72) noteOn72++;
+            }
+        }
+    }
+    // Note 60 at beat 0 should fire exactly once (first play-through only)
+    EXPECT_EQ(noteOn60, 1);
+    // Note 72 at beat 2.5 should fire many times (once per loop)
+    EXPECT_GE(noteOn72, 10);
+}

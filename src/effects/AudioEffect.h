@@ -16,6 +16,7 @@ struct ParameterInfo {
     float defaultValue;
     const char* unit;       // "dB", "ms", "Hz", "%", ""
     bool isBoolean;         // If true, 0.0 = off, 1.0 = on
+    bool isPerVoice = false;
 };
 
 class AudioEffect {

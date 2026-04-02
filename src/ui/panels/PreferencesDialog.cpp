@@ -41,9 +41,9 @@ void PreferencesDialog::paint(UIContext& ctx) {
 
     float tabY = m_dy + kTitleBarHeight;
     float tabH = 28.0f;
-    float tabW = dw / 3.0f;
-    const char* tabNames[] = {"Audio", "MIDI", "Defaults"};
-    for (int i = 0; i < 3; ++i) {
+    float tabW = dw / 4.0f;
+    const char* tabNames[] = {"Audio", "MIDI", "Defaults", "Metronome"};
+    for (int i = 0; i < 4; ++i) {
         Color bg = (i == m_tab) ? Color{65, 65, 75, 255} : Color{50, 50, 55, 255};
         r.drawRect(m_dx + i * tabW, tabY, tabW, tabH, bg);
         r.drawRectOutline(m_dx + i * tabW, tabY, tabW, tabH, Color{70, 70, 80, 255});
@@ -61,7 +61,8 @@ void PreferencesDialog::paint(UIContext& ctx) {
 
     if (m_tab == 0) paintAudioTab(ctx, contentX, contentY, contentW, rowH, textScale, textH);
     else if (m_tab == 1) paintMidiTab(ctx, contentX, contentY, contentW, rowH, textScale, textH);
-    else paintDefaultsTab(ctx, contentX, contentY, contentW, rowH, textScale, textH);
+    else if (m_tab == 2) paintDefaultsTab(ctx, contentX, contentY, contentW, rowH, textScale, textH);
+    else paintMetronomeTab(ctx, contentX, contentY, contentW, rowH, textScale, textH);
 
     float footerY = m_dy + dh - kFooterHeight;
     r.drawRect(m_dx, footerY, dw, kFooterHeight, Color{50, 50, 55, 255});
@@ -111,10 +112,10 @@ bool PreferencesDialog::onMouseDown(MouseEvent& e) {
 
     float tabY = m_dy + kTitleBarHeight;
     float tabH = 28.0f;
-    float tabW = m_preferredW / 3.0f;
+    float tabW = m_preferredW / 4.0f;
     if (my >= tabY && my < tabY + tabH) {
         int newTab = static_cast<int>((mx - m_dx) / tabW);
-        if (newTab >= 0 && newTab < 3) m_tab = newTab;
+        if (newTab >= 0 && newTab < 4) m_tab = newTab;
         e.consume();
         return true;
     }
@@ -130,8 +131,10 @@ bool PreferencesDialog::onMouseDown(MouseEvent& e) {
         handleAudioClick(mx, my, contentX, contentY, dropX, dropW, rowH);
     } else if (m_tab == 1) {
         handleMidiClick(mx, my, contentX, contentY, contentW, rowH);
-    } else {
+    } else if (m_tab == 2) {
         handleDefaultsClick(mx, my, contentX, contentY, dropX, dropW, rowH);
+    } else {
+        handleMetronomeClick(mx, my, contentX, contentY, dropX, dropW, rowH);
     }
 
     e.consume();
@@ -145,42 +148,42 @@ void PreferencesDialog::paintAudioTab(UIContext& ctx, float cx, float cy, float 
     float dropW = std::min(cw * 0.5f, 220.0f);
     float dropX = cx + cw - dropW;
 
-    drawLabel(r, f, "Audio Output Device", cx, cy, ts);
-    drawDeviceDropdown(r, f, dropX, cy, dropW, rh, th, ts,
-                       m_outputDevices, m_state.selectedOutputDevice,
-                       true, &m_audioOutputOpen);
-    cy += rh + 6;
+    const char* rates[] = {"44100", "48000", "96000", "192000"};
+    double rateVals[] = {44100.0, 48000.0, 96000.0, 192000.0};
+    int rateSel = 0;
+    for (int i = 0; i < 4; ++i)
+        if (std::abs(m_state.sampleRate - rateVals[i]) < 1.0) rateSel = i;
 
-    drawLabel(r, f, "Audio Input Device", cx, cy, ts);
-    drawDeviceDropdown(r, f, dropX, cy, dropW, rh, th, ts,
-                       m_outputDevices, m_state.selectedInputDevice,
-                       false, &m_audioInputOpen);
-    cy += rh + 6;
+    const char* sizes[] = {"64", "128", "256", "512", "1024", "2048"};
+    int sizeVals[] = {64, 128, 256, 512, 1024, 2048};
+    int sizeSel = 2;
+    for (int i = 0; i < 6; ++i)
+        if (m_state.bufferSize == sizeVals[i]) sizeSel = i;
 
-    drawLabel(r, f, "Sample Rate", cx, cy, ts);
-    {
-        const char* rates[] = {"44100", "48000", "96000", "192000"};
-        int sel = 0;
-        double rateVals[] = {44100.0, 48000.0, 96000.0, 192000.0};
-        for (int i = 0; i < 4; ++i) {
-            if (std::abs(m_state.sampleRate - rateVals[i]) < 1.0) sel = i;
-        }
-        drawDropdown(r, f, dropX, cy, dropW, rh, th, ts,
-                     rates, 4, sel, &m_sampleRateOpen);
-    }
-    cy += rh + 6;
+    float y0 = cy, y1 = cy + rh + 6, y2 = cy + 2 * (rh + 6), y3 = cy + 3 * (rh + 6);
 
-    drawLabel(r, f, "Buffer Size", cx, cy, ts);
-    {
-        const char* sizes[] = {"64", "128", "256", "512", "1024", "2048"};
-        int sizeVals[] = {64, 128, 256, 512, 1024, 2048};
-        int sel = 2;
-        for (int i = 0; i < 6; ++i) {
-            if (m_state.bufferSize == sizeVals[i]) sel = i;
-        }
-        drawDropdown(r, f, dropX, cy, dropW, rh, th, ts,
-                     sizes, 6, sel, &m_bufferSizeOpen);
-    }
+    // Pass 1: buttons
+    drawLabel(r, f, "Audio Output Device", cx, y0, ts);
+    drawDeviceDropdown(r, f, dropX, y0, dropW, rh, th, ts,
+                       m_outputDevices, m_state.selectedOutputDevice, true, &m_audioOutputOpen, false);
+
+    drawLabel(r, f, "Audio Input Device", cx, y1, ts);
+    drawDeviceDropdown(r, f, dropX, y1, dropW, rh, th, ts,
+                       m_outputDevices, m_state.selectedInputDevice, false, &m_audioInputOpen, false);
+
+    drawLabel(r, f, "Sample Rate", cx, y2, ts);
+    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, rates, 4, rateSel, &m_sampleRateOpen, false);
+
+    drawLabel(r, f, "Buffer Size", cx, y3, ts);
+    drawDropdown(r, f, dropX, y3, dropW, rh, th, ts, sizes, 6, sizeSel, &m_bufferSizeOpen, false);
+
+    // Pass 2: popups
+    drawDeviceDropdown(r, f, dropX, y0, dropW, rh, th, ts,
+                       m_outputDevices, m_state.selectedOutputDevice, true, &m_audioOutputOpen, true);
+    drawDeviceDropdown(r, f, dropX, y1, dropW, rh, th, ts,
+                       m_outputDevices, m_state.selectedInputDevice, false, &m_audioInputOpen, true);
+    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, rates, 4, rateSel, &m_sampleRateOpen, true);
+    drawDropdown(r, f, dropX, y3, dropW, rh, th, ts, sizes, 6, sizeSel, &m_bufferSizeOpen, true);
 }
 
 void PreferencesDialog::handleAudioClick(float mx, float my, float cx, float cy,
@@ -313,24 +316,26 @@ void PreferencesDialog::paintDefaultsTab(UIContext& ctx, float cx, float cy, flo
     float dropW = std::min(cw * 0.5f, 220.0f);
     float dropX = cx + cw - dropW;
 
-    drawLabel(r, f, "Default Launch Quantize", cx, cy, ts);
-    {
-        const char* modes[] = {"None", "Beat", "Bar"};
-        int sel = static_cast<int>(m_state.defaultLaunchQuantize);
-        if (sel < 0 || sel > 2) sel = 2;
-        drawDropdown(r, f, dropX, cy, dropW, rh, th, ts, modes, 3, sel,
-                     &m_launchQOpen);
-    }
-    cy += rh + 6;
+    const char* launchModes[] = {"None", "Beat", "Bar"};
+    int launchSel = static_cast<int>(m_state.defaultLaunchQuantize);
+    if (launchSel < 0 || launchSel > 2) launchSel = 2;
 
-    drawLabel(r, f, "Default Record Quantize", cx, cy, ts);
-    {
-        const char* modes[] = {"None", "Beat", "Bar"};
-        int sel = static_cast<int>(m_state.defaultRecordQuantize);
-        if (sel < 0 || sel > 2) sel = 2;
-        drawDropdown(r, f, dropX, cy, dropW, rh, th, ts, modes, 3, sel,
-                     &m_recordQOpen);
-    }
+    const char* recModes[] = {"None", "Beat", "Bar"};
+    int recSel = static_cast<int>(m_state.defaultRecordQuantize);
+    if (recSel < 0 || recSel > 2) recSel = 2;
+
+    float y0 = cy, y1 = cy + rh + 6;
+
+    // Pass 1: buttons
+    drawLabel(r, f, "Default Launch Quantize", cx, y0, ts);
+    drawDropdown(r, f, dropX, y0, dropW, rh, th, ts, launchModes, 3, launchSel, &m_launchQOpen, false);
+
+    drawLabel(r, f, "Default Record Quantize", cx, y1, ts);
+    drawDropdown(r, f, dropX, y1, dropW, rh, th, ts, recModes, 3, recSel, &m_recordQOpen, false);
+
+    // Pass 2: popups
+    drawDropdown(r, f, dropX, y0, dropW, rh, th, ts, launchModes, 3, launchSel, &m_launchQOpen, true);
+    drawDropdown(r, f, dropX, y1, dropW, rh, th, ts, recModes, 3, recSel, &m_recordQOpen, true);
 }
 
 void PreferencesDialog::handleDefaultsClick(float mx, float my, float cx, float cy,
@@ -368,29 +373,61 @@ void PreferencesDialog::drawLabel(Renderer2D& r, Font& f, const char* text,
 void PreferencesDialog::drawDropdown(Renderer2D& r, Font& f, float x, float y, float w,
                   float rh, float th, float ts,
                   const char* items[], int count, int selected,
-                  bool* isOpen) {
-    Color bg = *isOpen ? Color{65, 65, 75, 255} : Color{55, 55, 60, 255};
+                   bool* isOpen, bool overlayPass) {
+    if (!overlayPass) {
+    Color bg = *isOpen ? Color{55, 55, 60, 255} : Color{42, 42, 46, 255};
+    Color border = *isOpen ? Color{100, 160, 220, 255} : Color{70, 70, 75, 255};
     r.drawRect(x, y, w, 24.0f, bg);
-    r.drawRectOutline(x, y, w, 24.0f, Color{80, 80, 90, 255});
+    r.drawRectOutline(x, y, w, 24.0f, border);
+
+    float arrowZone = 14.0f;
     if (selected >= 0 && selected < count) {
+        r.pushClip(x + 1, y, w - 6 - arrowZone + 5, 24.0f);
         f.drawText(r, items[selected], x + 8,
                    y + (24.0f - th) * 0.5f, ts, Theme::textPrimary);
+        r.popClip();
     }
-    f.drawText(r, "v", x + w - 16, y + (24.0f - th) * 0.5f, ts, Theme::textDim);
 
+    // Triangle arrow
+    float triSize = 4.0f;
+    float triCx = x + w - arrowZone * 0.5f;
+    float triCy = y + 12.0f;
+    if (*isOpen) {
+        r.drawTriangle(triCx, triCy - triSize * 0.5f,
+                       triCx - triSize, triCy + triSize * 0.5f,
+                       triCx + triSize, triCy + triSize * 0.5f,
+                       Theme::textSecondary);
+    } else {
+        r.drawTriangle(triCx - triSize, triCy - triSize * 0.5f,
+                       triCx + triSize, triCy - triSize * 0.5f,
+                       triCx, triCy + triSize * 0.5f,
+                       Theme::textSecondary);
+    }
+
+    return;
+    }
+
+    // Overlay pass: draw popup
     if (*isOpen) {
         float popupY = y + 24.0f;
         float popupH = count * 22.0f;
-        r.drawRect(x, popupY, w, popupH, Color{50, 50, 58, 255});
-        r.drawRectOutline(x, popupY, w, popupH, Color{80, 80, 90, 255});
+        r.drawRect(x, popupY, w, popupH, Color{30, 30, 34, 255});
+        r.drawRectOutline(x, popupY, w, popupH, Color{90, 140, 200, 255});
         for (int i = 0; i < count; ++i) {
             float iy = popupY + i * 22.0f;
-            if (i == selected) {
-                r.drawRect(x + 2, iy, w - 4, 22.0f, Color{65, 100, 160, 255});
-            } else if (m_popupHover == i) {
-                r.drawRect(x + 2, iy, w - 4, 22.0f, Color{60, 60, 70, 255});
+            Color itemBg, textCol;
+            if (m_popupHover == i) {
+                itemBg = Color{200, 200, 210, 255};
+                textCol = Color{15, 15, 20, 255};
+            } else if (i == selected) {
+                itemBg = Color{70, 130, 200, 255};
+                textCol = Color{255, 255, 255, 255};
+            } else {
+                itemBg = Color{30, 30, 34, 255};
+                textCol = Theme::textPrimary;
             }
-            f.drawText(r, items[i], x + 8, iy + (22.0f - th) * 0.5f, ts, Theme::textPrimary);
+            r.drawRect(x + 1, iy, w - 2, 22.0f, itemBg);
+            f.drawText(r, items[i], x + 8, iy + (22.0f - th) * 0.5f, ts, textCol);
         }
     }
 }
@@ -398,16 +435,20 @@ void PreferencesDialog::drawDropdown(Renderer2D& r, Font& f, float x, float y, f
 void PreferencesDialog::drawDeviceDropdown(Renderer2D& r, Font& f, float x, float y, float w,
                         float rh, float th, float ts,
                         const std::vector<audio::AudioDevice>& devices,
-                        int selected, bool outputOnly, bool* isOpen) {
-    Color bg = *isOpen ? Color{65, 65, 75, 255} : Color{55, 55, 60, 255};
+                        int selected, bool outputOnly, bool* isOpen,
+                        bool overlayPass) {
+    if (!overlayPass) {
+    Color bg = *isOpen ? Color{55, 55, 60, 255} : Color{42, 42, 46, 255};
+    Color border = *isOpen ? Color{100, 160, 220, 255} : Color{70, 70, 75, 255};
     r.drawRect(x, y, w, 24.0f, bg);
-    r.drawRectOutline(x, y, w, 24.0f, Color{80, 80, 90, 255});
+    r.drawRectOutline(x, y, w, 24.0f, border);
 
+    float arrowZone = 14.0f;
+    r.pushClip(x + 1, y, w - 6 - arrowZone + 5, 24.0f);
     if (selected >= 0) {
         for (auto& d : devices) {
             if (d.id == selected) {
-                const char* name = d.name.c_str();
-                f.drawText(r, name, x + 8, y + (24.0f - th) * 0.5f, ts, Theme::textPrimary);
+                f.drawText(r, d.name.c_str(), x + 8, y + (24.0f - th) * 0.5f, ts, Theme::textPrimary);
                 break;
             }
         }
@@ -415,8 +456,28 @@ void PreferencesDialog::drawDeviceDropdown(Renderer2D& r, Font& f, float x, floa
         const char* def = outputOnly ? "Default Output" : "Default Input";
         f.drawText(r, def, x + 8, y + (24.0f - th) * 0.5f, ts, Theme::textSecondary);
     }
-    f.drawText(r, "v", x + w - 16, y + (24.0f - th) * 0.5f, ts, Theme::textDim);
+    r.popClip();
 
+    // Triangle arrow
+    float triSize = 4.0f;
+    float triCx = x + w - arrowZone * 0.5f;
+    float triCy = y + 12.0f;
+    if (*isOpen) {
+        r.drawTriangle(triCx, triCy - triSize * 0.5f,
+                       triCx - triSize, triCy + triSize * 0.5f,
+                       triCx + triSize, triCy + triSize * 0.5f,
+                       Theme::textSecondary);
+    } else {
+        r.drawTriangle(triCx - triSize, triCy - triSize * 0.5f,
+                       triCx + triSize, triCy - triSize * 0.5f,
+                       triCx, triCy + triSize * 0.5f,
+                       Theme::textSecondary);
+    }
+
+    return;
+    }
+
+    // Overlay pass: draw popup
     if (*isOpen) {
         int visibleCount = 0;
         for (auto& d : devices) {
@@ -425,21 +486,103 @@ void PreferencesDialog::drawDeviceDropdown(Renderer2D& r, Font& f, float x, floa
         }
         float popupY = y + 24.0f;
         float popupH = visibleCount * 22.0f;
-        r.drawRect(x, popupY, w, popupH, Color{50, 50, 58, 255});
-        r.drawRectOutline(x, popupY, w, popupH, Color{80, 80, 90, 255});
+        r.drawRect(x, popupY, w, popupH, Color{30, 30, 34, 255});
+        r.drawRectOutline(x, popupY, w, popupH, Color{90, 140, 200, 255});
         int idx = 0;
         for (auto& d : devices) {
             if (outputOnly && d.maxOutputChannels == 0) continue;
             if (!outputOnly && d.maxInputChannels == 0) continue;
             float iy = popupY + idx * 22.0f;
-            if (d.id == selected) {
-                r.drawRect(x + 2, iy, w - 4, 22.0f, Color{65, 100, 160, 255});
-            } else if (m_popupHover == idx) {
-                r.drawRect(x + 2, iy, w - 4, 22.0f, Color{60, 60, 70, 255});
+            Color itemBg, textCol;
+            if (m_popupHover == idx) {
+                itemBg = Color{200, 200, 210, 255};
+                textCol = Color{15, 15, 20, 255};
+            } else if (d.id == selected) {
+                itemBg = Color{70, 130, 200, 255};
+                textCol = Color{255, 255, 255, 255};
+            } else {
+                itemBg = Color{30, 30, 34, 255};
+                textCol = Theme::textPrimary;
             }
-            f.drawText(r, d.name.c_str(), x + 8, iy + (22.0f - th) * 0.5f, ts, Theme::textPrimary);
+            r.drawRect(x + 1, iy, w - 2, 22.0f, itemBg);
+            f.drawText(r, d.name.c_str(), x + 8, iy + (22.0f - th) * 0.5f, ts, textCol);
             idx++;
         }
+    }
+}
+
+// ─── Metronome Tab ──────────────────────────────────────────────────
+
+void PreferencesDialog::paintMetronomeTab(UIContext& ctx, float cx, float cy, float cw, float rh,
+                       float ts, float th) {
+    auto& r = *ctx.renderer;
+    auto& f = *ctx.font;
+    float dropW = std::min(cw * 0.5f, 220.0f);
+    float dropX = cx + cw - dropW;
+
+    const char* modes[] = {"Always", "Record Only", "Playback Only", "Off"};
+    int modeSel = std::clamp(m_state.metronomeMode, 0, 3);
+
+    const char* bars[] = {"None", "1 Bar", "2 Bars", "4 Bars"};
+    int barVals[] = {0, 1, 2, 4};
+    int barSel = 0;
+    for (int i = 0; i < 4; ++i)
+        if (m_state.countInBars == barVals[i]) barSel = i;
+
+    const char* vols[] = {"10%", "20%", "30%", "40%", "50%",
+                           "60%", "70%", "80%", "90%", "100%"};
+    int volSel = std::clamp(static_cast<int>(m_state.metronomeVolume * 10.0f + 0.5f) - 1, 0, 9);
+
+    float y0 = cy, y1 = cy + rh + 6, y2 = cy + 2 * (rh + 6);
+
+    // Pass 1: draw all buttons
+    drawLabel(r, f, "Metronome Mode", cx, y0, ts);
+    drawDropdown(r, f, dropX, y0, dropW, rh, th, ts, modes, 4, modeSel, &m_metroModeOpen, false);
+
+    drawLabel(r, f, "Count-in Bars", cx, y1, ts);
+    drawDropdown(r, f, dropX, y1, dropW, rh, th, ts, bars, 4, barSel, &m_countInOpen, false);
+
+    drawLabel(r, f, "Metronome Volume", cx, y2, ts);
+    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, vols, 10, volSel, &m_metroVolumeOpen, false);
+
+    // Pass 2: draw open popup on top
+    drawDropdown(r, f, dropX, y0, dropW, rh, th, ts, modes, 4, modeSel, &m_metroModeOpen, true);
+    drawDropdown(r, f, dropX, y1, dropW, rh, th, ts, bars, 4, barSel, &m_countInOpen, true);
+    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, vols, 10, volSel, &m_metroVolumeOpen, true);
+}
+
+void PreferencesDialog::handleMetronomeClick(float mx, float my, float cx, float cy,
+                          float dropX, float dropW, float rh) {
+    float dropH = 24.0f;
+
+    {
+        const char* modes[] = {"Always", "Record Only", "Playback Only", "Off"};
+        int sel = std::clamp(m_state.metronomeMode, 0, 3);
+        if (handleDropdownClick(mx, my, dropX, cy, dropW, dropH, 4, sel,
+                                &m_metroModeOpen, [&](int i) {
+            m_state.metronomeMode = i;
+        })) return;
+    }
+    cy += rh + 6;
+
+    {
+        int barVals[] = {0, 1, 2, 4};
+        int sel = 0;
+        for (int i = 0; i < 4; ++i)
+            if (m_state.countInBars == barVals[i]) sel = i;
+        if (handleDropdownClick(mx, my, dropX, cy, dropW, dropH, 4, sel,
+                                &m_countInOpen, [&](int i) {
+            m_state.countInBars = barVals[i];
+        })) return;
+    }
+    cy += rh + 6;
+
+    {
+        int sel = std::clamp(static_cast<int>(m_state.metronomeVolume * 10.0f + 0.5f) - 1, 0, 9);
+        handleDropdownClick(mx, my, dropX, cy, dropW, dropH, 10, sel,
+                            &m_metroVolumeOpen, [&](int i) {
+            m_state.metronomeVolume = (i + 1) * 0.1f;
+        });
     }
 }
 

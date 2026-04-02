@@ -105,6 +105,17 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 # ──────────────────────────────────────────────
+# minimp3 (header-only MP3 decoder)
+# ──────────────────────────────────────────────
+FetchContent_Declare(
+    minimp3
+    GIT_REPOSITORY https://github.com/lieff/minimp3.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(minimp3)
+
+# ──────────────────────────────────────────────
 # nlohmann/json (header-only JSON library)
 # ──────────────────────────────────────────────
 FetchContent_Declare(

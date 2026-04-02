@@ -436,7 +436,8 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     m_metronome.process(output, nf, nc,
                         m_transport.bpm(),
                         m_transport.positionInSamples(),
-                        m_transport.isPlaying());
+                        m_transport.isPlaying(),
+                        m_transport.isRecording());
 
     // Add test tone on top of mixer output (bypasses mixer routing)
     if (m_testTone.enabled) {
@@ -559,6 +560,9 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, MetronomeSetBeatsPerBarMsg>) {
                 m_metronome.setBeatsPerBar(msg.beatsPerBar);
             }
+            else if constexpr (std::is_same_v<T, MetronomeSetModeMsg>) {
+                m_metronome.setMode(static_cast<MetronomeMode>(msg.mode));
+            }
             else if constexpr (std::is_same_v<T, SendMidiToTrackMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     midi::MidiMessage m{};
@@ -606,6 +610,18 @@ void AudioEngine::processCommands() {
                         m_transport.play();
                     } else if (!m_transport.isPlaying()) {
                         m_transport.play();
+                    }
+                    // Auto-start per-track recording for all armed MIDI tracks
+                    for (int t = 0; t < kMaxTracks; ++t) {
+                        if (m_trackArmed[t] && m_trackType[t] == 1 &&
+                            !m_trackRecordStates[t].recording) {
+                            auto& rs = m_trackRecordStates[t];
+                            rs.reset();
+                            rs.recording = true;
+                            rs.targetScene = msg.sceneIndex;
+                            rs.overdub = false;
+                            rs.recordStartBeat = m_transport.positionInBeats();
+                        }
                     }
                 } else {
                     // Gracefully stop all active recordings respecting per-track quantize

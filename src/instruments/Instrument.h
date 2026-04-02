@@ -15,6 +15,7 @@ struct InstrumentParameterInfo {
     float defaultValue  = 0.0f;
     const char* unit    = "";
     bool isBoolean      = false;
+    bool isPerVoice     = false;  // true = per-voice/pad (applies to selected voice)
 };
 
 inline float noteToFreq(int note) {

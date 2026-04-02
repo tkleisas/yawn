@@ -14,7 +14,7 @@ struct AudioFileInfo {
     std::string format;
 };
 
-// Load an audio file (WAV, FLAC, OGG, AIFF) into an AudioBuffer.
+// Load an audio file (WAV, FLAC, OGG, AIFF, MP3) into an AudioBuffer.
 // Returns nullptr on failure. Audio is stored non-interleaved.
 std::shared_ptr<audio::AudioBuffer> loadAudioFile(
     const std::string& path,

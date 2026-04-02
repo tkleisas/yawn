@@ -845,3 +845,43 @@ TEST(DrumSlop, ReversePadPlayback) {
 
     EXPECT_GT(firstRev, firstFwd);
 }
+
+TEST(DrumSlop, PerPadParameterAPI) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    // Per-pad params read/write the selected pad
+    ds.setSelectedPad(0);
+    ds.setParameter(DrumSlop::kPadVolume, 0.7f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadVolume), 0.7f, 0.01f);
+
+    ds.setParameter(DrumSlop::kPadPan, -0.5f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadPan), -0.5f, 0.01f);
+
+    ds.setParameter(DrumSlop::kPadPitch, 7.0f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadPitch), 7.0f, 0.01f);
+
+    ds.setParameter(DrumSlop::kPadReverse, 1.0f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadReverse), 1.0f, 0.01f);
+
+    // Switch pad — values should be defaults (pad 3 untouched)
+    ds.setSelectedPad(3);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadVolume), 1.0f, 0.01f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadPan), 0.0f, 0.01f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadReverse), 0.0f, 0.01f);
+
+    // Modify pad 3 envelope
+    ds.setParameter(DrumSlop::kPadAttack, 0.5f);
+    ds.setParameter(DrumSlop::kPadSustain, 0.3f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadAttack), 0.5f, 0.01f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadSustain), 0.3f, 0.01f);
+
+    // Switch back to pad 0 — should still have original values
+    ds.setSelectedPad(0);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadVolume), 0.7f, 0.01f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kPadAttack), 0.001f, 0.01f);
+
+    // isPerVoice flag is set on per-pad params
+    EXPECT_TRUE(ds.parameterInfo(DrumSlop::kPadVolume).isPerVoice);
+    EXPECT_FALSE(ds.parameterInfo(DrumSlop::kVolume).isPerVoice);
+}
