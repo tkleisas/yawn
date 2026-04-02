@@ -25,6 +25,21 @@ void PianoRollPanel::paint(UIContext& ctx) {
     m_gh = m_bounds.h - kHandleHeight - kToolbarH - kRulerH - velH - kScrollbarH;
     m_velY = m_gy + m_gh;
 
+    // Follow playhead
+    if (m_followPlayhead && m_midiPlaying && m_clip) {
+        double clipLen = m_clip->lengthBeats();
+        if (clipLen > 0) {
+            double beat = std::fmod(m_playBeat, clipLen);
+            if (beat < 0) beat += clipLen;
+            float beatPx = static_cast<float>(beat * m_pxBeat);
+            // Keep playhead in the middle third of the view
+            if (beatPx - m_scrollX > m_gw * 0.8f || beatPx - m_scrollX < m_gw * 0.1f) {
+                m_scrollX = std::max(0.0f, beatPx - m_gw * 0.3f);
+                clampScroll();
+            }
+        }
+    }
+
     r.pushClip(m_px, m_py, m_pw, m_animatedHeight);
 
     r.drawRect(m_px, m_py, m_pw, m_bounds.h, Color{30, 30, 33});
@@ -105,6 +120,15 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
 
     if (mx >= m_px && mx < m_px + kClipOpsW && my >= m_gy && my < m_gy + m_gh) {
         return handleClipOpsClick(mx, my);
+    }
+
+    // Piano key vertical zoom drag
+    if (mx >= m_pianoX && mx < m_pianoX + kPianoW && my >= m_gy && my < m_gy + m_gh) {
+        m_pianoKeyDragging = true;
+        m_pianoKeyDragStartY = my;
+        m_pianoKeyDragStartRowH = m_rowH;
+        captureMouse();
+        return true;
     }
 
     if (mx < m_gx) return true;
@@ -197,6 +221,12 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
         m_userHeight = std::clamp(
             m_handleDragStartH + delta, kMinPanelH, kMaxPanelH);
         m_targetHeight = m_userHeight;
+        return true;
+    }
+
+    if (m_pianoKeyDragging) {
+        float delta = m_pianoKeyDragStartY - my;  // drag up = increase
+        m_rowH = std::clamp(m_pianoKeyDragStartRowH + delta * 0.05f, kMinRowH, kMaxRowH);
         return true;
     }
 
@@ -298,6 +328,11 @@ bool PianoRollPanel::onMouseUp(MouseEvent& e) {
     if (m_velDragging) {
         m_velDragging = false;
         m_velDragNoteIdx = -1;
+        releaseMouse();
+        return true;
+    }
+    if (m_pianoKeyDragging) {
+        m_pianoKeyDragging = false;
         releaseMouse();
         return true;
     }
@@ -475,9 +510,9 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     }
 
     x += sectionGap;
-    m_snapLabel.layout(Rect{x, tbY + 2, 36, btnH}, ctx);
+    m_snapLabel.layout(Rect{x, tbY + 2, 40, btnH}, ctx);
     m_snapLabel.paint(ctx);
-    x += 38;
+    x += 44;
 
     // Snap buttons
     static constexpr float snapW[] = {kSnapBtnW, kSnapBtnW, kSnapBtnW, kSnapBtnW,
@@ -506,7 +541,13 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     m_velBtn.setTextColor(m_showVelocityLane ? Color{10, 10, 15} : Theme::textSecondary);
     m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, ctx);
     m_velBtn.paint(ctx);
-    x += kVelBtnW + sectionGap;
+    x += kVelBtnW + gap;
+
+    m_followBtn.setColor(m_followPlayhead ? Color{100, 180, 255} : Color{55, 55, 60});
+    m_followBtn.setTextColor(m_followPlayhead ? Color{10, 10, 15} : Theme::textSecondary);
+    m_followBtn.layout(Rect{x, tbY + 2, kFollowBtnW, btnH}, ctx);
+    m_followBtn.paint(ctx);
+    x += kFollowBtnW + sectionGap;
 
     // Zoom buttons
     m_zoomOutBtn.setColor(Color{55, 55, 60});

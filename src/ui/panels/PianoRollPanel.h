@@ -93,6 +93,12 @@ public:
             m_showVelocityLane = !m_showVelocityLane;
         });
 
+        m_followBtn.setLabel("Follow");
+        m_followBtn.setDrawOutline(false);
+        m_followBtn.setOnClick([this]() {
+            m_followPlayhead = !m_followPlayhead;
+        });
+
         m_zoomInBtn.setLabel("+");
         m_zoomInBtn.setDrawOutline(false);
         m_zoomInBtn.setOnClick([this]() {
@@ -371,6 +377,7 @@ private:
             if (tryBtn(m_snapBtns[i])) return true;
         if (tryBtn(m_loopBtn)) return true;
         if (tryBtn(m_velBtn)) return true;
+        if (tryBtn(m_followBtn)) return true;
         if (tryBtn(m_zoomInBtn)) return true;
         if (tryBtn(m_zoomOutBtn)) return true;
         return true;
@@ -696,8 +703,9 @@ private:
     float m_pianoX = 0;
 
     // Toolbar widgets
-    static constexpr float kToolBtnW    = 56.0f;
-    static constexpr float kSnapBtnW    = 40.0f;
+    static constexpr float kToolBtnW    = 60.0f;
+    static constexpr float kSnapBtnW    = 44.0f;
+    static constexpr float kFollowBtnW  = 52.0f;
     static constexpr float kTripletBtnW = 32.0f;
     static constexpr float kLoopBtnW    = 50.0f;
     static constexpr float kVelBtnW     = 40.0f;
@@ -708,6 +716,7 @@ private:
     Label     m_snapLabel;
     FwButton  m_loopBtn;
     FwButton  m_velBtn;
+    FwButton  m_followBtn;
     FwButton  m_zoomInBtn;
     FwButton  m_zoomOutBtn;
     Label     m_clipNameLabel;
@@ -715,6 +724,14 @@ private:
 
     // Clip ops button Y positions
     float m_clipOpsBtnY[5] = {};
+
+    // Follow playhead
+    bool  m_followPlayhead = false;
+
+    // Piano key vertical zoom drag
+    bool  m_pianoKeyDragging = false;
+    float m_pianoKeyDragStartY = 0;
+    float m_pianoKeyDragStartRowH = 0;
 
     // Velocity lane
     bool  m_showVelocityLane = true;
