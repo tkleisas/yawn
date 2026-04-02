@@ -172,13 +172,24 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
     }
 
     bool warping = (speedRatio != 1.0);
+    bool hasTranspose = (clip.transposeSemitones != 0 || clip.detuneCents != 0);
 
     // Pitch-preserving modes: use TimeStretcher (Beats→WSOLA, Tones/Texture→PhaseVocoder)
-    bool usePitchPreserving = pitchPreservingMode && warping;
+    // Also enter this path when transpose/detune is set, even if the BPM ratio is 1.0 —
+    // the stretcher provides post-stretch resampling for pitch shift.
+    bool usePitchPreserving = pitchPreservingMode && (warping || hasTranspose);
 
-    if (usePitchPreserving && m_stretchers[trackIndex].initialized) {
-        processTrackStretched(trackIndex, output, numFrames, numChannels);
-        return;
+    if (usePitchPreserving) {
+        auto& stretcher = m_stretchers[trackIndex];
+        // Initialize stretcher if warp mode changed during playback (e.g., Off→Tones)
+        // but not if it was just de-initialized by the "too short" fallback
+        if (!stretcher.initialized && stretcher.activeMode != clip.warpMode) {
+            stretcher.init(m_sampleRate, 4096, clip.warpMode, bufChannels);
+        }
+        if (stretcher.initialized) {
+            processTrackStretched(trackIndex, output, numFrames, numChannels);
+            return;
+        }
     }
 
     // Repitch mode or no warping: variable-rate playback with linear interpolation
