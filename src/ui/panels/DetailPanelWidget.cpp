@@ -301,10 +301,10 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     font.drawText(renderer, "Warp", cx, stripY, labelScale, Theme::textDim);
     m_warpModeDropdown.layout(Rect{cx, inputCenterY, warpW, inputH}, ctx);
     m_warpModeDropdown.paint(ctx);
-    cx += warpW + 6.0f;
+    cx += warpW + gap;
 
     // Detect button
-    float detectW = 52.0f;
+    float detectW = 60.0f;
     m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, ctx);
     m_detectBtn.paint(ctx);
     cx += detectW + sectionGap;

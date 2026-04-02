@@ -154,7 +154,7 @@ public:
         // BPM input
         m_bpmInput.setRange(20.0f, 999.0f);
         m_bpmInput.setValue(clip->originalBPM > 0 ? static_cast<float>(clip->originalBPM) : 120.0f);
-        m_bpmInput.setSuffix(" BPM");
+        m_bpmInput.setSuffix("");
         m_bpmInput.setSensitivity(0.5f);
         m_bpmInput.setOnChange([this](float v) {
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->originalBPM = static_cast<double>(v);
@@ -500,12 +500,10 @@ public:
                 return m_warpModeDropdown.onMouseUp(e);
             if (hitWidget(m_gainKnob, e.x, e.y))
                 return m_gainKnob.onMouseUp(e);
-            if (hitWidget(m_transposeInput, e.x, e.y))
-                return m_transposeInput.onMouseUp(e);
-            if (hitWidget(m_detuneInput, e.x, e.y))
-                return m_detuneInput.onMouseUp(e);
-            if (hitWidget(m_bpmInput, e.x, e.y))
-                return m_bpmInput.onMouseUp(e);
+            // Number inputs: always forward mouseUp (drag may leave bounds)
+            if (m_transposeInput.onMouseUp(e)) return true;
+            if (m_detuneInput.onMouseUp(e)) return true;
+            if (m_bpmInput.onMouseUp(e)) return true;
             if (hitWidget(m_loopToggleBtn, e.x, e.y))
                 return m_loopToggleBtn.onMouseUp(e);
         }
