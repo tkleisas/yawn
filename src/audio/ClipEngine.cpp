@@ -338,15 +338,22 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
     // For each channel, ensure we have enough output buffered.
     // With pitch shift, we consume pitchRatio stretcher frames per output frame.
     int neededStretcherFrames = static_cast<int>(std::ceil(numFrames * pitchRatio)) + 2;
+
+    // Save position before channel loop — all channels must read from the same clip position
+    double inputPos = pos;
+
     for (int ch = 0; ch < numChannels; ++ch) {
         int srcCh = (ch < bufChannels) ? ch : (bufChannels - 1);
         int strCh = (ch < stretcherCh) ? ch : (stretcherCh - 1);
         auto& str = stretcher.stretchers[strCh];
 
+        // Each channel starts from the same position
+        double chPos = inputPos;
+
         // Produce enough output in the intermediate buffer
         while (stretcher.outBufAvail[ch] - static_cast<int>(stretcher.resamplePos[ch]) < neededStretcherFrames) {
             // Gather input from clip at current position
-            int gatherStart = static_cast<int>(pos);
+            int gatherStart = static_cast<int>(chPos);
             int gathered = 0;
             int gatherPos = gatherStart;
             int maxGather = 4096;
@@ -373,24 +380,28 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
             // Reset input position so stretcher reads from start of monoIn
             str.resetInputPosition();
 
-            // Request a large chunk of output
+            // Zero the output region for overlap-add (phase vocoder uses +=)
             int outSpace = TrackStretcher::kOutBufSize - stretcher.outBufAvail[ch];
             if (outSpace <= 0) break;
             float* outPtr = stretcher.outBuf[ch].data() + stretcher.outBufAvail[ch];
+            std::memset(outPtr, 0, outSpace * sizeof(float));
 
             int consumed = 0;
             int produced = str.process(monoIn, gathered, outPtr, outSpace, consumed);
             stretcher.outBufAvail[ch] += produced;
 
-            // Advance position by consumed (only track on first channel)
-            if (ch == 0 && consumed > 0) {
-                pos += consumed;
-                while (pos >= loopEnd && clip.looping)
-                    pos -= (loopEnd - loopStart);
+            // Advance this channel's position
+            if (consumed > 0) {
+                chPos += consumed;
+                while (chPos >= loopEnd && clip.looping)
+                    chPos -= (loopEnd - loopStart);
             }
 
             if (produced == 0) break; // stretcher can't produce more
         }
+
+        // Track the shared position from channel 0
+        if (ch == 0) pos = chPos;
     }
 
     // Read from intermediate buffers with pitch-shift resampling
@@ -436,6 +447,11 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
                          remaining * sizeof(float));
         }
         stretcher.outBufAvail[ch] = std::max(0, remaining);
+        // Zero the freed region to prevent stale data in overlap-add
+        if (remaining > 0 && remaining < TrackStretcher::kOutBufSize) {
+            std::memset(stretcher.outBuf[ch].data() + remaining, 0,
+                        (TrackStretcher::kOutBufSize - remaining) * sizeof(float));
+        }
         stretcher.resamplePos[ch] -= consumed;  // keep fractional part
         if (stretcher.resamplePos[ch] < 0.0) stretcher.resamplePos[ch] = 0.0;
     }
