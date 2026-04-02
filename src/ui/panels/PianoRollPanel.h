@@ -411,7 +411,7 @@ private:
         float gap = 4.0f;
         float startY = m_gy + 6.0f;
 
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 6; ++i) {
             float by = startY + i * (btnH + gap);
             if (my >= by && my < by + btnH) {
                 executeClipOp(i);
@@ -495,6 +495,38 @@ private:
                 m_clip->removeNote(m_clip->noteCount() - 1);
             m_selectedNotes.clear();
             break;
+        case 5: { // Set 1.1.1 here — crop clip to loop start
+            if (loopStart <= 0) break;
+            // Remove notes that end before loop start
+            for (int i = m_clip->noteCount() - 1; i >= 0; --i) {
+                const auto& n = m_clip->note(i);
+                if (n.startBeat + n.duration <= loopStart)
+                    m_clip->removeNote(i);
+            }
+            // Shift all remaining notes back by loopStart
+            for (int i = 0; i < m_clip->noteCount(); ++i) {
+                auto& n = m_clip->note(i);
+                n.startBeat = std::max(0.0, n.startBeat - loopStart);
+            }
+            // Shift CC events: collect, remove, re-add shifted
+            std::vector<midi::MidiCCEvent> keptCCs;
+            for (int i = 0; i < m_clip->ccCount(); ++i) {
+                auto cc = m_clip->ccEvent(i);
+                if (cc.beat >= loopStart) {
+                    cc.beat -= loopStart;
+                    keptCCs.push_back(cc);
+                }
+            }
+            while (m_clip->ccCount() > 0)
+                m_clip->removeCC(m_clip->ccCount() - 1);
+            for (auto& cc : keptCCs)
+                m_clip->addCC(cc);
+            // Adjust clip length and reset loop start
+            m_clip->setLengthBeats(std::max(0.25, len - loopStart));
+            m_clip->setLoopStartBeat(0);
+            m_selectedNotes.clear();
+            break;
+        }
         }
     }
 
@@ -723,7 +755,7 @@ private:
     ScrollBar m_scrollbar;
 
     // Clip ops button Y positions
-    float m_clipOpsBtnY[5] = {};
+    float m_clipOpsBtnY[6] = {};
 
     // Follow playhead
     bool  m_followPlayhead = false;

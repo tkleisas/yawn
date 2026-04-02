@@ -812,19 +812,20 @@ void PianoRollPanel::renderClipOps(Renderer2D& r, Font& f) {
 
     r.drawRect(x, y, w, m_gh, Color{32, 32, 36});
 
-    static const char* labels[] = {"Dup", "x2", "/2", "Rev", "Clr"};
+    static const char* labels[] = {"Dup", "x2", "/2", "Rev", "Clr", "1.1.1"};
     static const Color btnColors[] = {
         Color{80, 180, 255},
         Color{120, 230, 100},
         Color{255, 180, 60},
         Color{200, 130, 255},
-        Color{255, 90, 90}
+        Color{255, 90, 90},
+        Color{0, 220, 160}
     };
     float btnH = 20.0f;
     float gap = 4.0f;
     float startY = y + 6.0f;
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         float by = startY + i * (btnH + gap);
         if (by + btnH > y + m_gh) break;
         m_clipOpsBtnY[i] = by;
