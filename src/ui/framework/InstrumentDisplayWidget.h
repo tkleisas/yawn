@@ -748,6 +748,215 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DrumSlopDisplayPanel — Composite panel for DrumSlop instrument.
+// Top: loop waveform with slice markers.  Bottom: 4×4 (or 2×8) pad grid
+// with note names and active/playing highlights.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class DrumSlopDisplayPanel : public Widget {
+public:
+    DrumSlopDisplayPanel() { setName("DrumSlopDisplay"); }
+
+    void setLoopData(const float* data, int frames, int channels) {
+        m_loopData = data;
+        m_loopFrames = frames;
+        m_loopChannels = channels;
+    }
+
+    void setSliceCount(int count) { m_sliceCount = std::clamp(count, 1, 16); }
+
+    // Slice boundaries as frame positions (count+1 entries: start of each + end)
+    void setSliceBoundaries(const std::vector<int64_t>& bounds) {
+        m_sliceBounds = bounds;
+    }
+
+    void setBaseNote(int note) { m_baseNote = std::clamp(note, 0, 127); }
+    void setSelectedPad(int idx) { m_selectedPad = std::clamp(idx, 0, 15); }
+
+    void setPadPlaying(int idx, bool playing) {
+        if (idx >= 0 && idx < 16) m_padPlaying[idx] = playing;
+    }
+
+    // Callback when a pad is clicked in the UI
+    void setOnPadClick(std::function<void(int)> cb) { m_onPadClick = std::move(cb); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 120.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext& ctx) override {
+        (void)ctx;
+        m_bounds = bounds;
+        float gap = 2.0f;
+        m_waveH = std::min(40.0f, bounds.h * 0.35f);
+        m_waveRect = {bounds.x, bounds.y, bounds.w, m_waveH};
+        m_gridRect = {bounds.x, bounds.y + m_waveH + gap,
+                      bounds.w, bounds.h - m_waveH - gap};
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (!e.isLeftButton()) return false;
+        float mx = e.x, my = e.y;
+        // Check if click is in the pad grid
+        if (mx >= m_gridRect.x && mx < m_gridRect.x + m_gridRect.w &&
+            my >= m_gridRect.y && my < m_gridRect.y + m_gridRect.h) {
+            int cols = 8, rows = 2;
+            float cellW = m_gridRect.w / cols;
+            float cellH = m_gridRect.h / rows;
+            int col = static_cast<int>((mx - m_gridRect.x) / cellW);
+            int row = static_cast<int>((my - m_gridRect.y) / cellH);
+            int padIdx = row * cols + col;
+            if (padIdx >= 0 && padIdx < m_sliceCount && m_onPadClick)
+                m_onPadClick(padIdx);
+            return true;
+        }
+        return false;
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        // ─── Waveform area ───
+        r.drawRect(m_waveRect.x, m_waveRect.y, m_waveRect.w, m_waveRect.h,
+                   Color{20, 20, 26, 255});
+        r.drawRectOutline(m_waveRect.x, m_waveRect.y, m_waveRect.w, m_waveRect.h,
+                          Color{50, 50, 60, 255});
+
+        if (m_loopData && m_loopFrames > 0) {
+            float px = m_waveRect.x + 2;
+            float py = m_waveRect.y + 2;
+            float pw = m_waveRect.w - 4;
+            float ph = m_waveRect.h - 4;
+
+            // Draw waveform (min/max envelope)
+            if (pw > 4 && ph > 4) {
+                float midY = py + ph * 0.5f;
+                float halfH = ph * 0.5f;
+                int numBars = static_cast<int>(pw);
+                if (numBars < 1) numBars = 1;
+                Color waveCol{0, 180, 230, 180};
+                for (int i = 0; i < numBars; ++i) {
+                    int startFrame = (i * m_loopFrames) / numBars;
+                    int endFrame = ((i + 1) * m_loopFrames) / numBars;
+                    float minVal = 0.0f, maxVal = 0.0f;
+                    for (int s = startFrame; s < endFrame; ++s) {
+                        float v = m_loopData[s * m_loopChannels];
+                        if (v < minVal) minVal = v;
+                        if (v > maxVal) maxVal = v;
+                    }
+                    float top = midY - maxVal * halfH;
+                    float bot = midY - minVal * halfH;
+                    float barH = bot - top;
+                    if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
+                    r.drawRect(px + i, top, 1, barH, waveCol);
+                }
+                r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 80});
+
+                // Slice marker lines
+                if (!m_sliceBounds.empty()) {
+                    Color sliceCol{255, 200, 50, 140};
+                    for (int i = 1; i < (int)m_sliceBounds.size() - 1; ++i) {
+                        float xPos = px + (float)m_sliceBounds[i] / m_loopFrames * pw;
+                        r.drawRect(xPos, py, 1, ph, sliceCol);
+                    }
+                }
+
+                // Highlight selected pad's slice region
+                if (m_selectedPad >= 0 && m_selectedPad < (int)m_sliceBounds.size() - 1) {
+                    float selStart = px + (float)m_sliceBounds[m_selectedPad] / m_loopFrames * pw;
+                    float selEnd = px + (float)m_sliceBounds[m_selectedPad + 1] / m_loopFrames * pw;
+                    r.drawRect(selStart, py, selEnd - selStart, ph,
+                               Color{255, 200, 50, 30});
+                }
+            }
+        } else {
+            float lblScale = 7.0f / Theme::kFontSize;
+            const char* msg = "Drop Loop";
+            float tw = f.textWidth(msg, lblScale);
+            float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
+            float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
+            f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
+        }
+
+        // ─── Pad grid (2 rows × 8 cols) ───
+        int cols = 8, rows = 2;
+        float cellW = m_gridRect.w / cols;
+        float cellH = m_gridRect.h / rows;
+        float lblScale = 6.5f / Theme::kFontSize;
+
+        static const char* noteNames[] = {
+            "C","C#","D","D#","E","F","F#","G","G#","A","A#","B"
+        };
+
+        for (int i = 0; i < 16; ++i) {
+            int col = i % cols;
+            int row = i / cols;
+            float cx = m_gridRect.x + col * cellW;
+            float cy = m_gridRect.y + row * cellH;
+
+            bool active = i < m_sliceCount;
+            bool selected = (i == m_selectedPad);
+            bool playing = m_padPlaying[i];
+
+            // Pad background
+            Color bg{35, 35, 42, 255};
+            if (!active) bg = Color{25, 25, 30, 255};
+            else if (playing) bg = Color{50, 90, 50, 255};
+            else if (selected) bg = Color{55, 55, 70, 255};
+            r.drawRect(cx + 1, cy + 1, cellW - 2, cellH - 2, bg);
+
+            // Border
+            Color border = selected ? Color{255, 200, 50, 200} :
+                           playing  ? Color{80, 200, 80, 200}  :
+                                      Color{60, 60, 75, 255};
+            r.drawRectOutline(cx + 1, cy + 1, cellW - 2, cellH - 2, border);
+
+            if (active) {
+                // Note name (e.g. "C2", "D#3")
+                int midiNote = m_baseNote + i;
+                int octave = (midiNote / 12) - 1;
+                int noteIdx = midiNote % 12;
+                char label[8];
+                std::snprintf(label, sizeof(label), "%s%d",
+                              noteNames[noteIdx], octave);
+                float tw = f.textWidth(label, lblScale);
+                float tx = cx + (cellW - tw) * 0.5f;
+                float ty = cy + (cellH) * 0.5f - 3.5f;
+                Color textCol = selected ? Color{255, 220, 100, 255} :
+                                           Color{160, 160, 180, 255};
+                f.drawText(r, label, tx, ty, lblScale, textCol);
+
+                // Pad number (small, top-left)
+                char numBuf[4];
+                std::snprintf(numBuf, sizeof(numBuf), "%d", i + 1);
+                f.drawText(r, numBuf, cx + 3, cy + 2,
+                           5.5f / Theme::kFontSize, Color{80, 80, 100, 150});
+            }
+        }
+#endif
+    }
+
+private:
+    Rect m_waveRect{}, m_gridRect{};
+    float m_waveH = 40.0f;
+
+    const float* m_loopData = nullptr;
+    int m_loopFrames = 0;
+    int m_loopChannels = 1;
+
+    int m_sliceCount = 8;
+    std::vector<int64_t> m_sliceBounds;
+    int m_baseNote = 36;
+    int m_selectedPad = 0;
+    bool m_padPlaying[16] = {};
+
+    std::function<void(int)> m_onPadClick;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CustomDeviceBody — Abstract base for custom instrument body layouts.
 // Replaces the flat knob grid in DeviceWidget when set.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -843,6 +1052,14 @@ inline std::string shortenLabel(const std::string& name) {
     if (s == "Loop Start")    return "Start";
     if (s == "Loop End")      return "End";
     if (s == "Sample Gain")   return "Gain";
+    if (s == "Slice Count")   return "Slices";
+    if (s == "Slice Mode")    return "Mode";
+    if (s == "Orig BPM")      return "BPM";
+    if (s == "Base Note")     return "Base";
+    if (s == "Swing")         return "Swng";
+    if (s == "Filter Cut")    return "Cut";
+    if (s == "Filter Reso")   return "Reso";
+    if (s == "Start Offset")  return "Offs";
     return s;
 }
 

@@ -15,6 +15,7 @@
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
 #include "instruments/DrumRack.h"
+#include "instruments/DrumSlop.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
 #include "midi/MidiEffect.h"
@@ -71,7 +72,7 @@ void deserializeMidiEffectChain(midi::MidiEffectChain& chain, const json& arr,
                                 double sampleRate);
 
 // ---------------------------------------------------------------------------
-// Instrument serialization (with custom handling for Sampler/DrumRack)
+// Instrument serialization (with custom handling for Sampler/DrumRack/DrumSlop)
 // ---------------------------------------------------------------------------
 
 json serializeInstrument(const instruments::Instrument& inst,

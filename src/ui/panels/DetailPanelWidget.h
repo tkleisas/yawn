@@ -19,6 +19,7 @@
 #include "audio/TransientDetector.h"
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
+#include "instruments/DrumSlop.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
 #include "midi/MidiEffect.h"
@@ -797,6 +798,43 @@ private:
                     samplerPanel->setPlayhead(sampler->playheadPosition(),
                                               sampler->isPlaying());
                 }
+            });
+        } else if (nm == "DrumSlop") {
+            auto* dsPanel = new DrumSlopDisplayPanel();
+            config.display = dsPanel;
+            config.displayWidth = 160;
+            config.sections = {
+                {"Global", {0, 1, 2, 3, 4, 5}},
+            };
+
+            // Pad click callback to select pad
+            dsPanel->setOnPadClick([inst](int padIdx) {
+                auto* ds = dynamic_cast<instruments::DrumSlop*>(inst);
+                if (ds) ds->setSelectedPad(padIdx);
+            });
+
+            m_displayUpdaters.push_back([dsPanel, inst]() {
+                auto* ds = dynamic_cast<instruments::DrumSlop*>(inst);
+                if (!ds) return;
+
+                dsPanel->setSliceCount(ds->sliceCount());
+                dsPanel->setBaseNote(static_cast<int>(ds->getParameter(
+                    instruments::DrumSlop::kBaseNote)));
+                dsPanel->setSelectedPad(ds->selectedPad());
+
+                if (ds->hasLoop()) {
+                    dsPanel->setLoopData(ds->loopData(), ds->loopFrames(),
+                                         ds->loopChannels());
+                    // Build slice boundaries for display
+                    std::vector<int64_t> bounds;
+                    int sc = ds->sliceCount();
+                    for (int i = 0; i <= sc; ++i)
+                        bounds.push_back(ds->sliceBoundary(i));
+                    dsPanel->setSliceBoundaries(bounds);
+                }
+
+                for (int i = 0; i < instruments::DrumSlop::kNumPads; ++i)
+                    dsPanel->setPadPlaying(i, ds->isPadPlaying(i));
             });
         } else {
             return false;

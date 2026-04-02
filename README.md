@@ -52,6 +52,7 @@
 - **Sampler** — Sample playback with pitch tracking, linear interpolation, ADSR envelope
 - **Instrument Rack** — Multi-chain container with key/velocity zones, per-chain volume/pan (like Ableton Instrument Rack)
 - **Drum Rack** — 128 pads mapped to MIDI notes, per-pad sample/volume/pan/pitch adjust
+- **DrumSlop** — Loop slicer drum machine: auto/even/manual slicing, 16 pads with ADSR, SVF filter, per-pad effect chains, configurable MIDI base note
 
 ### MIDI
 - **MIDI Engine** — Internal 16-bit velocity, 32-bit CC resolution (MIDI 2.0 ready)
@@ -275,7 +276,8 @@ yawn/
 │   │   ├── FMSynth.h           # 4-operator FM synth (8 algorithms)
 │   │   ├── Sampler.h           # Sample playback with pitch tracking
 │   │   ├── InstrumentRack.h    # Multi-chain container (key/vel zones)
-│   │   └── DrumRack.h          # 128-pad drum machine
+│   │   ├── DrumRack.h          # 128-pad drum machine
+│   │   └── DrumSlop.h          # Loop slicer drum machine (16 pads)
 │   ├── midi/
 │   │   ├── MidiTypes.h         # MidiMessage, MidiBuffer, converters
 │   │   ├── MidiClip.h          # MIDI clip data model
@@ -373,7 +375,7 @@ yawn/
 | 6. MIDI Engine | ✅ Done | MIDI 2.0-res internals, RtMidi I/O, MPE zones, MIDI clips |
 | 7. Metronome | ✅ Done | Synthesized click track, beat-synced, configurable |
 | 8. Audio Effects | ✅ Done | 9 built-in effects (+ 2 visualizers), effect chains, 3-point insert |
-| 9. Native Instruments | ✅ Done | 5 instruments (SubSynth, FM, Sampler, InstrumentRack, DrumRack) |
+| 9. Native Instruments | ✅ Done | 6 instruments (SubSynth, FM, Sampler, InstrumentRack, DrumRack, DrumSlop) |
 | 10. MIDI Effects | ✅ Done | 7 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
 | 12. UI Framework | ✅ Done | Widget tree, FlexBox layout, primitive widgets, dialog system, panel migration |

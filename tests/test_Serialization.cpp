@@ -32,6 +32,7 @@ TEST(Factory, CreateAllInstruments) {
     EXPECT_NE(createInstrument("fmsynth"), nullptr);
     EXPECT_NE(createInstrument("sampler"), nullptr);
     EXPECT_NE(createInstrument("drumrack"), nullptr);
+    EXPECT_NE(createInstrument("drumslop"), nullptr);
     EXPECT_NE(createInstrument("instrack"), nullptr);
     EXPECT_EQ(createInstrument("nonexistent"), nullptr);
 }

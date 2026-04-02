@@ -6,6 +6,7 @@
 #include "instruments/Sampler.h"
 #include "instruments/InstrumentRack.h"
 #include "instruments/DrumRack.h"
+#include "instruments/DrumSlop.h"
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -544,4 +545,303 @@ TEST(InstrumentRack, RackWithDrumRack) {
     auto midi = makeNoteOn(36, 100);
     rack.process(buffer, kBlockSize, kChannels, midi);
     EXPECT_GT(rms(buffer, kBlockSize * kChannels), 0.001f);
+}
+
+// ========================= DrumSlop =========================
+
+// Helper: generate a mono test loop (sine wave)
+static std::vector<float> makeSineLoop(int frames = 44100, float freq = 440.0f) {
+    std::vector<float> loop(frames);
+    for (int i = 0; i < frames; ++i)
+        loop[i] = std::sin(2.0 * M_PI * freq * i / kSampleRate);
+    return loop;
+}
+
+TEST(DrumSlop, InitAndReset) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+    EXPECT_STREQ(ds.name(), "DrumSlop");
+    EXPECT_STREQ(ds.id(), "drumslop");
+    EXPECT_EQ(ds.parameterCount(), DrumSlop::kNumParams);
+    ds.reset();
+}
+
+TEST(DrumSlop, SilentWithoutLoop) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    float buffer[kBlockSize * kChannels] = {};
+    auto midi = makeNoteOn(36, 100);
+    ds.process(buffer, kBlockSize, kChannels, midi);
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 0.0001f);
+}
+
+TEST(DrumSlop, EvenSlicing) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1); // Even
+    ds.setParameter(DrumSlop::kSliceCount, 4);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    EXPECT_EQ(ds.sliceCount(), 4);
+    EXPECT_EQ(ds.sliceBoundary(0), 0);
+    EXPECT_EQ(ds.sliceBoundary(1), 11025);
+    EXPECT_EQ(ds.sliceBoundary(2), 22050);
+    EXPECT_EQ(ds.sliceBoundary(3), 33075);
+    EXPECT_EQ(ds.sliceBoundary(4), 44100);
+}
+
+TEST(DrumSlop, TriggerPadProducesOutput) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 4);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    float buffer[kBlockSize * kChannels] = {};
+    auto midi = makeNoteOn(36, 100);
+    ds.process(buffer, kBlockSize, kChannels, midi);
+    EXPECT_GT(rms(buffer, kBlockSize * kChannels), 0.001f);
+}
+
+TEST(DrumSlop, PadOutOfRangeIsSilent) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 4);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    // MIDI note 40 = pad 4 (only 4 slices)
+    float buffer[kBlockSize * kChannels] = {};
+    auto midi = makeNoteOn(40, 100);
+    ds.process(buffer, kBlockSize, kChannels, midi);
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 0.0001f);
+}
+
+TEST(DrumSlop, DifferentPadsPlayDifferentSlices) {
+    DrumSlop ds;
+    ds.init(kSampleRate, 4096);
+
+    const int halfLen = 4096;
+    std::vector<float> loop(halfLen * 2);
+    for (int i = 0; i < halfLen; ++i)
+        loop[i] = std::sin(2.0 * M_PI * 220.0 * i / kSampleRate);
+    for (int i = 0; i < halfLen; ++i)
+        loop[halfLen + i] = std::sin(2.0 * M_PI * 880.0 * i / kSampleRate);
+
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 2);
+    ds.loadLoop(loop.data(), halfLen * 2, 1);
+
+    float buf0[4096 * kChannels] = {};
+    auto midi0 = makeNoteOn(36, 100);
+    ds.process(buf0, 4096, kChannels, midi0);
+
+    ds.reset();
+    float buf1[4096 * kChannels] = {};
+    auto midi1 = makeNoteOn(37, 100);
+    ds.process(buf1, 4096, kChannels, midi1);
+
+    auto countZC = [](const float* buf, int n) {
+        int zc = 0;
+        for (int i = 2; i < n; i += 2)
+            if ((buf[i-2] >= 0 && buf[i] < 0) || (buf[i-2] < 0 && buf[i] >= 0))
+                ++zc;
+        return zc;
+    };
+    EXPECT_GT(countZC(buf1, 4096 * kChannels), countZC(buf0, 4096 * kChannels) * 1.5);
+}
+
+TEST(DrumSlop, NoteOffReleasesEnvelope) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 4);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    ds.setPadRelease(0, 0.01f);
+
+    float buffer[kBlockSize * kChannels];
+    std::memset(buffer, 0, sizeof(buffer));
+    auto noteOn = makeNoteOn(36, 100);
+    ds.process(buffer, kBlockSize, kChannels, noteOn);
+    float rmsOn = rms(buffer, kBlockSize * kChannels);
+
+    auto noteOff = makeNoteOff(36);
+    std::memset(buffer, 0, sizeof(buffer));
+    ds.process(buffer, kBlockSize, kChannels, noteOff);
+
+    for (int b = 0; b < 20; ++b) {
+        std::memset(buffer, 0, sizeof(buffer));
+        auto empty = makeEmpty();
+        ds.process(buffer, kBlockSize, kChannels, empty);
+    }
+    float rmsAfter = rms(buffer, kBlockSize * kChannels);
+    EXPECT_LT(rmsAfter, rmsOn * 0.1f);
+}
+
+TEST(DrumSlop, PadPitchAdjust) {
+    DrumSlop ds;
+    ds.init(kSampleRate, 4096);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 2);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    float buf1[4096 * kChannels] = {};
+    auto midi1 = makeNoteOn(36, 100);
+    ds.process(buf1, 4096, kChannels, midi1);
+
+    ds.reset();
+    ds.setPadPitch(0, 12.0f);
+    float buf2[4096 * kChannels] = {};
+    auto midi2 = makeNoteOn(36, 100);
+    ds.process(buf2, 4096, kChannels, midi2);
+
+    auto countZC = [](const float* buf, int n) {
+        int zc = 0;
+        for (int i = 2; i < n; i += 2)
+            if ((buf[i-2] >= 0 && buf[i] < 0) || (buf[i-2] < 0 && buf[i] >= 0))
+                ++zc;
+        return zc;
+    };
+    EXPECT_GT(countZC(buf2, 4096 * kChannels), countZC(buf1, 4096 * kChannels));
+}
+
+TEST(DrumSlop, ConfigurableBaseNote) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 4);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    ds.setParameter(DrumSlop::kBaseNote, 60);
+
+    // MIDI note 36 should now be silent
+    float buf1[kBlockSize * kChannels] = {};
+    auto midi1 = makeNoteOn(36, 100);
+    ds.process(buf1, kBlockSize, kChannels, midi1);
+    EXPECT_LT(rms(buf1, kBlockSize * kChannels), 0.0001f);
+
+    // MIDI note 60 should produce output
+    ds.reset();
+    float buf2[kBlockSize * kChannels] = {};
+    auto midi2 = makeNoteOn(60, 100);
+    ds.process(buf2, kBlockSize, kChannels, midi2);
+    EXPECT_GT(rms(buf2, kBlockSize * kChannels), 0.001f);
+}
+
+TEST(DrumSlop, AutoSlicingWithTransients) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    const int clickLen = 256;
+    const int gapLen = 4096;
+    const int numClicks = 8;
+    int totalFrames = numClicks * (clickLen + gapLen);
+    std::vector<float> loop(totalFrames, 0.0f);
+
+    for (int c = 0; c < numClicks; ++c) {
+        int start = c * (clickLen + gapLen);
+        for (int i = 0; i < clickLen; ++i)
+            loop[start + i] = std::sin(2.0 * M_PI * 1000.0 * i / kSampleRate)
+                               * std::exp(-(float)i / 50.0f);
+    }
+
+    ds.setParameter(DrumSlop::kSliceMode, 0); // Auto
+    ds.setParameter(DrumSlop::kSliceCount, 4);
+    ds.loadLoop(loop.data(), totalFrames, 1);
+
+    EXPECT_EQ(ds.sliceBoundary(0), 0);
+    EXPECT_EQ(ds.sliceBoundary(4), totalFrames);
+}
+
+TEST(DrumSlop, SelectedPad) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    EXPECT_EQ(ds.selectedPad(), 0);
+    ds.setSelectedPad(5);
+    EXPECT_EQ(ds.selectedPad(), 5);
+    ds.setSelectedPad(99);
+    EXPECT_EQ(ds.selectedPad(), 15);
+}
+
+TEST(DrumSlop, ParameterGetSet) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    ds.setParameter(DrumSlop::kSliceCount, 12);
+    EXPECT_EQ((int)ds.getParameter(DrumSlop::kSliceCount), 12);
+
+    ds.setParameter(DrumSlop::kVolume, 0.5f);
+    EXPECT_NEAR(ds.getParameter(DrumSlop::kVolume), 0.5f, 0.01f);
+
+    ds.setParameter(DrumSlop::kBaseNote, 48);
+    EXPECT_EQ((int)ds.getParameter(DrumSlop::kBaseNote), 48);
+}
+
+TEST(DrumSlop, PadADSR) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    auto loop = makeSineLoop(44100);
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 2);
+    ds.loadLoop(loop.data(), 44100, 1);
+
+    ds.setPadAttack(0, 0.1f);
+    ds.setPadSustain(0, 0.5f);
+
+    float buffer[kBlockSize * kChannels] = {};
+    auto midi = makeNoteOn(36, 100);
+    ds.process(buffer, kBlockSize, kChannels, midi);
+    float rmsFirst = rms(buffer, kBlockSize * kChannels);
+
+    for (int b = 0; b < 20; ++b) {
+        std::memset(buffer, 0, sizeof(buffer));
+        auto empty = makeEmpty();
+        ds.process(buffer, kBlockSize, kChannels, empty);
+    }
+    float rmsLater = rms(buffer, kBlockSize * kChannels);
+    EXPECT_GT(rmsLater, rmsFirst);
+}
+
+TEST(DrumSlop, ReversePadPlayback) {
+    DrumSlop ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    const int loopLen = 4096;
+    std::vector<float> loop(loopLen);
+    for (int i = 0; i < loopLen; ++i)
+        loop[i] = (float)i / loopLen;
+
+    ds.setParameter(DrumSlop::kSliceMode, 1);
+    ds.setParameter(DrumSlop::kSliceCount, 2);
+    ds.loadLoop(loop.data(), loopLen, 1);
+
+    float buf1[kBlockSize * kChannels] = {};
+    auto midi1 = makeNoteOn(36, 100);
+    ds.process(buf1, kBlockSize, kChannels, midi1);
+    float firstFwd = std::abs(buf1[0]);
+
+    ds.reset();
+    ds.setPadReverse(0, true);
+    float buf2[kBlockSize * kChannels] = {};
+    auto midi2 = makeNoteOn(36, 100);
+    ds.process(buf2, kBlockSize, kChannels, midi2);
+    float firstRev = std::abs(buf2[0]);
+
+    EXPECT_GT(firstRev, firstFwd);
 }

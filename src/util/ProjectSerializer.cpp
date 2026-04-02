@@ -73,7 +73,7 @@ void deserializeMidiEffectChain(midi::MidiEffectChain& chain, const json& arr,
 }
 
 // ---------------------------------------------------------------------------
-// Instrument serialization (with custom handling for Sampler/DrumRack)
+// Instrument serialization (with custom handling for Sampler/DrumRack/DrumSlop)
 // ---------------------------------------------------------------------------
 
 json serializeInstrument(const instruments::Instrument& inst,
@@ -120,6 +120,38 @@ json serializeInstrument(const instruments::Instrument& inst,
         j["pads"] = pads;
     }
 
+    // DrumSlop: save loop sample + per-pad settings
+    if (std::string(inst.id()) == "drumslop") {
+        auto& ds = static_cast<const instruments::DrumSlop&>(inst);
+        if (ds.hasLoop()) {
+            std::string filename = "loop_" + std::to_string(sampleCounter++) + ".wav";
+            fs::path samplePath = samplesDir / filename;
+            FileIO::saveAudioFile(samplePath.string(),
+                                  ds.loopData(), ds.loopFrames(),
+                                  ds.loopChannels(), 44100);
+            j["loopFile"] = "samples/" + filename;
+        }
+        json padsArr = json::array();
+        for (int i = 0; i < instruments::DrumSlop::kNumPads; ++i) {
+            const auto& p = ds.pad(i);
+            json padJ;
+            padJ["volume"] = p.volume;
+            padJ["pan"] = p.pan;
+            padJ["pitch"] = p.pitch;
+            padJ["reverse"] = p.reverse;
+            padJ["filterCutoff"] = p.filterCutoff;
+            padJ["filterReso"] = p.filterReso;
+            padJ["startOffset"] = p.startOffset;
+            padJ["attack"] = p.attack;
+            padJ["decay"] = p.decay;
+            padJ["sustain"] = p.sustain;
+            padJ["release"] = p.release;
+            padsArr.push_back(padJ);
+        }
+        j["dslopPads"] = padsArr;
+        j["selectedPad"] = ds.selectedPad();
+    }
+
     return j;
 }
 
@@ -162,6 +194,46 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             if (padJ.contains("pitchAdjust"))
                 rack.setPadPitch(note, padJ["pitchAdjust"].get<float>());
         }
+    }
+
+    // DrumSlop: load loop sample + per-pad settings
+    if (id == "drumslop") {
+        auto& ds = static_cast<instruments::DrumSlop&>(*inst);
+        if (j.contains("loopFile")) {
+            fs::path samplePath = projectDir / j["loopFile"].get<std::string>();
+            auto buf = FileIO::loadAudioFile(samplePath.string());
+            if (buf) {
+                // Convert non-interleaved AudioBuffer to interleaved for DrumSlop
+                int nf = buf->numFrames(), nc = buf->numChannels();
+                std::vector<float> interleaved(nf * nc);
+                for (int ch = 0; ch < nc; ++ch) {
+                    const float* src = buf->channelData(ch);
+                    for (int f = 0; f < nf; ++f)
+                        interleaved[f * nc + ch] = src[f];
+                }
+                ds.loadLoop(interleaved.data(), nf, nc);
+            }
+        }
+        if (j.contains("dslopPads")) {
+            int idx = 0;
+            for (const auto& padJ : j["dslopPads"]) {
+                if (idx >= instruments::DrumSlop::kNumPads) break;
+                if (padJ.contains("volume"))      ds.setPadVolume(idx, padJ["volume"].get<float>());
+                if (padJ.contains("pan"))          ds.setPadPan(idx, padJ["pan"].get<float>());
+                if (padJ.contains("pitch"))        ds.setPadPitch(idx, padJ["pitch"].get<float>());
+                if (padJ.contains("reverse"))      ds.setPadReverse(idx, padJ["reverse"].get<bool>());
+                if (padJ.contains("filterCutoff")) ds.setPadFilterCutoff(idx, padJ["filterCutoff"].get<float>());
+                if (padJ.contains("filterReso"))   ds.setPadFilterReso(idx, padJ["filterReso"].get<float>());
+                if (padJ.contains("startOffset"))  ds.setPadStartOffset(idx, padJ["startOffset"].get<float>());
+                if (padJ.contains("attack"))       ds.setPadAttack(idx, padJ["attack"].get<float>());
+                if (padJ.contains("decay"))        ds.setPadDecay(idx, padJ["decay"].get<float>());
+                if (padJ.contains("sustain"))      ds.setPadSustain(idx, padJ["sustain"].get<float>());
+                if (padJ.contains("release"))      ds.setPadRelease(idx, padJ["release"].get<float>());
+                ++idx;
+            }
+        }
+        if (j.contains("selectedPad"))
+            ds.setSelectedPad(j["selectedPad"].get<int>());
     }
 
     return inst;
