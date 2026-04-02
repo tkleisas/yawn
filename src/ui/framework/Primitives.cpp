@@ -149,8 +149,8 @@ void FwKnob::paint(UIContext& ctx) {
 
     if (!ctx.renderer || !ctx.font) return;
     float cx = m_bounds.x + m_bounds.w * 0.5f;
-    float cy = m_bounds.y + m_bounds.h * 0.4f;
-    float r = detail::cmin(m_bounds.w, m_bounds.h * 0.7f) * 0.4f;
+    float cy = m_bounds.y + m_bounds.h * 0.32f;
+    float r = detail::cmin(m_bounds.w, m_bounds.h * 0.6f) * 0.4f;
 
     // Background arc
     renderArc(*ctx.renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
@@ -188,23 +188,23 @@ void FwKnob::paint(UIContext& ctx) {
 
     // Value text (from format callback) — or edit text when editing
     float valScale = 10.0f / Theme::kFontSize;
+    float valY = m_bounds.y + m_bounds.h * 0.62f;
     if (m_editing) {
         // Show editable text with cursor
         std::string editStr = std::string(m_editText) + "|";
         float vw = ctx.font->textWidth(editStr, valScale);
-        float vy = m_bounds.y + m_bounds.h * 0.72f;
         // Background highlight for edit mode
-        ctx.renderer->drawRect(m_bounds.x + 2, vy - 1, m_bounds.w - 4, 14.0f,
+        ctx.renderer->drawRect(m_bounds.x + 2, valY - 1, m_bounds.w - 4, 14.0f,
                                Color{40, 40, 50, 200});
         ctx.font->drawText(*ctx.renderer, editStr.c_str(),
                            m_bounds.x + (m_bounds.w - vw) * 0.5f,
-                           vy, valScale, Color{255, 255, 255, 255});
+                           valY, valScale, Color{255, 255, 255, 255});
     } else if (m_formatCb) {
         std::string valStr = m_formatCb(m_value);
         float vw = ctx.font->textWidth(valStr, valScale);
         ctx.font->drawText(*ctx.renderer, valStr.c_str(),
                            m_bounds.x + (m_bounds.w - vw) * 0.5f,
-                           m_bounds.y + m_bounds.h * 0.72f, valScale, Theme::textSecondary);
+                           valY, valScale, Theme::textSecondary);
     }
 
     // Label below
@@ -213,7 +213,7 @@ void FwKnob::paint(UIContext& ctx) {
         float tw = ctx.font->textWidth(m_label, nameScale);
         float maxW = m_bounds.w - 2.0f;
         float tx = m_bounds.x + (m_bounds.w - detail::cmin(tw, maxW)) * 0.5f;
-        float ty = m_bounds.y + m_bounds.h * 0.85f;
+        float ty = m_bounds.y + m_bounds.h * 0.80f;
         ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, nameScale, Theme::textDim);
     }
 }

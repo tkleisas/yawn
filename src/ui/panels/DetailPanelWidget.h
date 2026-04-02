@@ -59,7 +59,7 @@ public:
     // Clip view layout constants
     static constexpr float kClipTitleRowH    = 32.0f;   // top pad + title text
     static constexpr float kClipWaveformH    = 80.0f;
-    static constexpr float kClipPropsH       = 70.0f;   // horizontal control strip
+    static constexpr float kClipPropsH       = 80.0f;   // horizontal control strip
     static constexpr float kClipSectionGap   = 4.0f;
     static constexpr float kClipLabelW       = 60.0f;
     static constexpr float kClipValueW       = 80.0f;

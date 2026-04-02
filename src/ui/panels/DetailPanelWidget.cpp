@@ -261,8 +261,8 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float labelScale = 10.0f / Theme::kFontSize;
     float labelH = 13.0f;
     float widgetY = stripY + labelH + 2.0f;
-    float knobH = 40.0f;
-    float knobW = 44.0f;
+    float knobH = 50.0f;
+    float knobW = 48.0f;
     float gap = 14.0f;
     float sectionGap = 24.0f;
     float inputH = 20.0f;
@@ -284,10 +284,10 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     cx += knobW + sectionGap;
 
     // Transpose knob
-    font.drawText(renderer, "Transpose", cx, stripY, labelScale, Theme::textDim);
+    font.drawText(renderer, "Trans", cx, stripY, labelScale, Theme::textDim);
     m_transposeKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
     m_transposeKnob.paint(ctx);
-    cx += knobW + gap;
+    cx += knobW + sectionGap;
 
     // Detune knob
     font.drawText(renderer, "Detune", cx, stripY, labelScale, Theme::textDim);
