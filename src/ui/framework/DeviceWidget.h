@@ -185,6 +185,40 @@ public:
     void setOnBypassToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onBypassToggle = std::move(cb); }
     void setOnExpandToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onExpandToggle = std::move(cb); }
 
+    // ─── Knob text-edit forwarding (for GroupedKnobBody) ────────────────
+
+    bool hasEditingKnob() const {
+        if (m_customBody) return m_customBody->hasEditingKnob();
+        for (auto* k : m_knobs)    if (k->isEditing()) return true;
+        for (auto* k : m_vizKnobs) if (k->isEditing()) return true;
+        return false;
+    }
+
+    bool forwardKeyDown(int key) {
+        if (m_customBody) return m_customBody->forwardKeyDown(key);
+        KeyEvent ke; ke.keyCode = key;
+        for (auto* k : m_knobs)    if (k->isEditing()) return k->onKeyDown(ke);
+        for (auto* k : m_vizKnobs) if (k->isEditing()) return k->onKeyDown(ke);
+        return false;
+    }
+
+    bool forwardTextInput(const char* text) {
+        if (m_customBody) return m_customBody->forwardTextInput(text);
+        TextInputEvent te;
+        std::strncpy(te.text, text, sizeof(te.text) - 1);
+        te.text[sizeof(te.text) - 1] = '\0';
+        for (auto* k : m_knobs)    if (k->isEditing()) return k->onTextInput(te);
+        for (auto* k : m_vizKnobs) if (k->isEditing()) return k->onTextInput(te);
+        return false;
+    }
+
+    void cancelEditingKnobs() {
+        if (m_customBody) { m_customBody->cancelEditingKnobs(); return; }
+        KeyEvent ke; ke.keyCode = 27;
+        for (auto* k : m_knobs)    if (k->isEditing()) k->onKeyDown(ke);
+        for (auto* k : m_vizKnobs) if (k->isEditing()) k->onKeyDown(ke);
+    }
+
     // ─── Width calculation (matches DetailPanelWidget::DevicePanel::deviceWidth) ─
 
     float preferredWidth() const {

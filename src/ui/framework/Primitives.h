@@ -361,7 +361,7 @@ public:
         float dy = e.y - m_lastY;
         m_lastY = e.y;
         float range = m_max - m_min;
-        float delta = -dy * m_sensitivity * range / 200.0f;
+        float delta = -dy * m_sensitivity * range / 120.0f;
         float newVal = detail::cclamp(m_value + delta, m_min, m_max);
         if (m_step > 0) newVal = std::round(newVal / m_step) * m_step;
         if (newVal != m_value) {

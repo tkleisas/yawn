@@ -85,9 +85,13 @@ public:
 
     ViewMode viewMode() const { return m_viewMode; }
 
-    // Check if any clip-property knob is in text-edit mode
+    // Check if any clip-property knob or device knob is in text-edit mode
     bool hasEditingKnob() const {
-        return m_transposeKnob.isEditing() || m_detuneKnob.isEditing() || m_bpmKnob.isEditing();
+        if (m_transposeKnob.isEditing() || m_detuneKnob.isEditing() || m_bpmKnob.isEditing())
+            return true;
+        for (auto* dw : m_deviceWidgets)
+            if (dw->hasEditingKnob()) return true;
+        return false;
     }
 
     // Forward key events to the editing knob
@@ -97,6 +101,8 @@ public:
         if (m_transposeKnob.isEditing()) return m_transposeKnob.onKeyDown(ke);
         if (m_detuneKnob.isEditing()) return m_detuneKnob.onKeyDown(ke);
         if (m_bpmKnob.isEditing()) return m_bpmKnob.onKeyDown(ke);
+        for (auto* dw : m_deviceWidgets)
+            if (dw->hasEditingKnob()) return dw->forwardKeyDown(key);
         return false;
     }
 
@@ -108,6 +114,8 @@ public:
         if (m_transposeKnob.isEditing()) return m_transposeKnob.onTextInput(te);
         if (m_detuneKnob.isEditing()) return m_detuneKnob.onTextInput(te);
         if (m_bpmKnob.isEditing()) return m_bpmKnob.onTextInput(te);
+        for (auto* dw : m_deviceWidgets)
+            if (dw->hasEditingKnob()) return dw->forwardTextInput(text);
         return false;
     }
 
@@ -116,6 +124,7 @@ public:
         if (m_transposeKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_transposeKnob.onKeyDown(ke); }
         if (m_detuneKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_detuneKnob.onKeyDown(ke); }
         if (m_bpmKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_bpmKnob.onKeyDown(ke); }
+        for (auto* dw : m_deviceWidgets) dw->cancelEditingKnobs();
     }
 
     // Show audio clip view: waveform + properties + effect chain

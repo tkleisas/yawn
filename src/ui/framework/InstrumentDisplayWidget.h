@@ -599,6 +599,12 @@ public:
     virtual void updateParamValue(int index, float value) = 0;
     virtual float preferredBodyWidth() const = 0;
     virtual void setOnParamChange(std::function<void(int, float)> cb) = 0;
+
+    // Text-edit support for knob double-click entry
+    virtual bool hasEditingKnob() const { return false; }
+    virtual bool forwardKeyDown(int /*key*/) { return false; }
+    virtual bool forwardTextInput(const char* /*text*/) { return false; }
+    virtual void cancelEditingKnobs() {}
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -814,6 +820,41 @@ public:
             for (auto& ke : sec.knobs)
                 if (ke.knob->onMouseMove(e)) return true;
         return false;
+    }
+
+    // Text-edit support: check if any knob is in double-click edit mode
+    bool hasEditingKnob() const {
+        for (auto& sec : m_sections)
+            for (auto& ke : sec.knobs)
+                if (ke.knob->isEditing()) return true;
+        return false;
+    }
+
+    bool forwardKeyDown(int key) {
+        KeyEvent ke;
+        ke.keyCode = key;
+        for (auto& sec : m_sections)
+            for (auto& entry : sec.knobs)
+                if (entry.knob->isEditing()) return entry.knob->onKeyDown(ke);
+        return false;
+    }
+
+    bool forwardTextInput(const char* text) {
+        TextInputEvent te;
+        std::strncpy(te.text, text, sizeof(te.text) - 1);
+        te.text[sizeof(te.text) - 1] = '\0';
+        for (auto& sec : m_sections)
+            for (auto& entry : sec.knobs)
+                if (entry.knob->isEditing()) return entry.knob->onTextInput(te);
+        return false;
+    }
+
+    void cancelEditingKnobs() {
+        KeyEvent ke;
+        ke.keyCode = 27; // Escape
+        for (auto& sec : m_sections)
+            for (auto& entry : sec.knobs)
+                if (entry.knob->isEditing()) entry.knob->onKeyDown(ke);
     }
 
 private:

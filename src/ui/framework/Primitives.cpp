@@ -157,13 +157,14 @@ void FwKnob::paint(UIContext& ctx) {
         float maxW = m_bounds.w - 2.0f;
         float tx = m_bounds.x + (m_bounds.w - detail::cmin(tw, maxW)) * 0.5f;
         float ty = m_bounds.y;
-        ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, labelScale, Theme::textDim);
+        ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, labelScale,
+                           Color{170, 175, 185, 255});
     }
 
-    // Arc in middle
+    // Arc in middle (pushed down to avoid label overlap)
     float cx = m_bounds.x + m_bounds.w * 0.5f;
-    float cy = m_bounds.y + m_bounds.h * 0.42f;
-    float r = detail::cmin(m_bounds.w, m_bounds.h * 0.55f) * 0.38f;
+    float cy = m_bounds.y + m_bounds.h * 0.47f;
+    float r = detail::cmin(m_bounds.w, m_bounds.h * 0.50f) * 0.36f;
 
     // Background arc
     renderArc(*ctx.renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
@@ -201,7 +202,7 @@ void FwKnob::paint(UIContext& ctx) {
 
     // Value text on bottom
     float valScale = 10.0f / Theme::kFontSize;
-    float valY = m_bounds.y + m_bounds.h * 0.78f;
+    float valY = m_bounds.y + m_bounds.h * 0.82f;
     if (m_editing) {
         std::string editStr = std::string(m_editText) + "|";
         float vw = ctx.font->textWidth(editStr, valScale);
@@ -215,7 +216,7 @@ void FwKnob::paint(UIContext& ctx) {
         float vw = ctx.font->textWidth(valStr, valScale);
         ctx.font->drawText(*ctx.renderer, valStr.c_str(),
                            m_bounds.x + (m_bounds.w - vw) * 0.5f,
-                           valY, valScale, Theme::textSecondary);
+                           valY, valScale, Color{200, 205, 215, 255});
     }
 }
 
