@@ -10,6 +10,7 @@
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
+#include "effects/AmpSimulator.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include <cmath>
@@ -794,4 +795,107 @@ TEST(EffectChain, MoveEffectSamePos) {
     chain.moveEffect(0, 0); // no-op
     EXPECT_EQ(chain.effectAt(0), dp);
     EXPECT_EQ(chain.effectAt(1), cp);
+}
+
+// ===========================================================================
+// AmpSimulator Tests
+// ===========================================================================
+
+TEST(AmpSimulator, Init) {
+    AmpSimulator amp;
+    amp.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(amp.parameterCount(), AmpSimulator::kParamCount);
+    EXPECT_STREQ(amp.name(), "Amp Simulator");
+    EXPECT_STREQ(amp.id(), "amp");
+}
+
+TEST(AmpSimulator, CleanTypePreservesSignal) {
+    AmpSimulator amp;
+    amp.init(kSampleRate, kBlockSize);
+    amp.setParameter(AmpSimulator::kGain, 0.0f);     // minimal drive
+    amp.setParameter(AmpSimulator::kAmpType, 0.0f);   // Clean
+    amp.setParameter(AmpSimulator::kCabinet, 0.0f);   // no cabinet
+    amp.setParameter(AmpSimulator::kOutput, 0.0f);     // unity output
+
+    const int frames = 512;
+    std::vector<float> buf(frames * 2);
+    fillSine(buf.data(), frames, 2, 440.0f, 0.3f, kSampleRate);
+    amp.process(buf.data(), frames, 2);
+
+    // Should produce output (not silence)
+    EXPECT_TRUE(hasSignal(buf.data() + 256, frames - 128, 2));
+}
+
+TEST(AmpSimulator, HighGainSaturates) {
+    AmpSimulator amp;
+    amp.init(kSampleRate, kBlockSize);
+    amp.setParameter(AmpSimulator::kGain, 48.0f);     // max drive
+    amp.setParameter(AmpSimulator::kAmpType, 3.0f);   // HighGain
+    amp.setParameter(AmpSimulator::kCabinet, 0.0f);
+    amp.setParameter(AmpSimulator::kOutput, -12.0f);
+
+    const int frames = 512;
+    std::vector<float> buf(frames * 2);
+    fillSine(buf.data(), frames, 2, 440.0f, 0.5f, kSampleRate);
+    auto orig = buf;
+    amp.process(buf.data(), frames, 2);
+
+    // Output should differ significantly from input (saturation)
+    float diffSum = 0.0f;
+    for (size_t i = 256; i < buf.size(); ++i)
+        diffSum += std::abs(buf[i] - orig[i]);
+    EXPECT_GT(diffSum, 1.0f);
+}
+
+TEST(AmpSimulator, CabinetReducesHighFreq) {
+    AmpSimulator amp;
+    amp.init(kSampleRate, kBlockSize);
+    amp.setParameter(AmpSimulator::kGain, 6.0f);
+    amp.setParameter(AmpSimulator::kAmpType, 0.0f);
+    amp.setParameter(AmpSimulator::kCabinet, 1.0f);   // full cabinet
+    amp.setParameter(AmpSimulator::kOutput, 0.0f);
+
+    // High frequency signal should be attenuated by cabinet
+    const int frames = 1024;
+    std::vector<float> buf(frames * 2);
+    fillSine(buf.data(), frames, 2, 8000.0f, 0.3f, kSampleRate);
+    float inRMS = computeRMS(buf.data() + 512, frames - 256, 2);
+    amp.process(buf.data(), frames, 2);
+    float outRMS = computeRMS(buf.data() + 512, frames - 256, 2);
+
+    EXPECT_LT(outRMS, inRMS);
+}
+
+TEST(AmpSimulator, BypassPassesThrough) {
+    AmpSimulator amp;
+    amp.init(kSampleRate, kBlockSize);
+    amp.setBypassed(true);
+
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    auto orig = buf;
+    amp.process(buf.data(), kBlockSize, 2);
+
+    for (int i = 0; i < kBlockSize * 2; ++i)
+        EXPECT_FLOAT_EQ(buf[i], orig[i]);
+}
+
+TEST(AmpSimulator, Parameters) {
+    AmpSimulator amp;
+    amp.init(kSampleRate, kBlockSize);
+
+    amp.setParameter(AmpSimulator::kGain, 24.0f);
+    EXPECT_FLOAT_EQ(amp.getParameter(AmpSimulator::kGain), 24.0f);
+
+    amp.setParameter(AmpSimulator::kBass, 6.0f);
+    EXPECT_FLOAT_EQ(amp.getParameter(AmpSimulator::kBass), 6.0f);
+
+    amp.setParameter(AmpSimulator::kAmpType, 2.0f);
+    EXPECT_FLOAT_EQ(amp.getParameter(AmpSimulator::kAmpType), 2.0f);
+
+    // Defaults
+    AmpSimulator amp2;
+    amp2.init(kSampleRate, kBlockSize);
+    EXPECT_FLOAT_EQ(amp2.getParameter(AmpSimulator::kGain),
+                    amp2.parameterInfo(AmpSimulator::kGain).defaultValue);
 }

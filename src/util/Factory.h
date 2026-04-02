@@ -22,6 +22,7 @@
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
+#include "effects/AmpSimulator.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 
@@ -64,6 +65,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"chorus",      [] { return std::make_unique<effects::Chorus>(); }},
         {"distortion",  [] { return std::make_unique<effects::Distortion>(); }},
         {"tape",        [] { return std::make_unique<effects::TapeEmulation>(); }},
+        {"amp",         [] { return std::make_unique<effects::AmpSimulator>(); }},
         {"oscilloscope",[] { return std::make_unique<effects::Oscilloscope>(); }},
         {"spectrum",    [] { return std::make_unique<effects::SpectrumAnalyzer>(); }},
     };

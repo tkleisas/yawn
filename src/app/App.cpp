@@ -14,6 +14,7 @@
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
+#include "effects/AmpSimulator.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include "midi/Arpeggiator.h"
@@ -400,6 +401,10 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     }});
     fxItems.push_back({"Tape Emulation", [this, trackIndex]() {
         m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::TapeEmulation>());
+        markDirty();
+    }});
+    fxItems.push_back({"Amp Simulator", [this, trackIndex]() {
+        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::AmpSimulator>());
         markDirty();
     }});
     fxItems.push_back({"Oscilloscope", [this, trackIndex]() {
