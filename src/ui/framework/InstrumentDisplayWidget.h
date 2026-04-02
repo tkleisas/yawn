@@ -108,18 +108,18 @@ private:
 #ifndef YAWN_TEST_BUILD
     void drawAlgorithm(Renderer2D& r, Font& f) {
         const auto& algo = kAlgos[m_algorithm];
-        float areaX = m_bounds.x + 6;
-        float areaY = m_bounds.y + 13;
-        float areaW = m_bounds.w - 12;
-        float areaH = m_bounds.h - 22;
+        float areaX = m_bounds.x + 4;
+        float areaY = m_bounds.y + 14;
+        float areaW = m_bounds.w - 8;
+        float areaH = m_bounds.h - 28;
         if (areaW < 40 || areaH < 20) return;
 
-        constexpr float boxW = 26, boxH = 18;
+        constexpr float boxW = 28, boxH = 22;
         float opX[4], opY[4];
         layoutOperators(algo, areaX, areaY, areaW, areaH, boxW, boxH, opX, opY);
 
         // Draw connections (modulator → destination)
-        Color connCol{220, 150, 50, 180};
+        Color connCol{220, 150, 50, 200};
         for (int dest = 0; dest < 4; ++dest)
             for (int src = 0; src < 4; ++src)
                 if (algo.mod[dest][src])
@@ -132,61 +132,60 @@ private:
             if (!algo.carrier[op]) continue;
             float cx = opX[op] + boxW / 2;
             float by = opY[op] + boxH;
-            float endY = std::min(by + 8, m_bounds.y + m_bounds.h - 4);
+            float endY = std::min(by + 10, m_bounds.y + m_bounds.h - 4);
             for (float py = by + 1; py < endY; py += 2)
-                r.drawRect(cx - 0.5f, py, 1.5f, 1.5f, outCol);
+                r.drawRect(cx - 0.5f, py, 2.0f, 1.5f, outCol);
             r.drawTriangle(cx - 3, endY - 1, cx + 3, endY - 1, cx, endY + 2, outCol);
         }
 
         // Feedback indicator on operator 4 (index 3)
         if (m_feedback > 0.01f) {
-            float nameScale = 7.0f / Theme::kFontSize;
             Color fbCol{255, 200, 60, 200};
-            float fbx = opX[3] + boxW + 3;
-            float fby = opY[3] + 2;
-            // Draw small self-loop: right→up→left
-            float rx = opX[3] + boxW + 1;
+            float rx = opX[3] + boxW + 2;
             float ry = opY[3] + boxH * 0.5f;
-            for (int s = 0; s < 4; ++s)
-                r.drawRect(rx + s * 2.0f, ry - s * 2.5f, 1.5f, 1.5f, fbCol);
+            // Self-loop: right side, going up and curving back
+            for (int s = 0; s < 5; ++s)
+                r.drawRect(rx + s * 1.5f, ry - s * 2.0f, 2.0f, 2.0f, fbCol);
             float topY = ry - 10;
             for (float px = rx + 6; px >= opX[3] + boxW * 0.7f; px -= 2)
-                r.drawRect(px, topY, 1.5f, 1.5f, fbCol);
+                r.drawRect(px, topY, 2.0f, 2.0f, fbCol);
             r.drawTriangle(opX[3] + boxW * 0.7f - 1, topY - 2,
-                           opX[3] + boxW * 0.7f - 1, topY + 3,
-                           opX[3] + boxW * 0.7f - 4, topY + 0.5f, fbCol);
-            f.drawText(r, "FB", fbx + 6, fby, nameScale, fbCol);
+                           opX[3] + boxW * 0.7f - 1, topY + 4,
+                           opX[3] + boxW * 0.7f - 4, topY + 1, fbCol);
         }
 
-        // Draw operator boxes
-        float nameScale = 9.0f / Theme::kFontSize;
+        // Draw operator boxes (on top of connections)
+        float numScale = 10.0f / Theme::kFontSize;
+        float numH = f.lineHeight(numScale);
         for (int op = 0; op < 4; ++op) {
             bool isCarrier = algo.carrier[op];
             float lvl = m_opLevel[op];
             Color boxBg = isCarrier
-                ? Color{static_cast<uint8_t>(25 + lvl * 40), static_cast<uint8_t>(80 + lvl * 35), static_cast<uint8_t>(40 + lvl * 20), 255}
-                : Color{static_cast<uint8_t>(75 + lvl * 35), static_cast<uint8_t>(50 + lvl * 25), static_cast<uint8_t>(20 + lvl * 15), 255};
+                ? Color{static_cast<uint8_t>(25 + lvl * 45), static_cast<uint8_t>(80 + lvl * 40), static_cast<uint8_t>(40 + lvl * 25), 255}
+                : Color{static_cast<uint8_t>(75 + lvl * 40), static_cast<uint8_t>(50 + lvl * 30), static_cast<uint8_t>(20 + lvl * 20), 255};
             r.drawRoundedRect(opX[op], opY[op], boxW, boxH, 3.0f, boxBg);
             Color border = isCarrier ? Color{80, 220, 100, 230} : Color{230, 160, 60, 230};
             r.drawRectOutline(opX[op], opY[op], boxW, boxH, border);
 
+            // Operator number centered inside box
             char label[4];
             std::snprintf(label, sizeof(label), "%d", op + 1);
-            float tw = f.textWidth(label, nameScale);
-            f.drawText(r, label, opX[op] + (boxW - tw) / 2,
-                       opY[op] + (boxH - 10) / 2, nameScale, Color{240, 240, 255, 230});
+            float tw = f.textWidth(label, numScale);
+            float tx = opX[op] + (boxW - tw) * 0.5f;
+            float ty = opY[op] + (boxH - numH) * 0.5f - numH * 0.1f;
+            f.drawText(r, label, tx, ty, numScale, Color{240, 240, 255, 240});
         }
 
-        // "OUT" label
+        // "OUT" label at bottom
         float outLblScale = 7.0f / Theme::kFontSize;
-        float outX = areaX + areaW / 2;
-        f.drawText(r, "OUT", outX - 8, m_bounds.y + m_bounds.h - 11, outLblScale, outCol);
+        float outTw = f.textWidth("OUT", outLblScale);
+        f.drawText(r, "OUT", areaX + (areaW - outTw) / 2,
+                   m_bounds.y + m_bounds.h - 12, outLblScale, outCol);
     }
 
     void layoutOperators(const AlgoDef& algo, float areaX, float areaY,
                          float areaW, float areaH, float boxW, float boxH,
                          float* opX, float* opY) {
-        // Compute depth: carriers=0, their modulators=1, etc.
         int depth[4];
         for (int op = 0; op < 4; ++op)
             depth[op] = algo.carrier[op] ? 0 : -1;
@@ -209,16 +208,17 @@ private:
         for (int op = 0; op < 4; ++op) countAt[depth[op]]++;
 
         float vGap = maxDepth > 0
-            ? std::min((areaH - boxH) / maxDepth, boxH + 6.0f)
+            ? std::min((areaH - boxH) / maxDepth, boxH + 8.0f)
             : 0.0f;
+        float hGap = 8.0f;
 
         for (int op = 0; op < 4; ++op) {
             int d = depth[op];
             int cnt = countAt[d];
             int idx = idxAt[d]++;
-            float totalW = cnt * boxW + (cnt - 1) * 14.0f;
+            float totalW = cnt * boxW + (cnt - 1) * hGap;
             float startX = areaX + (areaW - totalW) / 2;
-            opX[op] = startX + idx * (boxW + 14.0f);
+            opX[op] = startX + idx * (boxW + hGap);
             opY[op] = areaY + (maxDepth - d) * vGap;
         }
     }
@@ -227,13 +227,12 @@ private:
         float dx = x2 - x1, dy = y2 - y1;
         float len = std::sqrt(dx * dx + dy * dy);
         if (len < 2) return;
-        int steps = std::max(2, static_cast<int>(len / 2.5f));
+        int steps = std::max(3, static_cast<int>(len / 2.0f));
         for (int i = 0; i <= steps; ++i) {
             float t = static_cast<float>(i) / steps;
-            r.drawRect(x1 + dx * t - 0.5f, y1 + dy * t - 0.5f, 1.5f, 1.5f, col);
+            r.drawRect(x1 + dx * t - 0.75f, y1 + dy * t - 0.75f, 2.0f, 2.0f, col);
         }
-        // Arrowhead at destination
-        r.drawTriangle(x2 - 3, y2 - 3, x2 + 3, y2 - 3, x2, y2 + 1, col);
+        r.drawTriangle(x2 - 3, y2 - 2, x2 + 3, y2 - 2, x2, y2 + 2, col);
     }
 #endif // YAWN_TEST_BUILD
 };
@@ -636,6 +635,32 @@ inline std::string formatParamValue(float value, const std::string& unit, bool i
     return buf;
 }
 
+// Shorten parameter labels for compact knob display
+inline std::string shortenLabel(const std::string& name) {
+    // Strip "OpN " prefix (section header provides operator context)
+    std::string s = name;
+    if (s.size() > 4 && s[0] == 'O' && s[1] == 'p' && s[2] >= '1' && s[2] <= '9' && s[3] == ' ')
+        s = s.substr(4);
+
+    // Common abbreviations
+    if (s == "Algorithm")  return "Algo";
+    if (s == "Feedback")   return "FB";
+    if (s == "Volume")     return "Vol";
+    if (s == "Level")      return "Lvl";
+    if (s == "Attack")     return "Atk";
+    if (s == "Release")    return "Rel";
+    if (s == "Cutoff")     return "Cut";
+    if (s == "Resonance")  return "Res";
+    if (s == "Depth")      return "Dpt";
+    if (s == "Amount")     return "Amt";
+    if (s == "Noise Level") return "Noise";
+    if (s == "Root Note")  return "Root";
+    if (s == "Filter Type") return "Type";
+    if (s == "Filter Cutoff") return "Cut";
+    if (s == "Filter Res")    return "Res";
+    return s;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // GroupedKnobBody — Lays out knobs in named sections with an optional
 // inline display widget on the left.  Replaces the flat FwGrid for
@@ -687,7 +712,7 @@ public:
                 k->setRange(pd.minVal, pd.maxVal);
                 k->setDefault(pd.defaultVal);
                 k->setValue(pd.defaultVal);
-                k->setLabel(pd.name);
+                k->setLabel(shortenLabel(pd.name));
                 k->setBoolean(pd.isBoolean);
 
                 // Detect integer-range params and set step for snapping
@@ -698,6 +723,7 @@ public:
                                   pd.unit.empty() && !pd.isBoolean);
                 if (isInteger) {
                     k->setStep(1.0f);
+                    k->setSensitivity(2.5f);
                     k->setFormatCallback([](float v) {
                         char buf[8];
                         std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(std::round(v)));
