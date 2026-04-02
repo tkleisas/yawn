@@ -140,7 +140,8 @@ void MidiClipEngine::stopNow(int trackIndex) {
     // The AudioEngine should call allNotesOff() for this track
     state.active = false;
     state.stopping = false;
-    state.clip = nullptr;
+    // Keep state.clip so emitClipStates() continues reporting playing=false
+    // to the UI (prevents stale "playing" state blocking relaunch).
     state.playPositionBeats = 0.0;
 }
 
