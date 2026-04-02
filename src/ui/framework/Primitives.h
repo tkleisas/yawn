@@ -592,11 +592,13 @@ public:
         if (e.button != MouseButton::Left) return false;
         m_dragging = true;
         m_lastY = e.y;
+        captureMouse();
         return true;
     }
 
     bool onMouseUp(MouseEvent&) override {
         m_dragging = false;
+        releaseMouse();
         return true;
     }
 
