@@ -909,8 +909,11 @@ void App::processEvents() {
 
                 // Detail panel knob text-edit mode
                 if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
-                    if (m_detailPanel->forwardKeyDown(static_cast<int>(event.key.key)))
+                    if (m_detailPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
+                        if (!m_detailPanel->hasEditingKnob())
+                            SDL_StopTextInput(m_mainWindow.getHandle());
                         break;
+                    }
                 }
 
                 // Piano roll keyboard shortcuts
@@ -1118,6 +1121,7 @@ void App::processEvents() {
 
                 // Detail panel — dispatch via widget tree
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
+                bool hadEditingKnob = m_showDetailPanel && m_detailPanel->hasEditingKnob();
                 if (m_showDetailPanel) {
                     if (rightClick) {
                         if (m_detailPanel->handleRightClick(mx, my)) {
@@ -1129,12 +1133,21 @@ void App::processEvents() {
                         me.x = mx; me.y = my;
                         me.button = ui::fw::MouseButton::Left;
                         if (m_detailPanel->onMouseDown(me)) {
+                            // Start/stop SDL text input for knob edit mode
+                            if (m_detailPanel->hasEditingKnob() && !hadEditingKnob)
+                                SDL_StartTextInput(m_mainWindow.getHandle());
+                            else if (!m_detailPanel->hasEditingKnob() && hadEditingKnob)
+                                SDL_StopTextInput(m_mainWindow.getHandle());
                             break;
                         }
                     }
                 }
 
-                // Clicking outside detail panel clears focus
+                // Clicking outside detail panel — cancel any editing knob
+                if (hadEditingKnob) {
+                    m_detailPanel->cancelEditingKnobs();
+                    SDL_StopTextInput(m_mainWindow.getHandle());
+                }
                 m_detailPanel->setFocused(false);
 
                 // Piano roll click handling

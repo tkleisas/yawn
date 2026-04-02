@@ -110,6 +110,13 @@ public:
         return false;
     }
 
+    // Cancel any knob in text-edit mode (e.g., when clicking outside)
+    void cancelEditingKnobs() {
+        if (m_transposeKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_transposeKnob.onKeyDown(ke); }
+        if (m_detuneKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_detuneKnob.onKeyDown(ke); }
+        if (m_bpmKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_bpmKnob.onKeyDown(ke); }
+    }
+
     // Show audio clip view: waveform + properties + effect chain
     void setAudioClip(const audio::Clip* clip, effects::EffectChain* fxChain,
                       int sampleRate = 44100) {
