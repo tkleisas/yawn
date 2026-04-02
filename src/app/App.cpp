@@ -758,6 +758,43 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     return true;
 }
 
+bool App::loadSampleToSampler(const std::string& path, int trackIndex) {
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* sampler = dynamic_cast<instruments::Sampler*>(inst);
+    if (!sampler) return false;
+
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    // Convert non-interleaved AudioBuffer to interleaved for Sampler::loadSample
+    int frames = buffer->numFrames();
+    int channels = buffer->numChannels();
+    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
+    for (int ch = 0; ch < channels; ++ch) {
+        const float* src = buffer->channelData(ch);
+        for (int i = 0; i < frames; ++i)
+            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
+    }
+
+    sampler->loadSample(interleaved.data(), frames, channels);
+
+    std::string name = path;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    LOG_INFO("File", "Loaded sample '%s' into Sampler on Track %d",
+        name.c_str(), trackIndex + 1);
+
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
 void App::processEvents() {
     computeLayout();  // ensure widget bounds are current for hit-testing
 
@@ -1334,10 +1371,15 @@ void App::processEvents() {
                         if (s >= 0 && s < m_project.numScenes()) targetScene = s;
                     }
 
-                    loadClipToSlot(file, targetTrack, targetScene);
-                    // Advance scene for next drop on same track
-                    m_nextDropScene = targetScene + 1;
-                    if (m_nextDropScene >= m_project.numScenes()) m_nextDropScene = 0;
+                    // If the target track has a Sampler instrument, load as sample
+                    if (loadSampleToSampler(file, targetTrack)) {
+                        // Sample loaded into Sampler — done
+                    } else {
+                        loadClipToSlot(file, targetTrack, targetScene);
+                        // Advance scene for next drop on same track
+                        m_nextDropScene = targetScene + 1;
+                        if (m_nextDropScene >= m_project.numScenes()) m_nextDropScene = 0;
+                    }
                 }
                 break;
             }

@@ -56,6 +56,7 @@ private:
     void buildWidgetTree();
 
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
+    bool loadSampleToSampler(const std::string& path, int trackIndex);
     bool loadFont();
     void setupMenuBar();
     void showTrackContextMenu(int trackIndex, float mx, float my);
