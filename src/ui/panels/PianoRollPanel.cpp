@@ -202,6 +202,15 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
 
     if (m_dragMode == Drag::LoopStart || m_dragMode == Drag::LoopEnd) {
         if (m_clip) {
+            // Auto-scroll when dragging near edges
+            float edgeZone = 30.0f;
+            float scrollSpeed = 4.0f;
+            if (mx > m_gx + m_gw - edgeZone) {
+                m_scrollX += scrollSpeed;
+                clampScroll();
+            } else if (mx < m_gx + edgeZone && m_scrollX > 0) {
+                m_scrollX = std::max(0.0f, m_scrollX - scrollSpeed);
+            }
             double beat = snapBeat(std::max(0.0, xToBeat(mx)));
             if (m_dragMode == Drag::LoopStart) {
                 if (beat < m_clip->lengthBeats())
@@ -450,23 +459,27 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     auto& r = *ctx.renderer;
     float tbY = m_py + kHandleHeight;
     r.drawRect(m_px, tbY, m_pw, kToolbarH, Color{35, 35, 38});
-    float x = m_px + 6;
+    float x = m_px + 4;
     float btnH = kToolbarH - 4;
+    float gap = 4.0f;
+    float sectionGap = 12.0f;
 
+    // Tool buttons
     for (int i = 0; i < 3; ++i) {
         bool active = static_cast<int>(m_tool) == i;
         m_toolBtns[i].setColor(active ? Color{100, 180, 255} : Color{55, 55, 60});
         m_toolBtns[i].setTextColor(active ? Color{10, 10, 15} : Theme::textSecondary);
         m_toolBtns[i].layout(Rect{x, tbY + 2, kToolBtnW, btnH}, ctx);
         m_toolBtns[i].paint(ctx);
-        x += kToolBtnW + 16;
+        x += kToolBtnW + gap;
     }
 
-    x += 16;
-    m_snapLabel.layout(Rect{x, tbY + 2, 40, btnH}, ctx);
+    x += sectionGap;
+    m_snapLabel.layout(Rect{x, tbY + 2, 36, btnH}, ctx);
     m_snapLabel.paint(ctx);
-    x += 46;
+    x += 38;
 
+    // Snap buttons
     static constexpr float snapW[] = {kSnapBtnW, kSnapBtnW, kSnapBtnW, kSnapBtnW,
                                        kTripletBtnW, kTripletBtnW, kTripletBtnW};
     for (int i = 0; i < 7; ++i) {
@@ -478,27 +491,41 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
         m_snapBtns[i].setTextColor(active ? Color{10, 10, 15} : Theme::textSecondary);
         m_snapBtns[i].layout(Rect{x, tbY + 2, snapW[i], btnH}, ctx);
         m_snapBtns[i].paint(ctx);
-        x += snapW[i] + 16;
+        x += snapW[i] + gap;
     }
 
-    x += 16;
+    x += sectionGap;
     bool loopOn = m_clip && m_clip->loop();
     m_loopBtn.setColor(loopOn ? Color{80, 220, 100} : Color{55, 55, 60});
     m_loopBtn.setTextColor(loopOn ? Color{10, 10, 15} : Theme::textSecondary);
     m_loopBtn.layout(Rect{x, tbY + 2, kLoopBtnW, btnH}, ctx);
     m_loopBtn.paint(ctx);
-    x += kLoopBtnW + 16;
+    x += kLoopBtnW + gap;
 
     m_velBtn.setColor(m_showVelocityLane ? Color{100, 180, 255} : Color{55, 55, 60});
     m_velBtn.setTextColor(m_showVelocityLane ? Color{10, 10, 15} : Theme::textSecondary);
     m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, ctx);
     m_velBtn.paint(ctx);
+    x += kVelBtnW + sectionGap;
 
+    // Zoom buttons
+    m_zoomOutBtn.setColor(Color{55, 55, 60});
+    m_zoomOutBtn.setTextColor(Theme::textSecondary);
+    m_zoomOutBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, ctx);
+    m_zoomOutBtn.paint(ctx);
+    x += kZoomBtnW + 2;
+
+    m_zoomInBtn.setColor(Color{55, 55, 60});
+    m_zoomInBtn.setTextColor(Theme::textSecondary);
+    m_zoomInBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, ctx);
+    m_zoomInBtn.paint(ctx);
+
+    // Clip name (right-aligned)
     if (m_clip && !m_clip->name().empty()) {
         m_clipNameLabel.setText(m_clip->name());
         float nameW = ctx.font ? ctx.font->textWidth(m_clip->name(),
             Theme::kSmallFontSize / Theme::kFontSize * 0.6f) : 100.0f;
-        m_clipNameLabel.layout(Rect{m_px + m_pw - 160, tbY + 2, nameW, btnH}, ctx);
+        m_clipNameLabel.layout(Rect{m_px + m_pw - nameW - 8, tbY + 2, nameW, btnH}, ctx);
         m_clipNameLabel.paint(ctx);
     }
 }

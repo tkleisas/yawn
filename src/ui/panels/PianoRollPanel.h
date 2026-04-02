@@ -93,6 +93,18 @@ public:
             m_showVelocityLane = !m_showVelocityLane;
         });
 
+        m_zoomInBtn.setLabel("+");
+        m_zoomInBtn.setDrawOutline(false);
+        m_zoomInBtn.setOnClick([this]() {
+            m_pxBeat = std::min(kMaxPxBeat, m_pxBeat * 1.3f);
+        });
+
+        m_zoomOutBtn.setLabel("-");
+        m_zoomOutBtn.setDrawOutline(false);
+        m_zoomOutBtn.setOnClick([this]() {
+            m_pxBeat = std::max(kMinPxBeat, m_pxBeat / 1.3f);
+        });
+
         m_clipNameLabel.setColor(Theme::textPrimary);
 
         m_scrollbar.setOnScroll([this](float pos) {
@@ -359,6 +371,8 @@ private:
             if (tryBtn(m_snapBtns[i])) return true;
         if (tryBtn(m_loopBtn)) return true;
         if (tryBtn(m_velBtn)) return true;
+        if (tryBtn(m_zoomInBtn)) return true;
+        if (tryBtn(m_zoomOutBtn)) return true;
         return true;
     }
 
@@ -687,12 +701,15 @@ private:
     static constexpr float kTripletBtnW = 32.0f;
     static constexpr float kLoopBtnW    = 50.0f;
     static constexpr float kVelBtnW     = 40.0f;
+    static constexpr float kZoomBtnW    = 28.0f;
 
     FwButton  m_toolBtns[3];
     FwButton  m_snapBtns[7];
     Label     m_snapLabel;
     FwButton  m_loopBtn;
     FwButton  m_velBtn;
+    FwButton  m_zoomInBtn;
+    FwButton  m_zoomOutBtn;
     Label     m_clipNameLabel;
     ScrollBar m_scrollbar;
 
