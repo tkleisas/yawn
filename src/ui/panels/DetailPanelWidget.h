@@ -57,8 +57,9 @@ public:
     enum class ViewMode  { Devices, AudioClip };
 
     // Clip view layout constants
+    static constexpr float kClipTitleRowH    = 28.0f;   // top pad + title text
     static constexpr float kClipWaveformH    = 80.0f;
-    static constexpr float kClipPropsH       = 100.0f;
+    static constexpr float kClipPropsH       = 70.0f;   // horizontal control strip
     static constexpr float kClipSectionGap   = 4.0f;
     static constexpr float kClipLabelW       = 60.0f;
     static constexpr float kClipValueW       = 80.0f;
@@ -121,7 +122,7 @@ public:
         m_gainKnob.setRange(0.0f, 2.0f);
         m_gainKnob.setDefault(1.0f);
         m_gainKnob.setValue(clip->gain);
-        m_gainKnob.setLabel("Gain");
+        m_gainKnob.setLabel("");  // external label drawn in paintAudioClipView
         m_gainKnob.setFormatCallback([](float v) -> std::string {
             if (v < 0.001f) return "-inf dB";
             char buf[16];
@@ -160,12 +161,12 @@ public:
         });
 
         // Loop toggle button
-        m_loopToggleBtn.setLabel(clip->looping ? "Loop: On" : "Loop: Off");
+        m_loopToggleBtn.setLabel(clip->looping ? "On" : "Off");
         m_loopToggleBtn.setOnClick([this]() {
             if (m_clipPtr) {
                 auto* mc = const_cast<audio::Clip*>(m_clipPtr);
                 mc->looping = !mc->looping;
-                m_loopToggleBtn.setLabel(mc->looping ? "Loop: On" : "Loop: Off");
+                m_loopToggleBtn.setLabel(mc->looping ? "On" : "Off");
             }
         });
 
@@ -455,6 +456,11 @@ public:
         }
         // Forward to waveform widget in audio clip view
         if (m_viewMode == ViewMode::AudioClip) {
+            // When dropdown is open, forward moves for hover highlighting
+            if (m_warpModeDropdown.isOpen()) {
+                m_warpModeDropdown.onMouseMove(e);
+                return true;
+            }
             // Forward to draggable number inputs (they don't capture the mouse)
             if (m_transposeInput.onMouseMove(e)) return true;
             if (m_detuneInput.onMouseMove(e)) return true;
@@ -482,6 +488,8 @@ public:
         }
         // Forward to waveform widget
         if (m_viewMode == ViewMode::AudioClip) {
+            if (m_warpModeDropdown.isOpen())
+                return m_warpModeDropdown.onMouseUp(e);
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;

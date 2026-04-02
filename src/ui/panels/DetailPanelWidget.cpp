@@ -40,7 +40,9 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
     if (bodyH < 0) bodyH = 0;
 
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
-        float clipHeaderH = kClipWaveformH + kClipPropsH + kClipSectionGap * 2;
+        float overviewH = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+        float clipHeaderH = kClipTitleRowH + kClipWaveformH + overviewH
+                          + kClipPropsH + kClipSectionGap * 2;
         float scrollY = bodyY + clipHeaderH;
         float scrollH = std::max(0.0f, bodyH - clipHeaderH);
         m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
@@ -124,6 +126,9 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     // Forward to waveform widget in audio clip view
     if (m_viewMode == ViewMode::AudioClip) {
+        // When dropdown is open, forward ALL clicks to it (select item or close)
+        if (m_warpModeDropdown.isOpen())
+            return m_warpModeDropdown.onMouseDown(e);
         auto& wb = m_waveformWidget.bounds();
         if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
             e.lx = mx - wb.x;
@@ -218,6 +223,7 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float sectionX = x + pad;
     float sectionW = w - pad * 2;
 
+    // ── Title row: clip name (left) + info (right) ──
     float headerY = bodyY + 4.0f;
     float titleScale = 15.0f / Theme::kFontSize;
     font.drawText(renderer, clip.name.empty() ? "Audio Clip" : clip.name.c_str(),
@@ -226,100 +232,93 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     if (clip.buffer) {
         int64_t frames = clip.lengthInFrames();
         double seconds = static_cast<double>(frames) / m_clipSampleRate;
-        char durBuf[32];
-        std::snprintf(durBuf, sizeof(durBuf), "%.2fs  %lld smp",
-                      seconds, static_cast<long long>(frames));
-        float durW = static_cast<float>(std::strlen(durBuf)) * 7.0f * hScale;
+        char durBuf[48];
+        std::snprintf(durBuf, sizeof(durBuf), "%dch  %dHz  %.2fs",
+                      clip.buffer->numChannels(), m_clipSampleRate, seconds);
+        float durW = font.textWidth(durBuf, hScale);
         font.drawText(renderer, durBuf, x + w - pad - durW, headerY,
                       hScale, Theme::textDim);
     }
 
-    // WaveformWidget: overview bar + scrollable/zoomable waveform
-    float waveY = headerY + 20.0f;
+    // ── WaveformWidget: overview bar + scrollable/zoomable waveform ──
+    float waveY = headerY + kClipTitleRowH - 4.0f;
     float waveH = kClipWaveformH + WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
     m_waveformWidget.layout(Rect{sectionX, waveY, sectionW, waveH}, ctx);
     m_waveformWidget.paint(ctx);
-
-    float propsY = waveY + waveH + kClipSectionGap;
-    float propH = 16.0f;
-    float propGap = 2.0f;
-    float col1X = sectionX;
-    float col2X = sectionX + sectionW * 0.33f;
-    float col3X = sectionX + sectionW * 0.66f;
-    float labelScale = 11.0f / Theme::kFontSize;
-    float valScale = 12.0f / Theme::kFontSize;
-    Color labelCol = Theme::textDim;
-    Color valCol = Theme::textPrimary;
 
     // Sync widget values from clip each frame
     m_gainKnob.setValue(clip.gain);
     m_transposeInput.setValue(static_cast<float>(clip.transposeSemitones));
     m_detuneInput.setValue(static_cast<float>(clip.detuneCents));
     if (clip.originalBPM > 0) m_bpmInput.setValue(static_cast<float>(clip.originalBPM));
-    m_loopToggleBtn.setLabel(clip.looping ? "Loop: On" : "Loop: Off");
+    m_loopToggleBtn.setLabel(clip.looping ? "On" : "Off");
 
-    // Row 1: Gain knob | BPM input | Warp dropdown + Detect button
-    font.drawText(renderer, "Gain", col1X, propsY, labelScale, labelCol);
-    m_gainKnob.layout(Rect{col1X, propsY + propH, 40.0f, 40.0f}, ctx);
+    // ── Horizontal control strip ──
+    float stripY = waveY + waveH + kClipSectionGap;
+    float labelScale = 10.0f / Theme::kFontSize;
+    float labelH = 13.0f;
+    float widgetY = stripY + labelH + 2.0f;
+    float inputH = 20.0f;
+    float knobH = 40.0f;
+    float gap = 14.0f;
+    // Vertically center inputs with knob area
+    float inputCenterY = widgetY + (knobH - inputH) * 0.5f;
+
+    float cx = sectionX;
+
+    // Gain knob
+    float knobW = 44.0f;
+    font.drawText(renderer, "Gain", cx, stripY, labelScale, Theme::textDim);
+    m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
     m_gainKnob.paint(ctx);
+    cx += knobW + gap;
 
-    font.drawText(renderer, "BPM", col2X, propsY, labelScale, labelCol);
-    m_bpmInput.layout(Rect{col2X, propsY + propH, 60.0f, 20.0f}, ctx);
+    // BPM
+    float bpmW = 80.0f;
+    font.drawText(renderer, "BPM", cx, stripY, labelScale, Theme::textDim);
+    m_bpmInput.layout(Rect{cx, inputCenterY, bpmW, inputH}, ctx);
     m_bpmInput.paint(ctx);
+    cx += bpmW + gap;
 
-    font.drawText(renderer, "Warp", col3X, propsY, labelScale, labelCol);
-    {
-        m_warpModeDropdown.setSelected(static_cast<int>(clip.warpMode));
-        float ddW = sectionW * 0.20f;
-        float ddX = col3X;
-        float ddY = propsY + propH;
-        m_warpModeDropdown.layout(Rect{ddX, ddY, ddW, propH}, ctx);
-        m_warpModeDropdown.paint(ctx);
-
-        float btnX = ddX + ddW + 4.0f;
-        float btnW = sectionW - (btnX - sectionX);
-        if (btnW > 50.0f) btnW = 50.0f;
-        m_detectBtn.layout(Rect{btnX, ddY, btnW, propH}, ctx);
-        m_detectBtn.paint(ctx);
-    }
-
-    // Row 2: Transpose input | Detune input | Loop toggle
-    float row2Y = propsY + propH + 42.0f + propGap;
-    font.drawText(renderer, "Transpose", col1X, row2Y, labelScale, labelCol);
-    m_transposeInput.layout(Rect{col1X, row2Y + propH, 60.0f, 20.0f}, ctx);
+    // Transpose
+    float transW = 70.0f;
+    font.drawText(renderer, "Transpose", cx, stripY, labelScale, Theme::textDim);
+    m_transposeInput.layout(Rect{cx, inputCenterY, transW, inputH}, ctx);
     m_transposeInput.paint(ctx);
+    cx += transW + gap;
 
-    font.drawText(renderer, "Detune", col2X, row2Y, labelScale, labelCol);
-    m_detuneInput.layout(Rect{col2X, row2Y + propH, 60.0f, 20.0f}, ctx);
+    // Detune
+    float detW = 70.0f;
+    font.drawText(renderer, "Detune", cx, stripY, labelScale, Theme::textDim);
+    m_detuneInput.layout(Rect{cx, inputCenterY, detW, inputH}, ctx);
     m_detuneInput.paint(ctx);
+    cx += detW + gap * 2;
 
-    font.drawText(renderer, "Loop", col3X, row2Y, labelScale, labelCol);
-    m_loopToggleBtn.layout(Rect{col3X, row2Y + propH, 60.0f, 16.0f}, ctx);
+    // Warp dropdown
+    float warpW = 90.0f;
+    m_warpModeDropdown.setSelected(static_cast<int>(clip.warpMode));
+    font.drawText(renderer, "Warp", cx, stripY, labelScale, Theme::textDim);
+    m_warpModeDropdown.layout(Rect{cx, inputCenterY, warpW, inputH}, ctx);
+    m_warpModeDropdown.paint(ctx);
+    cx += warpW + 6.0f;
+
+    // Detect button
+    float detectW = 52.0f;
+    m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, ctx);
+    m_detectBtn.paint(ctx);
+    cx += detectW + gap * 2;
+
+    // Loop toggle
+    font.drawText(renderer, "Loop", cx, stripY, labelScale, Theme::textDim);
+    m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
     m_loopToggleBtn.paint(ctx);
 
-    // Row 3: Channels + Rate (text only, if buffer exists)
-    if (clip.buffer) {
-        float row3Y = row2Y + propH + 22.0f + propGap;
-        font.drawText(renderer, "Channels", col1X, row3Y, labelScale, labelCol);
-        {
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), "%d", clip.buffer->numChannels());
-            font.drawText(renderer, buf, col1X, row3Y + propH, valScale, valCol);
-        }
-
-        font.drawText(renderer, "Rate", col2X, row3Y, labelScale, labelCol);
-        {
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d Hz", m_clipSampleRate);
-            font.drawText(renderer, buf, col2X, row3Y + propH, valScale, valCol);
-        }
-    }
-
-    float fxSepY = propsY + kClipPropsH;
+    // ── Effects separator ──
+    float fxSepY = stripY + labelH + 2.0f + knobH + 6.0f;
     renderer.drawRect(sectionX, fxSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
 
     float fxLabelY = fxSepY + 3.0f;
-    font.drawText(renderer, "Audio Effects", sectionX, fxLabelY, labelScale, labelCol);
+    font.drawText(renderer, "Audio Effects", sectionX, fxLabelY, labelScale, Theme::textDim);
 
     if (!m_deviceWidgets.empty()) {
         updateParamValues();
