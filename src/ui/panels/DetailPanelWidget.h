@@ -726,7 +726,7 @@ private:
         if (nm == "FM Synth") {
             auto* algoW = new FMAlgorithmWidget();
             config.display = algoW;
-            config.displayWidth = 110;
+            config.displayWidth = 120;
             config.sections = {
                 {"",     {0, 1, 18}},         // Algorithm, Feedback, Volume
                 {"Op 1", {2, 3, 4, 5}},       // Level, Ratio, Attack, Release

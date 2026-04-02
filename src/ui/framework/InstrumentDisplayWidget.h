@@ -683,9 +683,26 @@ public:
                 k->setValue(pd.defaultVal);
                 k->setLabel(pd.name);
                 k->setBoolean(pd.isBoolean);
-                k->setFormatCallback([unit = pd.unit, isBool = pd.isBoolean](float v) {
-                    return formatParamValue(v, unit, isBool);
-                });
+
+                // Detect integer-range params and set step for snapping
+                float range = pd.maxVal - pd.minVal;
+                bool isInteger = (range > 0 && range <= 32 &&
+                                  pd.minVal == std::floor(pd.minVal) &&
+                                  pd.maxVal == std::floor(pd.maxVal) &&
+                                  pd.unit.empty() && !pd.isBoolean);
+                if (isInteger) {
+                    k->setStep(1.0f);
+                    k->setFormatCallback([](float v) {
+                        char buf[8];
+                        std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(std::round(v)));
+                        return std::string(buf);
+                    });
+                } else {
+                    k->setFormatCallback([unit = pd.unit, isBool = pd.isBoolean](float v) {
+                        return formatParamValue(v, unit, isBool);
+                    });
+                }
+
                 k->setOnChange([this, pidx = pd.index](float v) {
                     if (m_onParamChange) m_onParamChange(pidx, v);
                 });
@@ -800,13 +817,13 @@ public:
     }
 
 private:
-    static constexpr float kKnobW      = 46.0f;
-    static constexpr float kKnobH      = 60.0f;
-    static constexpr float kCellW      = 54.0f;
-    static constexpr float kRowH       = 62.0f;
-    static constexpr float kLabelH     = 12.0f;
-    static constexpr float kSectionGap = 10.0f;
-    static constexpr float kPadX       = 4.0f;
+    static constexpr float kKnobW      = 52.0f;
+    static constexpr float kKnobH      = 64.0f;
+    static constexpr float kCellW      = 62.0f;
+    static constexpr float kRowH       = 68.0f;
+    static constexpr float kLabelH     = 13.0f;
+    static constexpr float kSectionGap = 14.0f;
+    static constexpr float kPadX       = 6.0f;
     static constexpr int   kMaxRows    = 2;
 
     struct KnobEntry { int paramIndex; FwKnob* knob; };
