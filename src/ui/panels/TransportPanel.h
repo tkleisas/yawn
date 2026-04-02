@@ -31,7 +31,7 @@ public:
 
         m_bpmInput.setRange(20.0f, 999.0f);
         m_bpmInput.setFormat("%.2f");
-        m_bpmInput.setSensitivity(0.5f);
+        m_bpmInput.setSensitivity(0.1f);
         m_bpmInput.setOnChange([this](float v) {
             if (m_engine)
                 m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(v)});
