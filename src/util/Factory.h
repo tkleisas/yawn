@@ -13,6 +13,7 @@
 #include "instruments/DrumSlop.h"
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
+#include "instruments/GranularSynth.h"
 #include "instruments/InstrumentRack.h"
 
 #include "effects/AudioEffect.h"
@@ -52,6 +53,7 @@ inline std::unique_ptr<instruments::Instrument> createInstrument(const std::stri
         {"drumslop",   [] { return std::make_unique<instruments::DrumSlop>(); }},
         {"karplus",    [] { return std::make_unique<instruments::KarplusStrong>(); }},
         {"wavetable",  [] { return std::make_unique<instruments::WavetableSynth>(); }},
+        {"granular",   [] { return std::make_unique<instruments::GranularSynth>(); }},
         {"instrack",   [] { return std::make_unique<instruments::InstrumentRack>(); }},
     };
     auto it = registry.find(id);

@@ -9,6 +9,7 @@
 #include "instruments/DrumSlop.h"
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
+#include "instruments/GranularSynth.h"
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -1107,4 +1108,141 @@ TEST(WavetableSynth, ParameterGetSet) {
     wt2.init(kSampleRate, kBlockSize);
     EXPECT_FLOAT_EQ(wt2.getParameter(WavetableSynth::kVolume),
                     wt2.parameterInfo(WavetableSynth::kVolume).defaultValue);
+}
+
+// ─── GranularSynth Tests ─────────────────────────────────────
+
+static std::vector<float> makeTestSample(int frames, float freq = 440.0f,
+                                          double sr = 44100.0) {
+    std::vector<float> data(frames);
+    for (int i = 0; i < frames; ++i)
+        data[i] = std::sin(2.0 * 3.14159265 * freq * i / sr);
+    return data;
+}
+
+TEST(GranularSynth, InitAndReset) {
+    GranularSynth gs;
+    gs.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(gs.parameterCount(), GranularSynth::kParamCount);
+    EXPECT_STREQ(gs.name(), "Granular Synth");
+    EXPECT_STREQ(gs.id(), "granular");
+    EXPECT_FALSE(gs.hasSample());
+    gs.reset();
+}
+
+TEST(GranularSynth, SilenceWithoutSample) {
+    GranularSynth gs;
+    gs.init(kSampleRate, kBlockSize);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    gs.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_NEAR(r, 0.0f, 1e-10f);
+}
+
+TEST(GranularSynth, ProducesOutputWithSample) {
+    GranularSynth gs;
+    gs.init(kSampleRate, kBlockSize);
+
+    auto sample = makeTestSample(44100);
+    gs.loadSample(sample.data(), 44100, 1);
+    EXPECT_TRUE(gs.hasSample());
+
+    // Set fast density and short attack for immediate output
+    gs.setParameter(GranularSynth::kDensity, 40.0f);
+    gs.setParameter(GranularSynth::kAttack, 1.0f);
+    gs.setParameter(GranularSynth::kGrainSize, 50.0f);
+
+    // Process several blocks to allow grains to spawn and ramp up
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < 8; ++i) {
+        auto midi = (i == 0) ? makeNoteOn(60, 100) : makeEmpty();
+        gs.process(buf, kBlockSize, kChannels, midi);
+    }
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_GT(r, 1e-6f);
+}
+
+TEST(GranularSynth, SilenceWhenNoNotes) {
+    GranularSynth gs;
+    gs.init(kSampleRate, kBlockSize);
+
+    auto sample = makeTestSample(44100);
+    gs.loadSample(sample.data(), 44100, 1);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    gs.process(buf, kBlockSize, kChannels, makeEmpty());
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_NEAR(r, 0.0f, 1e-10f);
+}
+
+TEST(GranularSynth, DifferentShapesProduceOutput) {
+    auto sample = makeTestSample(44100);
+    for (int shape = 0; shape < 4; ++shape) {
+        GranularSynth gs;
+        gs.init(kSampleRate, kBlockSize);
+        gs.loadSample(sample.data(), 44100, 1);
+        gs.setParameter(GranularSynth::kShape, static_cast<float>(shape));
+        gs.setParameter(GranularSynth::kDensity, 40.0f);
+        gs.setParameter(GranularSynth::kAttack, 1.0f);
+
+        float buf[kBlockSize * kChannels];
+        std::memset(buf, 0, sizeof(buf));
+        for (int i = 0; i < 8; ++i) {
+            auto midi = (i == 0) ? makeNoteOn(60, 100) : makeEmpty();
+            gs.process(buf, kBlockSize, kChannels, midi);
+        }
+        float r = rms(buf, kBlockSize * kChannels);
+        EXPECT_GT(r, 1e-7f) << "Shape " << shape << " produced silence";
+    }
+}
+
+TEST(GranularSynth, ParameterGetSet) {
+    GranularSynth gs;
+    gs.init(kSampleRate, kBlockSize);
+
+    gs.setParameter(GranularSynth::kPosition, 0.7f);
+    EXPECT_FLOAT_EQ(gs.getParameter(GranularSynth::kPosition), 0.7f);
+
+    gs.setParameter(GranularSynth::kGrainSize, 200.0f);
+    EXPECT_FLOAT_EQ(gs.getParameter(GranularSynth::kGrainSize), 200.0f);
+
+    gs.setParameter(GranularSynth::kFilterCutoff, 5000.0f);
+    EXPECT_FLOAT_EQ(gs.getParameter(GranularSynth::kFilterCutoff), 5000.0f);
+
+    // Out-of-range clamped
+    gs.setParameter(GranularSynth::kVolume, 5.0f);
+    EXPECT_FLOAT_EQ(gs.getParameter(GranularSynth::kVolume), 1.0f);
+}
+
+TEST(GranularSynth, StereoSample) {
+    // Create stereo test sample
+    std::vector<float> stereo(44100 * 2);
+    for (int i = 0; i < 44100; ++i) {
+        float s = std::sin(2.0 * 3.14159265 * 440.0 * i / 44100.0);
+        stereo[i * 2]     = s;
+        stereo[i * 2 + 1] = s * 0.5f;
+    }
+
+    GranularSynth gs;
+    gs.init(kSampleRate, kBlockSize);
+    gs.loadSample(stereo.data(), 44100, 2);
+    EXPECT_EQ(gs.sampleChannels(), 2);
+    gs.setParameter(GranularSynth::kDensity, 40.0f);
+    gs.setParameter(GranularSynth::kAttack, 1.0f);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < 8; ++i) {
+        auto midi = (i == 0) ? makeNoteOn(60, 100) : makeEmpty();
+        gs.process(buf, kBlockSize, kChannels, midi);
+    }
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_GT(r, 1e-7f);
 }
