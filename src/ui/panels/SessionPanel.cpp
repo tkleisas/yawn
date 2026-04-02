@@ -233,7 +233,7 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
             bool isMidi = (m_project->track(t).type == Track::Type::Midi);
             const char* label = isMidi ? "MIDI" : "Audio";
             Color typeCol = isMidi ? Color{180,130,255} : Color{130,200,130};
-            f.drawText(r, label, tx + 6, y + 22, smallScale, typeCol);
+            f.drawText(r, label, tx + 6, y + 19, smallScale, typeCol);
         }
 
         r.drawRect(tx + tw - 1, y, 1, h, Theme::clipSlotBorder);
