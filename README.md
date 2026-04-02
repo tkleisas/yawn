@@ -43,6 +43,8 @@
 - **Filter** — Multi-mode SVF filter (lowpass, highpass, bandpass, notch) with 2x oversampled stability
 - **Chorus** — Modulated delay with multiple voices
 - **Distortion** — Waveshaper with soft clip, hard clip, and tube saturation modes
+- **Tape Emulation** — Analog tape simulation with asymmetric saturation, wow/flutter, tape hiss, and tone rolloff
+- **Amp Simulator** — Guitar/bass amp modelling with 4 amp types (Clean/Crunch/Lead/High Gain), 3-band tone stack, cabinet simulation
 - **Oscilloscope** — Real-time waveform visualizer (non-destructive analysis effect)
 - **Spectrum Analyzer** — FFT-based frequency spectrum display (non-destructive analysis effect)
 
@@ -50,6 +52,11 @@
 - **Subtractive Synth** — 2-oscillator analog-style synth with SVF filter, 23 parameters, 16-voice polyphony
 - **FM Synth** — 4-operator FM synthesizer with 8 algorithm presets, 19 parameters
 - **Sampler** — Sample playback with pitch tracking, linear interpolation, ADSR envelope
+- **Karplus-Strong** — Physical modelling string synth with 4 exciter types, damping, body resonance, string stretch
+- **Wavetable Synth** — 5 algorithmic wavetable types with position morphing, SVF filter, LFO modulation, sub oscillator, unison
+- **Granular Synth** — Sample-based granular synthesis with 4 window shapes, position/spread/spray, scan, pitch jitter, stereo width
+- **Vocoder** — Band-based vocoder with 4 carrier types (Saw/Square/Pulse/Noise), 4–32 bands, envelope followers, formant shift
+- **Multisampler** — Multi-zone sample player with key/velocity mapping, per-zone tuning/volume/pan/loop, velocity crossfade, dual ADSR
 - **Instrument Rack** — Multi-chain container with key/velocity zones, per-chain volume/pan (like Ableton Instrument Rack)
 - **Drum Rack** — 128 pads mapped to MIDI notes, per-pad sample/volume/pan/pitch adjust
 - **DrumSlop** — Loop slicer drum machine: auto/even/manual slicing, 16 pads with ADSR, SVF filter, per-pad effect chains, configurable MIDI base note
@@ -83,7 +90,7 @@
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 628 unit & integration tests via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 678 unit & integration tests via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
@@ -324,7 +331,7 @@ yawn/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 628 unit & integration tests (Google Test)
+├── tests/                      # 678 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
@@ -376,8 +383,8 @@ yawn/
 | 5. Mixer & Routing | ✅ Done | 64-track mixer, 8 send/return buses, master, metering |
 | 6. MIDI Engine | ✅ Done | MIDI 2.0-res internals, RtMidi I/O, MPE zones, MIDI clips |
 | 7. Metronome | ✅ Done | Synthesized click track, beat-synced, configurable |
-| 8. Audio Effects | ✅ Done | 9 built-in effects (+ 2 visualizers), effect chains, 3-point insert |
-| 9. Native Instruments | ✅ Done | 6 instruments (SubSynth, FM, Sampler, InstrumentRack, DrumRack, DrumSlop) |
+| 8. Audio Effects | ✅ Done | 11 built-in effects (+ 2 visualizers), effect chains, drag-to-reorder, 3-point insert |
+| 9. Native Instruments | ✅ Done | 11 instruments (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, Multisampler, InstrumentRack, DrumRack, DrumSlop) |
 | 10. MIDI Effects | ✅ Done | 7 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
 | 12. UI Framework | ✅ Done | Widget tree, FlexBox layout, primitive widgets, dialog system, panel migration |
@@ -454,7 +461,7 @@ while (true) {
 2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
 3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
 4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
-5. **628 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
+5. **678 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
 6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
