@@ -38,6 +38,7 @@ public:
     void setClip(const audio::Clip* clip) {
         if (m_clip == clip) return;
         m_clip = clip;
+        m_needsFitToWidth = true;
         resetView();
     }
 
@@ -106,6 +107,9 @@ public:
         // Center line
         r.drawRect(x, waveY + waveH * 0.5f - 0.25f, w, 0.5f, Color{50, 50, 55, 128});
         r.popClip();
+
+        // Zoom buttons (top-right corner of waveform area)
+        paintZoomButtons(r, *ctx.font, x, waveY, w);
     }
 #else
     void paint(UIContext&) override {}
@@ -155,6 +159,12 @@ public:
             captureMouse();
             return true;
         }
+
+        // Zoom buttons (use absolute coords)
+        float mx = e.x, my = e.y;
+        if (hitRect(m_zoomInBtn, mx, my))  { zoomIn();  return true; }
+        if (hitRect(m_zoomOutBtn, mx, my)) { zoomOut(); return true; }
+        if (hitRect(m_zoomFitBtn, mx, my)) { fitToWidth(); return true; }
 
         // Check for warp marker hit
         if (m_clip->warpMode != audio::WarpMode::Off) {
@@ -246,7 +256,41 @@ public:
 
     void setSampleRate(int sr) { m_sampleRate = sr; }
 
+    void layout(const Rect& r, const UIContext& ctx) override {
+        Widget::layout(r, ctx);
+        if (m_needsFitToWidth && m_bounds.w > 1.0f) {
+            m_needsFitToWidth = false;
+            fitToWidth();
+        }
+    }
+
+    // Fit entire clip into the visible width
+    void fitToWidth() {
+        if (!m_clip || !m_clip->buffer || m_clip->buffer->numFrames() <= 0) return;
+        float waveW = m_bounds.w - 4.0f;
+        if (waveW < 1.0f) waveW = 1.0f;
+        int64_t total = m_clip->buffer->numFrames();
+        m_samplesPerPixel = static_cast<double>(total) / waveW;
+        if (m_samplesPerPixel < kMinZoom) m_samplesPerPixel = kMinZoom;
+        m_scrollOffset = 0.0;
+    }
+
+    void zoomIn()  { applyZoom(1.0 / kZoomFactor, m_bounds.w * 0.5); }
+    void zoomOut() { applyZoom(kZoomFactor, m_bounds.w * 0.5); }
+
 private:
+    // Apply zoom centered on a pixel position
+    void applyZoom(double factor, double centerPx) {
+        if (!m_clip || !m_clip->buffer) return;
+        double sampleAtCenter = m_scrollOffset + centerPx * m_samplesPerPixel;
+        m_samplesPerPixel *= factor;
+        m_samplesPerPixel = std::clamp(m_samplesPerPixel, (double)kMinZoom, (double)kMaxZoom);
+        m_scrollOffset = sampleAtCenter - centerPx * m_samplesPerPixel;
+        clampScroll(m_bounds.w);
+        m_followPlayhead = false;
+    }
+
+public:
     const audio::Clip* m_clip = nullptr;
     double m_samplesPerPixel = 100.0;    // zoom level
     double m_scrollOffset = 0.0;         // first visible sample
@@ -254,9 +298,15 @@ private:
     bool m_playing = false;
     bool m_followPlayhead = true;
     bool m_draggingOverview = false;
+    bool m_needsFitToWidth = false;
     int m_draggingMarker = -1;           // index of warp marker being dragged
     int m_sampleRate = 44100;
     std::chrono::steady_clock::time_point m_lastClickTime{};
+
+    // Zoom button layout (computed in paint, used for hit testing)
+    static constexpr float kZoomBtnSize = 18.0f;
+    static constexpr float kZoomBtnGap  = 2.0f;
+    Rect m_zoomInBtn{}, m_zoomOutBtn{}, m_zoomFitBtn{};
 
     // ─── Paint helpers ──────────────────────────────────────────────────
 
@@ -394,6 +444,42 @@ private:
             std::snprintf(buf, sizeof(buf), "%.1f", wm.beatPosition);
             font.drawText(r, buf, px + 3, y + 1, labelScale, markerCol);
         }
+    }
+
+#endif // YAWN_TEST_BUILD
+
+    static bool hitRect(const Rect& r, float mx, float my) {
+        return mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h;
+    }
+
+#ifndef YAWN_TEST_BUILD
+    void paintZoomButtons(Renderer2D& r, Font& font, float x, float waveY, float w) {
+        float btnS = kZoomBtnSize;
+        float gap = kZoomBtnGap;
+        float bx = x + w - (btnS * 3 + gap * 2) - 4.0f;
+        float by = waveY + 4.0f;
+
+        m_zoomInBtn  = {bx, by, btnS, btnS};
+        m_zoomOutBtn = {bx + btnS + gap, by, btnS, btnS};
+        m_zoomFitBtn = {bx + (btnS + gap) * 2, by, btnS, btnS};
+
+        Color btnBg{30, 30, 34, 200};
+        Color btnBorder{70, 70, 75, 200};
+        Color btnText = Theme::textSecondary;
+        float scale = 11.0f / Theme::kFontSize;
+
+        auto drawBtn = [&](const Rect& b, const char* label) {
+            r.drawRect(b.x, b.y, b.w, b.h, btnBg);
+            r.drawRectOutline(b.x, b.y, b.w, b.h, btnBorder);
+            float tw = font.textWidth(label, scale);
+            float lh = font.lineHeight(scale);
+            font.drawText(r, label, b.x + (b.w - tw) * 0.5f,
+                          b.y + (b.h - lh) * 0.5f - lh * 0.15f, scale, btnText);
+        };
+
+        drawBtn(m_zoomInBtn,  "+");
+        drawBtn(m_zoomOutBtn, "-");
+        drawBtn(m_zoomFitBtn, "F");
     }
 #endif
 };

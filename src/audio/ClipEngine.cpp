@@ -158,9 +158,15 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
     double projectBPM = m_transport ? m_transport->bpm() : 120.0;
     double speedRatio = clip.warpSpeedRatio(projectBPM);
 
-    // Apply transpose (semitones + cents) as pitch shift via speed change
-    // For Repitch mode (or when warping), transpose changes playback speed
-    if (clip.transposeSemitones != 0 || clip.detuneCents != 0) {
+    // Transpose: in Repitch/Off modes, transpose changes playback speed (and pitch).
+    // In pitch-preserving modes (Beats/Tones/Texture/Auto), transpose is NOT applied
+    // to speed — it would need a separate pitch-shifting step (not yet implemented).
+    bool pitchPreservingMode = (clip.warpMode == WarpMode::Beats ||
+                                clip.warpMode == WarpMode::Tones ||
+                                clip.warpMode == WarpMode::Texture ||
+                                clip.warpMode == WarpMode::Auto);
+
+    if (!pitchPreservingMode && (clip.transposeSemitones != 0 || clip.detuneCents != 0)) {
         double semitones = clip.transposeSemitones + clip.detuneCents / 100.0;
         speedRatio *= std::pow(2.0, semitones / 12.0);
     }
@@ -168,10 +174,7 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
     bool warping = (speedRatio != 1.0);
 
     // Pitch-preserving modes: use TimeStretcher (Beats→WSOLA, Tones/Texture→PhaseVocoder)
-    bool usePitchPreserving = (clip.warpMode == WarpMode::Beats ||
-                               clip.warpMode == WarpMode::Tones ||
-                               clip.warpMode == WarpMode::Texture ||
-                               clip.warpMode == WarpMode::Auto) && warping;
+    bool usePitchPreserving = pitchPreservingMode && warping;
 
     if (usePitchPreserving && m_stretchers[trackIndex].initialized) {
         processTrackStretched(trackIndex, output, numFrames, numChannels);
@@ -285,11 +288,8 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
 
     double projectBPM = m_transport ? m_transport->bpm() : 120.0;
     double globalSpeed = clip.warpSpeedRatio(projectBPM);
-
-    if (clip.transposeSemitones != 0 || clip.detuneCents != 0) {
-        double semitones = clip.transposeSemitones + clip.detuneCents / 100.0;
-        globalSpeed *= std::pow(2.0, semitones / 12.0);
-    }
+    // Transpose is NOT applied to stretcher speed — pitch-preserving modes
+    // don't change pitch via speed ratio. (Future: add pitch shift post-stretch.)
 
     stretcher.setSpeedRatio(globalSpeed);
 
