@@ -356,7 +356,63 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             m_trackMidiBuffers[t].addMessage(vkBuf[i]);
     }
 
-    // Process instruments: MIDI effects → record post-effect → instrument
+    // Capture pre-effect MIDI for recording (raw input: held chords, etc.)
+    // Recording pre-effect means the clip stores your actual key presses.
+    // On playback, MIDI effects (arpeggiator, etc.) re-process them.
+    if (m_transport.isRecording()) {
+        for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackType[t] != 1 || !m_trackRecordStates[t].recording
+                || !m_trackArmed[t])
+                continue;
+            auto& rs = m_trackRecordStates[t];
+            double currentBeat = m_transport.positionInBeats();
+            const auto& buf = m_trackMidiBuffers[t];
+            for (int i = 0; i < buf.count(); ++i) {
+                const auto& msg = buf[i];
+                double msgBeat = currentBeat +
+                    (static_cast<double>(msg.frameOffset) / m_config.sampleRate) *
+                    (m_transport.bpm() / 60.0);
+                double relBeat = msgBeat - rs.recordStartBeat;
+                if (relBeat < 0) relBeat = 0;
+
+                if (msg.type == midi::MidiMessage::Type::NoteOn && msg.velocity > 0) {
+                    TrackRecordState::PendingNote pn;
+                    pn.pitch = msg.note;
+                    pn.channel = msg.channel;
+                    pn.velocity = msg.velocity;
+                    pn.startBeat = relBeat;
+                    rs.pendingNotes.push_back(pn);
+                }
+                else if (msg.type == midi::MidiMessage::Type::NoteOff ||
+                         (msg.type == midi::MidiMessage::Type::NoteOn && msg.velocity == 0)) {
+                    for (auto it = rs.pendingNotes.begin(); it != rs.pendingNotes.end(); ++it) {
+                        if (it->pitch == msg.note && it->channel == msg.channel) {
+                            midi::MidiNote note;
+                            note.startBeat = it->startBeat;
+                            note.duration = std::max(0.01, relBeat - it->startBeat);
+                            note.pitch = it->pitch;
+                            note.channel = it->channel;
+                            note.velocity = static_cast<uint16_t>(it->velocity * 512);
+                            if (note.velocity == 0) note.velocity = 1;
+                            rs.recordedNotes.push_back(note);
+                            rs.pendingNotes.erase(it);
+                            break;
+                        }
+                    }
+                }
+                else if (msg.type == midi::MidiMessage::Type::ControlChange) {
+                    midi::MidiCCEvent cc;
+                    cc.beat = relBeat;
+                    cc.ccNumber = msg.ccNumber;
+                    cc.value = static_cast<uint32_t>(msg.value) << 25;
+                    cc.channel = msg.channel;
+                    rs.recordedCCs.push_back(cc);
+                }
+            }
+        }
+    }
+
+    // Process instruments: MIDI effects → instrument
     for (int t = 0; t < kMaxTracks; ++t) {
         if (!m_instruments[t]) {
             m_trackMidiBuffers[t].clear();
@@ -370,61 +426,10 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             ti.positionInSamples = m_transport.positionInSamples();
             ti.sampleRate = m_config.sampleRate;
             ti.samplesPerBeat = ti.sampleRate * 60.0 / ti.bpm;
-            ti.playing = m_transport.isPlaying();
+            ti.playing = m_transport.isPlaying() && !m_transport.isCountingIn();
             ti.beatsPerBar = m_transport.beatsPerBar();
             ti.beatDenominator = m_transport.denominator();
             m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
-        }
-
-        // Capture post-effect MIDI for recording (arpeggiator output, etc.)
-        if (m_transport.isRecording() && m_trackType[t] == 1) {
-            auto& rs = m_trackRecordStates[t];
-            if (rs.recording && m_trackArmed[t]) {
-                double currentBeat = m_transport.positionInBeats();
-                const auto& buf = m_trackMidiBuffers[t];
-                for (int i = 0; i < buf.count(); ++i) {
-                    const auto& msg = buf[i];
-                    double msgBeat = currentBeat +
-                        (static_cast<double>(msg.frameOffset) / m_config.sampleRate) *
-                        (m_transport.bpm() / 60.0);
-                    double relBeat = msgBeat - rs.recordStartBeat;
-                    if (relBeat < 0) relBeat = 0;
-
-                    if (msg.type == midi::MidiMessage::Type::NoteOn && msg.velocity > 0) {
-                        TrackRecordState::PendingNote pn;
-                        pn.pitch = msg.note;
-                        pn.channel = msg.channel;
-                        pn.velocity = msg.velocity;
-                        pn.startBeat = relBeat;
-                        rs.pendingNotes.push_back(pn);
-                    }
-                    else if (msg.type == midi::MidiMessage::Type::NoteOff ||
-                             (msg.type == midi::MidiMessage::Type::NoteOn && msg.velocity == 0)) {
-                        for (auto it = rs.pendingNotes.begin(); it != rs.pendingNotes.end(); ++it) {
-                            if (it->pitch == msg.note && it->channel == msg.channel) {
-                                midi::MidiNote note;
-                                note.startBeat = it->startBeat;
-                                note.duration = std::max(0.01, relBeat - it->startBeat);
-                                note.pitch = it->pitch;
-                                note.channel = it->channel;
-                                note.velocity = static_cast<uint16_t>(it->velocity * 512);
-                                if (note.velocity == 0) note.velocity = 1;
-                                rs.recordedNotes.push_back(note);
-                                rs.pendingNotes.erase(it);
-                                break;
-                            }
-                        }
-                    }
-                    else if (msg.type == midi::MidiMessage::Type::ControlChange) {
-                        midi::MidiCCEvent cc;
-                        cc.beat = relBeat;
-                        cc.ccNumber = msg.ccNumber;
-                        cc.value = static_cast<uint32_t>(msg.value) << 25;
-                        cc.channel = msg.channel;
-                        rs.recordedCCs.push_back(cc);
-                    }
-                }
-            }
         }
 
         // Render instrument into track buffer (adds to existing audio)
@@ -757,6 +762,33 @@ void AudioEngine::processCommands() {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_trackMidiOutPort[msg.trackIndex] = msg.portIndex;
                     m_trackMidiOutCh[msg.trackIndex] = msg.channel;
+                }
+            }
+            else if constexpr (std::is_same_v<T, MoveMidiEffectMsg>) {
+                // Move already done directly; kept for compatibility
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
+                    m_midiEffectChains[msg.trackIndex].moveEffect(msg.fromIndex, msg.toIndex);
+            }
+            else if constexpr (std::is_same_v<T, MoveAudioEffectMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
+                    m_mixer.trackEffects(msg.trackIndex).moveEffect(msg.fromIndex, msg.toIndex);
+            }
+            else if constexpr (std::is_same_v<T, ResetMidiEffectChainMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    // Send all-notes-off to avoid stuck notes after reorder
+                    if (m_instruments[msg.trackIndex]) {
+                        midi::MidiBuffer killBuf;
+                        midi::MidiMessage allOff{};
+                        allOff.type = midi::MidiMessage::Type::ControlChange;
+                        allOff.ccNumber = 123;
+                        allOff.value = 0;
+                        allOff.channel = 0;
+                        killBuf.addMessage(allOff);
+                        float silence[512] = {};
+                        m_instruments[msg.trackIndex]->process(silence, 1, 2, killBuf);
+                    }
+                    // Reset all MIDI effects on this track to clear stale state
+                    m_midiEffectChains[msg.trackIndex].reset();
                 }
             }
         }, cmd);

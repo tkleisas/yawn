@@ -123,6 +123,13 @@ public:
 
             // Fire new steps
             double nextStep = m_lastStepBeat + m_rate;
+            // Safety: snap forward if nextStep is behind bufStart to avoid
+            // slow catch-up (can happen on transport transitions, rate changes)
+            if (nextStep < bufStart) {
+                double stepsToSkip = std::floor((bufStart - nextStep) / m_rate);
+                m_lastStepBeat += stepsToSkip * m_rate;
+                nextStep = m_lastStepBeat + m_rate;
+            }
             while (nextStep < bufEnd) {
                 if (nextStep >= bufStart) {
                     int f = beatToFrame(nextStep, bufStart, spb, numFrames);
@@ -140,9 +147,10 @@ public:
                     m_activeNote = step.pitch;
                     m_gateOffBeat = nextStep + m_rate * m_gate;
                     m_stepIndex = (idx + 1) % m_patternLen;
-                    m_lastStepBeat = nextStep;
                 }
-                nextStep = m_lastStepBeat + m_rate;
+                // Always advance to guarantee loop progress
+                m_lastStepBeat = nextStep;
+                nextStep += m_rate;
             }
 
             // Gate-off for newly triggered notes

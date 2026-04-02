@@ -208,6 +208,23 @@ struct SetTrackMidiOutputMsg {
     int channel;    // -1=all, 0-15
 };
 
+struct MoveMidiEffectMsg {
+    int trackIndex;
+    int fromIndex;
+    int toIndex;
+};
+
+struct MoveAudioEffectMsg {
+    int trackIndex;
+    int fromIndex;
+    int toIndex;
+};
+
+// Sent after reordering MIDI effects to reset state on the audio thread
+struct ResetMidiEffectChainMsg {
+    int trackIndex;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -247,7 +264,10 @@ using AudioCommand = std::variant<
     SetTrackTypeMsg,
     SetTrackAudioInputChMsg,
     SetTrackMonoMsg,
-    SetTrackMidiOutputMsg
+    SetTrackMidiOutputMsg,
+    MoveMidiEffectMsg,
+    MoveAudioEffectMsg,
+    ResetMidiEffectChainMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

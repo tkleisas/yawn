@@ -764,6 +764,7 @@ bool App::init() {
         switch (type) {
             case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
                 m_audioEngine.midiEffectChain(m_selectedTrack).moveEffect(fromIdx, toIdx);
+                m_audioEngine.sendCommand(audio::ResetMidiEffectChainMsg{m_selectedTrack});
                 LOG_INFO("MIDI", "Moved MIDI effect %d to %d on track %d", fromIdx, toIdx, m_selectedTrack + 1);
                 break;
             case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
