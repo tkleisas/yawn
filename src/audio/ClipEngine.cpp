@@ -288,10 +288,19 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
 
     double projectBPM = m_transport ? m_transport->bpm() : 120.0;
     double globalSpeed = clip.warpSpeedRatio(projectBPM);
-    // Transpose is NOT applied to stretcher speed — pitch-preserving modes
-    // don't change pitch via speed ratio. (Future: add pitch shift post-stretch.)
 
-    stretcher.setSpeedRatio(globalSpeed);
+    // Compute pitch ratio for transpose (applied as post-stretch resampling)
+    double pitchRatio = 1.0;
+    if (clip.transposeSemitones != 0 || clip.detuneCents != 0) {
+        double semitones = clip.transposeSemitones + clip.detuneCents / 100.0;
+        pitchRatio = std::pow(2.0, semitones / 12.0);
+    }
+
+    // Adjust stretcher speed: compensate for resampling so duration stays correct.
+    // Resampling by pitchRatio consumes pitchRatio stretcher frames per output frame,
+    // so the stretcher must produce pitchRatio times as many frames → speed / pitchRatio.
+    double adjustedSpeed = globalSpeed / pitchRatio;
+    stretcher.setSpeedRatio(adjustedSpeed);
 
     int stretcherCh = stretcher.numChannels;
     double pos = state.fractionalPosition;
@@ -315,14 +324,16 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
 
     float monoIn[4096];
 
-    // For each channel, ensure we have enough output buffered
+    // For each channel, ensure we have enough output buffered.
+    // With pitch shift, we consume pitchRatio stretcher frames per output frame.
+    int neededStretcherFrames = static_cast<int>(std::ceil(numFrames * pitchRatio)) + 2;
     for (int ch = 0; ch < numChannels; ++ch) {
         int srcCh = (ch < bufChannels) ? ch : (bufChannels - 1);
         int strCh = (ch < stretcherCh) ? ch : (stretcherCh - 1);
         auto& str = stretcher.stretchers[strCh];
 
         // Produce enough output in the intermediate buffer
-        while (stretcher.outBufAvail[ch] - stretcher.outBufRead[ch] < numFrames) {
+        while (stretcher.outBufAvail[ch] - static_cast<int>(stretcher.resamplePos[ch]) < neededStretcherFrames) {
             // Gather input from clip at current position
             int gatherStart = static_cast<int>(pos);
             int gathered = 0;
@@ -371,7 +382,7 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
         }
     }
 
-    // Read from intermediate buffers into interleaved output
+    // Read from intermediate buffers with pitch-shift resampling
     for (int i = 0; i < numFrames; ++i) {
         if (state.stopping) {
             state.fadeGain -= ClipPlayState::kFadeIncrement;
@@ -390,24 +401,32 @@ void ClipEngine::processTrackStretched(int trackIndex, float* output, int numFra
 
         for (int ch = 0; ch < numChannels; ++ch) {
             float sample = 0.0f;
-            if (stretcher.outBufRead[ch] < stretcher.outBufAvail[ch]) {
-                sample = stretcher.outBuf[ch][stretcher.outBufRead[ch]];
-                stretcher.outBufRead[ch]++;
+            double rp = stretcher.resamplePos[ch];
+            int idx0 = static_cast<int>(rp);
+            float frac = static_cast<float>(rp - idx0);
+            if (idx0 + 1 < stretcher.outBufAvail[ch]) {
+                sample = stretcher.outBuf[ch][idx0] * (1.0f - frac)
+                       + stretcher.outBuf[ch][idx0 + 1] * frac;
+            } else if (idx0 < stretcher.outBufAvail[ch]) {
+                sample = stretcher.outBuf[ch][idx0];
             }
+            stretcher.resamplePos[ch] += pitchRatio;
             output[i * numChannels + ch] += sample * gain;
         }
     }
 
-    // Compact the intermediate buffers (shift remaining data to start)
+    // Compact the intermediate buffers (shift consumed data out)
     for (int ch = 0; ch < numChannels; ++ch) {
-        int remaining = stretcher.outBufAvail[ch] - stretcher.outBufRead[ch];
-        if (remaining > 0 && stretcher.outBufRead[ch] > 0) {
+        int consumed = static_cast<int>(stretcher.resamplePos[ch]);
+        int remaining = stretcher.outBufAvail[ch] - consumed;
+        if (remaining > 0 && consumed > 0) {
             std::memmove(stretcher.outBuf[ch].data(),
-                         stretcher.outBuf[ch].data() + stretcher.outBufRead[ch],
+                         stretcher.outBuf[ch].data() + consumed,
                          remaining * sizeof(float));
         }
-        stretcher.outBufAvail[ch] = remaining;
-        stretcher.outBufRead[ch] = 0;
+        stretcher.outBufAvail[ch] = std::max(0, remaining);
+        stretcher.resamplePos[ch] -= consumed;  // keep fractional part
+        if (stretcher.resamplePos[ch] < 0.0) stretcher.resamplePos[ch] = 0.0;
     }
 
     state.fractionalPosition = pos;

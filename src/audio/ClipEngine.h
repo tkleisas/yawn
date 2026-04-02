@@ -41,6 +41,9 @@ struct TrackStretcher {
     int outBufAvail[kMaxChannels]{};
     int outBufRead[kMaxChannels]{};
 
+    // Fractional read position for pitch-shift resampling (post-stretch)
+    double resamplePos[kMaxChannels]{};
+
     void init(double sampleRate, int blockSize, WarpMode mode, int channels) {
         auto algo = (mode == WarpMode::Tones || mode == WarpMode::Texture)
                     ? TimeStretcher::Algorithm::PhaseVocoder
@@ -55,6 +58,7 @@ struct TrackStretcher {
         for (int ch = 0; ch < kMaxChannels; ++ch) {
             outBufAvail[ch] = 0;
             outBufRead[ch] = 0;
+            resamplePos[ch] = 0.0;
         }
     }
 
@@ -64,6 +68,7 @@ struct TrackStretcher {
         for (int ch = 0; ch < kMaxChannels; ++ch) {
             outBufAvail[ch] = 0;
             outBufRead[ch] = 0;
+            resamplePos[ch] = 0.0;
         }
     }
 

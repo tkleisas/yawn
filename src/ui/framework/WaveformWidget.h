@@ -52,18 +52,8 @@ public:
 
     // Reset view to show entire clip
     void resetView() {
-        if (!m_clip || !m_clip->buffer || m_clip->buffer->numFrames() <= 0) {
-            m_samplesPerPixel = 100.0;
-            m_scrollOffset = 0.0;
-            return;
-        }
-        float waveW = m_bounds.w - 4.0f;
-        if (waveW < 1.0f) waveW = 1.0f;
-        int64_t total = m_clip->effectiveLoopEnd() - m_clip->loopStart;
-        if (total <= 0) total = m_clip->buffer->numFrames();
-        m_samplesPerPixel = static_cast<double>(total) / waveW;
-        if (m_samplesPerPixel < kMinZoom) m_samplesPerPixel = kMinZoom;
-        m_scrollOffset = static_cast<double>(m_clip->loopStart);
+        m_samplesPerPixel = 100.0;
+        m_scrollOffset = 0.0;
     }
 
     // ─── Rendering ──────────────────────────────────────────────────────
@@ -166,6 +156,23 @@ public:
         if (hitRect(m_zoomOutBtn, mx, my)) { zoomOut(); return true; }
         if (hitRect(m_zoomFitBtn, mx, my)) { fitToWidth(); return true; }
 
+        // Loop marker hit-test (draggable start/end)
+        {
+            float tolerance = 8.0f;
+            float startPx = sampleToPixel(m_clip->loopStart);
+            float endPx = sampleToPixel(m_clip->effectiveLoopEnd());
+            if (std::abs(e.lx - startPx) < tolerance) {
+                m_draggingLoopMarker = 1;
+                captureMouse();
+                return true;
+            }
+            if (std::abs(e.lx - endPx) < tolerance) {
+                m_draggingLoopMarker = 2;
+                captureMouse();
+                return true;
+            }
+        }
+
         // Check for warp marker hit
         if (m_clip->warpMode != audio::WarpMode::Off) {
             int hitIdx = hitTestWarpMarker(e.lx, 6.0f);
@@ -217,9 +224,10 @@ public:
 
     bool onMouseUp(MouseEvent& e) override {
         (void)e;
-        if (m_draggingOverview || m_draggingMarker >= 0) {
+        if (m_draggingOverview || m_draggingMarker >= 0 || m_draggingLoopMarker > 0) {
             m_draggingOverview = false;
             m_draggingMarker = -1;
+            m_draggingLoopMarker = 0;
             releaseMouse();
             return true;
         }
@@ -248,6 +256,24 @@ public:
                     sp = std::min(sp, markers[m_draggingMarker + 1].samplePosition - 1);
 
                 markers[m_draggingMarker].samplePosition = sp;
+            }
+            return true;
+        }
+        if (m_draggingLoopMarker > 0 && m_clip) {
+            double samplePos = m_scrollOffset + static_cast<double>(e.lx) * m_samplesPerPixel;
+            int64_t sp = static_cast<int64_t>(std::clamp(samplePos, 0.0,
+                static_cast<double>(m_clip->buffer->numFrames())));
+            auto* mclip = const_cast<audio::Clip*>(m_clip);
+            if (m_draggingLoopMarker == 1) {
+                // Drag loop start: constrain to [0, loopEnd - 1]
+                int64_t maxStart = mclip->effectiveLoopEnd() - 1;
+                mclip->loopStart = std::clamp(sp, int64_t(0), maxStart);
+            } else {
+                // Drag loop end: constrain to [loopStart + 1, numFrames]
+                int64_t minEnd = mclip->loopStart + 1;
+                int64_t maxEnd = mclip->buffer->numFrames();
+                int64_t newEnd = std::clamp(sp, minEnd, maxEnd);
+                mclip->loopEnd = (newEnd >= maxEnd) ? -1 : newEnd;
             }
             return true;
         }
@@ -300,6 +326,7 @@ public:
     bool m_draggingOverview = false;
     bool m_needsFitToWidth = false;
     int m_draggingMarker = -1;           // index of warp marker being dragged
+    int m_draggingLoopMarker = 0;        // 0=none, 1=loop start, 2=loop end
     int m_sampleRate = 44100;
     std::chrono::steady_clock::time_point m_lastClickTime{};
 
@@ -396,16 +423,37 @@ public:
     }
 
     void paintLoopMarkers(Renderer2D& r, float x, float y, float, float h) {
+        if (!m_clip->looping) return;
         int64_t totalFrames = m_clip->buffer->numFrames();
-        if (m_clip->loopStart > 0) {
+        Color loopCol{255, 200, 0, 200};
+        Color loopDrag{255, 255, 100, 255};
+
+        // Loop start marker
+        {
             float lx = x + sampleToPixel(m_clip->loopStart);
-            r.drawRect(lx, y, 1.5f, h, Color{255, 200, 0, 180});
+            Color col = (m_draggingLoopMarker == 1) ? loopDrag : loopCol;
+            r.drawRect(lx, y, 1.5f, h, col);
+            // Handle bracket at top
+            r.drawRect(lx, y, 8.0f, 2.0f, col);
+            r.drawRect(lx, y, 2.0f, 10.0f, col);
         }
+
+        // Loop end marker
         int64_t le = m_clip->effectiveLoopEnd();
-        if (le > 0 && le < totalFrames) {
+        if (le < totalFrames || m_clip->loopEnd >= 0) {
             float lx = x + sampleToPixel(le);
-            r.drawRect(lx, y, 1.5f, h, Color{255, 200, 0, 180});
+            Color col = (m_draggingLoopMarker == 2) ? loopDrag : loopCol;
+            r.drawRect(lx - 1.5f, y, 1.5f, h, col);
+            // Handle bracket at top
+            r.drawRect(lx - 8.0f, y, 8.0f, 2.0f, col);
+            r.drawRect(lx - 2.0f, y, 2.0f, 10.0f, col);
         }
+
+        // Tint loop region
+        float startPx = x + sampleToPixel(m_clip->loopStart);
+        float endPx = x + sampleToPixel(le);
+        if (endPx > startPx)
+            r.drawRect(startPx, y, endPx - startPx, h, Color{255, 200, 0, 15});
     }
 
     void paintTransients(Renderer2D& r, Font&, float x, float y, float, float) {
