@@ -8,6 +8,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <climits>
 #include <algorithm>
 
 namespace yawn::instruments {

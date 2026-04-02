@@ -53,7 +53,7 @@ inline void deserializeParams(T& obj, const json& params) {
         auto& info = obj.parameterInfo(i);
         if (info.isPerVoice) continue;  // per-voice params deserialized separately
         if (params.contains(info.name)) {
-            obj.setParameter(i, params[info.name].get<float>());
+            obj.setParameter(i, params[info.name].template get<float>());
         }
     }
 }
