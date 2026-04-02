@@ -204,7 +204,6 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
 
     r.pushClip(x, y, w, h);
     float scale = Theme::kSmallFontSize / f.pixelHeight();
-    float smallScale = scale * 0.7f;
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
         float tx = x + t * Theme::kTrackWidth - m_scrollX;
@@ -218,7 +217,7 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
         r.drawRect(tx + 2, y + 2, tw - 4, 3, col);
 
         if (f.isLoaded()) {
-            float textX = tx + 6, textY = y + 8;
+            float textX = tx + 18, textY = y + 8;
             for (char c : m_project->track(t).name) {
                 auto g = f.getGlyph(c, textX, textY, scale);
                 r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
@@ -229,11 +228,33 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
             }
         }
 
-        if (f.isLoaded()) {
+        // Track type icon (left side) — waveform for Audio, MIDI port for MIDI
+        {
             bool isMidi = (m_project->track(t).type == Track::Type::Midi);
-            const char* label = isMidi ? "MIDI" : "Audio";
-            Color typeCol = isMidi ? Color{180,130,255} : Color{130,200,130};
-            f.drawText(r, label, tx + 6, y + 19, smallScale, typeCol);
+            Color iconCol = isMidi ? Color{180,130,255,200} : Color{130,200,130,200};
+            float iconSize = 10.0f;
+            float ix = tx + 6;
+            float iy = y + 7;  // above the track name
+            if (isMidi) {
+                // MIDI DIN connector: circle with 3 dots inside
+                float cr = iconSize * 0.5f;
+                float ccx = ix + cr, ccy = iy + cr;
+                r.drawFilledCircle(ccx, ccy, cr, iconCol, 16);
+                Color dot{30, 30, 35, 255};
+                float dotR = 1.0f;
+                r.drawFilledCircle(ccx - 2.5f, ccy, dotR, dot, 8);
+                r.drawFilledCircle(ccx,        ccy, dotR, dot, 8);
+                r.drawFilledCircle(ccx + 2.5f, ccy, dotR, dot, 8);
+            } else {
+                // Audio waveform icon: 5 vertical bars of varying height
+                float barW = 1.5f, gap = 1.0f;
+                float heights[] = {3, 7, 10, 6, 4};
+                for (int b = 0; b < 5; ++b) {
+                    float bh = heights[b];
+                    r.drawRect(ix + b * (barW + gap), iy + (iconSize - bh) * 0.5f,
+                               barW, bh, iconCol);
+                }
+            }
         }
 
         r.drawRect(tx + tw - 1, y, 1, h, Theme::clipSlotBorder);
