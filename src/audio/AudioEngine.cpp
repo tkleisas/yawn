@@ -478,6 +478,13 @@ void AudioEngine::processCommands() {
                 m_transport.play();
             }
             else if constexpr (std::is_same_v<T, TransportStopMsg>) {
+                // Finalize all active recordings before stopping transport
+                for (int t = 0; t < kMaxTracks; ++t) {
+                    if (m_trackRecordStates[t].recording)
+                        finalizeMidiRecord(t);
+                    if (m_audioRecordStates[t].recording)
+                        finalizeAudioRecord(t);
+                }
                 m_transport.stop();
                 // Stop all playing clips (audio and MIDI)
                 for (int t = 0; t < kMaxTracks; ++t) {
