@@ -64,8 +64,10 @@
 - **Session Panel** — Ableton-style clip grid with 8 visible tracks × 8 scenes, scrollable
 - **Mixer Panel** — Channel strips with interactive faders, pan knobs, mute/solo buttons, peak metering
 - **Device Chain Panel** — Composite widget architecture: DeviceWidget (header + grid + knobs + visualizer), SnapScrollContainer, neon arc knobs with 24-segment rendering
-- **Piano Roll Editor** — MIDI note editing with draw/select/erase tools, zoom/scroll, velocity, snap-to-grid
-- **Primitive Widgets** — FwButton, FwToggle, FwKnob, FwFader, Label, FwTextInput, FwNumberInput, FwDropDown with hover animations
+- **Grouped Instrument Layouts** — Instruments display knobs in logical sections (Global, Op 1–4, Filter, Amp, etc.) with inline graphical displays instead of flat grids
+- **Instrument Display Widgets** — FM algorithm routing diagram, ADSR envelope curves, oscillator waveform previews, filter response curves, composite synth panels
+- **Piano Roll Editor** — MIDI note editing with draw/select/erase tools, zoom/scroll, velocity, snap-to-grid, follow-playhead mode
+- **Primitive Widgets** — FwButton, FwToggle, FwKnob (with double-click text entry, step snapping, format callbacks), FwFader, Label, FwTextInput, FwNumberInput, FwDropDown with hover animations
 - **Dialog System** — fw::Dialog base class with title bar, OK/Cancel, drag-to-move, Escape/Enter handling; AboutDialog, ConfirmDialog
 - **Menu Bar** — File, Edit, View, Track, MIDI, Help menus with keyboard accelerators
 - **Context Menus** — Right-click track headers to set type, add instruments/effects
@@ -73,12 +75,13 @@
 - **Panel Animations** — Smooth exponential-lerp height transitions on panel collapse/expand
 - **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking
 - **Track Selection** — Click to select tracks, highlight in session & mixer views
+- **Track Type Icons** — Waveform icon for audio tracks, DIN circle icon for MIDI tracks
 - **Targeted Drag & Drop** — Drop audio files onto specific clip slots
 - **Custom 2D Renderer** — Batched OpenGL 3.3 rendering with font atlas (stb_truetype)
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 619 unit & integration tests via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 612 unit & integration tests via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
@@ -306,6 +309,7 @@ yawn/
 │   │   │   ├── DeviceHeaderWidget.h  # Color-coded device header with buttons
 │   │   │   ├── FwGrid.h        # Row-major grid layout container
 │   │   │   ├── VisualizerWidget.h    # Oscilloscope/spectrum display widget
+│   │   │   ├── InstrumentDisplayWidget.h # FM algo, ADSR, osc, filter display + GroupedKnobBody
 │   │   │   └── SnapScrollContainer.h # Horizontal snap-scroll with nav buttons
 │   │   └── panels/
 │   │       ├── SessionPanel.h      # Session view (clip grid, transport)
@@ -316,7 +320,7 @@ yawn/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 619 unit & integration tests (Google Test)
+├── tests/                      # 612 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
@@ -446,7 +450,7 @@ while (true) {
 2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
 3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
 4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
-5. **619 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
+5. **612 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
 6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
