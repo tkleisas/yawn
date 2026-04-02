@@ -717,7 +717,7 @@ public:
 
                 // Detect integer-range params and set step for snapping
                 float range = pd.maxVal - pd.minVal;
-                bool isInteger = (range > 0 && range <= 32 &&
+                bool isInteger = (range >= 2 && range <= 32 &&
                                   pd.minVal == std::floor(pd.minVal) &&
                                   pd.maxVal == std::floor(pd.maxVal) &&
                                   pd.unit.empty() && !pd.isBoolean);
