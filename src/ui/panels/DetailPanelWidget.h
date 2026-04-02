@@ -18,6 +18,7 @@
 #include "audio/Clip.h"
 #include "audio/TransientDetector.h"
 #include "instruments/Instrument.h"
+#include "instruments/Sampler.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
 #include "midi/MidiEffect.h"
@@ -772,20 +773,23 @@ private:
                     inst->getParameter(18), inst->getParameter(19));
             });
         } else if (nm == "Sampler") {
-            auto* adsr = new ADSRDisplayWidget();
-            adsr->setLabel("AMP");
-            adsr->setColor(Color{80, 220, 100, 255});
-            config.display = adsr;
-            config.displayWidth = 100;
+            auto* samplerPanel = new SamplerDisplayPanel();
+            config.display = samplerPanel;
+            config.displayWidth = 130;
             config.sections = {
                 {"Sample", {0}},
                 {"Amp",    {1, 2, 3, 4}},
                 {"Filter", {5, 6}},
                 {"",       {7}},
             };
-            m_displayUpdaters.push_back([adsr, inst]() {
-                adsr->setADSR(inst->getParameter(1), inst->getParameter(2),
-                              inst->getParameter(3), inst->getParameter(4));
+            m_displayUpdaters.push_back([samplerPanel, inst]() {
+                samplerPanel->setADSR(inst->getParameter(1), inst->getParameter(2),
+                                      inst->getParameter(3), inst->getParameter(4));
+                auto* sampler = dynamic_cast<instruments::Sampler*>(inst);
+                if (sampler && sampler->hasSample())
+                    samplerPanel->setSampleData(sampler->sampleData(),
+                                                sampler->sampleFrames(),
+                                                sampler->sampleChannels());
             });
         } else {
             return false;

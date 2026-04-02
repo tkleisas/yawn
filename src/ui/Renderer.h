@@ -27,8 +27,9 @@ public:
     void drawTriangle(float x0, float y0, float x1, float y1, float x2, float y2, Color color);
     void drawFilledCircle(float cx, float cy, float radius, Color color, int segments = 24);
     void drawRoundedRect(float x, float y, float w, float h, float radius, Color color, int cornerSegs = 6);
+    void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness = 1.0f);
 
-    // Textured quad (for font glyphs) — binds the given texture
+    // Textured quad(for font glyphs) — binds the given texture
     void drawTexturedQuad(float x, float y, float w, float h,
                           float u0, float v0, float u1, float v1,
                           Color color, GLuint textureId);

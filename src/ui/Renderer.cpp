@@ -311,6 +311,36 @@ void Renderer2D::drawRoundedRect(float x, float y, float w, float h,
     }
 }
 
+void Renderer2D::drawLine(float x1, float y1, float x2, float y2,
+                           Color color, float thickness) {
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len = std::sqrt(dx * dx + dy * dy);
+    if (len < 0.01f) return;
+    // Perpendicular unit vector
+    float nx = -dy / len * thickness * 0.5f;
+    float ny =  dx / len * thickness * 0.5f;
+
+    if (m_currentTexture != m_whiteTexture) {
+        flush();
+        m_currentTexture = m_whiteTexture;
+        glBindTexture(GL_TEXTURE_2D, m_currentTexture);
+    }
+    if (m_vertices.size() + 4 > kMaxVertices) flush();
+
+    uint32_t base = static_cast<uint32_t>(m_vertices.size());
+    m_vertices.push_back({x1 + nx, y1 + ny, 0, 0, color.r, color.g, color.b, color.a});
+    m_vertices.push_back({x1 - nx, y1 - ny, 0, 0, color.r, color.g, color.b, color.a});
+    m_vertices.push_back({x2 - nx, y2 - ny, 0, 0, color.r, color.g, color.b, color.a});
+    m_vertices.push_back({x2 + nx, y2 + ny, 0, 0, color.r, color.g, color.b, color.a});
+    m_indices.push_back(base + 0);
+    m_indices.push_back(base + 1);
+    m_indices.push_back(base + 2);
+    m_indices.push_back(base + 0);
+    m_indices.push_back(base + 2);
+    m_indices.push_back(base + 3);
+}
+
 void Renderer2D::drawTexturedQuad(float x, float y, float w, float h,
                                    float u0, float v0, float u1, float v1,
                                    Color color, GLuint textureId) {

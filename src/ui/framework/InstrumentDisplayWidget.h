@@ -316,17 +316,20 @@ private:
     void drawSeg(Renderer2D& r, float x1, float y1, float x2, float y2, bool exponential) {
         float dx = x2 - x1;
         if (std::abs(dx) < 1) return;
-        int steps = std::max(4, static_cast<int>(std::abs(dx) / 1.5f));
-        for (int i = 0; i <= steps; ++i) {
+        int steps = std::max(4, static_cast<int>(std::abs(dx) / 2.0f));
+        float prevX = x1, prevY = y1;
+        for (int i = 1; i <= steps; ++i) {
             float t = static_cast<float>(i) / steps;
             float px = x1 + dx * t;
-            float pyl;
             float dy = y2 - y1;
+            float pyl;
             if (exponential && std::abs(dy) > 1)
                 pyl = y1 + dy * (1.0f - std::exp(-t * 3.5f)) / (1.0f - std::exp(-3.5f));
             else
                 pyl = y1 + dy * t;
-            r.drawRect(px, pyl, 1.5f, 1.5f, m_color);
+            r.drawLine(prevX, prevY, px, pyl, m_color, 1.5f);
+            prevX = px;
+            prevY = pyl;
         }
     }
 #endif
@@ -383,7 +386,8 @@ public:
         float amp = wh / 2 * std::min(1.0f, m_level + 0.25f);
 
         int steps = static_cast<int>(ww);
-        for (int i = 0; i < steps; ++i) {
+        float prevX = wx, prevY = midY;
+        for (int i = 0; i <= steps; ++i) {
             float t = static_cast<float>(i) / steps;
             float val = 0;
             switch (m_waveform) {
@@ -394,7 +398,12 @@ public:
                 case 4: val = static_cast<float>((i * 1103515245 + 12345) & 0x7fffffff)
                               / static_cast<float>(0x7fffffff) * 2.0f - 1.0f; break;
             }
-            r.drawRect(wx + i, midY - val * amp, 1.5f, 1.5f, col);
+            float curX = wx + static_cast<float>(i);
+            float curY = midY - val * amp;
+            if (i > 0)
+                r.drawLine(prevX, prevY, curX, curY, col, 1.5f);
+            prevX = curX;
+            prevY = curY;
         }
 
         static const char* waveNames[] = {"Sin", "Saw", "Sqr", "Tri", "Nse"};
@@ -457,7 +466,8 @@ public:
 
         Color lineCol{255, 160, 40, 220};
         int steps = static_cast<int>(pw);
-        for (int i = 0; i < steps; ++i) {
+        float prevX = px, prevY = py + ph;
+        for (int i = 0; i <= steps; ++i) {
             float t = static_cast<float>(i) / steps;
             float dist = t - cutoffNorm;
             float slope = 7.0f + m_resonance * 12.0f;
@@ -482,8 +492,12 @@ public:
                 }
             }
             mag = std::clamp(mag, 0.0f, 1.3f);
-            float drawY = py + ph * (1.0f - mag * 0.75f);
-            r.drawRect(px + i, drawY, 1.5f, 1.5f, lineCol);
+            float curX = px + static_cast<float>(i);
+            float curY = py + ph * (1.0f - mag * 0.75f);
+            if (i > 0)
+                r.drawLine(prevX, prevY, curX, curY, lineCol, 1.5f);
+            prevX = curX;
+            prevY = curY;
         }
 
         // Cutoff frequency line
@@ -511,7 +525,7 @@ private:
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SubSynthDisplayPanel — Composite panel for Subtractive Synth.
-// Shows: [Osc1][Osc2][Filter][Amp Env][Filter Env] in a horizontal row.
+// 2-row layout: [Osc1 | Osc2 | Filter] top, [Amp Env | Filter Env] bottom.
 // ═══════════════════════════════════════════════════════════════════════════
 
 class SubSynthDisplayPanel : public Widget {
@@ -529,8 +543,6 @@ public:
         m_filtAdsr.setColor(Color{220, 200, 60, 255});
     }
 
-    // Update all sub-displays from SubtractiveSynth parameter values.
-    // Parameter indices match SubtractiveSynth::Params enum.
     void updateFromParams(
         float osc1Wave, float osc1Level,
         float osc2Wave, float osc2Level,
@@ -550,25 +562,28 @@ public:
     }
 
     Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, 48.0f});
+        return c.constrain({c.maxW, 96.0f});
     }
 
     void layout(const Rect& bounds, const UIContext& ctx) override {
         m_bounds = bounds;
         float gap = 3.0f;
-        // 5 panels: 2 narrow oscs, 1 medium filter, 2 medium ADSRs
-        // Weight: osc=1, filter=1.5, adsr=1.5 → total=7
-        float unit = (bounds.w - 4 * gap) / 7.0f;
+        float halfH = (bounds.h - gap) * 0.5f;
+
+        // Top row: Osc1, Osc2, Filter (equal width)
+        float topUnit = (bounds.w - 2 * gap) / 3.0f;
         float x = bounds.x;
-        m_osc1.layout({x, bounds.y, unit, bounds.h}, ctx);
-        x += unit + gap;
-        m_osc2.layout({x, bounds.y, unit, bounds.h}, ctx);
-        x += unit + gap;
-        m_filter.layout({x, bounds.y, unit * 1.5f, bounds.h}, ctx);
-        x += unit * 1.5f + gap;
-        m_ampAdsr.layout({x, bounds.y, unit * 1.5f, bounds.h}, ctx);
-        x += unit * 1.5f + gap;
-        m_filtAdsr.layout({x, bounds.y, unit * 1.5f, bounds.h}, ctx);
+        m_osc1.layout({x, bounds.y, topUnit, halfH}, ctx);
+        x += topUnit + gap;
+        m_osc2.layout({x, bounds.y, topUnit, halfH}, ctx);
+        x += topUnit + gap;
+        m_filter.layout({x, bounds.y, topUnit, halfH}, ctx);
+
+        // Bottom row: AmpADSR, FiltADSR (equal width)
+        float botUnit = (bounds.w - gap) * 0.5f;
+        float botY = bounds.y + halfH + gap;
+        m_ampAdsr.layout({bounds.x, botY, botUnit, halfH}, ctx);
+        m_filtAdsr.layout({bounds.x + botUnit + gap, botY, botUnit, halfH}, ctx);
     }
 
     void paint([[maybe_unused]] UIContext& ctx) override {
@@ -585,6 +600,111 @@ private:
     OscDisplayWidget    m_osc1, m_osc2;
     FilterDisplayWidget m_filter;
     ADSRDisplayWidget   m_ampAdsr, m_filtAdsr;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SamplerDisplayPanel — Composite panel for Sampler instrument.
+// Top: sample waveform display (or "Drop Sample" placeholder).
+// Bottom: small ADSR envelope display.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class SamplerDisplayPanel : public Widget {
+public:
+    SamplerDisplayPanel() {
+        setName("SamplerDisplay");
+        m_adsr.setLabel("AMP");
+        m_adsr.setColor(Color{80, 220, 100, 255});
+    }
+
+    void setADSR(float a, float d, float s, float rel) {
+        m_adsr.setADSR(a, d, s, rel);
+    }
+
+    void setSampleData(const float* data, int frames, int channels) {
+        m_sampleData = data;
+        m_sampleFrames = frames;
+        m_sampleChannels = channels;
+    }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 96.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext& ctx) override {
+        m_bounds = bounds;
+        float gap = 3.0f;
+        float adsrH = std::min(40.0f, bounds.h * 0.35f);
+        float waveH = bounds.h - adsrH - gap;
+        m_waveRect = {bounds.x, bounds.y, bounds.w, waveH};
+        m_adsr.layout({bounds.x, bounds.y + waveH + gap, bounds.w, adsrH}, ctx);
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        // Waveform area background
+        r.drawRect(m_waveRect.x, m_waveRect.y, m_waveRect.w, m_waveRect.h,
+                   Color{20, 20, 26, 255});
+        r.drawRectOutline(m_waveRect.x, m_waveRect.y, m_waveRect.w, m_waveRect.h,
+                          Color{50, 50, 60, 255});
+
+        float lblScale = 7.0f / Theme::kFontSize;
+        f.drawText(r, "SAMPLE", m_waveRect.x + 3, m_waveRect.y + 1,
+                   lblScale, Theme::textDim);
+
+        if (m_sampleData && m_sampleFrames > 0) {
+            float px = m_waveRect.x + 2;
+            float py = m_waveRect.y + 10;
+            float pw = m_waveRect.w - 4;
+            float ph = m_waveRect.h - 12;
+            if (pw > 10 && ph > 6) {
+                // Draw waveform envelope (first channel)
+                float midY = py + ph * 0.5f;
+                float halfH = ph * 0.5f;
+                int numBars = static_cast<int>(pw);
+                if (numBars < 1) numBars = 1;
+                Color waveCol{0, 180, 230, 200};
+                for (int i = 0; i < numBars; ++i) {
+                    int startFrame = (i * m_sampleFrames) / numBars;
+                    int endFrame = ((i + 1) * m_sampleFrames) / numBars;
+                    float minVal = 0.0f, maxVal = 0.0f;
+                    for (int s = startFrame; s < endFrame; ++s) {
+                        float v = m_sampleData[s * m_sampleChannels];
+                        if (v < minVal) minVal = v;
+                        if (v > maxVal) maxVal = v;
+                    }
+                    float top = midY - maxVal * halfH;
+                    float bot = midY - minVal * halfH;
+                    float barH = bot - top;
+                    if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
+                    r.drawRect(px + i, top, 1, barH, waveCol);
+                }
+                // Center line
+                r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 100});
+            }
+        } else {
+            // "Drop Sample" placeholder
+            const char* msg = "Drop Sample";
+            float tw = f.textWidth(msg, lblScale);
+            float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
+            float ty = m_waveRect.y + (m_waveRect.h) * 0.5f - 4;
+            f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
+        }
+
+        // ADSR below
+        m_adsr.paint(ctx);
+#endif
+    }
+
+private:
+    ADSRDisplayWidget m_adsr;
+    Rect m_waveRect{};
+    const float* m_sampleData = nullptr;
+    int m_sampleFrames = 0;
+    int m_sampleChannels = 1;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -653,11 +773,33 @@ inline std::string shortenLabel(const std::string& name) {
     if (s == "Resonance")  return "Res";
     if (s == "Depth")      return "Dpt";
     if (s == "Amount")     return "Amt";
+    if (s == "Sustain")    return "Sus";
+    if (s == "Decay")      return "Dcy";
     if (s == "Noise Level") return "Noise";
     if (s == "Root Note")  return "Root";
     if (s == "Filter Type") return "Type";
     if (s == "Filter Cutoff") return "Cut";
+    if (s == "Filter Cut")    return "Cut";
     if (s == "Filter Res")    return "Res";
+    if (s == "Filter Reso")   return "Reso";
+    if (s == "Filter Env")    return "FiltEnv";
+    if (s == "Osc1 Wave")     return "Wave";
+    if (s == "Osc1 Level")    return "Level";
+    if (s == "Osc2 Wave")     return "Wave";
+    if (s == "Osc2 Level")    return "Level";
+    if (s == "Osc2 Detune")   return "Detune";
+    if (s == "Osc2 Octave")   return "Octave";
+    if (s == "Sub Level")     return "Sub";
+    if (s == "LFO Rate")      return "Rate";
+    if (s == "LFO Depth")     return "Depth";
+    if (s == "Amp Attack")    return "Atk";
+    if (s == "Amp Decay")     return "Dcy";
+    if (s == "Amp Sustain")   return "Sus";
+    if (s == "Amp Release")   return "Rel";
+    if (s == "Filt Attack")   return "Atk";
+    if (s == "Filt Decay")    return "Dcy";
+    if (s == "Filt Sustain")  return "Sus";
+    if (s == "Filt Release")  return "Rel";
     return s;
 }
 
