@@ -50,6 +50,7 @@ void PianoRollPanel::paint(UIContext& ctx) {
     renderNotes(r);
     renderClipBound(r);
     renderRubberBand(r);
+    renderPlayhead(r);
     r.popClip();
 
     r.pushClip(m_pianoX, m_gy, kPianoW, m_gh);
@@ -655,6 +656,17 @@ void PianoRollPanel::renderRubberBand(Renderer2D& r) {
     r.drawRectOutline(rx, ry, rw, rh, Color{100, 180, 255, 180}, 1.0f);
 }
 
+void PianoRollPanel::renderPlayhead(Renderer2D& r) {
+    if (!m_midiPlaying || !m_clip) return;
+    double clipLen = m_clip->lengthBeats();
+    if (clipLen <= 0) return;
+    double beat = std::fmod(m_playBeat, clipLen);
+    if (beat < 0) beat += clipLen;
+    float px = beatToX(beat);
+    if (px < m_gx || px > m_gx + m_gw) return;
+    r.drawRect(px, m_gy, 2.0f, m_gh, Color{255, 255, 255, 220});
+}
+
 void PianoRollPanel::renderRuler(Renderer2D& r, Font& f) {
     float rulerY = m_py + kHandleHeight + kToolbarH;
     float sc = 11.0f / f.pixelHeight();
@@ -706,6 +718,22 @@ void PianoRollPanel::renderRuler(Renderer2D& r, Font& f) {
     }
 
     r.drawRect(m_gx, rulerY + kRulerH - 1, m_gw, 1, Color{55, 55, 60});
+
+    // Playhead on ruler
+    if (m_midiPlaying && m_clip) {
+        double clipLen = m_clip->lengthBeats();
+        if (clipLen > 0) {
+            double beat = std::fmod(m_playBeat, clipLen);
+            if (beat < 0) beat += clipLen;
+            float px = beatToX(beat);
+            if (px >= m_gx && px <= m_gx + m_gw) {
+                r.drawRect(px - 1, rulerY, 2, kRulerH, Color{255, 255, 255, 220});
+                // Small triangle marker
+                r.drawTriangle(px - 4, rulerY, px + 4, rulerY,
+                               px, rulerY + 5, Color{255, 255, 255, 220});
+            }
+        }
+    }
 }
 
 void PianoRollPanel::renderClipOps(Renderer2D& r, Font& f) {

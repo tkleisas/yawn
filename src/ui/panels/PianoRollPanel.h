@@ -112,6 +112,11 @@ public:
 
     void setTransport(const audio::Transport* t) { m_transport = t; }
 
+    void setPlayBeat(double beat, bool playing) {
+        m_playBeat = beat;
+        m_midiPlaying = playing;
+    }
+
     bool  isOpen()     const { return m_open; }
     bool  hasClip()    const { return m_clip != nullptr; }
     midi::MidiClip* clip() const { return m_clip; }
@@ -262,6 +267,12 @@ private:
     void renderRubberBand(Renderer2D&) {}
 #else
     void renderRubberBand(Renderer2D& r);
+#endif
+
+#ifdef YAWN_TEST_BUILD
+    void renderPlayhead(Renderer2D&) {}
+#else
+    void renderPlayhead(Renderer2D& r);
 #endif
 
 #ifdef YAWN_TEST_BUILD
@@ -619,6 +630,8 @@ private:
     const audio::Transport*  m_transport = nullptr;
     int   m_trackIdx  = 0;
     bool  m_open      = false;
+    double m_playBeat  = 0.0;
+    bool  m_midiPlaying = false;
 
     // Resizable panel height (user-adjustable via handle drag)
     float m_userHeight = kDefaultHeight;

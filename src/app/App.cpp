@@ -1383,6 +1383,12 @@ void App::update() {
                     m_detailPanel->setClipPlayPosition(msg.playPosition);
                     m_detailPanel->setClipPlaying(msg.playing);
                 }
+                // Forward MIDI playhead to piano roll
+                if (msg.isMidi && msg.trackIndex == m_pianoRoll->trackIndex() &&
+                    m_pianoRoll->isOpen()) {
+                    double beats = static_cast<double>(msg.playPosition) / 1000000.0;
+                    m_pianoRoll->setPlayBeat(beats, msg.playing);
+                }
             }
             else if constexpr (std::is_same_v<T, audio::MeterUpdate>) {
                 if (msg.trackIndex >= 0)
