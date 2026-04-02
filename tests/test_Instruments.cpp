@@ -10,6 +10,7 @@
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
+#include "instruments/Vocoder.h"
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -1245,4 +1246,104 @@ TEST(GranularSynth, StereoSample) {
     }
     float r = rms(buf, kBlockSize * kChannels);
     EXPECT_GT(r, 1e-7f);
+}
+
+// ─── Vocoder Tests ─────────────────────────────────────
+
+TEST(Vocoder, InitAndReset) {
+    Vocoder vc;
+    vc.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(vc.parameterCount(), Vocoder::kParamCount);
+    EXPECT_STREQ(vc.name(), "Vocoder");
+    EXPECT_STREQ(vc.id(), "vocoder");
+    EXPECT_FALSE(vc.hasModulatorSample());
+    vc.reset();
+}
+
+TEST(Vocoder, NoteOnProducesOutput) {
+    Vocoder vc;
+    vc.init(kSampleRate, kBlockSize);
+    // Use internal formant modulator (default modSource = 1)
+    vc.setParameter(Vocoder::kAmpAttack, 1.0f);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < 4; ++i) {
+        auto midi = (i == 0) ? makeNoteOn(60, 100) : makeEmpty();
+        vc.process(buf, kBlockSize, kChannels, midi);
+    }
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_GT(r, 1e-6f);
+}
+
+TEST(Vocoder, SilenceWhenNoNotes) {
+    Vocoder vc;
+    vc.init(kSampleRate, kBlockSize);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    vc.process(buf, kBlockSize, kChannels, makeEmpty());
+
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_NEAR(r, 0.0f, 1e-10f);
+}
+
+TEST(Vocoder, AllCarrierTypesProduceOutput) {
+    for (int ct = 0; ct < 4; ++ct) {
+        Vocoder vc;
+        vc.init(kSampleRate, kBlockSize);
+        vc.setParameter(Vocoder::kCarrierType, static_cast<float>(ct));
+        vc.setParameter(Vocoder::kAmpAttack, 1.0f);
+
+        float buf[kBlockSize * kChannels];
+        std::memset(buf, 0, sizeof(buf));
+        for (int i = 0; i < 4; ++i) {
+            auto midi = (i == 0) ? makeNoteOn(60, 100) : makeEmpty();
+            vc.process(buf, kBlockSize, kChannels, midi);
+        }
+        float r = rms(buf, kBlockSize * kChannels);
+        EXPECT_GT(r, 1e-7f) << "Carrier type " << ct << " produced silence";
+    }
+}
+
+TEST(Vocoder, WithModulatorSample) {
+    Vocoder vc;
+    vc.init(kSampleRate, kBlockSize);
+
+    // Load a test sample as modulator
+    std::vector<float> mod(44100);
+    for (int i = 0; i < 44100; ++i)
+        mod[i] = std::sin(2.0 * 3.14159265 * 440.0 * i / 44100.0);
+    vc.loadModulatorSample(mod.data(), 44100, 1);
+    EXPECT_TRUE(vc.hasModulatorSample());
+
+    vc.setParameter(Vocoder::kModSource, 0.0f); // Use sample
+    vc.setParameter(Vocoder::kAmpAttack, 1.0f);
+
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < 4; ++i) {
+        auto midi = (i == 0) ? makeNoteOn(60, 100) : makeEmpty();
+        vc.process(buf, kBlockSize, kChannels, midi);
+    }
+    float r = rms(buf, kBlockSize * kChannels);
+    EXPECT_GT(r, 1e-7f);
+}
+
+TEST(Vocoder, ParameterGetSet) {
+    Vocoder vc;
+    vc.init(kSampleRate, kBlockSize);
+
+    vc.setParameter(Vocoder::kBands, 24.0f);
+    EXPECT_FLOAT_EQ(vc.getParameter(Vocoder::kBands), 24.0f);
+
+    vc.setParameter(Vocoder::kBandwidth, 1.5f);
+    EXPECT_FLOAT_EQ(vc.getParameter(Vocoder::kBandwidth), 1.5f);
+
+    // Clamp
+    vc.setParameter(Vocoder::kVolume, 5.0f);
+    EXPECT_FLOAT_EQ(vc.getParameter(Vocoder::kVolume), 1.0f);
+
+    vc.setParameter(Vocoder::kFormantShift, -20.0f);
+    EXPECT_FLOAT_EQ(vc.getParameter(Vocoder::kFormantShift), -12.0f);
 }

@@ -8,6 +8,7 @@
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
+#include "instruments/Vocoder.h"
 #include "instruments/InstrumentRack.h"
 #include "effects/Reverb.h"
 #include "effects/Delay.h"
@@ -380,6 +381,12 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         m_project.track(trackIndex).type = Track::Type::Midi;
         m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
         m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::GranularSynth>());
+        markDirty();
+    }});
+    instrItems.push_back({"Vocoder", [this, trackIndex]() {
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Vocoder>());
         markDirty();
     }});
     instrItems.push_back({"Instrument Rack", [this, trackIndex]() {
