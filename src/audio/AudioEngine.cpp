@@ -329,27 +329,59 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Generate MIDI from MIDI clips into track MIDI buffers
     m_midiClipEngine.process(m_trackMidiBuffers.data(), nf);
 
-    // Merge live MIDI input from MidiEngine into track MIDI buffers
+    // For recording tracks, clear clip MIDI so only live input goes through
+    // effects and gets recorded (standard DAW behavior: clip playback is
+    // suspended on the recording track).
+    if (m_transport.isRecording()) {
+        for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackType[t] == 1 && m_trackRecordStates[t].recording
+                && m_trackArmed[t])
+                m_trackMidiBuffers[t].clear();
+        }
+    }
+
+    // Merge live MIDI input into track MIDI buffers
+    // (hardware MIDI from MidiEngine + virtual keyboard from m_liveInputMidi)
     if (m_midiEngine) {
         m_midiEngine->process(nf);
         for (int t = 0; t < kMaxTracks; ++t) {
             const auto& liveBuf = m_midiEngine->trackBuffer(t);
-            for (int i = 0; i < liveBuf.count(); ++i) {
+            for (int i = 0; i < liveBuf.count(); ++i)
                 m_trackMidiBuffers[t].addMessage(liveBuf[i]);
-            }
         }
     }
+    for (int t = 0; t < kMaxTracks; ++t) {
+        const auto& vkBuf = m_liveInputMidi[t];
+        for (int i = 0; i < vkBuf.count(); ++i)
+            m_trackMidiBuffers[t].addMessage(vkBuf[i]);
+    }
 
-    // Capture MIDI for recording (hardware input + virtual keyboard)
-    if (m_transport.isRecording()) {
-        double currentBeat = m_transport.positionInBeats();
-        for (int t = 0; t < kMaxTracks; ++t) {
-            if (m_trackType[t] != 1) continue; // MIDI tracks only
+    // Process instruments: MIDI effects → record post-effect → instrument
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (!m_instruments[t]) {
+            m_trackMidiBuffers[t].clear();
+            continue;
+        }
+        // Run MIDI effect chain on this track's MIDI buffer
+        if (m_midiEffectChains[t].count() > 0) {
+            midi::TransportInfo ti;
+            ti.bpm = m_transport.bpm();
+            ti.positionInBeats = m_transport.positionInBeats();
+            ti.positionInSamples = m_transport.positionInSamples();
+            ti.sampleRate = m_config.sampleRate;
+            ti.samplesPerBeat = ti.sampleRate * 60.0 / ti.bpm;
+            ti.playing = m_transport.isPlaying();
+            ti.beatsPerBar = m_transport.beatsPerBar();
+            ti.beatDenominator = m_transport.denominator();
+            m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
+        }
+
+        // Capture post-effect MIDI for recording (arpeggiator output, etc.)
+        if (m_transport.isRecording() && m_trackType[t] == 1) {
             auto& rs = m_trackRecordStates[t];
-            if (!rs.recording || !m_trackArmed[t]) continue;
-
-            // Helper: capture messages from a MIDI buffer into recording state
-            auto captureBuf = [&](const midi::MidiBuffer& buf) {
+            if (rs.recording && m_trackArmed[t]) {
+                double currentBeat = m_transport.positionInBeats();
+                const auto& buf = m_trackMidiBuffers[t];
                 for (int i = 0; i < buf.count(); ++i) {
                     const auto& msg = buf[i];
                     double msgBeat = currentBeat +
@@ -392,36 +424,9 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                         rs.recordedCCs.push_back(cc);
                     }
                 }
-            };
-
-            // Capture hardware MIDI input
-            if (m_midiEngine) {
-                captureBuf(m_midiEngine->trackBuffer(t));
             }
-            // Capture virtual keyboard / UI MIDI input
-            captureBuf(m_liveInputMidi[t]);
         }
-    }
 
-    // Process instruments: MIDI effects → instrument → add to track buffer
-    for (int t = 0; t < kMaxTracks; ++t) {
-        if (!m_instruments[t]) {
-            m_trackMidiBuffers[t].clear();
-            continue;
-        }
-        // Run MIDI effect chain on this track's MIDI buffer
-        if (m_midiEffectChains[t].count() > 0) {
-            midi::TransportInfo ti;
-            ti.bpm = m_transport.bpm();
-            ti.positionInBeats = m_transport.positionInBeats();
-            ti.positionInSamples = m_transport.positionInSamples();
-            ti.sampleRate = m_config.sampleRate;
-            ti.samplesPerBeat = ti.sampleRate * 60.0 / ti.bpm;
-            ti.playing = m_transport.isPlaying();
-            ti.beatsPerBar = m_transport.beatsPerBar();
-            ti.beatDenominator = m_transport.denominator();
-            m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
-        }
         // Render instrument into track buffer (adds to existing audio)
         m_instruments[t]->process(m_trackBufferPtrs[t], nf, nc,
                                   m_trackMidiBuffers[t]);
@@ -579,8 +584,7 @@ void AudioEngine::processCommands() {
                     m.velocity = msg.velocity;
                     m.value = msg.value;
                     m.ccNumber = msg.ccNumber;
-                    m_trackMidiBuffers[msg.trackIndex].addMessage(m);
-                    // Also store for recording capture (virtual keyboard input)
+                    // Store in live input buffer (merged into track buffer later)
                     m_liveInputMidi[msg.trackIndex].addMessage(m);
                     if (m.isNoteOn())
                         LOG_DEBUG("MIDI", "NoteOn track=%d note=%d vel=%d inst=%s",
@@ -808,6 +812,22 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
         rs.recordedNotes.push_back(note);
     }
     rs.pendingNotes.clear();
+
+    // Reset MIDI effect chain to clear arpeggiator state and prevent stuck notes
+    m_midiEffectChains[trackIndex].reset();
+
+    // Send all-notes-off to the instrument to silence any lingering arp notes
+    if (m_instruments[trackIndex]) {
+        midi::MidiBuffer killBuf;
+        midi::MidiMessage allOff{};
+        allOff.type = midi::MidiMessage::Type::ControlChange;
+        allOff.ccNumber = 123; // All Notes Off
+        allOff.value = 0;
+        allOff.channel = 0;
+        killBuf.addMessage(allOff);
+        float silence[512] = {};
+        m_instruments[trackIndex]->process(silence, 1, 2, killBuf);
+    }
 
     // Discard empty MIDI recordings (no notes and no CCs)
     if (rs.recordedNotes.empty() && rs.recordedCCs.empty()) {
