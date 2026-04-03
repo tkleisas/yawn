@@ -205,9 +205,9 @@ public:
     // ─── Keyboard ───────────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    bool handleKeyDown(int) { return false; }
+    bool handleKeyDown(int, bool = false) { return false; }
 #else
-    bool handleKeyDown(int key);
+    bool handleKeyDown(int key, bool ctrl = false);
 #endif
 
 private:

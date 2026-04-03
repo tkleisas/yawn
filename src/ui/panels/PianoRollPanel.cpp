@@ -393,7 +393,7 @@ void PianoRollPanel::handleScroll(float dx, float dy, bool ctrl, bool shift,
     clampScroll();
 }
 
-bool PianoRollPanel::handleKeyDown(int key) {
+bool PianoRollPanel::handleKeyDown(int key, bool ctrl) {
     if (!m_open) return false;
 
     constexpr int kEscape    = 0x1B;
@@ -451,13 +451,14 @@ bool PianoRollPanel::handleKeyDown(int key) {
         return true;
     }
 
-    if (key == '1') { m_snap = Snap::Quarter;          return true; }
-    if (key == '2') { m_snap = Snap::Eighth;            return true; }
-    if (key == '3') { m_snap = Snap::Sixteenth;         return true; }
-    if (key == '4') { m_snap = Snap::ThirtySecond;      return true; }
-    if (key == '5') { m_snap = Snap::QuarterTriplet;    return true; }
-    if (key == '6') { m_snap = Snap::EighthTriplet;     return true; }
-    if (key == '7') { m_snap = Snap::SixteenthTriplet;  return true; }
+    // Snap shortcuts (Ctrl+number)
+    if (ctrl && key == '1') { m_snap = Snap::Quarter;          return true; }
+    if (ctrl && key == '2') { m_snap = Snap::Eighth;            return true; }
+    if (ctrl && key == '3') { m_snap = Snap::Sixteenth;         return true; }
+    if (ctrl && key == '4') { m_snap = Snap::ThirtySecond;      return true; }
+    if (ctrl && key == '5') { m_snap = Snap::QuarterTriplet;    return true; }
+    if (ctrl && key == '6') { m_snap = Snap::EighthTriplet;     return true; }
+    if (ctrl && key == '7') { m_snap = Snap::SixteenthTriplet;  return true; }
 
     if (key == 'v' || key == 'V') { m_showVelocityLane = !m_showVelocityLane; return true; }
 

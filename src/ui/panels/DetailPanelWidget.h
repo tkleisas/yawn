@@ -20,6 +20,9 @@
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
 #include "instruments/DrumSlop.h"
+#include "instruments/DrumRack.h"
+#include "instruments/InstrumentRack.h"
+#include "instruments/SubtractiveSynth.h"
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
 #include "instruments/Vocoder.h"
@@ -1004,6 +1007,96 @@ private:
                 vocPanel->setPlaying(voc->isPlaying());
                 vocPanel->setBandCount(
                     static_cast<int>(voc->getParameter(instruments::Vocoder::kBands)));
+            });
+        } else if (nm == "Drum Rack") {
+            auto* drPanel = new DrumRackDisplayPanel();
+            config.display = drPanel;
+            config.displayWidth = 160;
+            config.sections = {
+                {"Global", {0}},
+                {"Pad",    {1, 2, 3}},
+            };
+
+            drPanel->setOnPadClick([inst](int note) {
+                auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
+                if (dr) dr->setSelectedPad(note);
+            });
+
+            m_displayUpdaters.push_back([drPanel, inst]() {
+                auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
+                if (!dr) return;
+
+                int sel = dr->selectedPad();
+                drPanel->setSelectedPad(sel);
+
+                // Update which page the selected pad is on
+                drPanel->setPage(sel / 16);
+
+                // Update sample/playing state for all 128 pads
+                for (int n = 0; n < instruments::DrumRack::kNumPads; ++n) {
+                    drPanel->setPadHasSample(n, dr->hasSample(n));
+                    drPanel->setPadPlaying(n, dr->isPadPlaying(n));
+                }
+
+                // Selected pad waveform
+                const float* data = dr->padSampleData(sel);
+                if (data)
+                    drPanel->setSelectedPadWaveform(data, dr->padSampleFrames(sel),
+                                                    dr->padSampleChannels(sel));
+                else
+                    drPanel->setSelectedPadWaveform(nullptr, 0, 1);
+            });
+        } else if (nm == "Instrument Rack") {
+            auto* irPanel = new InstrumentRackDisplayPanel();
+            config.display = irPanel;
+            config.displayWidth = 160;
+            config.sections = {
+                {"Rack",  {0}},
+                {"Chain", {1, 2, 3, 4, 5, 6}},
+            };
+
+            irPanel->setOnChainClick([inst](int idx) {
+                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+                if (ir) ir->setSelectedChain(idx);
+            });
+
+            irPanel->setOnAddChain([inst]() {
+                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+                if (ir && ir->chainCount() < instruments::InstrumentRack::kMaxChains)
+                    ir->addChain(std::make_unique<instruments::SubtractiveSynth>());
+            });
+
+            irPanel->setOnRemoveChain([inst](int idx) {
+                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+                if (ir && idx < ir->chainCount())
+                    ir->removeChain(idx);
+            });
+
+            irPanel->setOnToggleChain([inst](int idx) {
+                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+                if (ir && idx < ir->chainCount())
+                    ir->chain(idx).enabled = !ir->chain(idx).enabled;
+            });
+
+            m_displayUpdaters.push_back([irPanel, inst]() {
+                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+                if (!ir) return;
+
+                irPanel->setChainCount(ir->chainCount());
+                irPanel->setSelectedChain(ir->selectedChain());
+
+                for (int i = 0; i < ir->chainCount(); ++i) {
+                    const auto& ch = ir->chain(i);
+                    InstrumentRackDisplayPanel::ChainInfo ci;
+                    ci.name    = ch.instrument ? ch.instrument->name() : "Empty";
+                    ci.keyLow  = ch.keyLow;
+                    ci.keyHigh = ch.keyHigh;
+                    ci.velLow  = ch.velLow;
+                    ci.velHigh = ch.velHigh;
+                    ci.volume  = ch.volume;
+                    ci.enabled = ch.enabled;
+                    irPanel->setChain(i, ci);
+                }
             });
         } else {
             return false;

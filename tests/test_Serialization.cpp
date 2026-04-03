@@ -423,3 +423,65 @@ TEST_F(ProjectSerializerTest, SchemaVersioningIgnoresUnknownFields) {
     EXPECT_EQ(project.track(0).name, "Test");
     EXPECT_NEAR(engine.transport().bpm(), 130.0, 0.1);
 }
+
+TEST_F(ProjectSerializerTest, RoundTripInstrumentRackChains) {
+    Project project;
+    project.init(1, 1);
+    project.track(0).name = "RackTest";
+    project.track(0).type = Track::Type::Midi;
+
+    audio::AudioEngine engine;
+
+    // Create an InstrumentRack with two chains: a SubSynth and a DrumRack
+    auto rack = std::make_unique<instruments::InstrumentRack>();
+    auto synth = createInstrument("subsynth");
+    synth->init(44100.0, 256);
+    rack->addChain(std::move(synth), 0, 59, 1, 127);
+    rack->chain(0).volume = 0.7f;
+    rack->chain(0).pan = -0.3f;
+
+    auto dr = createInstrument("drumrack");
+    dr->init(44100.0, 256);
+    rack->addChain(std::move(dr), 60, 127, 1, 127);
+    rack->chain(1).volume = 0.5f;
+    rack->chain(1).enabled = false;
+
+    rack->init(44100.0, 256);
+    engine.setInstrument(0, std::move(rack));
+    // Set a param after setInstrument to verify round-trip
+    engine.instrument(0)->setParameter(0, 0.6f); // Rack Volume
+
+    auto dir = projDir();
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(dir, project, engine));
+    ASSERT_TRUE(fs::exists(dir / "project.json"));
+
+    // Load into fresh state
+    Project project2;
+    audio::AudioEngine engine2;
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(dir, project2, engine2));
+
+    auto* loaded = engine2.instrument(0);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_STREQ(loaded->name(), "Instrument Rack");
+
+    auto* loadedRack = dynamic_cast<instruments::InstrumentRack*>(loaded);
+    ASSERT_NE(loadedRack, nullptr);
+    EXPECT_EQ(loadedRack->chainCount(), 2);
+
+    // Chain 0: SubSynth with key range 0-59
+    EXPECT_STREQ(loadedRack->chain(0).instrument->name(), "Subtractive Synth");
+    EXPECT_EQ(loadedRack->chain(0).keyLow, 0);
+    EXPECT_EQ(loadedRack->chain(0).keyHigh, 59);
+    EXPECT_NEAR(loadedRack->chain(0).volume, 0.7f, 0.01f);
+    EXPECT_NEAR(loadedRack->chain(0).pan, -0.3f, 0.01f);
+
+    // Chain 1: DrumRack with key range 60-127, disabled
+    EXPECT_STREQ(loadedRack->chain(1).instrument->name(), "Drum Rack");
+    EXPECT_EQ(loadedRack->chain(1).keyLow, 60);
+    EXPECT_EQ(loadedRack->chain(1).keyHigh, 127);
+    EXPECT_NEAR(loadedRack->chain(1).volume, 0.5f, 0.01f);
+    EXPECT_FALSE(loadedRack->chain(1).enabled);
+
+    // Rack volume persisted
+    EXPECT_NEAR(loadedRack->getParameter(0), 0.6f, 0.01f);
+}

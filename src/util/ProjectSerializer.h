@@ -15,6 +15,7 @@
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
 #include "instruments/DrumRack.h"
+#include "instruments/InstrumentRack.h"
 #include "instruments/DrumSlop.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"

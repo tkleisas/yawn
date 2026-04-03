@@ -152,6 +152,28 @@ json serializeInstrument(const instruments::Instrument& inst,
         j["selectedPad"] = ds.selectedPad();
     }
 
+    // InstrumentRack: save chains with nested instruments
+    if (std::string(inst.id()) == "instrack") {
+        auto& rack = static_cast<const instruments::InstrumentRack&>(inst);
+        json chains = json::array();
+        for (int i = 0; i < rack.chainCount(); ++i) {
+            const auto& ch = rack.chain(i);
+            json cj;
+            cj["keyLow"] = ch.keyLow;
+            cj["keyHigh"] = ch.keyHigh;
+            cj["velLow"] = ch.velLow;
+            cj["velHigh"] = ch.velHigh;
+            cj["volume"] = ch.volume;
+            cj["pan"] = ch.pan;
+            cj["enabled"] = ch.enabled;
+            if (ch.instrument)
+                cj["instrument"] = serializeInstrument(*ch.instrument,
+                                                       samplesDir, sampleCounter);
+            chains.push_back(cj);
+        }
+        j["chains"] = chains;
+    }
+
     return j;
 }
 
@@ -234,6 +256,32 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
         }
         if (j.contains("selectedPad"))
             ds.setSelectedPad(j["selectedPad"].get<int>());
+    }
+
+    // InstrumentRack: load chains with nested instruments
+    if (id == "instrack" && j.contains("chains")) {
+        auto& rack = static_cast<instruments::InstrumentRack&>(*inst);
+        for (const auto& cj : j["chains"]) {
+            std::unique_ptr<instruments::Instrument> chainInst;
+            if (cj.contains("instrument"))
+                chainInst = deserializeInstrument(cj["instrument"], projectDir,
+                                                  sampleRate, maxBlockSize);
+            uint8_t kl = cj.value("keyLow",  (uint8_t)0);
+            uint8_t kh = cj.value("keyHigh", (uint8_t)127);
+            uint8_t vl = cj.value("velLow",  (uint8_t)1);
+            uint8_t vh = cj.value("velHigh", (uint8_t)127);
+            if (chainInst)
+                rack.addChain(std::move(chainInst), kl, kh, vl, vh);
+            else
+                continue;
+            // Set chain-level params after adding
+            int ci = rack.chainCount() - 1;
+            if (ci >= 0) {
+                rack.chain(ci).volume = cj.value("volume", 1.0f);
+                rack.chain(ci).pan = cj.value("pan", 0.0f);
+                rack.chain(ci).enabled = cj.value("enabled", true);
+            }
+        }
     }
 
     return inst;

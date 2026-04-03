@@ -121,27 +121,74 @@ public:
     const Chain& chain(int i) const { return m_chains[i]; }
     int chainCount() const { return m_numChains; }
 
+    // Selected chain for UI editing
+    int  selectedChain() const { return m_selectedChain; }
+    void setSelectedChain(int idx) { m_selectedChain = std::clamp(idx, 0, kMaxChains - 1); }
+
     // --- Instrument interface ---
 
     const char* name() const override { return "Instrument Rack"; }
     const char* id()   const override { return "instrack"; }
 
-    int parameterCount() const override { return 1; }
+    // Parameter indices
+    static constexpr int kVolume      = 0;
+    static constexpr int kChainVol    = 1;
+    static constexpr int kChainPan    = 2;
+    static constexpr int kChainKeyLow = 3;
+    static constexpr int kChainKeyHi  = 4;
+    static constexpr int kChainVelLow = 5;
+    static constexpr int kChainVelHi  = 6;
 
-    const InstrumentParameterInfo& parameterInfo(int) const override {
-        static const InstrumentParameterInfo p = {"Volume", 0, 1, 1, "", false};
-        return p;
+    int parameterCount() const override { return 7; }
+
+    const InstrumentParameterInfo& parameterInfo(int idx) const override {
+        static const InstrumentParameterInfo infos[] = {
+            {"Volume",       0,   1,    1.0f,  "",  false},
+            {"Chain Vol",    0,   1,    1.0f,  "",  false},
+            {"Chain Pan",   -1,   1,    0.0f,  "",  false},
+            {"Key Low",      0, 127,    0.0f,  "",  false},
+            {"Key High",     0, 127,  127.0f,  "",  false},
+            {"Vel Low",      0, 127,    1.0f,  "",  false},
+            {"Vel High",     0, 127,  127.0f,  "",  false},
+        };
+        return infos[std::clamp(idx, 0, 6)];
     }
 
-    float getParameter(int) const override { return m_rackVolume; }
+    float getParameter(int idx) const override {
+        if (idx == kVolume) return m_rackVolume;
+        int ci = m_selectedChain;
+        if (ci < 0 || ci >= m_numChains) return 0.0f;
+        const auto& ch = m_chains[ci];
+        switch (idx) {
+        case kChainVol:    return ch.volume;
+        case kChainPan:    return ch.pan;
+        case kChainKeyLow: return static_cast<float>(ch.keyLow);
+        case kChainKeyHi:  return static_cast<float>(ch.keyHigh);
+        case kChainVelLow: return static_cast<float>(ch.velLow);
+        case kChainVelHi:  return static_cast<float>(ch.velHigh);
+        default:           return 0.0f;
+        }
+    }
 
-    void setParameter(int, float v) override {
-        m_rackVolume = std::clamp(v, 0.0f, 1.0f);
+    void setParameter(int idx, float v) override {
+        if (idx == kVolume) { m_rackVolume = std::clamp(v, 0.0f, 1.0f); return; }
+        int ci = m_selectedChain;
+        if (ci < 0 || ci >= m_numChains) return;
+        auto& ch = m_chains[ci];
+        switch (idx) {
+        case kChainVol:    ch.volume  = std::clamp(v, 0.0f, 1.0f); break;
+        case kChainPan:    ch.pan     = std::clamp(v, -1.0f, 1.0f); break;
+        case kChainKeyLow: ch.keyLow  = static_cast<uint8_t>(std::clamp(v, 0.0f, 127.0f)); break;
+        case kChainKeyHi:  ch.keyHigh = static_cast<uint8_t>(std::clamp(v, 0.0f, 127.0f)); break;
+        case kChainVelLow: ch.velLow  = static_cast<uint8_t>(std::clamp(v, 0.0f, 127.0f)); break;
+        case kChainVelHi:  ch.velHigh = static_cast<uint8_t>(std::clamp(v, 0.0f, 127.0f)); break;
+        }
     }
 
 private:
     Chain m_chains[kMaxChains];
     int   m_numChains = 0;
+    int   m_selectedChain = 0;
     float m_rackVolume = 1.0f;
 
     midi::MidiBuffer   m_chainMidi[kMaxChains];

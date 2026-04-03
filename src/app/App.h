@@ -58,6 +58,7 @@ private:
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
     bool loadSampleToSampler(const std::string& path, int trackIndex);
     bool loadLoopToDrumSlop(const std::string& path, int trackIndex);
+    bool loadSampleToDrumRack(const std::string& path, int trackIndex);
     bool loadSampleToGranular(const std::string& path, int trackIndex);
     bool loadModulatorToVocoder(const std::string& path, int trackIndex);
     bool loadFont();

@@ -519,6 +519,117 @@ TEST(DrumRack, PadPitchAdjust) {
     EXPECT_GT(countZC(buf2, 4096 * kChannels), countZC(buf1, 4096 * kChannels));
 }
 
+TEST(DrumRack, SelectedPadTracking) {
+    DrumRack rack;
+    rack.init(kSampleRate, kBlockSize);
+
+    EXPECT_EQ(rack.selectedPad(), 36); // default is C2
+
+    rack.setSelectedPad(60);
+    EXPECT_EQ(rack.selectedPad(), 60);
+
+    // Clamped to valid range
+    rack.setSelectedPad(-1);
+    EXPECT_EQ(rack.selectedPad(), 0);
+    rack.setSelectedPad(200);
+    EXPECT_EQ(rack.selectedPad(), 127);
+}
+
+TEST(DrumRack, HasSampleAndPlaying) {
+    DrumRack rack;
+    rack.init(kSampleRate, kBlockSize);
+
+    EXPECT_FALSE(rack.hasSample(36));
+    EXPECT_FALSE(rack.isPadPlaying(36));
+
+    float sample[] = {0.5f, 0.3f, 0.1f};
+    rack.loadPad(36, sample, 3, 1);
+    EXPECT_TRUE(rack.hasSample(36));
+    EXPECT_FALSE(rack.hasSample(37));
+
+    // Trigger note and check playing state
+    auto midi = makeNoteOn(36, 100);
+    float buf[kBlockSize * kChannels] = {};
+    rack.process(buf, kBlockSize, kChannels, midi);
+    // Pad finishes quickly (3 frames), should be done
+    EXPECT_FALSE(rack.isPadPlaying(36));
+
+    // With a longer sample it should still be playing
+    std::vector<float> longSample(kBlockSize * 2, 0.5f);
+    rack.loadPad(37, longSample.data(), kBlockSize * 2, 1);
+    auto midi2 = makeNoteOn(37, 100);
+    float buf2[kBlockSize * kChannels] = {};
+    rack.process(buf2, kBlockSize, kChannels, midi2);
+    EXPECT_TRUE(rack.isPadPlaying(37));
+
+    // Out of range
+    EXPECT_FALSE(rack.hasSample(-1));
+    EXPECT_FALSE(rack.isPadPlaying(200));
+}
+
+TEST(DrumRack, PerPadParameterAPI) {
+    DrumRack rack;
+    rack.init(kSampleRate, kBlockSize);
+
+    EXPECT_EQ(rack.parameterCount(), 4);
+
+    // Global volume
+    EXPECT_STREQ(rack.parameterInfo(0).name, "Volume");
+
+    // Per-pad params operate on selected pad
+    rack.setSelectedPad(60);
+
+    // Default pad values
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadVolume), 1.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadPan), 0.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadPitch), 0.0f);
+
+    // Set via parameter API
+    rack.setParameter(DrumRack::kPadVolume, 1.5f);
+    rack.setParameter(DrumRack::kPadPan, -0.5f);
+    rack.setParameter(DrumRack::kPadPitch, 7.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadVolume), 1.5f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadPan), -0.5f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadPitch), 7.0f);
+
+    // Verify it changed the correct pad's data
+    EXPECT_FLOAT_EQ(rack.pad(60).volume, 1.5f);
+    EXPECT_FLOAT_EQ(rack.pad(60).pan, -0.5f);
+    EXPECT_FLOAT_EQ(rack.pad(60).pitchAdjust, 7.0f);
+
+    // Other pad unchanged
+    EXPECT_FLOAT_EQ(rack.pad(61).volume, 1.0f);
+
+    // Switch pad — see different values
+    rack.setSelectedPad(61);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadVolume), 1.0f);
+
+    // Clamping
+    rack.setParameter(DrumRack::kPadVolume, 5.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadVolume), 2.0f);
+    rack.setParameter(DrumRack::kPadPitch, -30.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(DrumRack::kPadPitch), -24.0f);
+}
+
+TEST(DrumRack, PadSampleDataAccessors) {
+    DrumRack rack;
+    rack.init(kSampleRate, kBlockSize);
+
+    EXPECT_EQ(rack.padSampleData(36), nullptr);
+    EXPECT_EQ(rack.padSampleFrames(36), 0);
+    EXPECT_EQ(rack.padSampleChannels(36), 1);
+
+    float sample[] = {0.5f, 0.3f, 0.1f, -0.2f};
+    rack.loadPad(36, sample, 2, 2); // 2 frames, stereo
+    EXPECT_NE(rack.padSampleData(36), nullptr);
+    EXPECT_EQ(rack.padSampleFrames(36), 2);
+    EXPECT_EQ(rack.padSampleChannels(36), 2);
+
+    // Out of range
+    EXPECT_EQ(rack.padSampleData(-1), nullptr);
+    EXPECT_EQ(rack.padSampleFrames(200), 0);
+}
+
 // ========================= Integration: Rack composability =========================
 
 TEST(InstrumentRack, NestedRack) {
@@ -550,6 +661,76 @@ TEST(InstrumentRack, RackWithDrumRack) {
     auto midi = makeNoteOn(36, 100);
     rack.process(buffer, kBlockSize, kChannels, midi);
     EXPECT_GT(rms(buffer, kBlockSize * kChannels), 0.001f);
+}
+
+TEST(InstrumentRack, SelectedChainTracking) {
+    InstrumentRack rack;
+    EXPECT_EQ(rack.selectedChain(), 0);
+    rack.setSelectedChain(3);
+    EXPECT_EQ(rack.selectedChain(), 3);
+    rack.setSelectedChain(-1);
+    EXPECT_EQ(rack.selectedChain(), 0);
+    rack.setSelectedChain(100);
+    EXPECT_EQ(rack.selectedChain(), 7);
+}
+
+TEST(InstrumentRack, PerChainParameterAPI) {
+    InstrumentRack rack;
+    rack.init(kSampleRate, kBlockSize);
+
+    auto synth1 = std::make_unique<SubtractiveSynth>();
+    auto synth2 = std::make_unique<SubtractiveSynth>();
+    rack.addChain(std::move(synth1), 0, 60);
+    rack.addChain(std::move(synth2), 61, 127);
+
+    EXPECT_EQ(rack.parameterCount(), 7);
+    EXPECT_STREQ(rack.parameterInfo(InstrumentRack::kVolume).name, "Volume");
+    EXPECT_STREQ(rack.parameterInfo(InstrumentRack::kChainVol).name, "Chain Vol");
+    EXPECT_STREQ(rack.parameterInfo(InstrumentRack::kChainPan).name, "Chain Pan");
+    EXPECT_STREQ(rack.parameterInfo(InstrumentRack::kChainKeyLow).name, "Key Low");
+
+    // Select chain 0 and set params
+    rack.setSelectedChain(0);
+    rack.setParameter(InstrumentRack::kChainVol, 0.5f);
+    rack.setParameter(InstrumentRack::kChainPan, -0.3f);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainVol), 0.5f);
+    EXPECT_NEAR(rack.getParameter(InstrumentRack::kChainPan), -0.3f, 0.001f);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainKeyLow), 0.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainKeyHi), 60.0f);
+
+    // Select chain 1 — params should reflect that chain
+    rack.setSelectedChain(1);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainVol), 1.0f); // default
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainKeyLow), 61.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainKeyHi), 127.0f);
+
+    // Setting key range via parameter API
+    rack.setParameter(InstrumentRack::kChainVelLow, 10.0f);
+    rack.setParameter(InstrumentRack::kChainVelHi, 100.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainVelLow), 10.0f);
+    EXPECT_FLOAT_EQ(rack.getParameter(InstrumentRack::kChainVelHi), 100.0f);
+}
+
+TEST(InstrumentRack, ChainEnableDisable) {
+    InstrumentRack rack;
+    rack.init(kSampleRate, kBlockSize);
+
+    auto synth = std::make_unique<SubtractiveSynth>();
+    rack.addChain(std::move(synth));
+
+    // Chain is enabled by default — should produce output
+    float buf1[kBlockSize * kChannels] = {};
+    auto midi = makeNoteOn(60, 100);
+    rack.process(buf1, kBlockSize, kChannels, midi);
+    float enabled_rms = rms(buf1, kBlockSize * kChannels);
+    EXPECT_GT(enabled_rms, 0.001f);
+
+    // Disable chain — should be silent
+    rack.chain(0).enabled = false;
+    float buf2[kBlockSize * kChannels] = {};
+    rack.process(buf2, kBlockSize, kChannels, midi);
+    float disabled_rms = rms(buf2, kBlockSize * kChannels);
+    EXPECT_LT(disabled_rms, 0.001f);
 }
 
 // ========================= DrumSlop =========================

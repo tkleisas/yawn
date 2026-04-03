@@ -60,6 +60,30 @@ public:
     Pad&       pad(int note)       { return m_pads[note & 0x7F]; }
     const Pad& pad(int note) const { return m_pads[note & 0x7F]; }
 
+    // Selected pad for UI editing
+    int  selectedPad() const { return m_selectedPad; }
+    void setSelectedPad(int note) { m_selectedPad = std::clamp(note, 0, kNumPads - 1); }
+
+    bool isPadPlaying(int note) const {
+        return (note >= 0 && note < kNumPads) ? m_pads[note].playing : false;
+    }
+
+    bool hasSample(int note) const {
+        return (note >= 0 && note < kNumPads) ? m_pads[note].sampleFrames > 0 : false;
+    }
+
+    // Sample data accessors for waveform display
+    const float* padSampleData(int note) const {
+        if (note < 0 || note >= kNumPads || m_pads[note].sampleFrames <= 0) return nullptr;
+        return m_pads[note].sampleData.data();
+    }
+    int padSampleFrames(int note) const {
+        return (note >= 0 && note < kNumPads) ? m_pads[note].sampleFrames : 0;
+    }
+    int padSampleChannels(int note) const {
+        return (note >= 0 && note < kNumPads) ? m_pads[note].sampleChannels : 1;
+    }
+
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override {
         // Handle MIDI triggers
@@ -106,19 +130,47 @@ public:
     const char* name() const override { return "Drum Rack"; }
     const char* id()   const override { return "drumrack"; }
 
-    int parameterCount() const override { return 1; }
+    // Parameter indices
+    static constexpr int kVolume    = 0;
+    static constexpr int kPadVolume = 1;
+    static constexpr int kPadPan    = 2;
+    static constexpr int kPadPitch  = 3;
 
-    const InstrumentParameterInfo& parameterInfo(int) const override {
-        static const InstrumentParameterInfo p = {"Volume", 0, 1, 0.8f, "", false};
-        return p;
+    int parameterCount() const override { return 4; }
+
+    const InstrumentParameterInfo& parameterInfo(int idx) const override {
+        static const InstrumentParameterInfo infos[] = {
+            {"Volume",     0,   1,   0.8f, "",   false},
+            {"Pad Volume", 0,   2,   1.0f, "",   false},
+            {"Pad Pan",   -1,   1,   0.0f, "",   false},
+            {"Pad Pitch", -24,  24,  0.0f, "st", false},
+        };
+        return infos[std::clamp(idx, 0, 3)];
     }
 
-    float getParameter(int) const override { return m_volume; }
-    void  setParameter(int, float v) override { m_volume = std::clamp(v, 0.0f, 1.0f); }
+    float getParameter(int idx) const override {
+        switch (idx) {
+        case kVolume:    return m_volume;
+        case kPadVolume: return m_pads[m_selectedPad].volume;
+        case kPadPan:    return m_pads[m_selectedPad].pan;
+        case kPadPitch:  return m_pads[m_selectedPad].pitchAdjust;
+        default:         return 0.0f;
+        }
+    }
+
+    void setParameter(int idx, float v) override {
+        switch (idx) {
+        case kVolume:    m_volume = std::clamp(v, 0.0f, 1.0f); break;
+        case kPadVolume: m_pads[m_selectedPad].volume = std::clamp(v, 0.0f, 2.0f); break;
+        case kPadPan:    m_pads[m_selectedPad].pan = std::clamp(v, -1.0f, 1.0f); break;
+        case kPadPitch:  m_pads[m_selectedPad].pitchAdjust = std::clamp(v, -24.0f, 24.0f); break;
+        }
+    }
 
 private:
     Pad   m_pads[kNumPads];
     float m_volume = 0.8f;
+    int   m_selectedPad = 36; // Default to C2 (standard GM kick drum)
 };
 
 } // namespace instruments

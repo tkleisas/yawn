@@ -957,6 +957,426 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DrumRackDisplayPanel — 128-pad drum machine with paged 4×4 grid.
+// Shows selected pad's sample waveform at top, pad grid below with page nav.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class DrumRackDisplayPanel : public Widget {
+public:
+    DrumRackDisplayPanel() { setName("DrumRackDisplay"); }
+
+    void setSelectedPad(int note) { m_selectedPad = std::clamp(note, 0, 127); }
+    void setPage(int page) { m_page = std::clamp(page, 0, 7); }
+    int  page() const { return m_page; }
+
+    void setPadHasSample(int note, bool has) {
+        if (note >= 0 && note < 128) m_padHasSample[note] = has;
+    }
+
+    void setPadPlaying(int note, bool playing) {
+        if (note >= 0 && note < 128) m_padPlaying[note] = playing;
+    }
+
+    // Sample waveform for the selected pad
+    void setSelectedPadWaveform(const float* data, int frames, int channels) {
+        m_waveData = data;
+        m_waveFrames = frames;
+        m_waveChannels = channels;
+    }
+
+    void setOnPadClick(std::function<void(int)> cb) { m_onPadClick = std::move(cb); }
+    void setOnPageChange(std::function<void(int)> cb) { m_onPageChange = std::move(cb); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 160.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext& ctx) override {
+        (void)ctx;
+        m_bounds = bounds;
+        float gap = 2.0f;
+        m_waveH = std::min(36.0f, bounds.h * 0.25f);
+        m_pageBarH = 16.0f;
+        m_waveRect = {bounds.x, bounds.y, bounds.w, m_waveH};
+        m_pageBarRect = {bounds.x, bounds.y + m_waveH + gap, bounds.w, m_pageBarH};
+        m_gridRect = {bounds.x, bounds.y + m_waveH + m_pageBarH + gap * 2,
+                      bounds.w, bounds.h - m_waveH - m_pageBarH - gap * 2};
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (!e.isLeftButton()) return false;
+        float mx = e.x, my = e.y;
+
+        // Page bar clicks
+        if (mx >= m_pageBarRect.x && mx < m_pageBarRect.x + m_pageBarRect.w &&
+            my >= m_pageBarRect.y && my < m_pageBarRect.y + m_pageBarRect.h) {
+            // < button
+            float btnW = 14.0f;
+            if (mx < m_pageBarRect.x + btnW) {
+                int newPage = std::max(0, m_page - 1);
+                if (newPage != m_page) {
+                    m_page = newPage;
+                    if (m_onPageChange) m_onPageChange(m_page);
+                }
+                return true;
+            }
+            // > button
+            if (mx > m_pageBarRect.x + m_pageBarRect.w - btnW) {
+                int newPage = std::min(7, m_page + 1);
+                if (newPage != m_page) {
+                    m_page = newPage;
+                    if (m_onPageChange) m_onPageChange(m_page);
+                }
+                return true;
+            }
+            // Page buttons
+            float innerW = m_pageBarRect.w - btnW * 2;
+            float pageW = innerW / 8.0f;
+            int clickedPage = static_cast<int>((mx - m_pageBarRect.x - btnW) / pageW);
+            clickedPage = std::clamp(clickedPage, 0, 7);
+            if (clickedPage != m_page) {
+                m_page = clickedPage;
+                if (m_onPageChange) m_onPageChange(m_page);
+            }
+            return true;
+        }
+
+        // Pad grid clicks
+        if (mx >= m_gridRect.x && mx < m_gridRect.x + m_gridRect.w &&
+            my >= m_gridRect.y && my < m_gridRect.y + m_gridRect.h) {
+            int cols = 4, rows = 4;
+            float cellW = m_gridRect.w / cols;
+            float cellH = m_gridRect.h / rows;
+            int col = static_cast<int>((mx - m_gridRect.x) / cellW);
+            int row = static_cast<int>((my - m_gridRect.y) / cellH);
+            int padIdx = row * cols + col;
+            int note = m_page * 16 + padIdx;
+            if (note >= 0 && note < 128 && m_onPadClick)
+                m_onPadClick(note);
+            return true;
+        }
+        return false;
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        // ─── Waveform area (selected pad's sample) ───
+        r.drawRect(m_waveRect.x, m_waveRect.y, m_waveRect.w, m_waveRect.h,
+                   Color{20, 20, 26, 255});
+        r.drawRectOutline(m_waveRect.x, m_waveRect.y, m_waveRect.w, m_waveRect.h,
+                          Color{50, 50, 60, 255});
+
+        if (m_waveData && m_waveFrames > 0) {
+            float px = m_waveRect.x + 2;
+            float py = m_waveRect.y + 2;
+            float pw = m_waveRect.w - 4;
+            float ph = m_waveRect.h - 4;
+
+            if (pw > 4 && ph > 4) {
+                float midY = py + ph * 0.5f;
+                float halfH = ph * 0.5f;
+                int numBars = static_cast<int>(pw);
+                if (numBars < 1) numBars = 1;
+                Color waveCol{0, 180, 230, 180};
+                for (int i = 0; i < numBars; ++i) {
+                    int startFrame = (i * m_waveFrames) / numBars;
+                    int endFrame = ((i + 1) * m_waveFrames) / numBars;
+                    float minVal = 0.0f, maxVal = 0.0f;
+                    for (int s = startFrame; s < endFrame; ++s) {
+                        float v = m_waveData[s * m_waveChannels];
+                        if (v < minVal) minVal = v;
+                        if (v > maxVal) maxVal = v;
+                    }
+                    float top = midY - maxVal * halfH;
+                    float bot = midY - minVal * halfH;
+                    float barH = bot - top;
+                    if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
+                    r.drawRect(px + i, top, 1, barH, waveCol);
+                }
+                r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 80});
+            }
+        } else {
+            float lblScale = 7.0f / Theme::kFontSize;
+            const char* msg = "Drop Sample";
+            float tw = f.textWidth(msg, lblScale);
+            float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
+            float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
+            f.drawText(r, msg, tx, ty, lblScale, Color{80, 80, 100, 180});
+        }
+
+        // ─── Page navigation bar ───
+        r.drawRect(m_pageBarRect.x, m_pageBarRect.y, m_pageBarRect.w,
+                   m_pageBarRect.h, Color{25, 25, 32, 255});
+
+        float btnW = 14.0f;
+        float lblScale = 6.0f / Theme::kFontSize;
+
+        // < > arrows
+        f.drawText(r, "<", m_pageBarRect.x + 3, m_pageBarRect.y + 2,
+                   lblScale, Color{160, 160, 180, 200});
+        f.drawText(r, ">", m_pageBarRect.x + m_pageBarRect.w - 10,
+                   m_pageBarRect.y + 2, lblScale, Color{160, 160, 180, 200});
+
+        // Page buttons
+        float innerW = m_pageBarRect.w - btnW * 2;
+        float pageW = innerW / 8.0f;
+        static const char* pageLabels[] = {
+            "C-1", "C0", "C1", "C2", "C3", "C4", "C5", "C6"
+        };
+        for (int i = 0; i < 8; ++i) {
+            float px = m_pageBarRect.x + btnW + i * pageW;
+            bool active = (i == m_page);
+            Color bg = active ? Color{60, 60, 80, 255} : Color{30, 30, 38, 255};
+            r.drawRect(px + 1, m_pageBarRect.y + 1, pageW - 2, m_pageBarH - 2, bg);
+            float tw = f.textWidth(pageLabels[i], lblScale);
+            float tx = px + (pageW - tw) * 0.5f;
+            Color tc = active ? Color{255, 200, 50, 255} : Color{120, 120, 140, 180};
+            f.drawText(r, pageLabels[i], tx, m_pageBarRect.y + 2, lblScale, tc);
+        }
+
+        // ─── Pad grid (4 rows × 4 cols for current page) ───
+        int cols = 4, rows = 4;
+        float cellW = m_gridRect.w / cols;
+        float cellH = m_gridRect.h / rows;
+        float padLblScale = 6.5f / Theme::kFontSize;
+
+        static const char* noteNames[] = {
+            "C","C#","D","D#","E","F","F#","G","G#","A","A#","B"
+        };
+
+        int baseNote = m_page * 16;
+        for (int i = 0; i < 16; ++i) {
+            int note = baseNote + i;
+            if (note >= 128) break;
+            int col = i % cols;
+            int row = i / cols;
+            float cx = m_gridRect.x + col * cellW;
+            float cy = m_gridRect.y + row * cellH;
+
+            bool hasSample = m_padHasSample[note];
+            bool selected = (note == m_selectedPad);
+            bool playing = m_padPlaying[note];
+
+            // Pad background
+            Color bg{35, 35, 42, 255};
+            if (playing) bg = Color{50, 90, 50, 255};
+            else if (selected) bg = Color{55, 55, 70, 255};
+            else if (hasSample) bg = Color{40, 40, 52, 255};
+            r.drawRect(cx + 1, cy + 1, cellW - 2, cellH - 2, bg);
+
+            // Border
+            Color border = selected ? Color{255, 200, 50, 200} :
+                           playing  ? Color{80, 200, 80, 200}  :
+                           hasSample ? Color{70, 70, 90, 255}  :
+                                       Color{50, 50, 60, 255};
+            r.drawRectOutline(cx + 1, cy + 1, cellW - 2, cellH - 2, border);
+
+            // Note name
+            int octave = (note / 12) - 1;
+            int noteIdx = note % 12;
+            char label[8];
+            std::snprintf(label, sizeof(label), "%s%d", noteNames[noteIdx], octave);
+            float tw = f.textWidth(label, padLblScale);
+            float tx = cx + (cellW - tw) * 0.5f;
+            float ty = cy + cellH * 0.5f - 3.5f;
+            Color textCol = selected ? Color{255, 220, 100, 255} :
+                            hasSample ? Color{180, 180, 200, 255} :
+                                        Color{100, 100, 120, 180};
+            f.drawText(r, label, tx, ty, padLblScale, textCol);
+
+            // Small sample indicator dot (top-right corner if has sample)
+            if (hasSample) {
+                r.drawRect(cx + cellW - 6, cy + 3, 3, 3,
+                           Color{0, 180, 230, 180});
+            }
+        }
+#endif
+    }
+
+private:
+    Rect m_waveRect{}, m_pageBarRect{}, m_gridRect{};
+    float m_waveH = 36.0f;
+    float m_pageBarH = 16.0f;
+
+    int m_selectedPad = 36;
+    int m_page = 2;  // Default page 2 = C1..D#2 (standard GM drum range)
+
+    bool m_padHasSample[128] = {};
+    bool m_padPlaying[128] = {};
+
+    const float* m_waveData = nullptr;
+    int m_waveFrames = 0;
+    int m_waveChannels = 1;
+
+    std::function<void(int)> m_onPadClick;
+    std::function<void(int)> m_onPageChange;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// InstrumentRackDisplayPanel — Shows chain list with key/vel range bars
+// ═══════════════════════════════════════════════════════════════════════════
+
+class InstrumentRackDisplayPanel : public Widget {
+public:
+    InstrumentRackDisplayPanel() { setName("InstrumentRackDisplay"); }
+
+    struct ChainInfo {
+        std::string name;       // instrument name (or "Empty")
+        uint8_t keyLow = 0, keyHigh = 127;
+        uint8_t velLow = 1, velHigh = 127;
+        float   volume = 1.0f;
+        bool    enabled = true;
+    };
+
+    void setChainCount(int n) { m_chainCount = std::clamp(n, 0, 8); }
+    void setChain(int i, const ChainInfo& info) {
+        if (i >= 0 && i < 8) m_chains[i] = info;
+    }
+    void setSelectedChain(int i) { m_selected = std::clamp(i, 0, 7); }
+
+    void setOnChainClick(std::function<void(int)> cb) { m_onChainClick = std::move(cb); }
+    void setOnAddChain(std::function<void()> cb) { m_onAddChain = std::move(cb); }
+    void setOnRemoveChain(std::function<void(int)> cb) { m_onRemoveChain = std::move(cb); }
+    void setOnToggleChain(std::function<void(int)> cb) { m_onToggleChain = std::move(cb); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 160.0f});
+    }
+
+    void layout(const Rect& bounds, const UIContext& ctx) override {
+        (void)ctx;
+        m_bounds = bounds;
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (!e.isLeftButton()) return false;
+        float lx = e.x - m_bounds.x;
+        float ly = e.y - m_bounds.y;
+
+        // Add button at the bottom
+        float addBtnY = m_bounds.h - 20.0f;
+        if (ly >= addBtnY && m_chainCount < 8) {
+            if (m_onAddChain) m_onAddChain();
+            return true;
+        }
+
+        // Chain rows
+        float rowH = chainRowHeight();
+        float headerH = 14.0f;
+        int idx = static_cast<int>((ly - headerH) / rowH);
+        if (idx < 0 || idx >= m_chainCount) return false;
+
+        if (lx < 16.0f) {
+            if (m_onToggleChain) m_onToggleChain(idx);
+            return true;
+        }
+
+        if (lx > m_bounds.w - 18.0f) {
+            if (m_onRemoveChain) m_onRemoveChain(idx);
+            return true;
+        }
+
+        if (m_onChainClick) m_onChainClick(idx);
+        return true;
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+        float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w, h = m_bounds.h;
+        float lblScale = 7.0f / Theme::kFontSize;
+        float smallScale = 6.0f / Theme::kFontSize;
+
+        r.drawRect(x, y, w, h, Color{30, 30, 35, 255});
+
+        // Header
+        f.drawText(r, "Chains", x + 4, y + 2, lblScale, Color{180, 180, 180, 255});
+        float headerH = 14.0f;
+
+        float rowH = chainRowHeight();
+
+        for (int i = 0; i < m_chainCount; ++i) {
+            float ry = y + headerH + i * rowH;
+            const auto& ch = m_chains[i];
+
+            bool sel = (i == m_selected);
+            r.drawRect(x, ry, w, rowH - 1,
+                       sel ? Color{50, 55, 70, 255} : Color{38, 38, 42, 255});
+
+            // Enable indicator
+            Color eDot = ch.enabled ? Color{80, 200, 100, 255} : Color{80, 80, 80, 255};
+            float dotCY = ry + rowH * 0.5f;
+            r.drawRect(x + 4, dotCY - 3, 7, 7, eDot);
+
+            // Chain number & name
+            char label[64];
+            snprintf(label, sizeof(label), "%d: %s", i + 1, ch.name.c_str());
+            f.drawText(r, label, x + 16, ry + 2, lblScale, Color{220, 220, 220, 255});
+
+            // Key range bar (blue)
+            float barX = x + 16;
+            float barW = w - 36;
+            float barY = ry + 14;
+            float barH = 4;
+            r.drawRect(barX, barY, barW, barH, Color{25, 25, 30, 255});
+            float k0 = ch.keyLow / 127.0f, k1 = ch.keyHigh / 127.0f;
+            float kx0 = barX + k0 * barW;
+            float kx1 = barX + k1 * barW;
+            r.drawRect(kx0, barY, std::max(1.0f, kx1 - kx0), barH, Color{80, 140, 220, 255});
+
+            // Vel range bar (yellow)
+            barY += barH + 1;
+            r.drawRect(barX, barY, barW, barH, Color{25, 25, 30, 255});
+            float v0 = ch.velLow / 127.0f, v1 = ch.velHigh / 127.0f;
+            float vx0 = barX + v0 * barW;
+            float vx1 = barX + v1 * barW;
+            r.drawRect(vx0, barY, std::max(1.0f, vx1 - vx0), barH, Color{220, 160, 50, 255});
+
+            // Remove button
+            f.drawText(r, "x", x + w - 14, ry + 2, lblScale, Color{160, 80, 80, 255});
+        }
+
+        // Empty state
+        if (m_chainCount == 0) {
+            f.drawText(r, "No chains", x + w * 0.5f - 24, y + h * 0.5f - 6,
+                       lblScale, Color{120, 120, 120, 255});
+        }
+
+        // Add button
+        float addY = y + h - 20;
+        bool canAdd = m_chainCount < 8;
+        Color addCol = canAdd ? Color{80, 180, 80, 255} : Color{60, 60, 60, 255};
+        r.drawRect(x + 2, addY, w - 4, 18, Color{40, 40, 45, 255});
+        const char* addTxt = "+ Add Chain";
+        float addTw = f.textWidth(addTxt, smallScale);
+        f.drawText(r, addTxt, x + (w - addTw) * 0.5f, addY + 3, smallScale, addCol);
+#endif
+    }
+
+private:
+    float chainRowHeight() const {
+        float usable = m_bounds.h - 14.0f - 22.0f;
+        int maxRows = std::max(m_chainCount, 1);
+        return std::clamp(usable / maxRows, 20.0f, 28.0f);
+    }
+
+    Rect m_bounds{};
+    int m_chainCount = 0;
+    int m_selected = 0;
+    ChainInfo m_chains[8];
+    std::function<void(int)> m_onChainClick;
+    std::function<void()>    m_onAddChain;
+    std::function<void(int)> m_onRemoveChain;
+    std::function<void(int)> m_onToggleChain;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // WavetableDisplayPanel — Shows the current wavetable frame waveform.
 // Updates dynamically as Table/Position parameters change.
 // ═══════════════════════════════════════════════════════════════════════════

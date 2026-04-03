@@ -921,6 +921,42 @@ bool App::loadLoopToDrumSlop(const std::string& path, int trackIndex) {
     return true;
 }
 
+bool App::loadSampleToDrumRack(const std::string& path, int trackIndex) {
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* rack = dynamic_cast<instruments::DrumRack*>(inst);
+    if (!rack) return false;
+
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    int frames = buffer->numFrames();
+    int channels = buffer->numChannels();
+    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
+    for (int ch = 0; ch < channels; ++ch) {
+        const float* src = buffer->channelData(ch);
+        for (int i = 0; i < frames; ++i)
+            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
+    }
+
+    rack->loadPad(rack->selectedPad(), interleaved.data(), frames, channels);
+
+    std::string name = path;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    LOG_INFO("File", "Loaded sample '%s' into Drum Rack pad %d on Track %d",
+        name.c_str(), rack->selectedPad(), trackIndex + 1);
+
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
 bool App::loadSampleToGranular(const std::string& path, int trackIndex) {
     auto* inst = m_audioEngine.instrument(trackIndex);
     auto* granular = dynamic_cast<instruments::GranularSynth*>(inst);
@@ -1153,7 +1189,8 @@ void App::processEvents() {
 
                 // Piano roll keyboard shortcuts
                 if (m_pianoRoll->isOpen()) {
-                    if (m_pianoRoll->handleKeyDown(static_cast<int>(event.key.key))) {
+                    bool prCtrl = (event.key.mod & SDL_KMOD_CTRL) != 0;
+                    if (m_pianoRoll->handleKeyDown(static_cast<int>(event.key.key), prCtrl)) {
                         if (!m_pianoRoll->isOpen()) {
                             // Piano roll was closed (Escape)
                         }
@@ -1562,8 +1599,9 @@ void App::processEvents() {
                         && dropX >= db.x && dropX < db.x + db.w) {
                         if (!loadSampleToSampler(file, m_selectedTrack))
                             if (!loadLoopToDrumSlop(file, m_selectedTrack))
-                                if (!loadSampleToGranular(file, m_selectedTrack))
-                                    loadModulatorToVocoder(file, m_selectedTrack);
+                                if (!loadSampleToDrumRack(file, m_selectedTrack))
+                                    if (!loadSampleToGranular(file, m_selectedTrack))
+                                        loadModulatorToVocoder(file, m_selectedTrack);
                         break;
                     }
 
