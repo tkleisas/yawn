@@ -1383,12 +1383,14 @@ void App::processEvents() {
                     m_contentGrid->onMouseMove(me);
                 }
 
-                // Update cursor shape based on content grid divider hover
-                if (m_contentGrid->wantsHorizontalResize() && m_contentGrid->wantsVerticalResize()) {
+                // Update cursor shape based on content grid divider hover or panel resize
+                bool wantNS = m_contentGrid->wantsVerticalResize()
+                           || (m_arrangementPanel && m_arrangementPanel->wantsVerticalResize());
+                if (m_contentGrid->wantsHorizontalResize() && wantNS) {
                     SDL_SetCursor(m_cursorMove);
                 } else if (m_contentGrid->wantsHorizontalResize()) {
                     SDL_SetCursor(m_cursorEWResize);
-                } else if (m_contentGrid->wantsVerticalResize()) {
+                } else if (wantNS) {
                     SDL_SetCursor(m_cursorNSResize);
                 } else {
                     SDL_SetCursor(m_cursorDefault);

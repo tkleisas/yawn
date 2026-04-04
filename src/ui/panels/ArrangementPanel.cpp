@@ -434,6 +434,28 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
         return true;
     }
 
+    // Hover detection for resize cursor on track header bottom borders
+    if (m_dragMode == DragMode::None && m_project) {
+        float hdrX = m_bounds.x;
+        float gridY = m_bounds.y + kRulerH;
+        float gridH = m_bounds.h - kRulerH - kScrollbarH;
+        bool foundResize = false;
+        if (e.x >= hdrX && e.x < hdrX + kTrackHeaderW &&
+            e.y >= gridY && e.y < gridY + gridH) {
+            int numTracks = m_project->numTracks();
+            for (int t = 0; t < numTracks; ++t) {
+                float ty = gridY + trackYOffset(t) - m_scrollY;
+                float baseH = trackBaseHeight(t);
+                float borderY = ty + baseH;
+                if (e.y >= borderY - 4 && e.y <= borderY + 2) {
+                    foundResize = true;
+                    break;
+                }
+            }
+        }
+        m_hoverResize = foundResize;
+    }
+
     if (m_dragMode == DragMode::None) return false;
 
     float gridX = m_bounds.x + kTrackHeaderW;

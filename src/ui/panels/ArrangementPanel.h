@@ -137,6 +137,9 @@ public:
     static constexpr float kMinTrackH = 32.0f;
     static constexpr float kMaxTrackH = 200.0f;
 
+    // Cursor hint — true when hovering a track resize handle
+    bool wantsVerticalResize() const { return m_hoverResize || m_dragMode == DragMode::ResizeTrackH; }
+
     // Effective row height (main row + expanded auto lanes)
     float trackRowHeight(int t) const;
     // Cumulative Y offset for track t
@@ -226,6 +229,7 @@ private:
     int   m_resizeTrack = -1;
     float m_resizeOrigH = 0.0f;
     float m_resizeMouseStart = 0.0f;
+    bool  m_hoverResize = false;
 
     // Per-track custom heights
     std::map<int, float> m_trackHeights;
