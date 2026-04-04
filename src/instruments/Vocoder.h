@@ -67,6 +67,11 @@ public:
         m_modSampleFrames = numFrames;
     }
 
+    void clearModulatorSample() {
+        m_modSample.clear();
+        m_modSampleFrames = 0;
+    }
+
     bool hasModulatorSample() const { return m_modSampleFrames > 0; }
     int modulatorFrames() const { return m_modSampleFrames; }
     const float* modulatorData() const { return m_modSample.empty() ? nullptr : m_modSample.data(); }

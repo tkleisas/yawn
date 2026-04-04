@@ -53,6 +53,13 @@ public:
         pad.sampleChannels = numChannels;
     }
 
+    void clearPad(int note) {
+        if (note < 0 || note >= kNumPads) return;
+        m_pads[note].sampleData.clear();
+        m_pads[note].sampleFrames = 0;
+        m_pads[note].sampleChannels = 1;
+    }
+
     void setPadVolume(int note, float v)     { if (note >= 0 && note < kNumPads) m_pads[note].volume = std::clamp(v, 0.0f, 2.0f); }
     void setPadPan(int note, float p)        { if (note >= 0 && note < kNumPads) m_pads[note].pan = std::clamp(p, -1.0f, 1.0f); }
     void setPadPitch(int note, float semi)   { if (note >= 0 && note < kNumPads) m_pads[note].pitchAdjust = std::clamp(semi, -24.0f, 24.0f); }

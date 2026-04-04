@@ -1119,6 +1119,21 @@ bool App::loadSampleToSampler(const std::string& path, int trackIndex) {
     LOG_INFO("File", "Loaded sample '%s' into Sampler on Track %d",
         name.c_str(), trackIndex + 1);
 
+    {
+        std::string undoPath = path;
+        int ti = trackIndex;
+        m_undoManager.push({"Load Sample (Sampler)",
+            [this, ti]{ // undo: clear sample
+                auto* s = dynamic_cast<instruments::Sampler*>(m_audioEngine.instrument(ti));
+                if (s) s->clearSample();
+                updateDetailForSelectedTrack();
+            },
+            [this, undoPath, ti]{ // redo: reload from file
+                loadSampleToSampler(undoPath, ti);
+            },
+            ""});
+    }
+
     updateDetailForSelectedTrack();
     markDirty();
     return true;
@@ -1155,6 +1170,21 @@ bool App::loadLoopToDrumSlop(const std::string& path, int trackIndex) {
     LOG_INFO("File", "Loaded loop '%s' into DrumSlop on Track %d",
         name.c_str(), trackIndex + 1);
 
+    {
+        std::string undoPath = path;
+        int ti = trackIndex;
+        m_undoManager.push({"Load Loop (DrumSlop)",
+            [this, ti]{ // undo: clear loop
+                auto* d = dynamic_cast<instruments::DrumSlop*>(m_audioEngine.instrument(ti));
+                if (d) d->clearLoop();
+                updateDetailForSelectedTrack();
+            },
+            [this, undoPath, ti]{ // redo: reload from file
+                loadLoopToDrumSlop(undoPath, ti);
+            },
+            ""});
+    }
+
     updateDetailForSelectedTrack();
     markDirty();
     return true;
@@ -1188,8 +1218,24 @@ bool App::loadSampleToDrumRack(const std::string& path, int trackIndex) {
     std::string name = path;
     auto pos = name.find_last_of("/\\");
     if (pos != std::string::npos) name = name.substr(pos + 1);
+    int padIdx = rack->selectedPad();
     LOG_INFO("File", "Loaded sample '%s' into Drum Rack pad %d on Track %d",
-        name.c_str(), rack->selectedPad(), trackIndex + 1);
+        name.c_str(), padIdx, trackIndex + 1);
+
+    {
+        std::string undoPath = path;
+        int ti = trackIndex;
+        m_undoManager.push({"Load Sample (DrumRack)",
+            [this, ti, padIdx]{ // undo: clear pad
+                auto* r = dynamic_cast<instruments::DrumRack*>(m_audioEngine.instrument(ti));
+                if (r) r->clearPad(padIdx);
+                updateDetailForSelectedTrack();
+            },
+            [this, undoPath, ti]{ // redo: reload from file
+                loadSampleToDrumRack(undoPath, ti);
+            },
+            ""});
+    }
 
     updateDetailForSelectedTrack();
     markDirty();
@@ -1227,6 +1273,21 @@ bool App::loadSampleToGranular(const std::string& path, int trackIndex) {
     LOG_INFO("File", "Loaded sample '%s' into Granular Synth on Track %d",
         name.c_str(), trackIndex + 1);
 
+    {
+        std::string undoPath = path;
+        int ti = trackIndex;
+        m_undoManager.push({"Load Sample (Granular)",
+            [this, ti]{ // undo: clear sample
+                auto* g = dynamic_cast<instruments::GranularSynth*>(m_audioEngine.instrument(ti));
+                if (g) g->clearSample();
+                updateDetailForSelectedTrack();
+            },
+            [this, undoPath, ti]{ // redo: reload from file
+                loadSampleToGranular(undoPath, ti);
+            },
+            ""});
+    }
+
     updateDetailForSelectedTrack();
     markDirty();
     return true;
@@ -1262,6 +1323,21 @@ bool App::loadModulatorToVocoder(const std::string& path, int trackIndex) {
     if (pos != std::string::npos) name = name.substr(pos + 1);
     LOG_INFO("File", "Loaded modulator '%s' into Vocoder on Track %d",
         name.c_str(), trackIndex + 1);
+
+    {
+        std::string undoPath = path;
+        int ti = trackIndex;
+        m_undoManager.push({"Load Modulator (Vocoder)",
+            [this, ti]{ // undo: clear modulator
+                auto* v = dynamic_cast<instruments::Vocoder*>(m_audioEngine.instrument(ti));
+                if (v) v->clearModulatorSample();
+                updateDetailForSelectedTrack();
+            },
+            [this, undoPath, ti]{ // redo: reload from file
+                loadModulatorToVocoder(undoPath, ti);
+            },
+            ""});
+    }
 
     updateDetailForSelectedTrack();
     markDirty();

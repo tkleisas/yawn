@@ -65,6 +65,12 @@ public:
         m_rootNote = rootNote;
     }
 
+    void clearSample() {
+        m_sampleData.clear();
+        m_sampleFrames = 0;
+        m_sampleChannels = 1;
+    }
+
     bool hasSample() const { return m_sampleFrames > 0; }
     int sampleFrames() const { return m_sampleFrames; }
     int sampleChannels() const { return m_sampleChannels; }

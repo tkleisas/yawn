@@ -48,6 +48,12 @@ public:
         m_loopEnd = 1.0f;
     }
 
+    void clearSample() {
+        m_sampleData.clear();
+        m_sampleFrames = 0;
+        m_sampleChannels = 1;
+    }
+
     bool hasSample() const { return m_sampleFrames > 0; }
     const float* sampleData() const { return m_sampleData.data(); }
     int sampleFrames() const { return m_sampleFrames; }

@@ -370,6 +370,12 @@ public:
         sliceLoop();
     }
 
+    void clearLoop() {
+        m_loopData.clear();
+        m_loopFrames = 0;
+        m_loopChannels = 1;
+    }
+
     bool hasLoop() const { return m_loopFrames > 0; }
     const float* loopData()     const { return m_loopData.data(); }
     int          loopFrames()   const { return m_loopFrames; }
