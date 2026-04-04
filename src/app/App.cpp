@@ -254,6 +254,23 @@ void App::buildWidgetTree() {
         int64_t samples = static_cast<int64_t>(beat * 60.0 / bpm * sr);
         m_audioEngine.sendCommand(audio::TransportSetPositionMsg{samples});
     });
+    m_arrangementPanel->setOnClipChange([this](int trackIdx) {
+        auto& track = m_project.track(trackIdx);
+        std::vector<audio::ArrClipRef> refs;
+        refs.reserve(track.arrangementClips.size());
+        for (auto& ac : track.arrangementClips) {
+            audio::ArrClipRef ref;
+            ref.type = ac.type == ArrangementClip::Type::Audio
+                ? audio::ArrClipRef::Type::Audio : audio::ArrClipRef::Type::Midi;
+            ref.startBeat = ac.startBeat;
+            ref.lengthBeats = ac.lengthBeats;
+            ref.offsetBeats = ac.offsetBeats;
+            ref.audioBuffer = ac.audioBuffer;
+            ref.midiClip = ac.midiClip;
+            refs.push_back(std::move(ref));
+        }
+        m_audioEngine.arrangementPlayback().submitTrackClips(trackIdx, std::move(refs));
+    });
     m_arrangementPanel->setVisible(false); // start in session view
 
     // Wire the 4-quadrant layout

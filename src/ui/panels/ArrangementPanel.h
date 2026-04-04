@@ -61,6 +61,40 @@ public:
     using PlayheadClickCallback = std::function<void(double)>;
     void setOnPlayheadClick(PlayheadClickCallback cb) { m_onPlayheadClick = std::move(cb); }
 
+    using ClipChangeCallback = std::function<void(int track)>;
+    void setOnClipChange(ClipChangeCallback cb) { m_onClipChange = std::move(cb); }
+
+    // ─── Snap grid ─────────────────────────────────────────────────────
+
+    enum class Snap { Off, Bar, Beat, Half, Quarter, Eighth };
+
+    Snap snap() const { return m_snap; }
+    void setSnap(Snap s) { m_snap = s; }
+
+    double snapVal() const {
+        switch (m_snap) {
+            case Snap::Off:     return 0.0;
+            case Snap::Bar:     return 4.0;
+            case Snap::Beat:    return 1.0;
+            case Snap::Half:    return 0.5;
+            case Snap::Quarter: return 0.25;
+            case Snap::Eighth:  return 0.125;
+        }
+        return 1.0;
+    }
+
+    double snapBeat(double b) const {
+        double s = snapVal();
+        if (s <= 0.0) return b;
+        return std::round(b / s) * s;
+    }
+
+    // ─── Clip selection ────────────────────────────────────────────────
+
+    int selectedClipTrack() const { return m_selClipTrack; }
+    int selectedClipIndex() const { return m_selClipIdx; }
+    void clearClipSelection() { m_selClipTrack = -1; m_selClipIdx = -1; }
+
     // ─── Widget overrides ──────────────────────────────────────────────
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -133,13 +167,80 @@ public:
             return true;
         }
 
-        // Grid click → select track + potential clip interaction
+        // Grid area — clip interaction
         if (e.x >= gridX && e.x < gridX + gridW &&
             e.y >= gridY && e.y < gridY + gridH) {
-            int track = static_cast<int>((e.y - gridY + m_scrollY) / kTrackRowH);
-            if (track >= 0 && track < m_project->numTracks()) {
-                m_selectedTrack = track;
-                if (m_onTrackClick) m_onTrackClick(track);
+            int trackIdx = static_cast<int>((e.y - gridY + m_scrollY) / kTrackRowH);
+            double beat = static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat);
+
+            if (trackIdx < 0 || trackIdx >= m_project->numTracks()) return true;
+            m_selectedTrack = trackIdx;
+            if (m_onTrackClick) m_onTrackClick(trackIdx);
+
+            // Hit-test clips on this track
+            auto& clips = m_project->track(trackIdx).arrangementClips;
+            int hitIdx = -1;
+            for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+                if (beat >= clips[i].startBeat && beat < clips[i].endBeat()) {
+                    hitIdx = i;
+                    break;
+                }
+            }
+
+            if (hitIdx >= 0) {
+                m_selClipTrack = trackIdx;
+                m_selClipIdx = hitIdx;
+                auto& clip = clips[hitIdx];
+
+                float clipLpx = gridX + static_cast<float>(clip.startBeat) * m_pixelsPerBeat - m_scrollX;
+                float clipRpx = gridX + static_cast<float>(clip.endBeat()) * m_pixelsPerBeat - m_scrollX;
+                constexpr float kEdge = 6.0f;
+                bool wideEnough = (clip.lengthBeats * m_pixelsPerBeat) > kEdge * 3;
+
+                if (e.x < clipLpx + kEdge && wideEnough)
+                    m_dragMode = DragMode::ResizeLeft;
+                else if (e.x > clipRpx - kEdge && wideEnough)
+                    m_dragMode = DragMode::ResizeRight;
+                else
+                    m_dragMode = DragMode::MoveClip;
+
+                m_dragStartBeat = beat;
+                m_dragOrigStart = clip.startBeat;
+                m_dragOrigLength = clip.lengthBeats;
+                m_dragOrigOffset = clip.offsetBeats;
+                m_dragOrigTrack = trackIdx;
+                captureMouse();
+            } else {
+                clearClipSelection();
+
+                // Double-click on empty space in MIDI track → add empty clip
+                if (e.isDoubleClick() &&
+                    m_project->track(trackIdx).type == Track::Type::Midi) {
+                    double snapB = std::max(0.0, snapBeat(beat));
+                    double len = snapVal() > 0 ? std::max(snapVal() * 4.0, 4.0) : 4.0;
+
+                    ArrangementClip nc;
+                    nc.type = ArrangementClip::Type::Midi;
+                    nc.startBeat = snapB;
+                    nc.lengthBeats = len;
+                    nc.name = "Clip";
+                    nc.midiClip = std::make_shared<midi::MidiClip>();
+                    nc.midiClip->setLengthBeats(len);
+
+                    m_project->track(trackIdx).arrangementClips.push_back(std::move(nc));
+                    m_project->track(trackIdx).sortArrangementClips();
+                    m_project->updateArrangementLength();
+
+                    auto& cs = m_project->track(trackIdx).arrangementClips;
+                    for (int i = 0; i < static_cast<int>(cs.size()); ++i) {
+                        if (std::abs(cs[i].startBeat - snapB) < 0.001) {
+                            m_selClipTrack = trackIdx;
+                            m_selClipIdx = i;
+                            break;
+                        }
+                    }
+                    if (m_onClipChange) m_onClipChange(trackIdx);
+                }
             }
             return true;
         }
@@ -151,6 +252,17 @@ public:
         if (m_scrollDragging) {
             m_scrollDragging = false;
             releaseMouse();
+            return true;
+        }
+        if (m_dragMode != DragMode::None) {
+            int affected = m_selClipTrack;
+            bool crossTrack = (m_dragOrigTrack >= 0 && m_dragOrigTrack != m_selClipTrack);
+            m_dragMode = DragMode::None;
+            releaseMouse();
+            if (m_onClipChange) {
+                m_onClipChange(affected);
+                if (crossTrack) m_onClipChange(m_dragOrigTrack);
+            }
             return true;
         }
         return false;
@@ -166,7 +278,77 @@ public:
             m_scrollX = std::clamp(m_scrollDragBase + delta * ratio, 0.0f, maxScroll);
             return true;
         }
-        return false;
+
+        if (m_dragMode == DragMode::None || m_selClipTrack < 0 || m_selClipIdx < 0)
+            return false;
+
+        float gridX = m_bounds.x + kTrackHeaderW;
+        float gridY = m_bounds.y + kRulerH;
+        double curBeat = static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat);
+        double delta = curBeat - m_dragStartBeat;
+
+        if (m_dragMode == DragMode::MoveClip) {
+            double newStart = snapBeat(m_dragOrigStart + delta);
+            newStart = std::max(0.0, newStart);
+
+            int newTrack = static_cast<int>((e.y - gridY + m_scrollY) / kTrackRowH);
+            newTrack = std::clamp(newTrack, 0, m_project->numTracks() - 1);
+
+            if (newTrack != m_selClipTrack) {
+                // Cross-track move
+                auto& src = m_project->track(m_selClipTrack).arrangementClips;
+                ArrangementClip moved = src[m_selClipIdx];
+                moved.startBeat = newStart;
+                src.erase(src.begin() + m_selClipIdx);
+                m_project->track(m_selClipTrack).sortArrangementClips();
+
+                auto& dst = m_project->track(newTrack).arrangementClips;
+                dst.push_back(std::move(moved));
+                m_project->track(newTrack).sortArrangementClips();
+
+                m_selClipIdx = 0;
+                for (int i = 0; i < static_cast<int>(dst.size()); ++i) {
+                    if (std::abs(dst[i].startBeat - newStart) < 0.001) {
+                        m_selClipIdx = i; break;
+                    }
+                }
+                m_selClipTrack = newTrack;
+                m_selectedTrack = newTrack;
+            } else {
+                // Same-track horizontal move
+                auto& clips = m_project->track(m_selClipTrack).arrangementClips;
+                clips[m_selClipIdx].startBeat = newStart;
+                m_project->track(m_selClipTrack).sortArrangementClips();
+                for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+                    if (std::abs(clips[i].startBeat - newStart) < 0.001) {
+                        m_selClipIdx = i; break;
+                    }
+                }
+            }
+            m_project->updateArrangementLength();
+        }
+        else if (m_dragMode == DragMode::ResizeRight) {
+            double newLen = snapBeat(m_dragOrigLength + delta);
+            double minLen = snapVal() > 0 ? snapVal() : 0.25;
+            newLen = std::max(minLen, newLen);
+            m_project->track(m_selClipTrack).arrangementClips[m_selClipIdx].lengthBeats = newLen;
+            m_project->updateArrangementLength();
+        }
+        else if (m_dragMode == DragMode::ResizeLeft) {
+            double newStart = snapBeat(m_dragOrigStart + delta);
+            newStart = std::max(0.0, newStart);
+            double endBt = m_dragOrigStart + m_dragOrigLength;
+            double minLen = snapVal() > 0 ? snapVal() : 0.25;
+            if (newStart > endBt - minLen) newStart = endBt - minLen;
+
+            auto& c = m_project->track(m_selClipTrack).arrangementClips[m_selClipIdx];
+            c.lengthBeats = endBt - newStart;
+            c.offsetBeats = m_dragOrigOffset + (newStart - m_dragOrigStart);
+            c.startBeat = newStart;
+            m_project->updateArrangementLength();
+        }
+
+        return true;
     }
 
     bool onScroll(ScrollEvent& e) override {
@@ -199,6 +381,45 @@ public:
         return true;
     }
 
+    bool onKeyDown(KeyEvent& e) override {
+        if (!m_project) return false;
+
+        // Delete selected clip
+        if ((e.isDelete() || e.isBackspace()) && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
+            auto& clips = m_project->track(m_selClipTrack).arrangementClips;
+            if (m_selClipIdx < static_cast<int>(clips.size())) {
+                int t = m_selClipTrack;
+                clips.erase(clips.begin() + m_selClipIdx);
+                clearClipSelection();
+                m_project->updateArrangementLength();
+                if (m_onClipChange) m_onClipChange(t);
+                return true;
+            }
+        }
+
+        // Ctrl+D = duplicate selected clip (placed immediately after)
+        if (e.keyCode == 'd' && e.mods.ctrl && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
+            auto& clips = m_project->track(m_selClipTrack).arrangementClips;
+            if (m_selClipIdx < static_cast<int>(clips.size())) {
+                ArrangementClip dup = clips[m_selClipIdx];
+                double dupStart = dup.endBeat();
+                dup.startBeat = dupStart;
+                clips.push_back(std::move(dup));
+                m_project->track(m_selClipTrack).sortArrangementClips();
+                m_project->updateArrangementLength();
+                for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+                    if (std::abs(clips[i].startBeat - dupStart) < 0.001) {
+                        m_selClipIdx = i; break;
+                    }
+                }
+                if (m_onClipChange) m_onClipChange(m_selClipTrack);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 private:
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
@@ -215,6 +436,23 @@ private:
 
     TrackClickCallback     m_onTrackClick;
     PlayheadClickCallback  m_onPlayheadClick;
+    ClipChangeCallback     m_onClipChange;
+
+    // Snap grid
+    Snap m_snap = Snap::Beat;
+
+    // Clip selection
+    int m_selClipTrack = -1;
+    int m_selClipIdx   = -1;
+
+    // Clip drag state
+    enum class DragMode { None, MoveClip, ResizeLeft, ResizeRight };
+    DragMode m_dragMode      = DragMode::None;
+    double   m_dragStartBeat = 0.0;
+    double   m_dragOrigStart = 0.0;
+    double   m_dragOrigLength = 0.0;
+    double   m_dragOrigOffset = 0.0;
+    int      m_dragOrigTrack  = -1;
 
     // ─── Painting helpers ──────────────────────────────────────────────
 
@@ -349,7 +587,8 @@ private:
             auto& track = m_project->track(t);
             Color trackCol = Theme::trackColors[track.colorIndex % Theme::kNumTrackColors];
 
-            for (auto& clip : track.arrangementClips) {
+            for (int ci = 0; ci < static_cast<int>(track.arrangementClips.size()); ++ci) {
+                auto& clip = track.arrangementClips[ci];
                 if (clip.endBeat() < viewStartBeat || clip.startBeat > viewEndBeat)
                     continue;
 
@@ -362,11 +601,22 @@ private:
                 Color clipCol = clip.colorIndex >= 0
                     ? Theme::trackColors[clip.colorIndex % Theme::kNumTrackColors]
                     : trackCol;
-                Color bodyCol{clipCol.r, clipCol.g, clipCol.b, 160};
+                bool selected = (t == m_selClipTrack && ci == m_selClipIdx);
+                Color bodyCol{clipCol.r, clipCol.g, clipCol.b,
+                              static_cast<uint8_t>(selected ? 200 : 160)};
                 r.drawRoundedRect(cx, cy, cw, ch, 2.0f, bodyCol, 4);
 
-                // Clip border
-                r.drawRectOutline(cx, cy, cw, ch, clipCol.withAlpha(100));
+                // Clip border (brighter if selected)
+                r.drawRectOutline(cx, cy, cw, ch,
+                    selected ? Color{255, 255, 255, 200} : clipCol.withAlpha(100));
+
+                // Resize handles on selected clip
+                if (selected && cw > 18.0f) {
+                    float hw = 3.0f, hh = ch * 0.4f;
+                    float hy = cy + (ch - hh) * 0.5f;
+                    r.drawRect(cx + 1, hy, hw, hh, Color{255, 255, 255, 140});
+                    r.drawRect(cx + cw - hw - 1, hy, hw, hh, Color{255, 255, 255, 140});
+                }
 
                 // Clip name
                 if (cw > 20.0f && !clip.name.empty()) {
