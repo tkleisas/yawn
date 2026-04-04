@@ -26,7 +26,7 @@
 - **Real-time Audio Engine** — Lock-free audio thread with PortAudio (ASIO/WASAPI/ALSA)
 - **Clip Playback** — Audio files (WAV, FLAC, OGG, AIFF, MP3), looping, gain, fade-in/out
 - **Quantized Launching** — Launch clips on beat or bar boundaries
-- **Transport** — Play/stop, BPM control, beat-synced position tracking
+- **Transport** — Play/stop, BPM control, beat-synced position tracking, loop range with markers
 - **Metronome** — Synthesized click track with accent on downbeats, configurable volume & time signature, count-in, recording/playback mode selection
 
 ### Mixer & Routing
@@ -67,9 +67,27 @@
 - **MPE Support** — Per-note pitch bend, slide, pressure via zone management
 - **7 MIDI Effects** — Arpeggiator (free-running & transport-synced), Chord, Scale, Note Length, Velocity, Random, Pitch
 
+### Automation & Modulation
+- **Automation Engine** — Per-parameter breakpoint envelopes with Read/Touch/Latch modes
+- **Automation Recording** — Touch/Latch parameter recording from UI knob interaction
+- **LFO Device** — Per-track LFO with 5 waveforms (sine, triangle, saw, square, S&H), tempo sync, depth, phase, polarity
+- **LFO Linking** — Stable ID-based linking to any instrument/effect/mixer parameter across tracks, survives reordering
+- **Automation Targets** — Instrument params, audio effect params, MIDI effect params, mixer (volume, pan, sends)
+
+### Arrangement View
+- **Timeline Grid** — Horizontal beat/bar grid with zoom (4–120 px/beat), scroll, snap-to-grid (off/bar/beat/half/quarter/eighth)
+- **Clip Placement** — Click to select, drag body to move (same + cross-track), drag edges to resize, double-click to create, Ctrl+D to duplicate, Delete to remove
+- **Arrangement Playback Engine** — Per-track clip rendering (audio + MIDI) with fade-in/out, thread-safe clip submission
+- **Session/Arrangement Toggle** — Per-track S/A button, auto-activates on view switch when clips exist
+- **Automation Lanes** — Expandable per-track lanes showing breakpoint envelopes, click to add/drag/right-click delete breakpoints
+- **Loop Range** — Green markers in ruler, Shift+click to set, drag to adjust, L key to toggle
+- **Auto-Scroll** — Playhead stays visible during playback (F key to toggle)
+- **Serialization** — Arrangement clips and automation lanes persist in project JSON
+
 ### UI Framework
 - **Composable Widget Tree** — FlexBox layout engine with measure/layout two-pass system, stretch/flex/fixed size policies
 - **Session Panel** — Ableton-style clip grid with 8 visible tracks × 8 scenes, scrollable
+- **Arrangement Panel** — Horizontal timeline with track headers, clip blocks, automation lanes, ruler, playhead, loop markers
 - **Mixer Panel** — Channel strips with interactive faders, pan knobs, mute/solo buttons, peak metering
 - **Device Chain Panel** — Composite widget architecture: DeviceWidget (header + grid + knobs + visualizer), SnapScrollContainer, neon arc knobs with 24-segment rendering
 - **Grouped Instrument Layouts** — Instruments display knobs in logical sections (Global, Op 1–4, Filter, Amp, etc.) with inline graphical displays instead of flat grids
@@ -90,16 +108,16 @@
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
 ### Quality
-- **Test-Driven Development** — 678 unit & integration tests via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 766 unit & integration tests via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
 
 ### Planned
 
-- 🎹 Arrangement View (timeline recording)
 - 🔌 VST3 plugin hosting
 - 💾 Project save/load (JSON format)
+- ↩️ Undo/redo system
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
@@ -180,13 +198,24 @@ cd build && ctest --output-on-failure -C Release
 | `Space` | Play / Stop |
 | `Up` / `Down` | BPM +/- 1 |
 | `Home` | Reset position to 0 |
+| `Tab` | Toggle Session / Arrangement view |
 | `M` | Toggle mixer view |
 | `D` | Toggle detail panel |
+| `L` | Toggle loop on/off (arrangement) |
+| `F` | Toggle auto-scroll / follow playhead (arrangement) |
+| `Delete` / `Backspace` | Delete selected clip (arrangement) |
+| `Ctrl+D` | Duplicate selected clip (arrangement) |
 | `Q` `2` `W` `3` `E` `R` ... `P` | Virtual keyboard (MIDI notes) |
 | `Z` / `X` | Octave down / up |
 | `Esc` | Close menu / Quit |
-| **Left click clip** | Launch clip |
-| **Right click clip** | Stop track |
+| **Left click clip** | Launch clip (session) / Select clip (arrangement) |
+| **Right click clip** | Stop track (session) |
+| **Click ruler** | Set playhead position (arrangement) |
+| **Shift+click ruler** | Set loop start (arrangement) |
+| **Shift+right-click ruler** | Set loop end (arrangement) |
+| **Double-click empty** | Create MIDI clip (arrangement, MIDI track) |
+| **Drag clip body** | Move clip, cross-track (arrangement) |
+| **Drag clip edges** | Resize clip with snap (arrangement) |
 | **Click track header** | Select track |
 | **Right-click header** | Context menu (type, instruments, effects) |
 | **Mouse drag on fader** | Adjust volume |
@@ -202,28 +231,28 @@ cd build && ctest --output-on-failure -C Release
 ┌──────────────────────────────────────────────────────────────┐
 │                   UI Layer (SDL3 + OpenGL)                   │
 │  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐  │
-│  │  Session    │ │   Mixer     │ │  Detail   │ │  Piano    │  │
+│  │  Session    │ │ Arrangement │ │  Detail   │ │  Piano    │  │
 │  │   Panel     │ │   Panel     │ │  Panel    │ │  Roll     │  │
 │  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘  │
 │  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐  │
-│  │  FlexBox    │ │  Primitives │ │ Renderer │ │ Font/Theme│  │
-│  │  Layout     │ │  & Dialogs  │ │    2D    │ │  & DPI    │  │
+│  │   Mixer     │ │  FlexBox    │ │ Renderer │ │ Font/Theme│  │
+│  │   Panel     │ │  & Dialogs  │ │    2D    │ │  & DPI    │  │
 │  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘  │
 ├──────────────────────────────────────────────────────────────┤
 │                   Application Core                           │
 │  ┌──────────┐ ┌───────────┐ ┌──────────────────────────────┐ │
 │  │ Project  │ │ Transport │ │  Message Queue (lock-free)   │ │
-│  │  Model   │ │           │ │  UI ↔ Audio thread           │ │
+│  │  Model   │ │  & Loop   │ │  UI ↔ Audio thread           │ │
 │  └──────────┘ └───────────┘ └──────────────────────────────┘ │
 ├──────────────────────────────────────────────────────────────┤
 │                   Audio Engine (real-time thread)            │
 │  ┌──────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐   │
-│  │PortAudio │ │   Clip    │ │   MIDI    │ │  Metronome   │   │
-│  │ Callback │ │  Engine   │ │  Engine   │ │              │   │
+│  │PortAudio │ │   Clip    │ │Arrangement│ │  Metronome   │   │
+│  │ Callback │ │  Engine   │ │ Playback  │ │              │   │
 │  └──────────┘ └───────────┘ └───────────┘ └──────────────┘   │
 │  ┌──────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐   │
-│  │  Mixer   │ │  Effects  │ │Instruments│ │ MIDI Effects │   │
-│  │ /Router  │ │  Chains   │ │ (Synths)  │ │ (Arp, etc.)  │   │
+│  │  Mixer   │ │  Effects  │ │Instruments│ │  Automation  │   │
+│  │ /Router  │ │  Chains   │ │ (Synths)  │ │ Engine + LFO │   │
 │  └──────────┘ └───────────┘ └───────────┘ └──────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -234,9 +263,13 @@ cd build && ctest --output-on-failure -C Release
 ```
 MIDI Input → MIDI Effect Chain → Instrument → Track Buffer
                                                    ↓
-Clip Engine ─────────────────────────────→ Track Buffer (summed)
+Clip Engine (session) ──────────────────→ Track Buffer (summed)
+         or                                        ↓
+Arrangement Playback (timeline) ────────→ Track Buffer (per-track S/A)
                                                    ↓
 Track Fader/Pan/Mute/Solo → Sends → Return Buses → Master Output
+                                                       ↓
+Automation Engine (envelopes + LFOs) ────────→ Parameter modulation
                                                        ↓
                                               Metronome (added)
 ```
@@ -252,15 +285,22 @@ yawn/
 │   ├── main.cpp                # Entry point
 │   ├── app/
 │   │   ├── App.h/cpp           # Application lifecycle, event loop
+│   │   ├── ArrangementClip.h   # Arrangement clip data model
 │   │   └── Project.h           # Track/Scene/Clip grid model
 │   ├── audio/
 │   │   ├── AudioBuffer.h       # Non-interleaved multi-channel buffer
 │   │   ├── AudioEngine.h/cpp   # PortAudio lifecycle, callback, routing
+│   │   ├── ArrangementPlayback.h/cpp # Per-track arrangement clip rendering
 │   │   ├── Clip.h              # Clip data model and play state
 │   │   ├── ClipEngine.h/cpp    # Multi-track quantized clip playback
 │   │   ├── Metronome.h         # Synthesized click track
 │   │   ├── Mixer.h             # 64-track mixer with sends/returns/master
-│   │   └── Transport.h         # Play/stop, BPM, position (atomics)
+│   │   └── Transport.h         # Play/stop, BPM, position, loop range (atomics)
+│   ├── automation/
+│   │   ├── AutomationTypes.h   # TargetType, MixerParam, AutomationTarget
+│   │   ├── AutomationEnvelope.h # Breakpoint envelope (addPoint/movePoint/valueAt)
+│   │   ├── AutomationLane.h    # Lane (target + envelope + armed flag)
+│   │   └── AutomationEngine.h  # Real-time automation parameter application
 │   ├── core/
 │   │   └── Constants.h         # Global limits (tracks, buses, buffer sizes)
 │   ├── effects/
@@ -275,7 +315,8 @@ yawn/
 │   │   ├── Chorus.h            # Modulated delay chorus
 │   │   ├── Distortion.h        # Waveshaper distortion
 │   │   ├── Oscilloscope.h      # Real-time waveform visualizer
-│   │   └── SpectrumAnalyzer.h  # FFT-based spectrum display
+│   │   ├── SpectrumAnalyzer.h  # FFT-based spectrum display
+│   │   └── LFO.h              # Modulation LFO (5 waveforms, tempo sync)
 │   ├── instruments/
 │   │   ├── Instrument.h        # Instrument base class
 │   │   ├── Envelope.h          # ADSR envelope generator
@@ -322,16 +363,18 @@ yawn/
 │   │   │   ├── InstrumentDisplayWidget.h # FM algo, ADSR, osc, filter display + GroupedKnobBody
 │   │   │   └── SnapScrollContainer.h # Horizontal snap-scroll with nav buttons
 │   │   └── panels/
-│   │       ├── SessionPanel.h      # Session view (clip grid, transport)
-│   │       ├── MixerPanel.h        # Mixer view (faders, metering)
-│   │       ├── DetailPanelWidget.h  # Device chain panel (composite widgets)
-│   │       ├── PianoRollPanel.h     # MIDI piano roll editor
-│   │       └── PreferencesDialog.cpp # Preferences (Audio, Defaults, Metronome)
+│   │       ├── SessionPanel.h/cpp     # Session view (clip grid, transport)
+│   │       ├── ArrangementPanel.h/cpp # Arrangement timeline (clips, automation, loop)
+│   │       ├── MixerPanel.h           # Mixer view (faders, metering)
+│   │       ├── DetailPanelWidget.h    # Device chain panel (composite widgets)
+│   │       ├── PianoRollPanel.h       # MIDI piano roll editor
+│   │       └── PreferencesDialog.cpp  # Preferences (Audio, Defaults, Metronome)
 │   └── util/
 │       ├── FileIO.h/cpp        # Audio file loading (libsndfile)
 │       ├── MessageQueue.h      # Typed command/event variants
+│       ├── ProjectSerializer.h/cpp # JSON project save/load
 │       └── RingBuffer.h        # Lock-free SPSC ring buffer
-├── tests/                      # 678 unit & integration tests (Google Test)
+├── tests/                      # 766 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_AudioBuffer.cpp
 │   ├── test_Clip.cpp
@@ -366,7 +409,10 @@ yawn/
 │   ├── test_Transport.cpp
 │   ├── test_VisualizerWidget.cpp
 │   ├── test_Widget.cpp         # Widget tree & event dispatch tests
-│   └── test_Widgets.cpp
+│   ├── test_Widgets.cpp
+│   ├── test_Arrangement.cpp   # Arrangement clips, playback, transport loop tests
+│   ├── test_Automation.cpp    # Automation engine, envelopes, LFO tests
+│   └── test_LFO.cpp          # LFO waveforms, tempo sync, linking tests
 └── assets/                     # Runtime assets (copied to build dir)
 ```
 
@@ -391,20 +437,22 @@ yawn/
 | 13. Piano Roll | ✅ Done | MIDI note editor with draw/select/erase tools, zoom/scroll, clip integration |
 | 14. Composite Widgets | ✅ Done | DeviceWidget, DeviceHeader, FwGrid, VisualizerWidget, SnapScrollContainer, neon knobs |
 | 15. Animations & DPI | ✅ Done | Hover animations, panel collapse/expand animations, DPI auto-detection & scaling |
-| 16. Arrangement View | 🔲 Next | Timeline, clip placement, recording |
+| 16. Arrangement View | ✅ Done | Timeline, clip placement, automation lanes, loop range |
 | 17. VST3 Hosting | 🔲 Planned | VST3 SDK, plugin scanning, editor windows |
 | 18. Save/Load & Polish | 🔲 Planned | JSON project files, undo/redo, keyboard shortcuts |
 
-### Phase 16: Arrangement View (Next)
+### Phase 16: Arrangement View (Done)
 
 The Arrangement View provides a linear timeline for composing full tracks:
 
-- **Timeline grid** — Beat/bar grid with zoom and scroll (horizontal time, vertical tracks)
-- **Clip placement** — Drag audio and MIDI clips onto timeline tracks
-- **Playhead** — Rendering and scrubbing with transport integration
-- **MIDI Piano Roll** — Note editing within MIDI clips (velocity, duration, pitch)
-- **Recording** — Record from Session View clips to Arrangement
-- **Automation lanes** — Per-track parameter automation (volume, pan, effect params)
+- **Timeline grid** — Beat/bar grid with zoom (4–120 px/beat) and scroll, snap-to-grid with 6 resolution levels
+- **Clip placement** — Select, move (same/cross-track), resize edges, double-click create, Ctrl+D duplicate, Delete remove
+- **Arrangement playback** — Per-track audio + MIDI clip rendering with fade crossfades, thread-safe clip submission
+- **Session/Arrangement toggle** — Per-track S/A button, independent mode switching, auto-activation on view switch
+- **Automation lanes** — Expandable per-track lanes with breakpoint envelopes, visual curve rendering, click/drag/delete breakpoints
+- **Loop range** — Green markers in ruler with drag handles, Shift+click to set, L key to toggle, wraps playback position
+- **Auto-scroll** — Playhead follow mode (F key), keeps playhead visible during playback
+- **Playhead** — Click ruler to seek, triangle indicator + vertical line, renders in real-time
 
 ### Phase 17: VST3 Plugin Hosting
 
@@ -461,7 +509,7 @@ while (true) {
 2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
 3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
 4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
-5. **678 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
+5. **766 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
 6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
