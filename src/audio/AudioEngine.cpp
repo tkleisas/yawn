@@ -67,6 +67,9 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_midiClipEngine.setTransport(&m_transport);
     m_midiClipEngine.setSampleRate(config.sampleRate);
 
+    m_arrPlayback.setTransport(&m_transport);
+    m_arrPlayback.setSampleRate(config.sampleRate);
+
     m_metronome.init(config.sampleRate, config.framesPerBuffer);
 
     // Preallocate per-track MIDI buffers on heap
@@ -321,13 +324,21 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     }
 
     // Render each track's clip into its own buffer
+    m_arrPlayback.applyPendingClips();
     m_clipEngine.checkAndFirePending();
     m_midiClipEngine.checkAndFirePending();
     checkPendingRecordStops(nf);
     for (int t = 0; t < kMaxTracks; ++t) {
-        m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
+        if (m_arrPlayback.isTrackActive(t)) {
+            // Arrangement mode: play from timeline
+            m_arrPlayback.processAudioTrack(t, m_trackBufferPtrs[t], nf, nc);
+            m_arrPlayback.processMidiTrack(t, m_trackMidiBuffers[t], nf);
+        } else {
+            // Session mode: play from clip slots
+            m_clipEngine.processTrackToBuffer(t, m_trackBufferPtrs[t], nf, nc);
+        }
     }
-    // Generate MIDI from MIDI clips into track MIDI buffers
+    // Generate MIDI from session MIDI clips (only for non-arrangement tracks)
     m_midiClipEngine.process(m_trackMidiBuffers.data(), nf);
 
     // For recording tracks, clear clip MIDI so only live input goes through
@@ -645,6 +656,7 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, TransportSetPositionMsg>) {
                 m_transport.setPositionInSamples(msg.positionInSamples);
+                m_arrPlayback.resetAllTracks();
             }
             else if constexpr (std::is_same_v<T, TestToneMsg>) {
                 m_testTone.enabled = msg.enabled;
@@ -930,6 +942,9 @@ void AudioEngine::processCommands() {
                 target.chainIndex = msg.chainIndex;
                 target.paramIndex = msg.paramIndex;
                 m_automationEngine.handleParamTouch(msg.trackIndex, target, msg.value, msg.touching);
+            }
+            else if constexpr (std::is_same_v<T, SetTrackArrActiveMsg>) {
+                m_arrPlayback.setTrackActive(msg.trackIndex, msg.active);
             }
         }, cmd);
     }

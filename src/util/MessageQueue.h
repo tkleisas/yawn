@@ -2,6 +2,7 @@
 
 #include "util/RingBuffer.h"
 #include "audio/ClipEngine.h"
+#include "audio/ArrangementPlayback.h"
 #include "automation/AutomationLane.h"
 #include <cstdint>
 #include <variant>
@@ -243,6 +244,12 @@ struct AutoParamTouchMsg {
     bool touching;        // true = begin, false = release
 };
 
+// Arrangement playback control
+struct SetTrackArrActiveMsg {
+    int trackIndex;
+    bool active;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -287,7 +294,8 @@ using AudioCommand = std::variant<
     MoveAudioEffectMsg,
     ResetMidiEffectChainMsg,
     SetAutoModeMsg,
-    AutoParamTouchMsg
+    AutoParamTouchMsg,
+    SetTrackArrActiveMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

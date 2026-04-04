@@ -45,6 +45,7 @@ file(GLOB_RECURSE YAWN_SOURCES
 # Linked by both main executable and test executable
 set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ArrangementPlayback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ClipEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiClipEngine.cpp

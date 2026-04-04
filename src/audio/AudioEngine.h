@@ -4,6 +4,7 @@
 #include "audio/Transport.h"
 #include "audio/ClipEngine.h"
 #include "audio/MidiClipEngine.h"
+#include "audio/ArrangementPlayback.h"
 #include "audio/Mixer.h"
 #include "audio/Metronome.h"
 #include "instruments/Instrument.h"
@@ -64,6 +65,7 @@ public:
     const Transport& transport() const { return m_transport; }
     ClipEngine& clipEngine() { return m_clipEngine; }
     MidiClipEngine& midiClipEngine() { return m_midiClipEngine; }
+    ArrangementPlayback& arrangementPlayback() { return m_arrPlayback; }
     Mixer& mixer() { return m_mixer; }
     const Mixer& mixer() const { return m_mixer; }
     Metronome& metronome() { return m_metronome; }
@@ -144,6 +146,7 @@ private:
     Transport m_transport;
     ClipEngine m_clipEngine;
     MidiClipEngine m_midiClipEngine;
+    ArrangementPlayback m_arrPlayback;
     Mixer m_mixer;
     Metronome m_metronome;
     automation::AutomationEngine m_automationEngine;

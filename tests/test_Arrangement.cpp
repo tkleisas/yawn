@@ -107,3 +107,223 @@ TEST(ProjectArrangement, UpdateArrangementLength) {
     p.updateArrangementLength();
     EXPECT_DOUBLE_EQ(p.arrangementLength(), 116.0);
 }
+
+// ── ArrangementPlayback engine ─────────────────────────────────────────────
+
+#include "audio/ArrangementPlayback.h"
+#include "audio/Transport.h"
+
+namespace {
+
+// Helper: create a simple audio buffer with a known pattern
+std::shared_ptr<yawn::audio::AudioBuffer> makeTestBuffer(int frames, int channels = 1) {
+    auto buf = std::make_shared<yawn::audio::AudioBuffer>(channels, frames);
+    for (int ch = 0; ch < channels; ++ch)
+        for (int f = 0; f < frames; ++f)
+            buf->sample(ch, f) = static_cast<float>(f + 1) * 0.01f;
+    return buf;
+}
+
+// Helper: create a simple MIDI clip with one note
+std::shared_ptr<yawn::midi::MidiClip> makeTestMidiClip() {
+    auto mc = std::make_shared<yawn::midi::MidiClip>();
+    mc->setLengthBeats(4.0);
+    yawn::midi::MidiNote note;
+    note.startBeat = 0.0;
+    note.duration = 1.0;
+    note.pitch = 60;
+    note.channel = 0;
+    note.velocity = 16384; // ~50% in 16-bit
+    mc->addNote(note);
+    return mc;
+}
+
+} // anonymous namespace
+
+TEST(ArrangementPlayback, TrackActiveDefault) {
+    yawn::audio::ArrangementPlayback ap;
+    EXPECT_FALSE(ap.isTrackActive(0));
+    EXPECT_FALSE(ap.isTrackActive(7));
+}
+
+TEST(ArrangementPlayback, SetTrackActive) {
+    yawn::audio::ArrangementPlayback ap;
+    ap.setTrackActive(0, true);
+    EXPECT_TRUE(ap.isTrackActive(0));
+    EXPECT_FALSE(ap.isTrackActive(1));
+    ap.setTrackActive(0, false);
+    EXPECT_FALSE(ap.isTrackActive(0));
+}
+
+TEST(ArrangementPlayback, SetTrackClips) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.audioBuffer = makeTestBuffer(44100);
+    clips.push_back(c);
+
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+    EXPECT_TRUE(ap.isTrackActive(0));
+}
+
+TEST(ArrangementPlayback, AudioPlaybackWritesToBuffer) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    // Create a clip at beat 0 with known audio data
+    auto audioBuf = makeTestBuffer(44100, 2);
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.audioBuffer = audioBuf;
+    clips.push_back(c);
+
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+
+    // Render 256 frames
+    std::vector<float> buffer(256 * 2, 0.0f);
+    ap.processAudioTrack(0, buffer.data(), 256, 2);
+
+    // Should have non-zero output (audio data was written)
+    bool hasNonZero = false;
+    for (float s : buffer) {
+        if (s != 0.0f) { hasNonZero = true; break; }
+    }
+    EXPECT_TRUE(hasNonZero);
+}
+
+TEST(ArrangementPlayback, SilenceInGap) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    // Clip starts at beat 8 (after a gap)
+    auto audioBuf = makeTestBuffer(44100, 1);
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 8.0;
+    c.lengthBeats = 4.0;
+    c.audioBuffer = audioBuf;
+    clips.push_back(c);
+
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+
+    // Transport is at beat 0, clip starts at beat 8 — should be silence
+    std::vector<float> buffer(256, 0.0f);
+    ap.processAudioTrack(0, buffer.data(), 256, 1);
+
+    bool allZero = true;
+    for (float s : buffer) {
+        if (s != 0.0f) { allZero = false; break; }
+    }
+    EXPECT_TRUE(allZero);
+}
+
+TEST(ArrangementPlayback, InactiveTrackNoOutput) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    auto audioBuf = makeTestBuffer(44100, 1);
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.audioBuffer = audioBuf;
+    clips.push_back(c);
+
+    ap.setTrackClips(0, std::move(clips));
+    // Track NOT active — should produce no output
+
+    std::vector<float> buffer(256, 0.0f);
+    ap.processAudioTrack(0, buffer.data(), 256, 1);
+
+    bool allZero = true;
+    for (float s : buffer) {
+        if (s != 0.0f) { allZero = false; break; }
+    }
+    EXPECT_TRUE(allZero);
+}
+
+TEST(ArrangementPlayback, MidiClipEmitsNotes) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    auto mc = makeTestMidiClip();
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Midi;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.midiClip = mc;
+    clips.push_back(c);
+
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+
+    // Process enough frames to cover beat 0 (note-on at beat 0)
+    yawn::midi::MidiBuffer midiBuffer;
+    midiBuffer.clear();
+    ap.processMidiTrack(0, midiBuffer, 256);
+
+    // Should have at least one MIDI message (note-on at beat 0)
+    EXPECT_GT(midiBuffer.count(), 0);
+}
+
+TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    auto audioBuf = makeTestBuffer(1000, 1);
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.audioBuffer = audioBuf;
+    clips.push_back(c);
+
+    // Submit from "UI thread"
+    ap.submitTrackClips(0, std::move(clips));
+
+    // Apply on "audio thread"
+    ap.applyPendingClips();
+    ap.setTrackActive(0, true);
+    EXPECT_TRUE(ap.isTrackActive(0));
+}
