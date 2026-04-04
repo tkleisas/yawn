@@ -538,6 +538,55 @@ void deserializeMixer(audio::Mixer& mixer, const json& j,
 }
 
 // ---------------------------------------------------------------------------
+// Arrangement clip serialization
+// ---------------------------------------------------------------------------
+
+json serializeArrangementClip(const ArrangementClip& clip,
+                               const fs::path& samplesDir, int& sampleCounter) {
+    json j;
+    j["type"] = clip.type == ArrangementClip::Type::Audio ? "Audio" : "Midi";
+    j["startBeat"] = clip.startBeat;
+    j["lengthBeats"] = clip.lengthBeats;
+    j["offsetBeats"] = clip.offsetBeats;
+    j["name"] = clip.name;
+    j["colorIndex"] = clip.colorIndex;
+
+    if (clip.type == ArrangementClip::Type::Audio && clip.audioBuffer) {
+        // Save the audio buffer reference
+        std::string filename = "arr_sample_" + std::to_string(sampleCounter++) + ".wav";
+        fs::path samplePath = samplesDir / filename;
+        FileIO::saveAudioBuffer(samplePath.string(), *clip.audioBuffer, 44100);
+        j["sampleFile"] = filename;
+    } else if (clip.type == ArrangementClip::Type::Midi && clip.midiClip) {
+        j["midiClip"] = serializeMidiClip(*clip.midiClip);
+    }
+
+    return j;
+}
+
+ArrangementClip deserializeArrangementClip(const json& j,
+                                            const fs::path& projectDir) {
+    ArrangementClip clip;
+    std::string typeStr = j.value("type", "Audio");
+    clip.type = (typeStr == "Midi") ? ArrangementClip::Type::Midi : ArrangementClip::Type::Audio;
+    clip.startBeat = j.value("startBeat", 0.0);
+    clip.lengthBeats = j.value("lengthBeats", 4.0);
+    clip.offsetBeats = j.value("offsetBeats", 0.0);
+    clip.name = j.value("name", "");
+    clip.colorIndex = j.value("colorIndex", -1);
+
+    if (clip.type == ArrangementClip::Type::Audio && j.contains("sampleFile")) {
+        fs::path samplePath = projectDir / "samples" / j["sampleFile"].get<std::string>();
+        auto buf = FileIO::loadAudioFile(samplePath.string());
+        if (buf) clip.audioBuffer = std::move(buf);
+    } else if (clip.type == ArrangementClip::Type::Midi && j.contains("midiClip")) {
+        clip.midiClip = deserializeMidiClip(j["midiClip"]);
+    }
+
+    return clip;
+}
+
+// ---------------------------------------------------------------------------
 // ProjectSerializer — top-level save/load
 // ---------------------------------------------------------------------------
 
@@ -565,6 +614,8 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
     proj["sampleRate"] = sr;
     proj["timeSignatureNumerator"] = engine.transport().numerator();
     proj["timeSignatureDenominator"] = engine.transport().denominator();
+    proj["viewMode"] = static_cast<int>(project.viewMode());
+    proj["arrangementLength"] = project.arrangementLength();
     root["project"] = proj;
 
     // Tracks
@@ -586,6 +637,15 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["autoMode"] = static_cast<int>(tr.autoMode);
         if (!tr.automationLanes.empty())
             tj["automationLanes"] = automation::lanesToJson(tr.automationLanes);
+
+        // Arrangement clips
+        tj["arrangementActive"] = tr.arrangementActive;
+        if (!tr.arrangementClips.empty()) {
+            json arrClips = json::array();
+            for (auto& ac : tr.arrangementClips)
+                arrClips.push_back(serializeArrangementClip(ac, samplesDir, sampleCounter));
+            tj["arrangementClips"] = arrClips;
+        }
 
         // Instrument
         auto* inst = const_cast<audio::AudioEngine&>(engine).instrument(t);
@@ -670,6 +730,8 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
         engine.transport().setTimeSignature(
             proj.value("timeSignatureNumerator", 4),
             proj.value("timeSignatureDenominator", 4));
+        project.setViewMode(static_cast<ViewMode>(proj.value("viewMode", 0)));
+        project.setArrangementLength(proj.value("arrangementLength", 64.0));
     }
 
     // Tracks & Scenes
@@ -704,6 +766,14 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.autoMode = static_cast<automation::AutoMode>(tj.value("autoMode", 0));
             if (tj.contains("automationLanes"))
                 tr.automationLanes = automation::lanesFromJson(tj["automationLanes"]);
+
+            // Arrangement clips
+            tr.arrangementActive = tj.value("arrangementActive", false);
+            if (tj.contains("arrangementClips")) {
+                for (auto& acj : tj["arrangementClips"])
+                    tr.arrangementClips.push_back(deserializeArrangementClip(acj, folderPath));
+                tr.sortArrangementClips();
+            }
 
             // Instrument
             if (tj.contains("instrument")) {

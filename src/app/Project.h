@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Constants.h"
+#include "app/ArrangementClip.h"
 #include "audio/Clip.h"
 #include "audio/ClipEngine.h"
 #include "midi/MidiClip.h"
@@ -8,6 +9,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <algorithm>
 
 namespace yawn {
 
@@ -34,6 +36,24 @@ struct Track {
     // Per-track automation lanes (arrangement-level, absolute beat times)
     std::vector<automation::AutomationLane> automationLanes;
     automation::AutoMode autoMode = automation::AutoMode::Off;
+
+    // Arrangement clips (sorted by startBeat)
+    std::vector<ArrangementClip> arrangementClips;
+    bool arrangementActive = false;  // true = arrangement mode, false = session mode
+
+    // Get arrangement clip at a given beat position
+    const ArrangementClip* arrangementClipAt(double beat) const {
+        for (auto& c : arrangementClips)
+            if (beat >= c.startBeat && beat < c.endBeat()) return &c;
+        return nullptr;
+    }
+
+    void sortArrangementClips() {
+        std::sort(arrangementClips.begin(), arrangementClips.end(),
+                  [](const ArrangementClip& a, const ArrangementClip& b) {
+                      return a.startBeat < b.startBeat;
+                  });
+    }
 };
 
 struct Scene {
@@ -61,6 +81,9 @@ struct ClipSlot {
     // Per-clip automation lanes (times relative to clip start, loop with clip)
     std::vector<automation::AutomationLane> clipAutomation;
 };
+
+// Which top-level view is displayed (UI only; per-track mode is Track::arrangementActive)
+enum class ViewMode : uint8_t { Session, Arrangement };
 
 // Project model: holds tracks, scenes, and the 2D clip grid.
 // Owned by the UI thread. Clip pointers are passed to the audio engine.
@@ -172,11 +195,29 @@ public:
         }
     }
 
+    // ─── Arrangement view ──────────────────────────────────────────────
+    ViewMode viewMode() const { return m_viewMode; }
+    void setViewMode(ViewMode m) { m_viewMode = m; }
+
+    double arrangementLength() const { return m_arrangementLength; }
+    void setArrangementLength(double beats) { m_arrangementLength = beats; }
+
+    // Recompute arrangement length from all track clips
+    void updateArrangementLength() {
+        double maxEnd = 16.0; // minimum 4 bars
+        for (auto& t : m_tracks)
+            for (auto& c : t.arrangementClips)
+                maxEnd = std::max(maxEnd, c.endBeat());
+        m_arrangementLength = maxEnd;
+    }
+
 private:
     std::vector<Track> m_tracks;
     std::vector<Scene> m_scenes;
     // m_clipSlots[trackIndex][sceneIndex]
     std::vector<std::vector<ClipSlot>> m_clipSlots;
+    ViewMode m_viewMode = ViewMode::Session;
+    double m_arrangementLength = 64.0; // default 16 bars
 };
 
 } // namespace yawn

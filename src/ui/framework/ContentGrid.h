@@ -27,6 +27,8 @@ public:
         m_br = bottomRight;
     }
 
+    void setTopLeft(Widget* w) { m_tl = w; }
+
     void setDividerRatios(float hRatio, float vRatio) {
         m_hRatio = std::clamp(hRatio, 0.1f, 0.9f);
         m_vRatio = std::clamp(vRatio, 0.2f, 0.95f);

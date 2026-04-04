@@ -111,6 +111,15 @@ void deserializeMixer(audio::Mixer& mixer, const json& j,
                       double sampleRate, int maxBlockSize);
 
 // ---------------------------------------------------------------------------
+// Arrangement clip serialization
+// ---------------------------------------------------------------------------
+
+json serializeArrangementClip(const ArrangementClip& clip,
+                               const fs::path& samplesDir, int& sampleCounter);
+ArrangementClip deserializeArrangementClip(const json& j,
+                                            const fs::path& projectDir);
+
+// ---------------------------------------------------------------------------
 // ProjectSerializer — top-level save/load
 // ---------------------------------------------------------------------------
 

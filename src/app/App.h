@@ -17,6 +17,7 @@
 #include "ui/framework/ContentGrid.h"
 #include "ui/panels/MixerPanel.h"
 #include "ui/panels/SessionPanel.h"
+#include "ui/panels/ArrangementPanel.h"
 #include "ui/panels/TransportPanel.h"
 #include "ui/panels/BrowserPanel.h"
 #include "ui/panels/ReturnMasterPanel.h"
@@ -66,6 +67,7 @@ private:
     void showTrackContextMenu(int trackIndex, float mx, float my);
     void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
     void updateDetailForSelectedTrack();
+    void switchToView(ViewMode mode);
 
     // Project file operations
     void newProject();
@@ -97,6 +99,7 @@ private:
     ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
     ui::fw::MixerPanel*   m_mixerPanel   = nullptr;  // owned by unique_ptr below
     ui::fw::SessionPanel* m_sessionPanel = nullptr;  // owned by unique_ptr below
+    ui::fw::ArrangementPanel* m_arrangementPanel = nullptr;
     ui::fw::TransportPanel*      m_transportPanel  = nullptr;
     ui::fw::ContentGrid*         m_contentGrid     = nullptr;
     ui::fw::BrowserPanel*        m_browserPanel    = nullptr;

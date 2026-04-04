@@ -109,8 +109,8 @@ void App::setupMenuBar() {
 
     // View menu
     m_menuBar.addMenu("View", {
-        {"Session View",    "",    nullptr},
-        {"Arrangement View","",    nullptr, false, false},
+        {"Session View",     "Tab", [this]() { switchToView(ViewMode::Session); }},
+        {"Arrangement View", "Tab", [this]() { switchToView(ViewMode::Arrangement); }},
         {"Toggle Mixer",    "M",   [this]() { m_showMixer = !m_showMixer; }},
         {"Detail Panel",    "D",   [this]() {
             m_showDetailPanel = !m_showDetailPanel;
@@ -163,6 +163,7 @@ void App::buildWidgetTree() {
     auto menuW      = std::make_unique<MenuBarWrapper>(m_menuBar);
     auto transportP = std::make_unique<TransportPanel>();
     auto sessionP   = std::make_unique<SessionPanel>();
+    auto arrP       = std::make_unique<ArrangementPanel>();
     auto mixerP     = std::make_unique<MixerPanel>();
     auto browserP   = std::make_unique<BrowserPanel>();
     auto returnMstP = std::make_unique<ReturnMasterPanel>();
@@ -180,6 +181,7 @@ void App::buildWidgetTree() {
     m_menuBarW          = menuW.get();
     m_transportPanel    = transportP.get();
     m_sessionPanel      = sessionP.get();
+    m_arrangementPanel  = arrP.get();
     m_mixerPanel        = mixerP.get();
     m_browserPanel      = browserP.get();
     m_returnMasterPanel = returnMstP.get();
@@ -239,6 +241,21 @@ void App::buildWidgetTree() {
         }
     });
 
+    // Init arrangement panel
+    m_arrangementPanel->init(&m_project, &m_audioEngine);
+    m_arrangementPanel->setOnTrackClick([this](int t) {
+        m_selectedTrack = t;
+        m_sessionPanel->setSelectedTrack(t);
+        if (m_showDetailPanel) updateDetailForSelectedTrack();
+    });
+    m_arrangementPanel->setOnPlayheadClick([this](double beat) {
+        double sr = m_audioEngine.sampleRate();
+        double bpm = m_audioEngine.transport().bpm();
+        int64_t samples = static_cast<int64_t>(beat * 60.0 / bpm * sr);
+        m_audioEngine.sendCommand(audio::TransportSetPositionMsg{samples});
+    });
+    m_arrangementPanel->setVisible(false); // start in session view
+
     // Wire the 4-quadrant layout
     m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
                                m_mixerPanel, m_returnMasterPanel);
@@ -261,6 +278,7 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(menuW));
     m_wrappers.push_back(std::move(transportP));
     m_wrappers.push_back(std::move(sessionP));
+    m_wrappers.push_back(std::move(arrP));
     m_wrappers.push_back(std::move(mixerP));
     m_wrappers.push_back(std::move(browserP));
     m_wrappers.push_back(std::move(returnMstP));
@@ -1264,6 +1282,15 @@ void App::processEvents() {
                         m_audioEngine.sendCommand(audio::TransportSetPositionMsg{0});
                         break;
 
+                    case SDLK_TAB:
+                        if (!shift) {
+                            auto next = (m_project.viewMode() == ViewMode::Session)
+                                ? ViewMode::Arrangement
+                                : ViewMode::Session;
+                            switchToView(next);
+                        }
+                        break;
+
                     case SDLK_M:
                         if (!shift) m_showMixer = !m_showMixer;
                         break;
@@ -1603,7 +1630,21 @@ void App::processEvents() {
                     se.dx = dx; se.dy = dy;
                     m_mixerPanel->onScroll(se);
                 } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {
-                    m_sessionPanel->handleScroll(dx, dy);
+                    if (m_project.viewMode() == ViewMode::Arrangement) {
+                        auto ab = m_arrangementPanel->bounds();
+                        if (m_lastMouseX >= ab.x && m_lastMouseX < ab.x + ab.w) {
+                            auto mod = SDL_GetModState();
+                            bool ctrl  = (mod & SDL_KMOD_CTRL) != 0;
+                            bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+                            ui::fw::ScrollEvent se;
+                            se.x = m_lastMouseX; se.y = m_lastMouseY;
+                            se.dx = dx; se.dy = dy;
+                            se.mods.ctrl = ctrl; se.mods.shift = shift;
+                            m_arrangementPanel->onScroll(se);
+                        }
+                    } else {
+                        m_sessionPanel->handleScroll(dx, dy);
+                    }
                 }
                 break;
             }
@@ -2058,6 +2099,17 @@ void App::updateWindowTitle() {
     }
     if (m_projectDirty) title += " *";
     SDL_SetWindowTitle(m_mainWindow.getHandle(), title.c_str());
+}
+
+void App::switchToView(ViewMode mode) {
+    m_project.setViewMode(mode);
+    bool showArrangement = (mode == ViewMode::Arrangement);
+    m_sessionPanel->setVisible(!showArrangement);
+    m_arrangementPanel->setVisible(showArrangement);
+    m_contentGrid->setTopLeft(showArrangement
+        ? static_cast<ui::fw::Widget*>(m_arrangementPanel)
+        : static_cast<ui::fw::Widget*>(m_sessionPanel));
+    m_arrangementPanel->setSelectedTrack(m_selectedTrack);
 }
 
 void SDLCALL App::onOpenFolderResult(void* userdata, const char* const* filelist, int /*filter*/) {
