@@ -255,21 +255,11 @@ void App::buildWidgetTree() {
         m_audioEngine.sendCommand(audio::TransportSetPositionMsg{samples});
     });
     m_arrangementPanel->setOnClipChange([this](int trackIdx) {
-        auto& track = m_project.track(trackIdx);
-        std::vector<audio::ArrClipRef> refs;
-        refs.reserve(track.arrangementClips.size());
-        for (auto& ac : track.arrangementClips) {
-            audio::ArrClipRef ref;
-            ref.type = ac.type == ArrangementClip::Type::Audio
-                ? audio::ArrClipRef::Type::Audio : audio::ArrClipRef::Type::Midi;
-            ref.startBeat = ac.startBeat;
-            ref.lengthBeats = ac.lengthBeats;
-            ref.offsetBeats = ac.offsetBeats;
-            ref.audioBuffer = ac.audioBuffer;
-            ref.midiClip = ac.midiClip;
-            refs.push_back(std::move(ref));
-        }
-        m_audioEngine.arrangementPlayback().submitTrackClips(trackIdx, std::move(refs));
+        syncArrangementClipsToEngine(trackIdx);
+    });
+    m_arrangementPanel->setOnTrackArrToggle([this](int trackIdx, bool active) {
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{trackIdx, active});
+        if (active) syncArrangementClipsToEngine(trackIdx);
     });
     m_arrangementPanel->setVisible(false); // start in session view
 
@@ -2127,6 +2117,32 @@ void App::switchToView(ViewMode mode) {
         ? static_cast<ui::fw::Widget*>(m_arrangementPanel)
         : static_cast<ui::fw::Widget*>(m_sessionPanel));
     m_arrangementPanel->setSelectedTrack(m_selectedTrack);
+
+    // Activate/deactivate arrangement mode for all tracks
+    for (int t = 0; t < m_project.numTracks(); ++t) {
+        bool active = showArrangement && !m_project.track(t).arrangementClips.empty();
+        m_project.track(t).arrangementActive = active;
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, active});
+        if (active) syncArrangementClipsToEngine(t);
+    }
+}
+
+void App::syncArrangementClipsToEngine(int trackIdx) {
+    auto& track = m_project.track(trackIdx);
+    std::vector<audio::ArrClipRef> refs;
+    refs.reserve(track.arrangementClips.size());
+    for (auto& ac : track.arrangementClips) {
+        audio::ArrClipRef ref;
+        ref.type = ac.type == ArrangementClip::Type::Audio
+            ? audio::ArrClipRef::Type::Audio : audio::ArrClipRef::Type::Midi;
+        ref.startBeat = ac.startBeat;
+        ref.lengthBeats = ac.lengthBeats;
+        ref.offsetBeats = ac.offsetBeats;
+        ref.audioBuffer = ac.audioBuffer;
+        ref.midiClip = ac.midiClip;
+        refs.push_back(std::move(ref));
+    }
+    m_audioEngine.arrangementPlayback().submitTrackClips(trackIdx, std::move(refs));
 }
 
 void SDLCALL App::onOpenFolderResult(void* userdata, const char* const* filelist, int /*filter*/) {

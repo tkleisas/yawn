@@ -64,6 +64,9 @@ public:
     using ClipChangeCallback = std::function<void(int track)>;
     void setOnClipChange(ClipChangeCallback cb) { m_onClipChange = std::move(cb); }
 
+    using TrackArrToggleCallback = std::function<void(int track, bool active)>;
+    void setOnTrackArrToggle(TrackArrToggleCallback cb) { m_onTrackArrToggle = std::move(cb); }
+
     // ─── Snap grid ─────────────────────────────────────────────────────
 
     enum class Snap { Off, Bar, Beat, Half, Quarter, Eighth };
@@ -145,11 +148,23 @@ public:
             return true;
         }
 
-        // Track header click → select track
+        // Track header click
         if (e.x >= x && e.x < gridX &&
             e.y >= gridY && e.y < gridY + gridH) {
             int track = static_cast<int>((e.y - gridY + m_scrollY) / kTrackRowH);
             if (track >= 0 && track < m_project->numTracks()) {
+                float ty = gridY + track * kTrackRowH - m_scrollY;
+                float btnX = x + kTrackHeaderW - 22;
+                float btnY = ty + kTrackRowH - 17;
+                // S/A toggle button (bottom-right of header)
+                if (e.x >= btnX && e.x < btnX + 20 &&
+                    e.y >= btnY && e.y < btnY + 14) {
+                    auto& tr = m_project->track(track);
+                    tr.arrangementActive = !tr.arrangementActive;
+                    if (m_onTrackArrToggle)
+                        m_onTrackArrToggle(track, tr.arrangementActive);
+                    return true;
+                }
                 m_selectedTrack = track;
                 if (m_onTrackClick) m_onTrackClick(track);
             }
@@ -437,6 +452,7 @@ private:
     TrackClickCallback     m_onTrackClick;
     PlayheadClickCallback  m_onPlayheadClick;
     ClipChangeCallback     m_onClipChange;
+    TrackArrToggleCallback m_onTrackArrToggle;
 
     // Snap grid
     Snap m_snap = Snap::Beat;
@@ -544,6 +560,19 @@ private:
                                    Theme::textPrimary, f.textureId());
                 tx += g.xAdvance;
             }
+
+            // Session/Arrangement toggle indicator
+            bool arrActive = tr.arrangementActive;
+            float btnX = x + kTrackHeaderW - 22;
+            float btnY = ty + kTrackRowH - 17;
+            Color btnBg = arrActive ? Color{80, 140, 80, 255} : Color{60, 60, 65, 255};
+            r.drawRoundedRect(btnX, btnY, 20, 14, 2.0f, btnBg, 4);
+            const char btnCh = arrActive ? 'A' : 'S';
+            float labelScale = (Theme::kSmallFontSize * 0.8f) / f.pixelHeight();
+            auto bg2 = f.getGlyph(btnCh, btnX + 6, btnY + 1, labelScale);
+            r.drawTexturedQuad(bg2.x0, bg2.y0, bg2.x1 - bg2.x0, bg2.y1 - bg2.y0,
+                               bg2.u0, bg2.v0, bg2.u1, bg2.v1,
+                               Color{255, 255, 255, 220}, f.textureId());
 
             // Bottom border
             r.drawRect(x, ty + kTrackRowH - 1, kTrackHeaderW, 1,

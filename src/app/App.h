@@ -68,6 +68,7 @@ private:
     void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
     void updateDetailForSelectedTrack();
     void switchToView(ViewMode mode);
+    void syncArrangementClipsToEngine(int trackIdx);
 
     // Project file operations
     void newProject();
