@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 
@@ -124,6 +125,18 @@ public:
         else m_expandedTracks.insert(t);
     }
 
+    // Per-track custom base height (user can resize)
+    float trackBaseHeight(int t) const {
+        auto it = m_trackHeights.find(t);
+        return (it != m_trackHeights.end()) ? it->second : kTrackRowH;
+    }
+    void setTrackBaseHeight(int t, float h) {
+        m_trackHeights[t] = std::max(kMinTrackH, std::min(kMaxTrackH, h));
+    }
+
+    static constexpr float kMinTrackH = 32.0f;
+    static constexpr float kMaxTrackH = 200.0f;
+
     // Effective row height (main row + expanded auto lanes)
     float trackRowHeight(int t) const;
     // Cumulative Y offset for track t
@@ -201,13 +214,21 @@ private:
     int m_selClipIdx   = -1;
 
     // Clip drag state
-    enum class DragMode { None, MoveClip, ResizeLeft, ResizeRight, AutoPoint };
+    enum class DragMode { None, MoveClip, ResizeLeft, ResizeRight, AutoPoint, ResizeTrackH };
     DragMode m_dragMode      = DragMode::None;
     double   m_dragStartBeat = 0.0;
     double   m_dragOrigStart = 0.0;
     double   m_dragOrigLength = 0.0;
     double   m_dragOrigOffset = 0.0;
     int      m_dragOrigTrack  = -1;
+
+    // Track resize drag
+    int   m_resizeTrack = -1;
+    float m_resizeOrigH = 0.0f;
+    float m_resizeMouseStart = 0.0f;
+
+    // Per-track custom heights
+    std::map<int, float> m_trackHeights;
 
     // Automation lane expansion
     std::set<int> m_expandedTracks;

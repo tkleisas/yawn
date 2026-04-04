@@ -13,7 +13,7 @@ namespace fw {
 // ── Layout helpers ─────────────────────────────────────────────────────
 
 float ArrangementPanel::trackRowHeight(int t) const {
-    float h = kTrackRowH;
+    float h = trackBaseHeight(t);
     if (m_expandedTracks.count(t) && m_project) {
         int nLanes = static_cast<int>(m_project->track(t).automationLanes.size());
         if (nLanes > 0) h += nLanes * kAutoLaneH;
@@ -43,8 +43,9 @@ int ArrangementPanel::trackAtY(float relY) const {
 // Returns -1 if in the main clip row, or 0..n-1 for auto lane index
 int ArrangementPanel::autoLaneAtY(int track, float relYInTrack) const {
     if (!m_project || !m_expandedTracks.count(track)) return -1;
-    if (relYInTrack < kTrackRowH) return -1;
-    float offset = relYInTrack - kTrackRowH;
+    float base = trackBaseHeight(track);
+    if (relYInTrack < base) return -1;
+    float offset = relYInTrack - base;
     int lane = static_cast<int>(offset / kAutoLaneH);
     int nLanes = static_cast<int>(m_project->track(track).automationLanes.size());
     return (lane >= 0 && lane < nLanes) ? lane : -1;
@@ -179,15 +180,27 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         int track = trackAtY(relY);
         if (track >= 0 && track < m_project->numTracks()) {
             float ty = gridY + trackYOffset(track) - m_scrollY;
+            float baseH = trackBaseHeight(track);
+
+            // Check for resize handle (bottom 4px of base area)
+            float resizeZone = ty + baseH;
+            if (e.y >= resizeZone - 4 && e.y <= resizeZone + 2) {
+                m_dragMode = DragMode::ResizeTrackH;
+                m_resizeTrack = track;
+                m_resizeOrigH = baseH;
+                m_resizeMouseStart = e.y;
+                captureMouse();
+                return true;
+            }
 
             // Button row Y and dimensions (must match paintTrackHeaders)
-            float btnRowY = ty + kTrackRowH - 22;
+            float btnRowY = ty + baseH - 22;
             float btnH = 16.0f;
             float btnGap = 4.0f;
 
             // Expand/collapse button [▶/▼]
             float expBtnX = x + 10;
-            float expW = 22.0f;
+            float expW = 20.0f;
             if (e.x >= expBtnX && e.x < expBtnX + expW &&
                 e.y >= btnRowY && e.y < btnRowY + btnH) {
                 toggleTrackExpanded(track);
@@ -241,7 +254,7 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         // Automation lane click
         if (laneIdx >= 0) {
             auto& lane = m_project->track(trackIdx).automationLanes[laneIdx];
-            float laneTop = gridY + trackTop + kTrackRowH + laneIdx * kAutoLaneH - m_scrollY;
+            float laneTop = gridY + trackTop + trackBaseHeight(trackIdx) + laneIdx * kAutoLaneH - m_scrollY;
 
             // Convert mouse to time and value
             double clickBeat = beat;
@@ -373,6 +386,8 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
             m_autoPointDragIdx = -1;
             m_autoPointDragLane = -1;
             m_autoPointDragTrack = -1;
+        } else if (m_dragMode == DragMode::ResizeTrackH) {
+            m_resizeTrack = -1;
         } else {
             int affected = m_selClipTrack;
             bool crossTrack = (m_dragOrigTrack >= 0 && m_dragOrigTrack != m_selClipTrack);
@@ -413,6 +428,12 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
         return true;
     }
 
+    if (m_dragMode == DragMode::ResizeTrackH) {
+        float delta = e.y - m_resizeMouseStart;
+        setTrackBaseHeight(m_resizeTrack, m_resizeOrigH + delta);
+        return true;
+    }
+
     if (m_dragMode == DragMode::None) return false;
 
     float gridX = m_bounds.x + kTrackHeaderW;
@@ -424,7 +445,7 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
         if (m_autoPointDragTrack < 0 || m_autoPointDragLane < 0 || m_autoPointDragIdx < 0)
             return false;
         auto& lane = m_project->track(m_autoPointDragTrack).automationLanes[m_autoPointDragLane];
-        float laneTop = gridY + trackYOffset(m_autoPointDragTrack) + kTrackRowH
+        float laneTop = gridY + trackYOffset(m_autoPointDragTrack) + trackBaseHeight(m_autoPointDragTrack)
                        + m_autoPointDragLane * kAutoLaneH - m_scrollY;
         double newTime = std::max(0.0, curBeat);
         float newVal = 1.0f - (e.y - laneTop) / kAutoLaneH;
@@ -674,6 +695,7 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
 
     for (int t = 0; t < numTracks; ++t) {
         float ty = y + trackYOffset(t) - m_scrollY;
+        float baseH = trackBaseHeight(t);
         float rowH = trackRowHeight(t);
         if (ty + rowH < y || ty > y + h) continue;
 
@@ -682,13 +704,13 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
         // Main row background
         Color bg = (t == m_selectedTrack)
             ? Color{50, 55, 65, 255} : Color{42, 42, 46, 255};
-        r.drawRect(x, ty, kTrackHeaderW, kTrackRowH, bg);
+        r.drawRect(x, ty, kTrackHeaderW, baseH, bg);
 
         // Color bar (left edge)
         Color col = Theme::trackColors[tr.colorIndex % Theme::kNumTrackColors];
-        r.drawRect(x + 1, ty + 1, 4, kTrackRowH - 2, col);
+        r.drawRect(x + 1, ty + 1, 4, baseH - 2, col);
 
-        // Track name (top row, y+4)
+        // Track name (top row)
         float tx = x + 10;
         float textY = ty + 4;
         float maxNameX = x + kTrackHeaderW - 6;
@@ -700,51 +722,72 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
             tx += g.xAdvance;
         }
 
-        // Button row (bottom area of main row, y offset ~30)
-        float btnRowY = ty + kTrackRowH - 22;
+        // Button row (bottom area)
+        float btnRowY = ty + baseH - 22;
         float btnH = 16.0f;
         float btnGap = 4.0f;
         float bx = x + 10;
 
-        // Expand/collapse auto lanes button [▶] / [▼]
-        float expW = 22.0f;
+        // Expand/collapse button — filled triangle ▶ or ▼
+        float expW = 20.0f;
         bool expanded = m_expandedTracks.count(t) > 0;
         Color expBg = expanded ? Color{55, 65, 75, 255} : Color{48, 48, 52, 255};
         r.drawRoundedRect(bx, btnRowY, expW, btnH, 3.0f, expBg, 4);
-        auto expG = f.getGlyph(expanded ? 'v' : '>', bx + 7, btnRowY + 2, smallScale);
-        r.drawTexturedQuad(expG.x0, expG.y0, expG.x1 - expG.x0, expG.y1 - expG.y0,
-                           expG.u0, expG.v0, expG.u1, expG.v1,
-                           Color{180, 180, 190, 220}, f.textureId());
+        {
+            float cx = bx + expW * 0.5f;
+            float cy = btnRowY + btnH * 0.5f;
+            float ts = 4.0f; // triangle half-size
+            Color triCol{180, 180, 190, 220};
+            if (expanded) {
+                // Down-pointing triangle ▼
+                r.drawTriangle(cx - ts, cy - ts * 0.5f,
+                               cx + ts, cy - ts * 0.5f,
+                               cx,      cy + ts * 0.5f, triCol);
+            } else {
+                // Right-pointing triangle ▶
+                r.drawTriangle(cx - ts * 0.4f, cy - ts,
+                               cx - ts * 0.4f, cy + ts,
+                               cx + ts * 0.6f, cy, triCol);
+            }
+        }
         bx += expW + btnGap;
 
-        // S/A toggle button [Session] / [Arr]
+        // S/A toggle button — text centered inside
         float saW = 36.0f;
         bool arrActive = tr.arrangementActive;
         Color saBg = arrActive ? Color{60, 130, 70, 255} : Color{60, 60, 65, 255};
         r.drawRoundedRect(bx, btnRowY, saW, btnH, 3.0f, saBg, 4);
-        const char* saLabel = arrActive ? "Arr" : "Ses";
-        float saX = bx + 4;
-        for (const char* p = saLabel; *p; ++p) {
-            auto g = f.getGlyph(*p, saX, btnRowY + 2, smallScale);
-            r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                               g.u0, g.v0, g.u1, g.v1,
-                               Color{255, 255, 255, 220}, f.textureId());
-            saX += g.xAdvance;
+        {
+            const char* saLabel = arrActive ? "Arr" : "Ses";
+            // Measure text width
+            float tw = 0;
+            for (const char* p = saLabel; *p; ++p) {
+                auto g = f.getGlyph(*p, 0, 0, smallScale);
+                tw += g.xAdvance;
+            }
+            float saTextX = bx + (saW - tw) * 0.5f;
+            float saTextY = btnRowY + (btnH - Theme::kSmallFontSize * 0.85f) * 0.5f;
+            for (const char* p = saLabel; *p; ++p) {
+                auto g = f.getGlyph(*p, saTextX, saTextY, smallScale);
+                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                   g.u0, g.v0, g.u1, g.v1,
+                                   Color{255, 255, 255, 220}, f.textureId());
+                saTextX += g.xAdvance;
+            }
         }
 
-        // Bottom border
-        r.drawRect(x, ty + kTrackRowH - 1, kTrackHeaderW, 1, Color{60, 60, 65, 255});
+        // Bottom border — slightly thicker as resize handle hint
+        r.drawRect(x, ty + baseH - 2, kTrackHeaderW, 2, Color{70, 70, 78, 255});
 
         // Automation lane headers (when expanded)
         if (expanded) {
             int nLanes = static_cast<int>(tr.automationLanes.size());
             for (int li = 0; li < nLanes; ++li) {
-                float ly = ty + kTrackRowH + li * kAutoLaneH;
+                float ly = ty + baseH + li * kAutoLaneH;
                 if (ly + kAutoLaneH < y || ly > y + h) continue;
 
                 r.drawRect(x, ly, kTrackHeaderW, kAutoLaneH, Color{36, 36, 40, 255});
 
-                // Lane name
                 std::string name = autoLaneName(tr.automationLanes[li].target);
                 float lnx = x + 10;
                 float lny = ly + (kAutoLaneH - Theme::kSmallFontSize * 0.8f) * 0.5f;
@@ -791,9 +834,10 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
         if (ty + rowH < y || ty > y + h) continue;
 
         // Main clip row background
+        float baseH = trackBaseHeight(t);
         Color rowBg = (t % 2 == 0) ? Color{33, 33, 36, 255} : Color{30, 30, 33, 255};
-        r.drawRect(x, ty, w, kTrackRowH, rowBg);
-        r.drawRect(x, ty + kTrackRowH - 1, w, 1, Color{45, 45, 50, 100});
+        r.drawRect(x, ty, w, baseH, rowBg);
+        r.drawRect(x, ty + baseH - 1, w, 1, Color{45, 45, 50, 100});
 
         // Arrangement clips
         auto& track = m_project->track(t);
@@ -807,7 +851,7 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
             float cx = x + static_cast<float>(clip.startBeat) * m_pixelsPerBeat - m_scrollX;
             float cw = static_cast<float>(clip.lengthBeats) * m_pixelsPerBeat;
             float cy = ty + 2;
-            float ch = kTrackRowH - 4;
+            float ch = baseH - 4;
 
             Color clipCol = clip.colorIndex >= 0
                 ? Theme::trackColors[clip.colorIndex % Theme::kNumTrackColors]
@@ -845,7 +889,7 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
         if (m_expandedTracks.count(t)) {
             int nLanes = static_cast<int>(track.automationLanes.size());
             for (int li = 0; li < nLanes; ++li) {
-                float ly = ty + kTrackRowH + li * kAutoLaneH;
+                float ly = ty + baseH + li * kAutoLaneH;
                 r.drawRect(x, ly, w, kAutoLaneH, Color{28, 28, 32, 255});
                 // Center line (value = 0.5)
                 r.drawRect(x, ly + kAutoLaneH * 0.5f, w, 1, Color{40, 40, 48, 150});
@@ -872,7 +916,7 @@ void ArrangementPanel::paintAutoLanes(Renderer2D& r, Font&,
         int nLanes = static_cast<int>(track.automationLanes.size());
 
         for (int li = 0; li < nLanes; ++li) {
-            float laneY = ty + kTrackRowH + li * kAutoLaneH;
+            float laneY = ty + trackBaseHeight(t) + li * kAutoLaneH;
             if (laneY + kAutoLaneH < y || laneY > y + h) continue;
 
             auto& lane = track.automationLanes[li];
