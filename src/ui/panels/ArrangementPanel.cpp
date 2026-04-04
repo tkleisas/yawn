@@ -180,24 +180,29 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         if (track >= 0 && track < m_project->numTracks()) {
             float ty = gridY + trackYOffset(track) - m_scrollY;
 
-            // S/A toggle (bottom-right of main row)
-            float btnX = x + kTrackHeaderW - 22;
-            float btnY = ty + kTrackRowH - 17;
-            if (e.x >= btnX && e.x < btnX + 20 &&
-                e.y >= btnY && e.y < btnY + 14) {
+            // Button row Y and dimensions (must match paintTrackHeaders)
+            float btnRowY = ty + kTrackRowH - 22;
+            float btnH = 16.0f;
+            float btnGap = 4.0f;
+
+            // Expand/collapse button [▶/▼]
+            float expBtnX = x + 10;
+            float expW = 22.0f;
+            if (e.x >= expBtnX && e.x < expBtnX + expW &&
+                e.y >= btnRowY && e.y < btnRowY + btnH) {
+                toggleTrackExpanded(track);
+                return true;
+            }
+
+            // S/A toggle button [Ses/Arr]
+            float saBtnX = expBtnX + expW + btnGap;
+            float saW = 36.0f;
+            if (e.x >= saBtnX && e.x < saBtnX + saW &&
+                e.y >= btnRowY && e.y < btnRowY + btnH) {
                 auto& tr = m_project->track(track);
                 tr.arrangementActive = !tr.arrangementActive;
                 if (m_onTrackArrToggle)
                     m_onTrackArrToggle(track, tr.arrangementActive);
-                return true;
-            }
-
-            // Expand/collapse auto lanes toggle (▶/▼ button, top-right)
-            float expBtnX = x + kTrackHeaderW - 44;
-            float expBtnY = ty + 2;
-            if (e.x >= expBtnX && e.x < expBtnX + 18 &&
-                e.y >= expBtnY && e.y < expBtnY + 14) {
-                toggleTrackExpanded(track);
                 return true;
             }
 
@@ -597,7 +602,7 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
 
 void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, float w) {
     r.drawRect(x, y, w, kRulerH, Color{35, 35, 40, 255});
-    r.pushClip(x, y, w, kRulerH);
+    r.pushClip(x - 1, y, w + 2, kRulerH + 1);
 
     // Draw loop range highlight
     if (m_loopEnabled && m_loopEnd > m_loopStart) {
@@ -607,7 +612,6 @@ void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, floa
         lx1 = std::min(lx1, x + w);
         if (lx1 > lx0) {
             r.drawRect(lx0, y, lx1 - lx0, kRulerH, Color{60, 120, 80, 80});
-            // Loop start/end markers
             r.drawRect(lx0, y, 2, kRulerH, Color{100, 200, 120, 200});
             r.drawRect(lx1 - 2, y, 2, kRulerH, Color{100, 200, 120, 200});
         }
@@ -627,17 +631,20 @@ void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, floa
     int endBar = static_cast<int>(endBeat / beatsPerBar) + 1;
 
     float scale = Theme::kSmallFontSize / f.pixelHeight();
+    float textH = Theme::kSmallFontSize;
+    float textY = y + (kRulerH - textH) * 0.5f;
+
     for (int bar = startBar; bar <= endBar; ++bar) {
-        float beatPos = bar * beatsPerBar;
+        float beatPos = static_cast<float>(bar * beatsPerBar);
         float px = x + beatPos * m_pixelsPerBeat - m_scrollX;
         r.drawRect(px, y, 1, kRulerH, Color{80, 80, 90, 255});
 
         if (bar >= 0 && (bar % barLabelEvery) == 0) {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%d", bar + 1);
-            float tx = px + 3;
+            float tx = px + 4;
             for (const char* p = buf; *p; ++p) {
-                auto g = f.getGlyph(*p, tx, y + 4, scale);
+                auto g = f.getGlyph(*p, tx, textY, scale);
                 r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                    g.u0, g.v0, g.u1, g.v1,
                                    Theme::textSecondary, f.textureId());
@@ -663,7 +670,7 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
     r.pushClip(x, y, kTrackHeaderW, h);
     int numTracks = m_project->numTracks();
     float scale = Theme::kSmallFontSize / f.pixelHeight();
-    float labelScale = (Theme::kSmallFontSize * 0.8f) / f.pixelHeight();
+    float smallScale = (Theme::kSmallFontSize * 0.85f) / f.pixelHeight();
 
     for (int t = 0; t < numTracks; ++t) {
         float ty = y + trackYOffset(t) - m_scrollY;
@@ -677,15 +684,15 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
             ? Color{50, 55, 65, 255} : Color{42, 42, 46, 255};
         r.drawRect(x, ty, kTrackHeaderW, kTrackRowH, bg);
 
-        // Color bar
+        // Color bar (left edge)
         Color col = Theme::trackColors[tr.colorIndex % Theme::kNumTrackColors];
-        r.drawRect(x + 2, ty + 2, 3, kTrackRowH - 4, col);
+        r.drawRect(x + 1, ty + 1, 4, kTrackRowH - 2, col);
 
-        // Track name
-        float tx = x + 8;
-        float textY = ty + (kTrackRowH - Theme::kSmallFontSize) * 0.5f;
-        float maxX = x + kTrackHeaderW - 48;
-        for (const char* p = tr.name.c_str(); *p && tx < maxX; ++p) {
+        // Track name (top row, y+4)
+        float tx = x + 10;
+        float textY = ty + 4;
+        float maxNameX = x + kTrackHeaderW - 6;
+        for (const char* p = tr.name.c_str(); *p && tx < maxNameX; ++p) {
             auto g = f.getGlyph(*p, tx, textY, scale);
             r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                g.u0, g.v0, g.u1, g.v1,
@@ -693,29 +700,39 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
             tx += g.xAdvance;
         }
 
-        // Expand/collapse auto lanes button (top-right)
+        // Button row (bottom area of main row, y offset ~30)
+        float btnRowY = ty + kTrackRowH - 22;
+        float btnH = 16.0f;
+        float btnGap = 4.0f;
+        float bx = x + 10;
+
+        // Expand/collapse auto lanes button [▶] / [▼]
+        float expW = 22.0f;
         bool expanded = m_expandedTracks.count(t) > 0;
-        float expX = x + kTrackHeaderW - 44;
-        float expY = ty + 2;
-        Color expBg = expanded ? Color{55, 60, 70, 255} : Color{48, 48, 52, 255};
-        r.drawRoundedRect(expX, expY, 18, 14, 2.0f, expBg, 4);
-        auto expG = f.getGlyph(expanded ? 'v' : '>', expX + 5, expY + 1, labelScale);
+        Color expBg = expanded ? Color{55, 65, 75, 255} : Color{48, 48, 52, 255};
+        r.drawRoundedRect(bx, btnRowY, expW, btnH, 3.0f, expBg, 4);
+        auto expG = f.getGlyph(expanded ? 'v' : '>', bx + 7, btnRowY + 2, smallScale);
         r.drawTexturedQuad(expG.x0, expG.y0, expG.x1 - expG.x0, expG.y1 - expG.y0,
                            expG.u0, expG.v0, expG.u1, expG.v1,
                            Color{180, 180, 190, 220}, f.textureId());
+        bx += expW + btnGap;
 
-        // S/A toggle (bottom-right)
+        // S/A toggle button [Session] / [Arr]
+        float saW = 36.0f;
         bool arrActive = tr.arrangementActive;
-        float btnX = x + kTrackHeaderW - 22;
-        float btnY = ty + kTrackRowH - 17;
-        Color btnBg = arrActive ? Color{80, 140, 80, 255} : Color{60, 60, 65, 255};
-        r.drawRoundedRect(btnX, btnY, 20, 14, 2.0f, btnBg, 4);
-        auto bg2 = f.getGlyph(arrActive ? 'A' : 'S', btnX + 6, btnY + 1, labelScale);
-        r.drawTexturedQuad(bg2.x0, bg2.y0, bg2.x1 - bg2.x0, bg2.y1 - bg2.y0,
-                           bg2.u0, bg2.v0, bg2.u1, bg2.v1,
-                           Color{255, 255, 255, 220}, f.textureId());
+        Color saBg = arrActive ? Color{60, 130, 70, 255} : Color{60, 60, 65, 255};
+        r.drawRoundedRect(bx, btnRowY, saW, btnH, 3.0f, saBg, 4);
+        const char* saLabel = arrActive ? "Arr" : "Ses";
+        float saX = bx + 4;
+        for (const char* p = saLabel; *p; ++p) {
+            auto g = f.getGlyph(*p, saX, btnRowY + 2, smallScale);
+            r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                               g.u0, g.v0, g.u1, g.v1,
+                               Color{255, 255, 255, 220}, f.textureId());
+            saX += g.xAdvance;
+        }
 
-        // Bottom border of main row
+        // Bottom border
         r.drawRect(x, ty + kTrackRowH - 1, kTrackHeaderW, 1, Color{60, 60, 65, 255});
 
         // Automation lane headers (when expanded)
@@ -729,10 +746,10 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
 
                 // Lane name
                 std::string name = autoLaneName(tr.automationLanes[li].target);
-                float lnx = x + 8;
+                float lnx = x + 10;
                 float lny = ly + (kAutoLaneH - Theme::kSmallFontSize * 0.8f) * 0.5f;
                 for (const char* p = name.c_str(); *p && lnx < x + kTrackHeaderW - 4; ++p) {
-                    auto g = f.getGlyph(*p, lnx, lny, labelScale);
+                    auto g = f.getGlyph(*p, lnx, lny, smallScale);
                     r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
                                        Color{160, 160, 180, 200}, f.textureId());

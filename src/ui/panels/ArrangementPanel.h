@@ -29,8 +29,8 @@ class ArrangementPanel : public Widget {
 public:
     // Layout constants
     static constexpr float kRulerH       = 24.0f;
-    static constexpr float kTrackRowH    = 40.0f;
-    static constexpr float kTrackHeaderW = 100.0f;
+    static constexpr float kTrackRowH    = 56.0f;
+    static constexpr float kTrackHeaderW = 150.0f;
     static constexpr float kScrollbarH   = 12.0f;
     static constexpr float kAutoLaneH    = 28.0f;
     static constexpr float kMinZoom      = 4.0f;
