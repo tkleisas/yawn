@@ -574,6 +574,7 @@ private:
 class FwNumberInput : public Widget {
 public:
     using ValueCallback = std::function<void(float)>;
+    using DragEndCallback = std::function<void(float)>; // receives drag start value
 
     FwNumberInput() = default;
 
@@ -582,6 +583,7 @@ public:
     void setRange(float mn, float mx) { m_min = mn; m_max = mx; }
     void setFormat(const std::string& fmt) { m_format = fmt; }
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setOnDragEnd(DragEndCallback cb) { m_onDragEnd = std::move(cb); }
     void setSensitivity(float s) { m_sensitivity = s; }
     void setSuffix(const std::string& s) { m_suffix = s; }
     bool isEditing() const { return m_editing; }
@@ -601,13 +603,18 @@ public:
         if (e.button != MouseButton::Left) return false;
         m_dragging = true;
         m_lastY = e.y;
+        m_dragStartValue = m_value;
         captureMouse();
         return true;
     }
 
     bool onMouseUp(MouseEvent&) override {
-        m_dragging = false;
-        releaseMouse();
+        if (m_dragging) {
+            m_dragging = false;
+            releaseMouse();
+            if (m_onDragEnd && m_value != m_dragStartValue)
+                m_onDragEnd(m_dragStartValue);
+        }
         return true;
     }
 
@@ -683,9 +690,11 @@ private:
     std::string m_format = "%.1f";
     std::string m_suffix;
     ValueCallback m_onChange;
+    DragEndCallback m_onDragEnd;
     bool m_hovered = false;
     bool m_dragging = false;
     float m_lastY = 0;
+    float m_dragStartValue = 0.0f;
     bool m_editing = false;
     char m_editText[16] = {};
     int  m_editLen = 0;

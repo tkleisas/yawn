@@ -381,8 +381,19 @@ void TransportPanel::tapTempo() {
                      - m_tapTimes[si % kTapHistorySize];
         double avg = total / n;
         double bpm = std::clamp(std::round(60.0 / avg * 100.0) / 100.0, 20.0, 999.0);
+        float oldBpm = m_bpmInput.value();
+        float newBpm = static_cast<float>(bpm);
         if (m_engine)
             m_engine->sendCommand(audio::TransportSetBPMMsg{bpm});
+        m_bpmInput.setValue(newBpm);
+        if (m_undoManager) {
+            m_undoManager->push({"Tap Tempo",
+                [this, oldBpm]{ m_bpmInput.setValue(oldBpm);
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(oldBpm)}); },
+                [this, newBpm]{ m_bpmInput.setValue(newBpm);
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(newBpm)}); },
+                "bpm"});
+        }
     }
 }
 

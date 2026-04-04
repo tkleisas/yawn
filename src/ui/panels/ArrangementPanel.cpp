@@ -161,10 +161,14 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             float lx1 = gridX + static_cast<float>(m_loopEnd) * m_pixelsPerBeat - m_scrollX;
             if (std::abs(e.x - lx0) < 5.0f) {
                 m_loopDragMode = LoopDragMode::DragStart;
+                m_loopDragOrigStart = m_loopStart;
+                m_loopDragOrigEnd = m_loopEnd;
                 return true;
             }
             if (std::abs(e.x - lx1) < 5.0f) {
                 m_loopDragMode = LoopDragMode::DragEnd;
+                m_loopDragOrigStart = m_loopStart;
+                m_loopDragOrigEnd = m_loopEnd;
                 return true;
             }
         }
@@ -213,9 +217,18 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             if (e.x >= saBtnX && e.x < saBtnX + saW &&
                 e.y >= btnRowY && e.y < btnRowY + btnH) {
                 auto& tr = m_project->track(track);
-                tr.arrangementActive = !tr.arrangementActive;
+                bool oldVal = tr.arrangementActive;
+                tr.arrangementActive = !oldVal;
                 if (m_onTrackArrToggle)
                     m_onTrackArrToggle(track, tr.arrangementActive);
+                if (m_undoManager) {
+                    m_undoManager->push({"Toggle Arrangement Active",
+                        [this, track, oldVal]{ m_project->track(track).arrangementActive = oldVal;
+                            if (m_onTrackArrToggle) m_onTrackArrToggle(track, oldVal); },
+                        [this, track, oldVal]{ m_project->track(track).arrangementActive = !oldVal;
+                            if (m_onTrackArrToggle) m_onTrackArrToggle(track, !oldVal); },
+                        ""});
+                }
                 return true;
             }
 
@@ -278,7 +291,24 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
 
             if (e.isRightButton() && hitPt >= 0) {
                 // Right-click: delete point
+                auto oldPt = lane.envelope.point(hitPt);
+                int ti = trackIdx, li = laneIdx;
                 lane.envelope.removePoint(hitPt);
+                if (m_undoManager) {
+                    m_undoManager->push({"Delete Automation Point",
+                        [this, ti, li, oldPt]{
+                            m_project->track(ti).automationLanes[li].envelope.addPoint(oldPt.time, oldPt.value);
+                        },
+                        [this, ti, li, oldPt]{
+                            auto& env = m_project->track(ti).automationLanes[li].envelope;
+                            for (int i = 0; i < env.pointCount(); ++i) {
+                                if (std::abs(env.point(i).time - oldPt.time) < 0.001 &&
+                                    std::abs(env.point(i).value - oldPt.value) < 0.001f) {
+                                    env.removePoint(i); break;
+                                }
+                            }
+                        }, ""});
+                }
                 return true;
             }
 
@@ -295,6 +325,22 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             } else {
                 // Add new point
                 lane.envelope.addPoint(clickBeat, clickVal);
+                if (m_undoManager) {
+                    int ti = trackIdx, li = laneIdx;
+                    m_undoManager->push({"Add Automation Point",
+                        [this, ti, li, clickBeat, clickVal]{
+                            auto& env = m_project->track(ti).automationLanes[li].envelope;
+                            for (int i = 0; i < env.pointCount(); ++i) {
+                                if (std::abs(env.point(i).time - clickBeat) < 0.001 &&
+                                    std::abs(env.point(i).value - clickVal) < 0.001f) {
+                                    env.removePoint(i); break;
+                                }
+                            }
+                        },
+                        [this, ti, li, clickBeat, clickVal]{
+                            m_project->track(ti).automationLanes[li].envelope.addPoint(clickBeat, clickVal);
+                        }, ""});
+                }
             }
             return true;
         }
@@ -362,6 +408,32 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
                     }
                 }
                 if (m_onClipChange) m_onClipChange(trackIdx);
+                if (m_undoManager) {
+                    int ti = trackIdx;
+                    m_undoManager->push({"Add Arrangement Clip",
+                        [this, ti, snapB]{
+                            auto& clips = m_project->track(ti).arrangementClips;
+                            for (auto it = clips.begin(); it != clips.end(); ++it) {
+                                if (std::abs(it->startBeat - snapB) < 0.001) {
+                                    clips.erase(it); break;
+                                }
+                            }
+                            m_project->updateArrangementLength();
+                            clearClipSelection();
+                        },
+                        [this, ti, snapB, len]{
+                            ArrangementClip nc2;
+                            nc2.type = ArrangementClip::Type::Midi;
+                            nc2.startBeat = snapB;
+                            nc2.lengthBeats = len;
+                            nc2.name = "Clip";
+                            nc2.midiClip = std::make_shared<midi::MidiClip>();
+                            nc2.midiClip->setLengthBeats(len);
+                            m_project->track(ti).arrangementClips.push_back(std::move(nc2));
+                            m_project->track(ti).sortArrangementClips();
+                            m_project->updateArrangementLength();
+                        }, ""});
+                }
             }
         }
         return true;
@@ -372,6 +444,16 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
 
 bool ArrangementPanel::onMouseUp(MouseEvent&) {
     if (m_loopDragMode != LoopDragMode::None) {
+        if (m_undoManager && (m_loopStart != m_loopDragOrigStart || m_loopEnd != m_loopDragOrigEnd)) {
+            double oldS = m_loopDragOrigStart, oldE = m_loopDragOrigEnd;
+            double newS = m_loopStart, newE = m_loopEnd;
+            m_undoManager->push({"Change Loop Range",
+                [this, oldS, oldE]{ m_loopStart = oldS; m_loopEnd = oldE;
+                    if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd); },
+                [this, newS, newE]{ m_loopStart = newS; m_loopEnd = newE;
+                    if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd); },
+                ""});
+        }
         m_loopDragMode = LoopDragMode::None;
         releaseMouse();
         return true;
@@ -383,6 +465,40 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
     }
     if (m_dragMode != DragMode::None) {
         if (m_dragMode == DragMode::AutoPoint) {
+            // Push undo for auto point move if it actually moved
+            if (m_undoManager && m_autoPointDragTrack >= 0 && m_autoPointDragLane >= 0) {
+                int ti = m_autoPointDragTrack, li = m_autoPointDragLane;
+                double origTime = m_autoPointDragOrigTime;
+                float origVal = m_autoPointDragOrigVal;
+                // Find current position of the dragged point
+                auto& lane = m_project->track(ti).automationLanes[li];
+                if (m_autoPointDragIdx >= 0 && m_autoPointDragIdx < lane.envelope.pointCount()) {
+                    auto pt = lane.envelope.point(m_autoPointDragIdx);
+                    double newTime = pt.time;
+                    float newVal = pt.value;
+                    if (std::abs(newTime - origTime) > 0.001 || std::abs(newVal - origVal) > 0.001f) {
+                        m_undoManager->push({"Move Automation Point",
+                            [this, ti, li, newTime, newVal, origTime, origVal]{
+                                auto& env = m_project->track(ti).automationLanes[li].envelope;
+                                for (int i = 0; i < env.pointCount(); ++i) {
+                                    if (std::abs(env.point(i).time - newTime) < 0.001 &&
+                                        std::abs(env.point(i).value - newVal) < 0.001f) {
+                                        env.movePoint(i, origTime, origVal); break;
+                                    }
+                                }
+                            },
+                            [this, ti, li, newTime, newVal, origTime, origVal]{
+                                auto& env = m_project->track(ti).automationLanes[li].envelope;
+                                for (int i = 0; i < env.pointCount(); ++i) {
+                                    if (std::abs(env.point(i).time - origTime) < 0.001 &&
+                                        std::abs(env.point(i).value - origVal) < 0.001f) {
+                                        env.movePoint(i, newTime, newVal); break;
+                                    }
+                                }
+                            }, ""});
+                    }
+                }
+            }
             m_autoPointDragIdx = -1;
             m_autoPointDragLane = -1;
             m_autoPointDragTrack = -1;
@@ -394,6 +510,90 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
             if (m_onClipChange) {
                 m_onClipChange(affected);
                 if (crossTrack) m_onClipChange(m_dragOrigTrack);
+            }
+            // Push undo for clip move/resize
+            if (m_undoManager && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
+                auto& clips = m_project->track(m_selClipTrack).arrangementClips;
+                if (m_selClipIdx < static_cast<int>(clips.size())) {
+                    auto& c = clips[m_selClipIdx];
+                    double newStart = c.startBeat;
+                    double newLen = c.lengthBeats;
+                    int newTrack = m_selClipTrack;
+                    double origStart = m_dragOrigStart;
+                    double origLen = m_dragOrigLength;
+                    int origTrack = m_dragOrigTrack >= 0 ? m_dragOrigTrack : m_selClipTrack;
+                    bool changed = (newStart != origStart || newLen != origLen || newTrack != origTrack);
+                    if (changed) {
+                        if (crossTrack) {
+                            // Cross-track move: clip was removed from origTrack, added to newTrack
+                            ArrangementClip snapshot = c;
+                            m_undoManager->push({"Move Arrangement Clip",
+                                [this, origTrack, origStart, origLen, newTrack, newStart, snapshot]{
+                                    // Remove from new track
+                                    auto& dst = m_project->track(newTrack).arrangementClips;
+                                    for (auto it = dst.begin(); it != dst.end(); ++it) {
+                                        if (std::abs(it->startBeat - newStart) < 0.001) {
+                                            dst.erase(it); break;
+                                        }
+                                    }
+                                    // Add back to original track
+                                    ArrangementClip restored = snapshot;
+                                    restored.startBeat = origStart;
+                                    restored.lengthBeats = origLen;
+                                    m_project->track(origTrack).arrangementClips.push_back(std::move(restored));
+                                    m_project->track(origTrack).sortArrangementClips();
+                                    m_project->track(newTrack).sortArrangementClips();
+                                    m_project->updateArrangementLength();
+                                    clearClipSelection();
+                                },
+                                [this, origTrack, origStart, newTrack, newStart, newLen, snapshot]{
+                                    // Remove from original track
+                                    auto& src = m_project->track(origTrack).arrangementClips;
+                                    for (auto it = src.begin(); it != src.end(); ++it) {
+                                        if (std::abs(it->startBeat - origStart) < 0.001) {
+                                            src.erase(it); break;
+                                        }
+                                    }
+                                    // Add to new track
+                                    ArrangementClip moved = snapshot;
+                                    moved.startBeat = newStart;
+                                    moved.lengthBeats = newLen;
+                                    m_project->track(newTrack).arrangementClips.push_back(std::move(moved));
+                                    m_project->track(newTrack).sortArrangementClips();
+                                    m_project->track(origTrack).sortArrangementClips();
+                                    m_project->updateArrangementLength();
+                                    clearClipSelection();
+                                }, ""});
+                        } else {
+                            // Same-track move or resize
+                            m_undoManager->push({"Move/Resize Arrangement Clip",
+                                [this, newTrack, newStart, origStart, origLen]{
+                                    auto& cs = m_project->track(newTrack).arrangementClips;
+                                    for (auto& cl : cs) {
+                                        if (std::abs(cl.startBeat - newStart) < 0.001) {
+                                            cl.startBeat = origStart;
+                                            cl.lengthBeats = origLen;
+                                            break;
+                                        }
+                                    }
+                                    m_project->track(newTrack).sortArrangementClips();
+                                    m_project->updateArrangementLength();
+                                },
+                                [this, newTrack, origStart, newStart, newLen]{
+                                    auto& cs = m_project->track(newTrack).arrangementClips;
+                                    for (auto& cl : cs) {
+                                        if (std::abs(cl.startBeat - origStart) < 0.001) {
+                                            cl.startBeat = newStart;
+                                            cl.lengthBeats = newLen;
+                                            break;
+                                        }
+                                    }
+                                    m_project->track(newTrack).sortArrangementClips();
+                                    m_project->updateArrangementLength();
+                                }, ""});
+                        }
+                    }
+                }
             }
         }
         m_dragMode = DragMode::None;
@@ -589,10 +789,29 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
         auto& clips = m_project->track(m_selClipTrack).arrangementClips;
         if (m_selClipIdx < static_cast<int>(clips.size())) {
             int t = m_selClipTrack;
+            ArrangementClip backup = clips[m_selClipIdx];
             clips.erase(clips.begin() + m_selClipIdx);
             clearClipSelection();
             m_project->updateArrangementLength();
             if (m_onClipChange) m_onClipChange(t);
+            if (m_undoManager) {
+                m_undoManager->push({"Delete Arrangement Clip",
+                    [this, t, backup]{
+                        m_project->track(t).arrangementClips.push_back(backup);
+                        m_project->track(t).sortArrangementClips();
+                        m_project->updateArrangementLength();
+                    },
+                    [this, t, sb = backup.startBeat]{
+                        auto& cs = m_project->track(t).arrangementClips;
+                        for (auto it = cs.begin(); it != cs.end(); ++it) {
+                            if (std::abs(it->startBeat - sb) < 0.001) {
+                                cs.erase(it); break;
+                            }
+                        }
+                        m_project->updateArrangementLength();
+                        clearClipSelection();
+                    }, ""});
+            }
             return true;
         }
     }
@@ -607,18 +826,48 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
             clips.push_back(std::move(dup));
             m_project->track(m_selClipTrack).sortArrangementClips();
             m_project->updateArrangementLength();
+            int t = m_selClipTrack;
             for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
                 if (std::abs(clips[i].startBeat - dupStart) < 0.001) {
                     m_selClipIdx = i; break;
                 }
             }
-            if (m_onClipChange) m_onClipChange(m_selClipTrack);
+            if (m_onClipChange) m_onClipChange(t);
+            if (m_undoManager) {
+                m_undoManager->push({"Duplicate Arrangement Clip",
+                    [this, t, dupStart]{
+                        auto& cs = m_project->track(t).arrangementClips;
+                        for (auto it = cs.begin(); it != cs.end(); ++it) {
+                            if (std::abs(it->startBeat - dupStart) < 0.001) {
+                                cs.erase(it); break;
+                            }
+                        }
+                        m_project->updateArrangementLength();
+                        clearClipSelection();
+                    },
+                    [this, t, dupStart, origIdx = m_selClipIdx - (m_selClipIdx > 0 ? 0 : 0)]{
+                        auto& cs = m_project->track(t).arrangementClips;
+                        // find original clip near the duplicated position minus its length
+                        for (auto& c : cs) {
+                            if (std::abs(c.endBeat() - dupStart) < 0.001) {
+                                ArrangementClip dup2 = c;
+                                dup2.startBeat = dupStart;
+                                cs.push_back(std::move(dup2));
+                                m_project->track(t).sortArrangementClips();
+                                m_project->updateArrangementLength();
+                                break;
+                            }
+                        }
+                    }, ""});
+            }
             return true;
         }
     }
 
     // L = toggle loop
     if (e.keyCode == 'l') {
+        bool wasEnabled = m_loopEnabled;
+        double oldStart = m_loopStart, oldEnd = m_loopEnd;
         m_loopEnabled = !m_loopEnabled;
         if (m_loopEnabled && m_loopEnd <= m_loopStart) {
             double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
@@ -627,6 +876,16 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
             m_loopEnd = m_loopStart + beatsPerBar * 4.0;
         }
         if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        if (m_undoManager) {
+            bool newEnabled = m_loopEnabled;
+            double newStart = m_loopStart, newEnd = m_loopEnd;
+            m_undoManager->push({"Toggle Loop",
+                [this, wasEnabled, oldStart, oldEnd]{ m_loopEnabled = wasEnabled; m_loopStart = oldStart; m_loopEnd = oldEnd;
+                    if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd); },
+                [this, newEnabled, newStart, newEnd]{ m_loopEnabled = newEnabled; m_loopStart = newStart; m_loopEnd = newEnd;
+                    if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd); },
+                ""});
+        }
         return true;
     }
 

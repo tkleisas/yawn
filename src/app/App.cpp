@@ -39,6 +39,49 @@
 
 namespace yawn {
 
+// Factory helpers for undo — create device by name (loses parameters but restores type)
+static std::unique_ptr<instruments::Instrument> makeInstrumentByName(const std::string& n) {
+    if (n == "Subtractive Synth") return std::make_unique<instruments::SubtractiveSynth>();
+    if (n == "FM Synth")          return std::make_unique<instruments::FMSynth>();
+    if (n == "Sampler")           return std::make_unique<instruments::Sampler>();
+    if (n == "Drum Rack")         return std::make_unique<instruments::DrumRack>();
+    if (n == "DrumSlop")          return std::make_unique<instruments::DrumSlop>();
+    if (n == "Karplus-Strong")    return std::make_unique<instruments::KarplusStrong>();
+    if (n == "Wavetable Synth")   return std::make_unique<instruments::WavetableSynth>();
+    if (n == "Granular Synth")    return std::make_unique<instruments::GranularSynth>();
+    if (n == "Vocoder")           return std::make_unique<instruments::Vocoder>();
+    if (n == "Multisampler")      return std::make_unique<instruments::Multisampler>();
+    if (n == "Instrument Rack")   return std::make_unique<instruments::InstrumentRack>();
+    return nullptr;
+}
+
+static std::unique_ptr<effects::AudioEffect> makeAudioEffectByName(const std::string& n) {
+    if (n == "Reverb")            return std::make_unique<effects::Reverb>();
+    if (n == "Delay")             return std::make_unique<effects::Delay>();
+    if (n == "EQ")                return std::make_unique<effects::EQ>();
+    if (n == "Compressor")        return std::make_unique<effects::Compressor>();
+    if (n == "Filter")            return std::make_unique<effects::Filter>();
+    if (n == "Chorus")            return std::make_unique<effects::Chorus>();
+    if (n == "Distortion")        return std::make_unique<effects::Distortion>();
+    if (n == "Tape Emulation")    return std::make_unique<effects::TapeEmulation>();
+    if (n == "Amp Simulator")     return std::make_unique<effects::AmpSimulator>();
+    if (n == "Oscilloscope")      return std::make_unique<effects::Oscilloscope>();
+    if (n == "Spectrum Analyzer" || n == "Spectrum") return std::make_unique<effects::SpectrumAnalyzer>();
+    return nullptr;
+}
+
+static std::unique_ptr<midi::MidiEffect> makeMidiEffectByName(const std::string& n) {
+    if (n == "Arpeggiator")    return std::make_unique<midi::Arpeggiator>();
+    if (n == "Chord")          return std::make_unique<midi::Chord>();
+    if (n == "Scale")          return std::make_unique<midi::Scale>();
+    if (n == "Note Length")    return std::make_unique<midi::NoteLength>();
+    if (n == "Velocity")       return std::make_unique<midi::VelocityEffect>();
+    if (n == "Random" || n == "MIDI Random") return std::make_unique<midi::MidiRandom>();
+    if (n == "Pitch" || n == "MIDI Pitch")   return std::make_unique<midi::MidiPitch>();
+    if (n == "LFO")            return std::make_unique<midi::LFO>();
+    return nullptr;
+}
+
 App::~App() {
     shutdown();
 }
@@ -126,6 +169,15 @@ void App::setupMenuBar() {
             m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
             m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{idx, m_project.track(idx).audioInputCh});
             markDirty();
+            m_undoManager.push({"Add Audio Track",
+                [this]{ m_project.removeLastTrack(); markDirty(); },
+                [this]{
+                    int i = m_project.numTracks();
+                    m_project.addTrack("Audio " + std::to_string(i + 1), Track::Type::Audio);
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 0});
+                    m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, m_project.track(i).audioInputCh});
+                    markDirty();
+                }, ""});
             LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
         }},
         {"Add MIDI Track",   "",  [this]() {
@@ -134,6 +186,18 @@ void App::setupMenuBar() {
             m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
             m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
             markDirty();
+            m_undoManager.push({"Add MIDI Track",
+                [this, idx]{
+                    m_audioEngine.setInstrument(idx, nullptr);
+                    m_project.removeLastTrack(); markDirty();
+                },
+                [this]{
+                    int i = m_project.numTracks();
+                    m_project.addTrack("MIDI " + std::to_string(i + 1), Track::Type::Midi);
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 1});
+                    m_audioEngine.setInstrument(i, std::make_unique<instruments::SubtractiveSynth>());
+                    markDirty();
+                }, ""});
             LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
         }},
         {"Delete Track",     "",  nullptr, true},
@@ -242,7 +306,7 @@ void App::buildWidgetTree() {
     });
 
     // Init arrangement panel
-    m_arrangementPanel->init(&m_project, &m_audioEngine);
+    m_arrangementPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_arrangementPanel->setOnTrackClick([this](int t) {
         m_selectedTrack = t;
         m_sessionPanel->setSelectedTrack(t);
@@ -366,156 +430,107 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 
     // Separator + Instruments submenu
     std::vector<ui::ContextMenu::Item> instrItems;
-    instrItems.push_back({"SubSynth", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::SubtractiveSynth>());
-        markDirty();
-    }});
-    instrItems.push_back({"FM Synth", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::FMSynth>());
-        markDirty();
-    }});
-    instrItems.push_back({"Sampler", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Sampler>());
-        markDirty();
-    }});
-    instrItems.push_back({"Drum Rack", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::DrumRack>());
-        markDirty();
-    }});
-    instrItems.push_back({"DrumSlop", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::DrumSlop>());
-        markDirty();
-    }});
-    instrItems.push_back({"Karplus-Strong", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::KarplusStrong>());
-        markDirty();
-    }});
-    instrItems.push_back({"Wavetable Synth", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::WavetableSynth>());
-        markDirty();
-    }});
-    instrItems.push_back({"Granular Synth", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::GranularSynth>());
-        markDirty();
-    }});
-    instrItems.push_back({"Vocoder", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Vocoder>());
-        markDirty();
-    }});
-    instrItems.push_back({"Multisampler", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::Multisampler>());
-        markDirty();
-    }});
-    instrItems.push_back({"Instrument Rack", [this, trackIndex]() {
-        m_project.track(trackIndex).type = Track::Type::Midi;
-        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-        m_audioEngine.setInstrument(trackIndex, std::make_unique<instruments::InstrumentRack>());
-        markDirty();
-    }});
+    auto addInstrItem = [&](const char* label, auto factory) {
+        instrItems.push_back({label, [this, trackIndex, label, factory]() {
+            auto oldType = m_project.track(trackIndex).type;
+            std::string oldInstr;
+            auto* inst = m_audioEngine.instrument(trackIndex);
+            if (inst) oldInstr = inst->name();
+            uint8_t oldTypeVal = (oldType == Track::Type::Audio) ? 0 : 1;
+            m_project.track(trackIndex).type = Track::Type::Midi;
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+            m_audioEngine.setInstrument(trackIndex, factory());
+            markDirty();
+            std::string newInstr = label;
+            m_undoManager.push({"Set Instrument: " + newInstr,
+                [this, trackIndex, oldType, oldTypeVal, oldInstr]{
+                    m_project.track(trackIndex).type = oldType;
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, oldTypeVal});
+                    m_audioEngine.setInstrument(trackIndex, makeInstrumentByName(oldInstr));
+                    markDirty();
+                },
+                [this, trackIndex, factory]{
+                    m_project.track(trackIndex).type = Track::Type::Midi;
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+                    m_audioEngine.setInstrument(trackIndex, factory());
+                    markDirty();
+                }, ""});
+        }});
+    };
+    addInstrItem("SubSynth", [](){ return std::make_unique<instruments::SubtractiveSynth>(); });
+    addInstrItem("FM Synth", [](){ return std::make_unique<instruments::FMSynth>(); });
+    addInstrItem("Sampler", [](){ return std::make_unique<instruments::Sampler>(); });
+    addInstrItem("Drum Rack", [](){ return std::make_unique<instruments::DrumRack>(); });
+    addInstrItem("DrumSlop", [](){ return std::make_unique<instruments::DrumSlop>(); });
+    addInstrItem("Karplus-Strong", [](){ return std::make_unique<instruments::KarplusStrong>(); });
+    addInstrItem("Wavetable Synth", [](){ return std::make_unique<instruments::WavetableSynth>(); });
+    addInstrItem("Granular Synth", [](){ return std::make_unique<instruments::GranularSynth>(); });
+    addInstrItem("Vocoder", [](){ return std::make_unique<instruments::Vocoder>(); });
+    addInstrItem("Multisampler", [](){ return std::make_unique<instruments::Multisampler>(); });
+    addInstrItem("Instrument Rack", [](){ return std::make_unique<instruments::InstrumentRack>(); });
     items.push_back({"Add Instrument", nullptr, true, true, std::move(instrItems)});
 
     // Audio effects submenu
     std::vector<ui::ContextMenu::Item> fxItems;
-    fxItems.push_back({"Reverb", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Reverb>());
-        markDirty();
-    }});
-    fxItems.push_back({"Delay", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Delay>());
-        markDirty();
-    }});
-    fxItems.push_back({"EQ", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::EQ>());
-        markDirty();
-    }});
-    fxItems.push_back({"Compressor", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Compressor>());
-        markDirty();
-    }});
-    fxItems.push_back({"Filter", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Filter>());
-        markDirty();
-    }});
-    fxItems.push_back({"Chorus", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Chorus>());
-        markDirty();
-    }});
-    fxItems.push_back({"Distortion", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Distortion>());
-        markDirty();
-    }});
-    fxItems.push_back({"Tape Emulation", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::TapeEmulation>());
-        markDirty();
-    }});
-    fxItems.push_back({"Amp Simulator", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::AmpSimulator>());
-        markDirty();
-    }});
-    fxItems.push_back({"Oscilloscope", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::Oscilloscope>());
-        markDirty();
-    }});
-    fxItems.push_back({"Spectrum", [this, trackIndex]() {
-        m_audioEngine.mixer().trackEffects(trackIndex).append(std::make_unique<effects::SpectrumAnalyzer>());
-        markDirty();
-    }});
+    auto addFxItem = [&](const char* label, auto factory) {
+        fxItems.push_back({label, [this, trackIndex, label, factory]() {
+            auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
+            chain.append(factory());
+            int slot = chain.count() - 1;
+            markDirty();
+            std::string fxName = label;
+            m_undoManager.push({"Add Effect: " + fxName,
+                [this, trackIndex, slot]{
+                    m_audioEngine.mixer().trackEffects(trackIndex).remove(slot);
+                    markDirty();
+                },
+                [this, trackIndex, factory]{
+                    m_audioEngine.mixer().trackEffects(trackIndex).append(factory());
+                    markDirty();
+                }, ""});
+        }});
+    };
+    addFxItem("Reverb",      [](){ return std::make_unique<effects::Reverb>(); });
+    addFxItem("Delay",       [](){ return std::make_unique<effects::Delay>(); });
+    addFxItem("EQ",          [](){ return std::make_unique<effects::EQ>(); });
+    addFxItem("Compressor",  [](){ return std::make_unique<effects::Compressor>(); });
+    addFxItem("Filter",      [](){ return std::make_unique<effects::Filter>(); });
+    addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
+    addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
+    addFxItem("Tape Emulation", [](){ return std::make_unique<effects::TapeEmulation>(); });
+    addFxItem("Amp Simulator",  [](){ return std::make_unique<effects::AmpSimulator>(); });
+    addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
+    addFxItem("Spectrum",       [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
     items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
 
     // MIDI effects submenu
     std::vector<ui::ContextMenu::Item> midiItems;
-    midiItems.push_back({"Arpeggiator", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Arpeggiator>());
-        markDirty();
-    }});
-    midiItems.push_back({"Chord", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Chord>());
-        markDirty();
-    }});
-    midiItems.push_back({"Scale", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::Scale>());
-        markDirty();
-    }});
-    midiItems.push_back({"Note Length", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::NoteLength>());
-        markDirty();
-    }});
-    midiItems.push_back({"Velocity", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::VelocityEffect>());
-        markDirty();
-    }});
-    midiItems.push_back({"Random", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiRandom>());
-        markDirty();
-    }});
-    midiItems.push_back({"Pitch", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiPitch>());
-        markDirty();
-    }});
-    midiItems.push_back({"LFO", [this, trackIndex]() {
-        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::LFO>());
-        markDirty();
-    }});
+    auto addMidiItem = [&](const char* label, auto factory) {
+        midiItems.push_back({label, [this, trackIndex, label, factory]() {
+            auto& chain = m_audioEngine.midiEffectChain(trackIndex);
+            chain.addEffect(factory());
+            int slot = chain.count() - 1;
+            markDirty();
+            std::string fxName = label;
+            m_undoManager.push({"Add MIDI Effect: " + fxName,
+                [this, trackIndex, slot]{
+                    m_audioEngine.midiEffectChain(trackIndex).removeEffect(slot);
+                    markDirty();
+                },
+                [this, trackIndex, factory]{
+                    m_audioEngine.midiEffectChain(trackIndex).addEffect(factory());
+                    markDirty();
+                }, ""});
+        }});
+    };
+    addMidiItem("Arpeggiator", [](){ return std::make_unique<midi::Arpeggiator>(); });
+    addMidiItem("Chord",       [](){ return std::make_unique<midi::Chord>(); });
+    addMidiItem("Scale",       [](){ return std::make_unique<midi::Scale>(); });
+    addMidiItem("Note Length", [](){ return std::make_unique<midi::NoteLength>(); });
+    addMidiItem("Velocity",    [](){ return std::make_unique<midi::VelocityEffect>(); });
+    addMidiItem("Random",      [](){ return std::make_unique<midi::MidiRandom>(); });
+    addMidiItem("Pitch",       [](){ return std::make_unique<midi::MidiPitch>(); });
+    addMidiItem("LFO",         [](){ return std::make_unique<midi::LFO>(); });
     items.push_back({"Add MIDI Effect", nullptr, false, true, std::move(midiItems)});
 
     // Record quantize submenu
@@ -572,36 +587,106 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     items.push_back({"Cut", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && s->audioClip) {
+            auto backup = s->audioClip->clone();
             m_clipboard.clear();
             m_clipboard.type = ClipboardData::Type::Audio;
             m_clipboard.audioClip = s->audioClip->clone();
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             s->audioClip.reset();
+            markDirty();
+            m_undoManager.push({"Cut Audio Clip",
+                [this, trackIndex, sceneIndex, b = std::shared_ptr<audio::Clip>(std::move(backup))]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (s2) { s2->audioClip = b->clone(); markDirty(); }
+                },
+                [this, trackIndex, sceneIndex]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (s2) { m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                              s2->audioClip.reset(); markDirty(); }
+                }, ""});
         } else if (s && s->midiClip) {
+            auto backup = s->midiClip->clone();
             m_clipboard.clear();
             m_clipboard.type = ClipboardData::Type::Midi;
             m_clipboard.midiClip = s->midiClip->clone();
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
             s->midiClip.reset();
+            markDirty();
+            m_undoManager.push({"Cut MIDI Clip",
+                [this, trackIndex, sceneIndex, b = std::shared_ptr<midi::MidiClip>(std::move(backup))]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (s2) { s2->midiClip = b->clone(); markDirty(); }
+                },
+                [this, trackIndex, sceneIndex]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (s2) { m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+                              s2->midiClip.reset(); markDirty(); }
+                }, ""});
         }
-        markDirty();
     }, false, hasClip});
 
     items.push_back({"Paste", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (!s) return;
+        std::shared_ptr<audio::Clip> oldAudio;
+        std::shared_ptr<midi::MidiClip> oldMidi;
+        if (s->audioClip) oldAudio.reset(s->audioClip->clone().release());
+        if (s->midiClip) oldMidi.reset(s->midiClip->clone().release());
         if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
             s->clear();
             s->audioClip = m_clipboard.audioClip->clone();
+            markDirty();
+            auto pc = m_clipboard.audioClip->clone();
+            m_undoManager.push({"Paste Audio Clip",
+                [this, trackIndex, sceneIndex, oldAudio, oldMidi]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2) return;
+                    m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+                    s2->clear();
+                    if (oldAudio) s2->audioClip = oldAudio->clone();
+                    if (oldMidi) s2->midiClip = oldMidi->clone();
+                    markDirty();
+                },
+                [this, trackIndex, sceneIndex, p = std::shared_ptr<audio::Clip>(std::move(pc))]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2) return;
+                    m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+                    s2->clear();
+                    s2->audioClip = p->clone();
+                    markDirty();
+                }, ""});
         } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
             s->clear();
             s->midiClip = m_clipboard.midiClip->clone();
+            markDirty();
+            auto pc = m_clipboard.midiClip->clone();
+            m_undoManager.push({"Paste MIDI Clip",
+                [this, trackIndex, sceneIndex, oldAudio, oldMidi]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2) return;
+                    m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+                    s2->clear();
+                    if (oldAudio) s2->audioClip = oldAudio->clone();
+                    if (oldMidi) s2->midiClip = oldMidi->clone();
+                    markDirty();
+                },
+                [this, trackIndex, sceneIndex, p = std::shared_ptr<midi::MidiClip>(std::move(pc))]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2) return;
+                    m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+                    s2->clear();
+                    s2->midiClip = p->clone();
+                    markDirty();
+                }, ""});
         }
-        markDirty();
     }, false, hasClipboard});
 
     items.push_back({"Duplicate", [this, trackIndex, sceneIndex]() {
@@ -612,9 +697,24 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             if (dst && dst->empty()) {
                 if (src->audioClip) dst->audioClip = src->audioClip->clone();
                 else if (src->midiClip) dst->midiClip = src->midiClip->clone();
+                int destScene = s;
                 m_selectedScene = s;
                 m_sessionPanel->setSelectedScene(s);
                 markDirty();
+                m_undoManager.push({"Duplicate Clip",
+                    [this, trackIndex, destScene]{
+                        auto* s2 = m_project.getSlot(trackIndex, destScene);
+                        if (s2) { s2->clear(); markDirty(); }
+                    },
+                    [this, trackIndex, sceneIndex, destScene]{
+                        auto* src2 = m_project.getSlot(trackIndex, sceneIndex);
+                        auto* dst2 = m_project.getSlot(trackIndex, destScene);
+                        if (src2 && dst2) {
+                            if (src2->audioClip) dst2->audioClip = src2->audioClip->clone();
+                            else if (src2->midiClip) dst2->midiClip = src2->midiClip->clone();
+                            markDirty();
+                        }
+                    }, ""});
                 break;
             }
         }
@@ -645,10 +745,30 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     items.push_back({"Delete", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && !s->empty()) {
+            std::shared_ptr<audio::Clip> oldAudio;
+            std::shared_ptr<midi::MidiClip> oldMidi;
+            if (s->audioClip) oldAudio.reset(s->audioClip->clone().release());
+            if (s->midiClip) oldMidi.reset(s->midiClip->clone().release());
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
             s->clear();
             markDirty();
+            m_undoManager.push({"Delete Clip",
+                [this, trackIndex, sceneIndex, oldAudio, oldMidi]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2) return;
+                    if (oldAudio) s2->audioClip = oldAudio->clone();
+                    if (oldMidi) s2->midiClip = oldMidi->clone();
+                    markDirty();
+                },
+                [this, trackIndex, sceneIndex]{
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2) return;
+                    m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
+                    s2->clear();
+                    markDirty();
+                }, ""});
         }
     }, false, hasClip});
 
@@ -730,8 +850,8 @@ bool App::init() {
     m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine, &m_undoManager);
-    m_transportPanel->init(&m_project, &m_audioEngine);
-    m_returnMasterPanel->init(&m_project, &m_audioEngine);
+    m_transportPanel->init(&m_project, &m_audioEngine, &m_undoManager);
+    m_returnMasterPanel->init(&m_project, &m_audioEngine, &m_undoManager);
 
     m_settings = util::AppSettings::load();
 
@@ -796,43 +916,97 @@ bool App::init() {
     // Wire up detail panel remove device callback
     m_detailPanel->setOnRemoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int chainIndex) {
         if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+        int t = m_selectedTrack;
         switch (type) {
-            case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
-                m_audioEngine.midiEffectChain(m_selectedTrack).removeEffect(chainIndex);
-                // Send all-notes-off (CC 123) to clear any stuck notes
+            case ui::fw::DetailPanelWidget::DeviceType::MidiFx: {
+                auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+                std::string fxName = fx ? fx->name() : "";
+                m_audioEngine.midiEffectChain(t).removeEffect(chainIndex);
                 m_audioEngine.sendCommand(audio::SendMidiToTrackMsg{
-                    m_selectedTrack,
-                    (uint8_t)midi::MidiMessage::Type::ControlChange,
-                    0, 0, 0, 0, 123});
-                LOG_INFO("MIDI", "Removed MIDI effect %d from track %d", chainIndex, m_selectedTrack + 1);
+                    t, (uint8_t)midi::MidiMessage::Type::ControlChange, 0, 0, 0, 0, 123});
+                LOG_INFO("MIDI", "Removed MIDI effect %d from track %d", chainIndex, t + 1);
+                m_undoManager.push({"Remove MIDI Effect",
+                    [this, t, chainIndex, fxName]{
+                        auto inst = makeMidiEffectByName(fxName);
+                        if (inst) {
+                            auto& chain = m_audioEngine.midiEffectChain(t);
+                            chain.addEffect(std::move(inst));
+                            // Move to original position
+                            for (int i = chain.count() - 1; i > chainIndex; --i)
+                                chain.moveEffect(i, i - 1);
+                        }
+                        m_detailPanel->clear(); markDirty();
+                    },
+                    [this, t, chainIndex]{
+                        m_audioEngine.midiEffectChain(t).removeEffect(chainIndex);
+                        m_detailPanel->clear(); markDirty();
+                    }, ""});
                 break;
-            case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
-                m_audioEngine.mixer().trackEffects(m_selectedTrack).remove(chainIndex);
-                LOG_INFO("Audio", "Removed audio effect %d from track %d", chainIndex, m_selectedTrack + 1);
+            }
+            case ui::fw::DetailPanelWidget::DeviceType::AudioFx: {
+                auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+                std::string fxName = fx ? fx->name() : "";
+                m_audioEngine.mixer().trackEffects(t).remove(chainIndex);
+                LOG_INFO("Audio", "Removed audio effect %d from track %d", chainIndex, t + 1);
+                m_undoManager.push({"Remove Audio Effect",
+                    [this, t, chainIndex, fxName]{
+                        auto inst = makeAudioEffectByName(fxName);
+                        if (inst) {
+                            auto& chain = m_audioEngine.mixer().trackEffects(t);
+                            chain.insert(chainIndex, std::move(inst));
+                        }
+                        m_detailPanel->clear(); markDirty();
+                    },
+                    [this, t, chainIndex]{
+                        m_audioEngine.mixer().trackEffects(t).remove(chainIndex);
+                        m_detailPanel->clear(); markDirty();
+                    }, ""});
                 break;
+            }
             default:
                 break;
         }
-        m_detailPanel->clear();  // Force rebuild on next frame
+        m_detailPanel->clear();
         markDirty();
     });
 
     m_detailPanel->setOnMoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int fromIdx, int toIdx) {
         if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+        int t = m_selectedTrack;
         switch (type) {
             case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
-                m_audioEngine.midiEffectChain(m_selectedTrack).moveEffect(fromIdx, toIdx);
-                m_audioEngine.sendCommand(audio::ResetMidiEffectChainMsg{m_selectedTrack});
-                LOG_INFO("MIDI", "Moved MIDI effect %d to %d on track %d", fromIdx, toIdx, m_selectedTrack + 1);
+                m_audioEngine.midiEffectChain(t).moveEffect(fromIdx, toIdx);
+                m_audioEngine.sendCommand(audio::ResetMidiEffectChainMsg{t});
+                LOG_INFO("MIDI", "Moved MIDI effect %d to %d on track %d", fromIdx, toIdx, t + 1);
+                m_undoManager.push({"Move MIDI Effect",
+                    [this, t, fromIdx, toIdx]{
+                        m_audioEngine.midiEffectChain(t).moveEffect(toIdx, fromIdx);
+                        m_audioEngine.sendCommand(audio::ResetMidiEffectChainMsg{t});
+                        m_detailPanel->clear(); markDirty();
+                    },
+                    [this, t, fromIdx, toIdx]{
+                        m_audioEngine.midiEffectChain(t).moveEffect(fromIdx, toIdx);
+                        m_audioEngine.sendCommand(audio::ResetMidiEffectChainMsg{t});
+                        m_detailPanel->clear(); markDirty();
+                    }, ""});
                 break;
             case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
-                m_audioEngine.mixer().trackEffects(m_selectedTrack).moveEffect(fromIdx, toIdx);
-                LOG_INFO("Audio", "Moved audio effect %d to %d on track %d", fromIdx, toIdx, m_selectedTrack + 1);
+                m_audioEngine.mixer().trackEffects(t).moveEffect(fromIdx, toIdx);
+                LOG_INFO("Audio", "Moved audio effect %d to %d on track %d", fromIdx, toIdx, t + 1);
+                m_undoManager.push({"Move Audio Effect",
+                    [this, t, fromIdx, toIdx]{
+                        m_audioEngine.mixer().trackEffects(t).moveEffect(toIdx, fromIdx);
+                        m_detailPanel->clear(); markDirty();
+                    },
+                    [this, t, fromIdx, toIdx]{
+                        m_audioEngine.mixer().trackEffects(t).moveEffect(fromIdx, toIdx);
+                        m_detailPanel->clear(); markDirty();
+                    }, ""});
                 break;
             default:
                 break;
         }
-        m_detailPanel->clear();  // Force rebuild on next frame
+        m_detailPanel->clear();
         markDirty();
     });
 
@@ -1179,59 +1353,150 @@ void App::processEvents() {
                             break;
                         }
                         case SDLK_X: { // Cut clip
-                            auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                            int ct = m_selectedTrack, cs = m_selectedScene;
+                            auto* slot = m_project.getSlot(ct, cs);
                             if (slot && slot->audioClip) {
+                                auto backup = slot->audioClip->clone();
                                 m_clipboard.clear();
                                 m_clipboard.type = ClipboardData::Type::Audio;
                                 m_clipboard.audioClip = slot->audioClip->clone();
-                                m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                                m_audioEngine.sendCommand(audio::StopClipMsg{ct});
                                 slot->audioClip.reset();
                                 markDirty();
+                                m_undoManager.push({"Cut Audio Clip",
+                                    [this, ct, cs, b = std::shared_ptr<audio::Clip>(std::move(backup))]{
+                                        auto* s = m_project.getSlot(ct, cs);
+                                        if (s) { s->audioClip = b->clone(); markDirty(); }
+                                    },
+                                    [this, ct, cs]{
+                                        auto* s = m_project.getSlot(ct, cs);
+                                        if (s) { m_audioEngine.sendCommand(audio::StopClipMsg{ct});
+                                                  s->audioClip.reset(); markDirty(); }
+                                    }, ""});
                             } else if (slot && slot->midiClip) {
+                                auto backup = slot->midiClip->clone();
                                 m_clipboard.clear();
                                 m_clipboard.type = ClipboardData::Type::Midi;
                                 m_clipboard.midiClip = slot->midiClip->clone();
-                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
                                 slot->midiClip.reset();
                                 markDirty();
+                                m_undoManager.push({"Cut MIDI Clip",
+                                    [this, ct, cs, b = std::shared_ptr<midi::MidiClip>(std::move(backup))]{
+                                        auto* s = m_project.getSlot(ct, cs);
+                                        if (s) { s->midiClip = b->clone(); markDirty(); }
+                                    },
+                                    [this, ct, cs]{
+                                        auto* s = m_project.getSlot(ct, cs);
+                                        if (s) { m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
+                                                  s->midiClip.reset(); markDirty(); }
+                                    }, ""});
                             }
                             break;
                         }
                         case SDLK_V: { // Paste clip
+                            int pt = m_selectedTrack, ps = m_selectedScene;
                             if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
-                                auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                                auto* slot = m_project.getSlot(pt, ps);
                                 if (slot) {
-                                    m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
-                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                    // Capture old slot contents for undo
+                                    std::shared_ptr<audio::Clip> oldAudio;
+                                    std::shared_ptr<midi::MidiClip> oldMidi;
+                                    if (slot->audioClip) oldAudio.reset(slot->audioClip->clone().release());
+                                    if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
+                                    m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
                                     slot->clear();
                                     slot->audioClip = m_clipboard.audioClip->clone();
                                     markDirty();
+                                    auto pastedClone = m_clipboard.audioClip->clone();
+                                    m_undoManager.push({"Paste Audio Clip",
+                                        [this, pt, ps, oldAudio, oldMidi]{
+                                            auto* s = m_project.getSlot(pt, ps);
+                                            if (!s) return;
+                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                            s->clear();
+                                            if (oldAudio) s->audioClip = oldAudio->clone();
+                                            if (oldMidi) s->midiClip = oldMidi->clone();
+                                            markDirty();
+                                        },
+                                        [this, pt, ps, pc = std::shared_ptr<audio::Clip>(std::move(pastedClone))]{
+                                            auto* s = m_project.getSlot(pt, ps);
+                                            if (!s) return;
+                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                            s->clear();
+                                            s->audioClip = pc->clone();
+                                            markDirty();
+                                        }, ""});
                                 }
                             } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
-                                auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                                auto* slot = m_project.getSlot(pt, ps);
                                 if (slot) {
-                                    m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
-                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                    std::shared_ptr<audio::Clip> oldAudio;
+                                    std::shared_ptr<midi::MidiClip> oldMidi;
+                                    if (slot->audioClip) oldAudio.reset(slot->audioClip->clone().release());
+                                    if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
+                                    m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
                                     slot->clear();
                                     slot->midiClip = m_clipboard.midiClip->clone();
                                     markDirty();
+                                    auto pastedClone = m_clipboard.midiClip->clone();
+                                    m_undoManager.push({"Paste MIDI Clip",
+                                        [this, pt, ps, oldAudio, oldMidi]{
+                                            auto* s = m_project.getSlot(pt, ps);
+                                            if (!s) return;
+                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                            s->clear();
+                                            if (oldAudio) s->audioClip = oldAudio->clone();
+                                            if (oldMidi) s->midiClip = oldMidi->clone();
+                                            markDirty();
+                                        },
+                                        [this, pt, ps, pc = std::shared_ptr<midi::MidiClip>(std::move(pastedClone))]{
+                                            auto* s = m_project.getSlot(pt, ps);
+                                            if (!s) return;
+                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                            s->clear();
+                                            s->midiClip = pc->clone();
+                                            markDirty();
+                                        }, ""});
                                 }
                             }
                             break;
                         }
                         case SDLK_D: { // Duplicate clip to next empty slot below
-                            auto* srcSlot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                            int dt = m_selectedTrack, ds = m_selectedScene;
+                            auto* srcSlot = m_project.getSlot(dt, ds);
                             if (srcSlot && !srcSlot->empty()) {
-                                for (int s = m_selectedScene + 1; s < m_project.numScenes(); ++s) {
-                                    auto* dst = m_project.getSlot(m_selectedTrack, s);
+                                for (int s = ds + 1; s < m_project.numScenes(); ++s) {
+                                    auto* dst = m_project.getSlot(dt, s);
                                     if (dst && dst->empty()) {
                                         if (srcSlot->audioClip)
                                             dst->audioClip = srcSlot->audioClip->clone();
                                         else if (srcSlot->midiClip)
                                             dst->midiClip = srcSlot->midiClip->clone();
+                                        int destScene = s;
                                         m_selectedScene = s;
                                         m_sessionPanel->setSelectedScene(m_selectedScene);
                                         markDirty();
+                                        m_undoManager.push({"Duplicate Clip",
+                                            [this, dt, destScene]{
+                                                auto* s2 = m_project.getSlot(dt, destScene);
+                                                if (s2) { s2->clear(); markDirty(); }
+                                            },
+                                            [this, dt, ds, destScene]{
+                                                auto* src2 = m_project.getSlot(dt, ds);
+                                                auto* dst2 = m_project.getSlot(dt, destScene);
+                                                if (src2 && dst2) {
+                                                    if (src2->audioClip) dst2->audioClip = src2->audioClip->clone();
+                                                    else if (src2->midiClip) dst2->midiClip = src2->midiClip->clone();
+                                                    markDirty();
+                                                }
+                                            }, ""});
                                         break;
                                     }
                                 }
@@ -1564,11 +1829,25 @@ void App::processEvents() {
                             newClip->setName("MIDI Clip");
                             newClip->setLoop(true);
                             auto* clipPtr = newClip.get();
-                            m_project.setMidiClip(dblTrack, dblScene, std::move(newClip));
-                            m_pianoRoll->setClip(clipPtr, dblTrack);
+                            int ct = dblTrack, cs = dblScene;
+                            m_project.setMidiClip(ct, cs, std::move(newClip));
+                            m_pianoRoll->setClip(clipPtr, ct);
                             m_pianoRoll->setOpen(true);
-                            m_selectedTrack = dblTrack;
+                            m_selectedTrack = ct;
                             markDirty();
+                            m_undoManager.push({"Create MIDI Clip",
+                                [this, ct, cs]{
+                                    auto* s = m_project.getSlot(ct, cs);
+                                    if (s) { s->midiClip.reset(); markDirty(); }
+                                },
+                                [this, ct, cs]{
+                                    auto nc = std::make_unique<midi::MidiClip>(
+                                        m_audioEngine.transport().numerator() * 4.0);
+                                    nc->setName("MIDI Clip");
+                                    nc->setLoop(true);
+                                    m_project.setMidiClip(ct, cs, std::move(nc));
+                                    markDirty();
+                                }, ""});
                             break;
                         }
                     }

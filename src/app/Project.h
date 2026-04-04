@@ -185,6 +185,13 @@ public:
         m_clipSlots.back().resize(numScenes());
     }
 
+    // Remove the last track (used by undo of Add Track)
+    void removeLastTrack() {
+        if (m_tracks.empty()) return;
+        m_tracks.pop_back();
+        m_clipSlots.pop_back();
+    }
+
     void addScene() {
         Scene s;
         s.name = std::to_string(m_scenes.size() + 1);

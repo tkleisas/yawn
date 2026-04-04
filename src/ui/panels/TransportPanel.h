@@ -13,6 +13,7 @@
 #endif
 #include "ui/Theme.h"
 #include "audio/AudioEngine.h"
+#include "util/UndoManager.h"
 
 namespace yawn { class Project; }
 #include <cmath>
@@ -36,6 +37,16 @@ public:
             if (m_engine)
                 m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(v)});
         });
+        m_bpmInput.setOnDragEnd([this](float oldVal) {
+            if (!m_undoManager) return;
+            float newVal = m_bpmInput.value();
+            m_undoManager->push({"Change BPM",
+                [this, oldVal]{ m_bpmInput.setValue(oldVal);
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(oldVal)}); },
+                [this, newVal]{ m_bpmInput.setValue(newVal);
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(newVal)}); },
+                "bpm"});
+        });
 
         m_tsNumInput.setRange(1.0f, 32.0f);
         m_tsNumInput.setFormat("%.0f");
@@ -45,6 +56,18 @@ public:
             if (m_engine)
                 m_engine->sendCommand(
                     audio::TransportSetTimeSignatureMsg{val, m_transportDenominator});
+        });
+        m_tsNumInput.setOnDragEnd([this](float oldVal) {
+            if (!m_undoManager) return;
+            int oldNum = static_cast<int>(oldVal);
+            int newNum = static_cast<int>(m_tsNumInput.value());
+            int den = m_transportDenominator;
+            m_undoManager->push({"Change Time Signature",
+                [this, oldNum, den]{ m_tsNumInput.setValue(static_cast<float>(oldNum));
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{oldNum, den}); },
+                [this, newNum, den]{ m_tsNumInput.setValue(static_cast<float>(newNum));
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{newNum, den}); },
+                ""});
         });
 
         m_tsDenInput.setRange(1.0f, 32.0f);
@@ -62,6 +85,18 @@ public:
                 m_engine->sendCommand(
                     audio::TransportSetTimeSignatureMsg{m_transportNumerator, val});
         });
+        m_tsDenInput.setOnDragEnd([this](float oldVal) {
+            if (!m_undoManager) return;
+            int num = m_transportNumerator;
+            int oldDen = static_cast<int>(oldVal);
+            int newDen = static_cast<int>(m_tsDenInput.value());
+            m_undoManager->push({"Change Time Signature",
+                [this, num, oldDen]{ m_tsDenInput.setValue(static_cast<float>(oldDen));
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{num, oldDen}); },
+                [this, num, newDen]{ m_tsDenInput.setValue(static_cast<float>(newDen));
+                    if (m_engine) m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{num, newDen}); },
+                ""});
+        });
 
         m_posLabel.setAlign(TextAlign::Right);
         m_countInLabel.setAlign(TextAlign::Right);
@@ -76,9 +111,11 @@ public:
         });
     }
 
-    void init(Project* project, audio::AudioEngine* engine) {
+    void init(Project* project, audio::AudioEngine* engine,
+              undo::UndoManager* undoMgr = nullptr) {
         m_project = project;
         m_engine  = engine;
+        m_undoManager = undoMgr;
         if (engine) m_metronomeOn = engine->metronome().enabled();
     }
 
@@ -203,6 +240,7 @@ private:
 
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
+    undo::UndoManager*  m_undoManager = nullptr;
     int                 m_selectedScene = 0;
 
     bool   m_transportPlaying     = false;

@@ -15,6 +15,7 @@
 #include "app/Project.h"
 #include "audio/AudioEngine.h"
 #include "automation/AutomationTypes.h"
+#include "util/UndoManager.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -40,9 +41,11 @@ public:
 
     ArrangementPanel() { setName("ArrangementPanel"); }
 
-    void init(Project* project, audio::AudioEngine* engine) {
+    void init(Project* project, audio::AudioEngine* engine,
+              undo::UndoManager* undoMgr = nullptr) {
         m_project = project;
         m_engine  = engine;
+        m_undoManager = undoMgr;
     }
 
     // ─── Accessors ─────────────────────────────────────────────────────
@@ -176,6 +179,7 @@ public:
 private:
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
+    undo::UndoManager*  m_undoManager = nullptr;
 
     float m_scrollX = 0.0f;
     float m_scrollY = 0.0f;

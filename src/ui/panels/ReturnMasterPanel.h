@@ -15,6 +15,7 @@
 #include "audio/AudioEngine.h"
 #include "app/Project.h"
 #include "core/Constants.h"
+#include "util/UndoManager.h"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -56,7 +57,14 @@ public:
             rs.muteBtn.setOnClick([this, b]() {
                 if (!m_engine) return;
                 bool cur = m_engine->mixer().returnBus(b).muted;
-                m_engine->sendCommand(audio::SetReturnMuteMsg{b, !cur});
+                bool next = !cur;
+                m_engine->sendCommand(audio::SetReturnMuteMsg{b, next});
+                if (m_undoManager) {
+                    m_undoManager->push({"Toggle Return Mute",
+                        [this, b, cur]{ m_engine->sendCommand(audio::SetReturnMuteMsg{b, cur}); },
+                        [this, b, next]{ m_engine->sendCommand(audio::SetReturnMuteMsg{b, next}); },
+                        ""});
+                }
             });
 
             rs.pan.setThumbColor(busCol);
@@ -64,12 +72,37 @@ public:
                 if (!m_engine) return;
                 m_engine->sendCommand(audio::SetReturnPanMsg{b, v});
             });
+            rs.pan.setOnTouch([this, b](bool start) {
+                if (!m_undoManager) return;
+                if (start) {
+                    m_returnPanStart[b] = m_returnStrips[b].pan.value();
+                } else {
+                    float oldV = m_returnPanStart[b];
+                    float newV = m_returnStrips[b].pan.value();
+                    m_undoManager->push({"Change Return Pan",
+                        [this, b, oldV]{ m_returnStrips[b].pan.setValue(oldV);
+                            if (m_engine) m_engine->sendCommand(audio::SetReturnPanMsg{b, oldV}); },
+                        [this, b, newV]{ m_returnStrips[b].pan.setValue(newV);
+                            if (m_engine) m_engine->sendCommand(audio::SetReturnPanMsg{b, newV}); },
+                        "return.pan." + std::to_string(b)});
+                }
+            });
 
             rs.fader.setRange(0.0f, 2.0f);
             rs.fader.setTrackColor(busCol);
             rs.fader.setOnChange([this, b](float v) {
                 if (!m_engine) return;
                 m_engine->sendCommand(audio::SetReturnVolumeMsg{b, v});
+            });
+            rs.fader.setOnDragEnd([this, b](float oldVal) {
+                if (!m_undoManager) return;
+                float newVal = m_returnStrips[b].fader.value();
+                m_undoManager->push({"Change Return Volume",
+                    [this, b, oldVal]{ m_returnStrips[b].fader.setValue(oldVal);
+                        if (m_engine) m_engine->sendCommand(audio::SetReturnVolumeMsg{b, oldVal}); },
+                    [this, b, newVal]{ m_returnStrips[b].fader.setValue(newVal);
+                        if (m_engine) m_engine->sendCommand(audio::SetReturnVolumeMsg{b, newVal}); },
+                    "return.vol." + std::to_string(b)});
             });
         }
 
@@ -82,11 +115,23 @@ public:
             if (!m_engine) return;
             m_engine->sendCommand(audio::SetMasterVolumeMsg{v});
         });
+        m_masterStrip.fader.setOnDragEnd([this](float oldVal) {
+            if (!m_undoManager) return;
+            float newVal = m_masterStrip.fader.value();
+            m_undoManager->push({"Change Master Volume",
+                [this, oldVal]{ m_masterStrip.fader.setValue(oldVal);
+                    if (m_engine) m_engine->sendCommand(audio::SetMasterVolumeMsg{oldVal}); },
+                [this, newVal]{ m_masterStrip.fader.setValue(newVal);
+                    if (m_engine) m_engine->sendCommand(audio::SetMasterVolumeMsg{newVal}); },
+                "master.volume"});
+        });
     }
 
-    void init(Project* project, audio::AudioEngine* engine) {
+    void init(Project* project, audio::AudioEngine* engine,
+              undo::UndoManager* undoMgr = nullptr) {
         m_project = project;
         m_engine  = engine;
+        m_undoManager = undoMgr;
     }
 
     void updateMeter(int trackIndex, float peakL, float peakR) {
@@ -189,6 +234,8 @@ private:
 
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
+    undo::UndoManager*  m_undoManager = nullptr;
+    float m_returnPanStart[kMaxReturnBuses] = {};
 
     ReturnMeter m_returnMeters[kMaxReturnBuses] = {};
     ReturnMeter m_masterMeter = {};
