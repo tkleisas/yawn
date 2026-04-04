@@ -170,6 +170,24 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             return s.monBtn.onMouseDown(e);
         }
 
+        if (hitWidget(s.autoBtn, mx, my)) {
+            if (rightClick) {
+                auto oldMode = m_project->track(t).autoMode;
+                m_project->track(t).autoMode = automation::AutoMode::Off;
+                m_engine->sendCommand(audio::SetAutoModeMsg{t, 0});
+                if (m_undoManager) {
+                    m_undoManager->push({"Reset Auto Mode",
+                        [this, t, oldMode]{ m_project->track(t).autoMode = oldMode;
+                            m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(oldMode)}); },
+                        [this, t]{ m_project->track(t).autoMode = automation::AutoMode::Off;
+                            m_engine->sendCommand(audio::SetAutoModeMsg{t, 0}); },
+                        ""});
+                }
+                return true;
+            }
+            return s.autoBtn.onMouseDown(e);
+        }
+
         if (m_showIO && m_project->track(t).type == Track::Type::Audio) {
             if (!rightClick && hitWidget(s.audioInputDrop, mx, my))
                 return s.audioInputDrop.onMouseDown(e);
@@ -284,6 +302,24 @@ void MixerPanel::setupStripCallbacks(int t) {
                     m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(oldMode)}); },
                 [this, t, newMode]{ m_project->track(t).monitorMode = newMode;
                     m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(newMode)}); },
+                ""});
+        }
+    });
+
+    s.autoBtn.setOnClick([this, t]() {
+        if (!m_project || !m_engine) return;
+        auto& track = m_project->track(t);
+        auto oldMode = track.autoMode;
+        int next = (static_cast<int>(oldMode) + 1) % 4;
+        auto newMode = static_cast<automation::AutoMode>(next);
+        track.autoMode = newMode;
+        m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(next)});
+        if (m_undoManager) {
+            m_undoManager->push({"Change Auto Mode",
+                [this, t, oldMode]{ m_project->track(t).autoMode = oldMode;
+                    m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(oldMode)}); },
+                [this, t, newMode]{ m_project->track(t).autoMode = newMode;
+                    m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(newMode)}); },
                 ""});
         }
     });
@@ -502,6 +538,35 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     float monW = iw - 8 - btnW - 2;          // fill remaining row width
     s.monBtn.layout(Rect{monX, curY, monW, kButtonHeight}, ctx);
     s.monBtn.paint(ctx);
+
+    curY += kButtonHeight + 2;
+
+    // Automation mode button row
+    {
+        auto am = track.autoMode;
+        const char* autoLabel = "Off";
+        Color autoBg = Theme::clipSlotEmpty;
+        Color autoTxt = Theme::textDim;
+        if (am == automation::AutoMode::Read) {
+            autoLabel = "Read";
+            autoBg = Color{40, 80, 40};
+            autoTxt = Color{120, 230, 120};
+        } else if (am == automation::AutoMode::Touch) {
+            autoLabel = "Touch";
+            autoBg = Color{100, 70, 20};
+            autoTxt = Color{255, 200, 80};
+        } else if (am == automation::AutoMode::Latch) {
+            autoLabel = "Latch";
+            autoBg = Color{100, 30, 30};
+            autoTxt = Color{255, 120, 120};
+        }
+        s.autoBtn.setLabel(autoLabel);
+        s.autoBtn.setColor(autoBg);
+        s.autoBtn.setTextColor(autoTxt);
+        float autoW = iw - 8;
+        s.autoBtn.layout(Rect{ix + 4, curY, autoW, kButtonHeight}, ctx);
+        s.autoBtn.paint(ctx);
+    }
 
     curY += kButtonHeight + 4;
 

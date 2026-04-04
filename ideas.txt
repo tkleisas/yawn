@@ -1,0 +1,10 @@
+Tuner
+Render to track
+Convolution reverb
+Wavetable editor
+Wave editor (allows detailed editing of waveforms)
+New UI widgets (dented knob, 360 degree knob, toggle switch (left or right value), number selection
+
+
+
+

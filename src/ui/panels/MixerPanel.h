@@ -14,6 +14,7 @@
 #include "ui/Theme.h"
 #include "audio/Mixer.h"
 #include "app/Project.h"
+#include "automation/AutomationTypes.h"
 #include "util/UndoManager.h"
 
 namespace yawn { namespace audio { class AudioEngine; } }
@@ -166,6 +167,7 @@ private:
         FwButton soloBtn;
         FwButton armBtn;
         FwButton monBtn;
+        FwButton autoBtn;   // Automation mode: Off/Read/Touch/Latch
         FwDropDown audioInputDrop;
         FwButton monoBtn;
         FwDropDown midiInDrop;
