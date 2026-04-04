@@ -151,9 +151,12 @@ public:
 
         if (isViz) {
             // Create visualizer and its single-row knob grid
-            auto mode = (vizType && std::string(vizType) == "spectrum")
-                            ? VisualizerWidget::Mode::Spectrum
-                            : VisualizerWidget::Mode::Oscilloscope;
+            auto mode = VisualizerWidget::Mode::Oscilloscope;
+            if (vizType) {
+                std::string vt(vizType);
+                if (vt == "spectrum") mode = VisualizerWidget::Mode::Spectrum;
+                else if (vt == "tuner") mode = VisualizerWidget::Mode::Tuner;
+            }
             m_visualizer = new VisualizerWidget(mode);
             m_vizKnobGrid = new FwGrid();
             m_vizKnobGrid->setCellSize(kKnobSize + kKnobSpacing, kKnobSize + 22.0f);

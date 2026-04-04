@@ -22,6 +22,7 @@
 #include "effects/AmpSimulator.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
+#include "effects/Tuner.h"
 #include "midi/Arpeggiator.h"
 #include "midi/Chord.h"
 #include "midi/Scale.h"
@@ -67,6 +68,7 @@ static std::unique_ptr<effects::AudioEffect> makeAudioEffectByName(const std::st
     if (n == "Amp Simulator")     return std::make_unique<effects::AmpSimulator>();
     if (n == "Oscilloscope")      return std::make_unique<effects::Oscilloscope>();
     if (n == "Spectrum Analyzer" || n == "Spectrum") return std::make_unique<effects::SpectrumAnalyzer>();
+    if (n == "Tuner")             return std::make_unique<effects::Tuner>();
     return nullptr;
 }
 
@@ -501,6 +503,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Amp Simulator",  [](){ return std::make_unique<effects::AmpSimulator>(); });
     addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
     addFxItem("Spectrum",       [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
+    addFxItem("Tuner",          [](){ return std::make_unique<effects::Tuner>(); });
     items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
 
     // MIDI effects submenu

@@ -30,6 +30,7 @@
 #include "effects/AmpSimulator.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
+#include "effects/Tuner.h"
 
 #include "midi/MidiEffect.h"
 #include "midi/Arpeggiator.h"
@@ -79,6 +80,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"amp",         [] { return std::make_unique<effects::AmpSimulator>(); }},
         {"oscilloscope",[] { return std::make_unique<effects::Oscilloscope>(); }},
         {"spectrum",    [] { return std::make_unique<effects::SpectrumAnalyzer>(); }},
+        {"tuner",       [] { return std::make_unique<effects::Tuner>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
