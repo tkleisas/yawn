@@ -75,8 +75,23 @@ public:
     int numerator()   const { return m_numerator.load(std::memory_order_acquire); }
     int denominator() const { return m_denominator.load(std::memory_order_acquire); }
 
+    // Loop range (in beats)
+    void setLoopEnabled(bool e) { m_loopEnabled.store(e, std::memory_order_release); }
+    bool isLoopEnabled() const { return m_loopEnabled.load(std::memory_order_acquire); }
+
+    void setLoopRange(double startBeats, double endBeats) {
+        m_loopStartBeats.store(startBeats, std::memory_order_release);
+        m_loopEndBeats.store(endBeats, std::memory_order_release);
+    }
+    double loopStartBeats() const { return m_loopStartBeats.load(std::memory_order_acquire); }
+    double loopEndBeats() const { return m_loopEndBeats.load(std::memory_order_acquire); }
+
+    // Returns true if the transport wrapped around the loop point this advance.
+    bool didLoopWrap() const { return m_didLoopWrap; }
+
     // Advance transport position by numFrames. Called each audio callback.
     void advance(int numFrames) {
+        m_didLoopWrap = false;
         // Handle count-in first
         int64_t countIn = m_countInRemaining.load(std::memory_order_acquire);
         if (countIn > 0) {
@@ -90,6 +105,17 @@ public:
         }
         if (m_playing.load(std::memory_order_acquire)) {
             m_positionInSamples.fetch_add(numFrames, std::memory_order_relaxed);
+
+            // Loop wrap
+            if (m_loopEnabled.load(std::memory_order_acquire)) {
+                double loopEnd = m_loopEndBeats.load(std::memory_order_acquire);
+                if (loopEnd > 0.0 && positionInBeats() >= loopEnd) {
+                    double loopStart = m_loopStartBeats.load(std::memory_order_acquire);
+                    int64_t startSamples = static_cast<int64_t>(loopStart * samplesPerBeat());
+                    m_positionInSamples.store(startSamples, std::memory_order_release);
+                    m_didLoopWrap = true;
+                }
+            }
         }
     }
 
@@ -133,6 +159,10 @@ public:
         m_numerator.store(kDefaultNumerator, std::memory_order_release);
         m_denominator.store(kDefaultDenominator, std::memory_order_release);
         m_countInRemaining.store(0, std::memory_order_release);
+        m_loopEnabled.store(false, std::memory_order_release);
+        m_loopStartBeats.store(0.0, std::memory_order_release);
+        m_loopEndBeats.store(0.0, std::memory_order_release);
+        m_didLoopWrap = false;
     }
 
 private:
@@ -145,6 +175,10 @@ private:
     std::atomic<int> m_denominator{kDefaultDenominator};
     std::atomic<int> m_countInBars{0};
     std::atomic<int64_t> m_countInRemaining{0};
+    std::atomic<bool> m_loopEnabled{false};
+    std::atomic<double> m_loopStartBeats{0.0};
+    std::atomic<double> m_loopEndBeats{0.0};
+    bool m_didLoopWrap = false; // non-atomic, only written/read on audio thread
 };
 
 } // namespace audio

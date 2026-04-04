@@ -103,6 +103,18 @@ void ArrangementPanel::paint(UIContext& ctx) {
     float gridY = y + kRulerH;
     float gridH = h - kRulerH - kScrollbarH;
 
+    // Auto-scroll: keep playhead visible during playback
+    if (m_autoScroll && m_engine->transport().isPlaying()) {
+        double beat = m_engine->transport().positionInBeats();
+        float px = static_cast<float>(beat) * m_pixelsPerBeat;
+        float margin = gridW * 0.1f;
+        if (px - m_scrollX > gridW - margin) {
+            m_scrollX = px - gridW + margin;
+        } else if (px < m_scrollX) {
+            m_scrollX = std::max(0.0f, px - margin);
+        }
+    }
+
     paintRuler(r, f, gridX, y, gridW);
     paintTrackHeaders(r, f, x, gridY, gridH);
     paintClipTimeline(r, f, gridX, gridY, gridW, gridH);
@@ -122,11 +134,41 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
     float gridY = y + kRulerH;
     float gridH = h - kRulerH - kScrollbarH;
 
-    // Ruler click → set playhead
+    // Ruler click → set playhead or loop range
     if (e.x >= gridX && e.x < gridX + gridW &&
         e.y >= y && e.y < gridY) {
         double beat = (e.x - gridX + m_scrollX) / m_pixelsPerBeat;
-        if (m_onPlayheadClick) m_onPlayheadClick(std::max(0.0, beat));
+        beat = std::max(0.0, beat);
+
+        // Shift+click sets loop start, Shift+right-click sets loop end
+        if (e.mods.shift) {
+            double snapped = snapBeat(beat);
+            if (e.isLeftButton()) {
+                m_loopStart = snapped;
+                if (m_loopEnd <= m_loopStart) m_loopEnd = m_loopStart + 4.0;
+            } else if (e.isRightButton()) {
+                m_loopEnd = snapped;
+                if (m_loopEnd <= m_loopStart) m_loopStart = std::max(0.0, m_loopEnd - 4.0);
+            }
+            if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+            return true;
+        }
+
+        // Check if clicking on loop start/end marker for dragging
+        if (m_loopEnabled && m_loopEnd > m_loopStart) {
+            float lx0 = gridX + static_cast<float>(m_loopStart) * m_pixelsPerBeat - m_scrollX;
+            float lx1 = gridX + static_cast<float>(m_loopEnd) * m_pixelsPerBeat - m_scrollX;
+            if (std::abs(e.x - lx0) < 5.0f) {
+                m_loopDragMode = LoopDragMode::DragStart;
+                return true;
+            }
+            if (std::abs(e.x - lx1) < 5.0f) {
+                m_loopDragMode = LoopDragMode::DragEnd;
+                return true;
+            }
+        }
+
+        if (m_onPlayheadClick) m_onPlayheadClick(beat);
         return true;
     }
 
@@ -311,6 +353,11 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
 }
 
 bool ArrangementPanel::onMouseUp(MouseEvent&) {
+    if (m_loopDragMode != LoopDragMode::None) {
+        m_loopDragMode = LoopDragMode::None;
+        releaseMouse();
+        return true;
+    }
     if (m_scrollDragging) {
         m_scrollDragging = false;
         releaseMouse();
@@ -337,6 +384,20 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
 }
 
 bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
+    // Loop marker drag
+    if (m_loopDragMode != LoopDragMode::None) {
+        float gridX = m_bounds.x + kTrackHeaderW;
+        double beat = std::max(0.0, static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat));
+        beat = snapBeat(beat);
+        if (m_loopDragMode == LoopDragMode::DragStart) {
+            m_loopStart = std::min(beat, m_loopEnd - 0.25);
+        } else if (m_loopDragMode == LoopDragMode::DragEnd) {
+            m_loopEnd = std::max(beat, m_loopStart + 0.25);
+        }
+        if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        return true;
+    }
+
     if (m_scrollDragging) {
         float delta = e.x - m_scrollDragStart;
         float contentW = static_cast<float>(m_project->arrangementLength()) * m_pixelsPerBeat;
@@ -508,6 +569,25 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
         }
     }
 
+    // L = toggle loop
+    if (e.keyCode == 'l') {
+        m_loopEnabled = !m_loopEnabled;
+        if (m_loopEnabled && m_loopEnd <= m_loopStart) {
+            double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
+            int beatsPerBar = m_engine ? m_engine->transport().numerator() : 4;
+            m_loopStart = snapBeat(cur);
+            m_loopEnd = m_loopStart + beatsPerBar * 4.0;
+        }
+        if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        return true;
+    }
+
+    // F = toggle auto-scroll (follow)
+    if (e.keyCode == 'f') {
+        m_autoScroll = !m_autoScroll;
+        return true;
+    }
+
     return false;
 }
 
@@ -518,6 +598,20 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
 void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, float w) {
     r.drawRect(x, y, w, kRulerH, Color{35, 35, 40, 255});
     r.pushClip(x, y, w, kRulerH);
+
+    // Draw loop range highlight
+    if (m_loopEnabled && m_loopEnd > m_loopStart) {
+        float lx0 = x + static_cast<float>(m_loopStart) * m_pixelsPerBeat - m_scrollX;
+        float lx1 = x + static_cast<float>(m_loopEnd) * m_pixelsPerBeat - m_scrollX;
+        lx0 = std::max(lx0, x);
+        lx1 = std::min(lx1, x + w);
+        if (lx1 > lx0) {
+            r.drawRect(lx0, y, lx1 - lx0, kRulerH, Color{60, 120, 80, 80});
+            // Loop start/end markers
+            r.drawRect(lx0, y, 2, kRulerH, Color{100, 200, 120, 200});
+            r.drawRect(lx1 - 2, y, 2, kRulerH, Color{100, 200, 120, 200});
+        }
+    }
 
     int beatsPerBar = m_engine ? m_engine->transport().numerator() : 4;
     float barWidthPx = beatsPerBar * m_pixelsPerBeat;

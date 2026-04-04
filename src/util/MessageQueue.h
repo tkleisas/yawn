@@ -250,6 +250,16 @@ struct SetTrackArrActiveMsg {
     bool active;
 };
 
+// Loop range control
+struct TransportSetLoopEnabledMsg {
+    bool enabled;
+};
+
+struct TransportSetLoopRangeMsg {
+    double startBeats;
+    double endBeats;
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -295,7 +305,9 @@ using AudioCommand = std::variant<
     ResetMidiEffectChainMsg,
     SetAutoModeMsg,
     AutoParamTouchMsg,
-    SetTrackArrActiveMsg
+    SetTrackArrActiveMsg,
+    TransportSetLoopEnabledMsg,
+    TransportSetLoopRangeMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

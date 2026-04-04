@@ -327,3 +327,65 @@ TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
     ap.setTrackActive(0, true);
     EXPECT_TRUE(ap.isTrackActive(0));
 }
+
+// ── Transport loop ──────────────────────────────────────────────────────
+
+TEST(TransportLoop, LoopDisabledByDefault) {
+    yawn::audio::Transport t;
+    EXPECT_FALSE(t.isLoopEnabled());
+    EXPECT_DOUBLE_EQ(t.loopStartBeats(), 0.0);
+    EXPECT_DOUBLE_EQ(t.loopEndBeats(), 0.0);
+}
+
+TEST(TransportLoop, SetLoopRange) {
+    yawn::audio::Transport t;
+    t.setLoopRange(4.0, 12.0);
+    EXPECT_DOUBLE_EQ(t.loopStartBeats(), 4.0);
+    EXPECT_DOUBLE_EQ(t.loopEndBeats(), 12.0);
+}
+
+TEST(TransportLoop, LoopWrapsPosition) {
+    yawn::audio::Transport t;
+    t.setSampleRate(44100.0);
+    t.setBPM(120.0);
+    t.setLoopEnabled(true);
+    t.setLoopRange(0.0, 4.0); // loop 0-4 beats
+
+    // At 120 BPM, 4 beats = 2 seconds = 88200 samples
+    // Position near loop end
+    double spb = t.samplesPerBeat(); // 22050
+    t.setPositionInSamples(static_cast<int64_t>(3.99 * spb));
+    t.play();
+    t.advance(512); // should push past beat 4.0 and wrap
+
+    double beat = t.positionInBeats();
+    EXPECT_LT(beat, 1.0); // should have wrapped back near start
+    EXPECT_GE(beat, 0.0);
+    EXPECT_TRUE(t.didLoopWrap());
+}
+
+TEST(TransportLoop, NoWrapWhenDisabled) {
+    yawn::audio::Transport t;
+    t.setSampleRate(44100.0);
+    t.setBPM(120.0);
+    t.setLoopEnabled(false);
+    t.setLoopRange(0.0, 4.0);
+
+    double spb = t.samplesPerBeat();
+    t.setPositionInSamples(static_cast<int64_t>(3.99 * spb));
+    t.play();
+    t.advance(512);
+
+    EXPECT_GT(t.positionInBeats(), 4.0); // no wrap
+    EXPECT_FALSE(t.didLoopWrap());
+}
+
+TEST(TransportLoop, ResetClearsLoop) {
+    yawn::audio::Transport t;
+    t.setLoopEnabled(true);
+    t.setLoopRange(4.0, 8.0);
+    t.reset();
+    EXPECT_FALSE(t.isLoopEnabled());
+    EXPECT_DOUBLE_EQ(t.loopStartBeats(), 0.0);
+    EXPECT_DOUBLE_EQ(t.loopEndBeats(), 0.0);
+}

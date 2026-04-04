@@ -606,6 +606,11 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Advance transport
     m_transport.advance(nf);
 
+    // Reset arrangement playback state when loop wraps
+    if (m_transport.didLoopWrap()) {
+        m_arrPlayback.resetAllTracks();
+    }
+
     // Periodically send position updates to the UI (~30 Hz)
     m_posUpdateCounter += nf;
     int updateInterval = static_cast<int>(m_config.sampleRate / 30.0);
@@ -945,6 +950,12 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, SetTrackArrActiveMsg>) {
                 m_arrPlayback.setTrackActive(msg.trackIndex, msg.active);
+            }
+            else if constexpr (std::is_same_v<T, TransportSetLoopEnabledMsg>) {
+                m_transport.setLoopEnabled(msg.enabled);
+            }
+            else if constexpr (std::is_same_v<T, TransportSetLoopRangeMsg>) {
+                m_transport.setLoopRange(msg.startBeats, msg.endBeats);
             }
         }, cmd);
     }

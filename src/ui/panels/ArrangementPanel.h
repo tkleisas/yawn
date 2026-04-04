@@ -94,6 +94,22 @@ public:
         return std::round(b / s) * s;
     }
 
+    // ─── Loop range ───────────────────────────────────────────────────
+
+    double loopStart() const { return m_loopStart; }
+    double loopEnd() const { return m_loopEnd; }
+    bool loopEnabled() const { return m_loopEnabled; }
+    void setLoopEnabled(bool e) { m_loopEnabled = e; }
+    void setLoopRange(double s, double e) { m_loopStart = s; m_loopEnd = e; }
+
+    using LoopChangeCallback = std::function<void(bool enabled, double start, double end)>;
+    void setOnLoopChange(LoopChangeCallback cb) { m_onLoopChange = std::move(cb); }
+
+    // ─── Auto-scroll ──────────────────────────────────────────────────
+
+    bool autoScroll() const { return m_autoScroll; }
+    void setAutoScroll(bool a) { m_autoScroll = a; }
+
     // ─── Clip selection ────────────────────────────────────────────────
 
     int selectedClipTrack() const { return m_selClipTrack; }
@@ -160,9 +176,25 @@ private:
     PlayheadClickCallback  m_onPlayheadClick;
     ClipChangeCallback     m_onClipChange;
     TrackArrToggleCallback m_onTrackArrToggle;
+    LoopChangeCallback     m_onLoopChange;
 
     // Snap grid
     Snap m_snap = Snap::Beat;
+
+    // Loop range
+    double m_loopStart = 0.0;
+    double m_loopEnd   = 0.0;
+    bool   m_loopEnabled = false;
+
+    // Auto-scroll playhead
+    bool m_autoScroll = true;
+
+    // Loop range drag state
+    enum class LoopDragMode { None, DragStart, DragEnd, DragBoth };
+    LoopDragMode m_loopDragMode = LoopDragMode::None;
+    double m_loopDragOrigStart = 0.0;
+    double m_loopDragOrigEnd = 0.0;
+    float  m_loopDragMouseStart = 0.0f;
 
     // Clip selection
     int m_selClipTrack = -1;

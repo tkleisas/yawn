@@ -261,6 +261,10 @@ void App::buildWidgetTree() {
         m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{trackIdx, active});
         if (active) syncArrangementClipsToEngine(trackIdx);
     });
+    m_arrangementPanel->setOnLoopChange([this](bool enabled, double start, double end) {
+        m_audioEngine.sendCommand(audio::TransportSetLoopEnabledMsg{enabled});
+        m_audioEngine.sendCommand(audio::TransportSetLoopRangeMsg{start, end});
+    });
     m_arrangementPanel->setVisible(false); // start in session view
 
     // Wire the 4-quadrant layout
