@@ -420,6 +420,296 @@ void ScrollBar::paint(UIContext& ctx) {
     ctx.renderer->drawRect(thumbX, m_bounds.y, thumbW, m_bounds.h, thumbCol);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FwDentedKnob
+// ═══════════════════════════════════════════════════════════════════════════
+
+void FwDentedKnob::renderArc(Renderer2D& renderer, float cx, float cy, float r,
+                              float startNorm, float endNorm, Color color) {
+    const int segs = 24;
+    float startAngle = static_cast<float>(-M_PI * 0.75 + startNorm * M_PI * 1.5);
+    float endAngle   = static_cast<float>(-M_PI * 0.75 + endNorm   * M_PI * 1.5);
+    float step = (endAngle - startAngle) / segs;
+    for (int i = 0; i < segs; ++i) {
+        float a = startAngle + step * (i + 0.5f);
+        float px = cx + std::cos(a) * r - 2;
+        float py = cy + std::sin(a) * r - 2;
+        renderer.drawRect(px, py, 4, 4, color);
+    }
+}
+
+void FwDentedKnob::paint(UIContext& ctx) {
+    constexpr float kHoverSpeed = 0.15f;
+    if (m_hovered) m_hoverAlpha = detail::cmin(1.0f, m_hoverAlpha + kHoverSpeed);
+    else           m_hoverAlpha = detail::cmax(0.0f, m_hoverAlpha - kHoverSpeed);
+
+    if (!ctx.renderer || !ctx.font) return;
+
+    float labelScale = 9.0f / Theme::kFontSize;
+    float labelH = 0;
+    if (!m_label.empty()) {
+        float tw = ctx.font->textWidth(m_label, labelScale);
+        float maxW = m_bounds.w - 2.0f;
+        float tx = m_bounds.x + (m_bounds.w - detail::cmin(tw, maxW)) * 0.5f;
+        float ty = m_bounds.y + 1;
+        ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, labelScale,
+                           Color{170, 175, 185, 255});
+        labelH = ctx.font->lineHeight(labelScale) + 2;
+    }
+
+    float arcArea = m_bounds.h - labelH;
+    float cx = m_bounds.x + m_bounds.w * 0.5f;
+    float cy = m_bounds.y + labelH + arcArea * 0.38f;
+    float r = detail::cmin(m_bounds.w * 0.42f, arcArea * 0.32f);
+
+    // Background arc
+    renderArc(*ctx.renderer, cx, cy, r, 0.0f, 1.0f, Color{50, 50, 55, 255});
+
+    float range = m_max - m_min;
+    float norm = (range > 0) ? (m_value - m_min) / range : 0.0f;
+    norm = detail::cclamp(norm, 0.0f, 1.0f);
+
+    Color arcCol = m_customColor ? m_arcColor : Color{0, 200, 255, 255};
+    if (m_dragging) {
+        arcCol = m_customColor ? Color{static_cast<uint8_t>(detail::cmin(255.0f, m_arcColor.r + 55.0f)),
+                                        static_cast<uint8_t>(detail::cmin(255.0f, m_arcColor.g + 55.0f)),
+                                        static_cast<uint8_t>(detail::cmin(255.0f, m_arcColor.b + 55.0f)),
+                                        m_arcColor.a}
+                               : Color{0, 255, 255, 255};
+    }
+    if (m_hoverAlpha > 0.001f) {
+        Color bright{
+            static_cast<uint8_t>(detail::cmin(255.0f, arcCol.r + 40.0f)),
+            static_cast<uint8_t>(detail::cmin(255.0f, arcCol.g + 40.0f)),
+            static_cast<uint8_t>(detail::cmin(255.0f, arcCol.b + 40.0f)),
+            arcCol.a};
+        arcCol = Color::lerp(arcCol, bright, m_hoverAlpha);
+    }
+    renderArc(*ctx.renderer, cx, cy, r, 0.0f, norm, arcCol);
+
+    // Dot indicator
+    float angle = static_cast<float>(-M_PI * 0.75 + norm * M_PI * 1.5);
+    float dotX = cx + std::cos(angle) * r * 0.65f - 2;
+    float dotY = cy + std::sin(angle) * r * 0.65f - 2;
+    ctx.renderer->drawRect(dotX, dotY, 4, 4, Theme::textPrimary);
+
+    // Detent tick marks on outer ring
+    for (auto& d : m_detents) {
+        float dNorm = (range > 0) ? (d.value - m_min) / range : 0.0f;
+        float dAngle = static_cast<float>(-M_PI * 0.75 + dNorm * M_PI * 1.5);
+        float outerR = r + 4.0f;
+        float dx = cx + std::cos(dAngle) * outerR - 1.5f;
+        float dy = cy + std::sin(dAngle) * outerR - 1.5f;
+        Color tickCol = (std::abs(m_value - d.value) < 0.001f)
+            ? Color{255, 220, 80, 255} : Color{120, 120, 130, 255};
+        ctx.renderer->drawRect(dx, dy, 3, 3, tickCol);
+    }
+
+    // Value text
+    float valScale = 9.0f / Theme::kFontSize;
+    float valY = m_bounds.y + m_bounds.h - ctx.font->lineHeight(valScale) - 1;
+    if (m_formatCb) {
+        std::string valStr = m_formatCb(m_value);
+        float vw = ctx.font->textWidth(valStr, valScale);
+        ctx.font->drawText(*ctx.renderer, valStr.c_str(),
+                           m_bounds.x + (m_bounds.w - vw) * 0.5f,
+                           valY, valScale, Color{200, 205, 215, 255});
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FwKnob360
+// ═══════════════════════════════════════════════════════════════════════════
+
+void FwKnob360::paint(UIContext& ctx) {
+    constexpr float kHoverSpeed = 0.15f;
+    if (m_hovered) m_hoverAlpha = detail::cmin(1.0f, m_hoverAlpha + kHoverSpeed);
+    else           m_hoverAlpha = detail::cmax(0.0f, m_hoverAlpha - kHoverSpeed);
+
+    if (!ctx.renderer || !ctx.font) return;
+
+    float labelScale = 9.0f / Theme::kFontSize;
+    float labelH = 0;
+    if (!m_label.empty()) {
+        float tw = ctx.font->textWidth(m_label, labelScale);
+        float maxW = m_bounds.w - 2.0f;
+        float tx = m_bounds.x + (m_bounds.w - detail::cmin(tw, maxW)) * 0.5f;
+        float ty = m_bounds.y + 1;
+        ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, ty, labelScale,
+                           Color{170, 175, 185, 255});
+        labelH = ctx.font->lineHeight(labelScale) + 2;
+    }
+
+    float arcArea = m_bounds.h - labelH;
+    float cx = m_bounds.x + m_bounds.w * 0.5f;
+    float cy = m_bounds.y + labelH + arcArea * 0.38f;
+    float r = detail::cmin(m_bounds.w * 0.42f, arcArea * 0.32f);
+
+    // Full circle background (360°)
+    const int segs = 32;
+    for (int i = 0; i < segs; ++i) {
+        float a = static_cast<float>(2.0 * M_PI * i / segs);
+        float px = cx + std::cos(a) * r - 2;
+        float py = cy + std::sin(a) * r - 2;
+        ctx.renderer->drawRect(px, py, 4, 4, Color{50, 50, 55, 255});
+    }
+
+    // Value arc — from top (12 o'clock) clockwise
+    float range = m_max - m_min;
+    float norm = (range > 0) ? (m_value - m_min) / range : 0.0f;
+    norm = detail::cclamp(norm, 0.0f, 1.0f);
+
+    Color arcCol = m_customColor ? m_arcColor : Color{0, 200, 255, 255};
+    if (m_dragging) {
+        arcCol = m_customColor ? Color{static_cast<uint8_t>(detail::cmin(255.0f, m_arcColor.r + 55.0f)),
+                                        static_cast<uint8_t>(detail::cmin(255.0f, m_arcColor.g + 55.0f)),
+                                        static_cast<uint8_t>(detail::cmin(255.0f, m_arcColor.b + 55.0f)),
+                                        m_arcColor.a}
+                               : Color{0, 255, 255, 255};
+    }
+    if (m_hoverAlpha > 0.001f) {
+        Color bright{
+            static_cast<uint8_t>(detail::cmin(255.0f, arcCol.r + 40.0f)),
+            static_cast<uint8_t>(detail::cmin(255.0f, arcCol.g + 40.0f)),
+            static_cast<uint8_t>(detail::cmin(255.0f, arcCol.b + 40.0f)),
+            arcCol.a};
+        arcCol = Color::lerp(arcCol, bright, m_hoverAlpha);
+    }
+
+    int valSegs = static_cast<int>(norm * segs);
+    for (int i = 0; i < valSegs; ++i) {
+        // Start from top (-π/2), go clockwise
+        float a = static_cast<float>(-M_PI * 0.5 + 2.0 * M_PI * i / segs);
+        float px = cx + std::cos(a) * r - 2;
+        float py = cy + std::sin(a) * r - 2;
+        ctx.renderer->drawRect(px, py, 4, 4, arcCol);
+    }
+
+    // Dot indicator at current position
+    float dotAngle = static_cast<float>(-M_PI * 0.5 + norm * 2.0 * M_PI);
+    float dotX = cx + std::cos(dotAngle) * r * 0.65f - 2;
+    float dotY = cy + std::sin(dotAngle) * r * 0.65f - 2;
+    ctx.renderer->drawRect(dotX, dotY, 4, 4, Theme::textPrimary);
+
+    // Value text
+    float valScale = 9.0f / Theme::kFontSize;
+    float valY = m_bounds.y + m_bounds.h - ctx.font->lineHeight(valScale) - 1;
+    if (m_formatCb) {
+        std::string valStr = m_formatCb(m_value);
+        float vw = ctx.font->textWidth(valStr, valScale);
+        ctx.font->drawText(*ctx.renderer, valStr.c_str(),
+                           m_bounds.x + (m_bounds.w - vw) * 0.5f,
+                           valY, valScale, Color{200, 205, 215, 255});
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FwToggleSwitch
+// ═══════════════════════════════════════════════════════════════════════════
+
+void FwToggleSwitch::paint(UIContext& ctx) {
+    constexpr float kAnimSpeed = 0.15f;
+    float target = m_state ? 1.0f : 0.0f;
+    if (m_animPos < target) m_animPos = detail::cmin(target, m_animPos + kAnimSpeed);
+    else if (m_animPos > target) m_animPos = detail::cmax(target, m_animPos - kAnimSpeed);
+
+    if (!ctx.renderer || !ctx.font) return;
+
+    float x = m_bounds.x, y = m_bounds.y;
+    float w = m_bounds.w, h = m_bounds.h;
+    float halfW = w * 0.5f;
+
+    // Background track
+    ctx.renderer->drawRoundedRect(x, y, w, h, h * 0.4f, Color{35, 35, 40, 255});
+    ctx.renderer->drawRectOutline(x, y, w, h, Color{60, 60, 65, 255});
+
+    // Sliding pill indicator
+    float pillX = x + m_animPos * halfW;
+    Color pillCol = m_state ? m_activeColor : Color{80, 80, 90, 255};
+    ctx.renderer->drawRoundedRect(pillX + 1, y + 1, halfW - 2, h - 2, (h - 2) * 0.4f, pillCol);
+
+    // Labels
+    float scale = 9.0f / Theme::kFontSize;
+    float lh = ctx.font->lineHeight(scale);
+    float ty = y + (h - lh) * 0.5f - lh * 0.15f;
+
+    Color leftCol  = m_state ? Theme::textDim : Theme::textPrimary;
+    Color rightCol = m_state ? Theme::textPrimary : Theme::textDim;
+
+    float ltw = ctx.font->textWidth(m_leftLabel, scale);
+    ctx.font->drawText(*ctx.renderer, m_leftLabel.c_str(),
+                       x + (halfW - ltw) * 0.5f, ty, scale, leftCol);
+
+    float rtw = ctx.font->textWidth(m_rightLabel, scale);
+    ctx.font->drawText(*ctx.renderer, m_rightLabel.c_str(),
+                       x + halfW + (halfW - rtw) * 0.5f, ty, scale, rightCol);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FwStepSelector
+// ═══════════════════════════════════════════════════════════════════════════
+
+void FwStepSelector::paint(UIContext& ctx) {
+    if (!ctx.renderer || !ctx.font) return;
+
+    float x = m_bounds.x, y = m_bounds.y;
+    float w = m_bounds.w, h = m_bounds.h;
+    float arrowW = 16.0f;
+
+    // Label (if any)
+    float labelScale = 9.0f / Theme::kFontSize;
+    float labelH = 0;
+    if (!m_label.empty()) {
+        float tw = ctx.font->textWidth(m_label, labelScale);
+        float tx = x + (w - tw) * 0.5f;
+        ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, y + 1,
+                           labelScale, Color{170, 175, 185, 255});
+        labelH = 12.0f;
+    }
+
+    float dispY = y + labelH;
+    float dispH = h - labelH;
+
+    // Background
+    ctx.renderer->drawRect(x, dispY, w, dispH, Color{38, 38, 42, 255});
+    ctx.renderer->drawRectOutline(x, dispY, w, dispH, Color{60, 60, 65, 255});
+
+    // Left arrow (◀)
+    float triSize = 4.0f;
+    float laCx = x + arrowW * 0.5f;
+    float laCy = dispY + dispH * 0.5f;
+    ctx.renderer->drawTriangle(
+        laCx + triSize, laCy - triSize,
+        laCx - triSize, laCy,
+        laCx + triSize, laCy + triSize,
+        Theme::textSecondary);
+
+    // Right arrow (▶)
+    float raCx = x + w - arrowW * 0.5f;
+    float raCy = laCy;
+    ctx.renderer->drawTriangle(
+        raCx - triSize, raCy - triSize,
+        raCx + triSize, raCy,
+        raCx - triSize, raCy + triSize,
+        Theme::textSecondary);
+
+    // Value display (centered between arrows)
+    float valScale = 9.0f / Theme::kFontSize;
+    std::string valStr;
+    if (m_formatCb) {
+        valStr = m_formatCb(m_value);
+    } else {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%d", m_value);
+        valStr = buf;
+    }
+    float vw = ctx.font->textWidth(valStr, valScale);
+    float lh = ctx.font->lineHeight(valScale);
+    float vtx = x + (w - vw) * 0.5f;
+    float vty = dispY + (dispH - lh) * 0.5f - lh * 0.15f;
+    ctx.font->drawText(*ctx.renderer, valStr.c_str(), vtx, vty, valScale, Theme::textPrimary);
+}
+
 } // namespace fw
 } // namespace ui
 } // namespace yawn

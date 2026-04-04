@@ -1010,6 +1010,348 @@ private:
     ScrollCallback m_onScroll;
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DentedKnob — Knob with snap detent positions (e.g., center, endpoints)
+// ═══════════════════════════════════════════════════════════════════════════
+
+class FwDentedKnob : public Widget {
+public:
+    using ValueCallback  = std::function<void(float)>;
+    using TouchCallback  = std::function<void(bool)>;
+    using FormatCallback = std::function<std::string(float)>;
+
+    struct Detent {
+        float value;
+        float snapRange; // absolute range for snapping
+    };
+
+    FwDentedKnob() = default;
+
+    void setRange(float mn, float mx)   { m_min = mn; m_max = mx; }
+    void setDefault(float d)             { m_default = d; }
+    void setValue(float v)               { m_value = detail::cclamp(v, m_min, m_max); }
+    float value() const                  { return m_value; }
+    void setSensitivity(float s)         { m_sensitivity = s; }
+    void setOnChange(ValueCallback cb)   { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb)    { m_onTouch = std::move(cb); }
+    void setFormat(FormatCallback cb)    { m_formatCb = std::move(cb); }
+    void setLabel(const std::string& l)  { m_label = l; }
+    void setArcColor(Color c)            { m_arcColor = c; m_customColor = true; }
+
+    void addDetent(float value, float snapRange = 0.03f) {
+        m_detents.push_back({detail::cclamp(value, m_min, m_max), snapRange * (m_max - m_min)});
+    }
+
+    void clearDetents() { m_detents.clear(); }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({40.0f, 50.0f});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void paint(UIContext&) override {}
+#else
+    void paint(UIContext& ctx) override;
+    void renderArc(Renderer2D& renderer, float cx, float cy, float r,
+                   float startNorm, float endNorm, Color color);
+#endif
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button == MouseButton::Left) {
+            m_dragging = true;
+            m_rawValue = m_value;
+            m_lastY = e.y;
+            captureMouse();
+            if (m_onTouch) m_onTouch(true);
+            return true;
+        }
+        if (e.button == MouseButton::Right) {
+            m_value = m_default;
+            if (m_onChange) m_onChange(m_value);
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_dragging) {
+            m_dragging = false;
+            releaseMouse();
+            if (m_onTouch) m_onTouch(false);
+        }
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (!m_dragging) return false;
+        float dy = e.y - m_lastY;
+        m_lastY = e.y;
+        float range = m_max - m_min;
+        float delta = -dy * m_sensitivity * range / 120.0f;
+        m_rawValue = detail::cclamp(m_rawValue + delta, m_min, m_max);
+
+        // Snap to nearest detent if within range
+        float snapped = m_rawValue;
+        for (auto& d : m_detents) {
+            if (std::abs(m_rawValue - d.value) < d.snapRange) {
+                snapped = d.value;
+                break;
+            }
+        }
+
+        if (snapped != m_value) {
+            m_value = snapped;
+            if (m_onChange) m_onChange(m_value);
+        }
+        return true;
+    }
+
+private:
+    float m_value = 0.0f;
+    float m_rawValue = 0.0f;
+    float m_min = 0.0f, m_max = 1.0f;
+    float m_default = 0.5f;
+    float m_sensitivity = 1.0f;
+    bool m_dragging = false;
+    float m_lastY = 0;
+    ValueCallback m_onChange;
+    TouchCallback m_onTouch;
+    FormatCallback m_formatCb;
+    std::string m_label;
+    float m_hoverAlpha = 0.0f;
+    bool m_customColor = false;
+    Color m_arcColor{0, 200, 255, 255};
+    std::vector<Detent> m_detents;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Knob360 — Full 360° rotation knob (no dead zone), for phase/cyclic params
+// ═══════════════════════════════════════════════════════════════════════════
+
+class FwKnob360 : public Widget {
+public:
+    using ValueCallback  = std::function<void(float)>;
+    using TouchCallback  = std::function<void(bool)>;
+    using FormatCallback = std::function<std::string(float)>;
+
+    FwKnob360() = default;
+
+    void setRange(float mn, float mx)   { m_min = mn; m_max = mx; }
+    void setDefault(float d)             { m_default = d; }
+    void setValue(float v)               { m_value = detail::cclamp(v, m_min, m_max); }
+    float value() const                  { return m_value; }
+    void setSensitivity(float s)         { m_sensitivity = s; }
+    void setOnChange(ValueCallback cb)   { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb)    { m_onTouch = std::move(cb); }
+    void setFormat(FormatCallback cb)    { m_formatCb = std::move(cb); }
+    void setLabel(const std::string& l)  { m_label = l; }
+    void setArcColor(Color c)            { m_arcColor = c; m_customColor = true; }
+    void setWrap(bool w)                 { m_wrap = w; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({40.0f, 50.0f});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void paint(UIContext&) override {}
+#else
+    void paint(UIContext& ctx) override;
+#endif
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button == MouseButton::Left) {
+            m_dragging = true;
+            m_lastY = e.y;
+            captureMouse();
+            if (m_onTouch) m_onTouch(true);
+            return true;
+        }
+        if (e.button == MouseButton::Right) {
+            m_value = m_default;
+            if (m_onChange) m_onChange(m_value);
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_dragging) {
+            m_dragging = false;
+            releaseMouse();
+            if (m_onTouch) m_onTouch(false);
+        }
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (!m_dragging) return false;
+        float dy = e.y - m_lastY;
+        m_lastY = e.y;
+        float range = m_max - m_min;
+        float delta = -dy * m_sensitivity * range / 120.0f;
+        float newVal = m_value + delta;
+        if (m_wrap) {
+            // Wrap around
+            while (newVal > m_max) newVal -= range;
+            while (newVal < m_min) newVal += range;
+        } else {
+            newVal = detail::cclamp(newVal, m_min, m_max);
+        }
+        if (newVal != m_value) {
+            m_value = newVal;
+            if (m_onChange) m_onChange(m_value);
+        }
+        return true;
+    }
+
+private:
+    float m_value = 0.0f;
+    float m_min = 0.0f, m_max = 1.0f;
+    float m_default = 0.0f;
+    float m_sensitivity = 1.0f;
+    bool m_dragging = false;
+    float m_lastY = 0;
+    bool m_wrap = true;
+    ValueCallback m_onChange;
+    TouchCallback m_onTouch;
+    FormatCallback m_formatCb;
+    std::string m_label;
+    float m_hoverAlpha = 0.0f;
+    bool m_customColor = false;
+    Color m_arcColor{0, 200, 255, 255};
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ToggleSwitch — Horizontal toggle between two labeled values
+// ═══════════════════════════════════════════════════════════════════════════
+
+class FwToggleSwitch : public Widget {
+public:
+    using Callback = std::function<void(bool)>;
+
+    FwToggleSwitch() = default;
+
+    void setLabels(const std::string& left, const std::string& right) {
+        m_leftLabel = left;
+        m_rightLabel = right;
+    }
+    void setState(bool rightActive) { m_state = rightActive; }
+    bool state() const { return m_state; }
+    void setOnChange(Callback cb) { m_onChange = std::move(cb); }
+    void setActiveColor(Color c) { m_activeColor = c; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        float w = (m_leftLabel.size() + m_rightLabel.size()) * 7.0f + 32.0f;
+        return c.constrain({w, 24.0f});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void paint(UIContext&) override {}
+#else
+    void paint(UIContext& ctx) override;
+#endif
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button != MouseButton::Left) return false;
+        float mid = m_bounds.x + m_bounds.w * 0.5f;
+        bool newState = (e.x >= mid);
+        if (newState != m_state) {
+            m_state = newState;
+            if (m_onChange) m_onChange(m_state);
+        }
+        return true;
+    }
+
+private:
+    bool m_state = false;
+    std::string m_leftLabel = "Off";
+    std::string m_rightLabel = "On";
+    float m_animPos = 0.0f;
+    Callback m_onChange;
+    Color m_activeColor{0, 160, 255, 255};
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// StepSelector — Integer selector with up/down buttons and display
+// ═══════════════════════════════════════════════════════════════════════════
+
+class FwStepSelector : public Widget {
+public:
+    using ValueCallback = std::function<void(int)>;
+    using FormatCallback = std::function<std::string(int)>;
+
+    FwStepSelector() = default;
+
+    void setRange(int mn, int mx)      { m_min = mn; m_max = mx; }
+    void setValue(int v)               { m_value = std::max(m_min, std::min(v, m_max)); }
+    int  value() const                 { return m_value; }
+    void setStep(int s)                { m_step = std::max(1, s); }
+    void setWrap(bool w)               { m_wrap = w; }
+    void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setFormat(FormatCallback cb)  { m_formatCb = std::move(cb); }
+    void setLabel(const std::string& l){ m_label = l; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({60.0f, 36.0f});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void paint(UIContext&) override {}
+#else
+    void paint(UIContext& ctx) override;
+#endif
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button != MouseButton::Left) return false;
+
+        // Left arrow region
+        float arrowW = 16.0f;
+        float gx = m_bounds.x;
+        float dispY = m_bounds.y + (m_label.empty() ? 0.0f : 12.0f);
+        float dispH = m_bounds.h - (m_label.empty() ? 0.0f : 12.0f);
+
+        if (e.x < gx + arrowW && e.y >= dispY && e.y < dispY + dispH) {
+            stepValue(-m_step);
+            return true;
+        }
+        // Right arrow region
+        if (e.x >= gx + m_bounds.w - arrowW && e.y >= dispY && e.y < dispY + dispH) {
+            stepValue(m_step);
+            return true;
+        }
+        return false;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        stepValue(e.dy > 0 ? m_step : -m_step);
+        return true;
+    }
+
+private:
+    void stepValue(int delta) {
+        int newVal = m_value + delta;
+        if (m_wrap) {
+            int range = m_max - m_min + 1;
+            newVal = m_min + ((newVal - m_min) % range + range) % range;
+        } else {
+            newVal = std::max(m_min, std::min(newVal, m_max));
+        }
+        if (newVal != m_value) {
+            m_value = newVal;
+            if (m_onChange) m_onChange(m_value);
+        }
+    }
+
+    int m_value = 0;
+    int m_min = 0, m_max = 127;
+    int m_step = 1;
+    bool m_wrap = false;
+    std::string m_label;
+    ValueCallback m_onChange;
+    FormatCallback m_formatCb;
+    Color m_activeColor{0, 160, 255, 255};
+};
+
 } // namespace fw
 } // namespace ui
 } // namespace yawn
