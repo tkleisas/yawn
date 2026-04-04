@@ -79,8 +79,8 @@ void App::setupMenuBar() {
 
     // Edit menu
     m_menuBar.addMenu("Edit", {
-        {"Undo",        "Ctrl+Z", nullptr},
-        {"Redo",        "Ctrl+Y", nullptr},
+        {"Undo",        "Ctrl+Z", [this]() { if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); } }},
+        {"Redo",        "Ctrl+Y", [this]() { if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); } }},
         {"Preferences", "",       [this]() {
             ui::fw::PreferencesDialog::State state;
             state.selectedOutputDevice = m_audioEngine.config().outputDevice;
@@ -1144,6 +1144,12 @@ void App::processEvents() {
                             if (shift) saveProjectAs();
                             else       saveProject();
                             break;
+                        case SDLK_Z: // Undo
+                            if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); }
+                            break;
+                        case SDLK_Y: // Redo
+                            if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); }
+                            break;
                         case SDLK_C: { // Copy clip
                             auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
                             if (slot && slot->audioClip) {
@@ -1975,6 +1981,7 @@ void App::newProject() {
 
         m_projectPath.clear();
         m_projectDirty = false;
+        m_undoManager.clear();
         m_selectedTrack = 0;
         m_showDetailPanel = false;
         m_pianoRoll->close();
@@ -2075,6 +2082,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
         syncTracksToEngine();
         m_projectPath = projectDir;
         m_projectDirty = false;
+        m_undoManager.clear();
         m_selectedTrack = 0;
         m_showDetailPanel = false;
         m_pianoRoll->close();

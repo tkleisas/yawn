@@ -27,6 +27,7 @@
 #include "midi/MidiEngine.h"
 #include "util/FileIO.h"
 #include "util/AppSettings.h"
+#include "util/UndoManager.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -114,6 +115,7 @@ private:
     audio::AudioEngine m_audioEngine;
     midi::MidiEngine m_midiEngine;
     Project m_project;
+    undo::UndoManager m_undoManager;
     util::AppSettings m_settings;
     bool m_running = false;
     bool m_showMixer = true;
