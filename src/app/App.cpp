@@ -203,7 +203,14 @@ void App::setupMenuBar() {
             LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
         }},
         {"Delete Track",     "",  nullptr, true},
-        {"Rename Track",     "",  nullptr},
+        {"Rename Track",     "",  [this]() {
+            if (m_sessionPanel->visible()) {
+                m_sessionPanel->startTrackRename(m_selectedTrack);
+            } else {
+                m_arrangementPanel->startTrackRename(m_selectedTrack);
+            }
+            SDL_StartTextInput(m_mainWindow.getHandle());
+        }},
     });
 
     // MIDI menu
@@ -350,6 +357,17 @@ void App::buildWidgetTree() {
     m_mixerPanel->setOnScrollChanged([this](float sx) {
         m_sessionPanel->setScrollX(sx);
     });
+
+    // Track rename callbacks (shared undo handler)
+    auto renameHandler = [this](int track, const std::string& oldName, const std::string& newName) {
+        markDirty();
+        m_undoManager.push({"Rename Track",
+            [this, track, oldName]{ m_project.track(track).name = oldName; markDirty(); },
+            [this, track, newName]{ m_project.track(track).name = newName; markDirty(); },
+            ""});
+    };
+    m_sessionPanel->setOnTrackRenamed(renameHandler);
+    m_arrangementPanel->setOnTrackRenamed(renameHandler);
 
     // Transfer ownership
     m_wrappers.push_back(std::move(menuW));
@@ -1593,6 +1611,22 @@ void App::processEvents() {
                         break;
                 }
 
+                // Track rename keyboard handling
+                if (m_sessionPanel->isRenamingTrack()) {
+                    bool wasRenaming = true;
+                    m_sessionPanel->handleRenameKeyDown(static_cast<int>(event.key.key));
+                    if (!m_sessionPanel->isRenamingTrack())
+                        SDL_StopTextInput(m_mainWindow.getHandle());
+                    if (wasRenaming) break;
+                }
+                if (m_arrangementPanel->isRenamingTrack()) {
+                    bool wasRenaming = true;
+                    m_arrangementPanel->handleRenameKeyDown(static_cast<int>(event.key.key));
+                    if (!m_arrangementPanel->isRenamingTrack())
+                        SDL_StopTextInput(m_mainWindow.getHandle());
+                    if (wasRenaming) break;
+                }
+
                 // Detail panel knob text-edit mode
                 if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
                     if (m_detailPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
@@ -1614,8 +1648,11 @@ void App::processEvents() {
                 }
 
                 // Virtual keyboard (intercepts musical keys before shortcuts)
-                if (m_virtualKeyboard.onKeyDown(event.key.key))
-                    break;
+                // Skip when renaming a track — keys are for text input, not notes
+                if (!m_sessionPanel->isRenamingTrack() && !m_arrangementPanel->isRenamingTrack()) {
+                    if (m_virtualKeyboard.onKeyDown(event.key.key))
+                        break;
+                }
 
                 // Detail panel arrow key navigation
                 if (m_showDetailPanel && m_detailPanel->isFocused()) {
@@ -1703,6 +1740,15 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
+                // Track rename text input
+                if (m_sessionPanel->isRenamingTrack()) {
+                    m_sessionPanel->handleRenameTextInput(event.text.text);
+                    break;
+                }
+                if (m_arrangementPanel->isRenamingTrack()) {
+                    m_arrangementPanel->handleRenameTextInput(event.text.text);
+                    break;
+                }
                 // Transport editing (BPM / time sig)
                 if (m_transportPanel->isEditing()) {
                     m_transportPanel->handleTextInput(event.text.text);
@@ -1947,7 +1993,12 @@ void App::processEvents() {
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
+                    me.clickCount = event.button.clicks;
                     m_contentGrid->dispatchMouseDown(me);
+                    // Start SDL text input if a track rename started
+                    if (m_sessionPanel->isRenamingTrack() || m_arrangementPanel->isRenamingTrack()) {
+                        SDL_StartTextInput(m_mainWindow.getHandle());
+                    }
                     int selTrack = m_sessionPanel->lastClickTrack();
                     if (selTrack >= 0) {
                         m_selectedTrack = selTrack;
@@ -1967,8 +2018,9 @@ void App::processEvents() {
                         showClipContextMenu(rcTrack, rcScene, mx, my);
                     }
                 }
-                if (wasEditing && !m_transportPanel->isEditing())
+                if (wasEditing && !m_transportPanel->isEditing()) {
                     SDL_StopTextInput(m_mainWindow.getHandle());
+                }
                 break;
             }
 

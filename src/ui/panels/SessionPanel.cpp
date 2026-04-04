@@ -67,13 +67,16 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
         return true;
     }
 
-    // Track header click — select track
+    // Track header click — select track (or double-click to rename)
     if (my >= headerY && my < gridY && mx >= gridX) {
         float cmx = mx + m_scrollX;
         int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
         if (ti >= 0 && ti < m_project->numTracks()) {
             m_selectedTrack = ti;
             m_lastClickTrack = ti;
+            if (e.isDoubleClick()) {
+                startTrackRename(ti);
+            }
             return true;
         }
     }
@@ -217,18 +220,40 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
         r.drawRect(tx + 2, y + 2, tw - 4, 3, col);
 
         if (f.isLoaded()) {
-            float textX = tx + 18, textY = y + 8;
-            for (char c : m_project->track(t).name) {
-                auto g = f.getGlyph(c, textX, textY, scale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Theme::textPrimary, f.textureId());
-                textX += g.xAdvance;
-                if (textX > tx + tw - 42) break;
+            if (t == m_renameTrack) {
+                // Inline rename text box — wraps around text at (tx+18, y+8)
+                float textX = tx + 18, textY = y + 8;
+                float boxX = tx + 14, boxY = y + 6;
+                float boxW = tw - 18, boxH = 24;
+                r.drawRect(boxX, boxY, boxW, boxH, Color{20, 22, 28, 255});
+                r.drawRectOutline(boxX, boxY, boxW, boxH, Theme::transportAccent);
+                float cx = textX;
+                if (m_renameCursor == 0)
+                    r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+                for (int i = 0; i < static_cast<int>(m_renameText.size()); ++i) {
+                    auto g = f.getGlyph(m_renameText[i], cx, textY, scale);
+                    if (cx + g.xAdvance > boxX + boxW - 4) break;
+                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       Theme::textPrimary, f.textureId());
+                    cx += g.xAdvance;
+                    if (i == m_renameCursor - 1)
+                        r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+                }
+            } else {
+                float textX = tx + 18, textY = y + 8;
+                for (char c : m_project->track(t).name) {
+                    auto g = f.getGlyph(c, textX, textY, scale);
+                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       Theme::textPrimary, f.textureId());
+                    textX += g.xAdvance;
+                    if (textX > tx + tw - 42) break;
+                }
             }
         }
 
-        // Track type icon (left side) — waveform for Audio, MIDI port for MIDI
+        // Track type icon(left side) — waveform for Audio, MIDI port for MIDI
         {
             bool isMidi = (m_project->track(t).type == Track::Type::Midi);
             Color iconCol = isMidi ? Color{180,130,255,200} : Color{130,200,130,200};

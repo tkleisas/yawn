@@ -479,8 +479,9 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
     r.drawRect(ix, stripY, iw, 3, col);
 
-    char nameBuf[16];
-    std::snprintf(nameBuf, sizeof(nameBuf), "%d", idx + 1);
+    char nameBuf[32];
+    const auto& trackName = m_project->track(idx).name;
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", trackName.c_str());
     s.nameLabel.setText(nameBuf);
     s.nameLabel.layout(Rect{ix + 4, stripY + 5, iw - 8, 14}, ctx);
     s.nameLabel.paint(ctx);

@@ -234,6 +234,11 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
 
             m_selectedTrack = track;
             if (m_onTrackClick) m_onTrackClick(track);
+
+            // Double-click on track name area → rename
+            if (e.isDoubleClick() && e.y < btnRowY) {
+                startTrackRename(track);
+            }
         }
         return true;
     }
@@ -992,15 +997,37 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
         r.drawRect(x + 1, ty + 1, 4, baseH - 2, col);
 
         // Track name (top row)
-        float tx = x + 10;
-        float textY = ty + 4;
-        float maxNameX = x + kTrackHeaderW - 6;
-        for (const char* p = tr.name.c_str(); *p && tx < maxNameX; ++p) {
-            auto g = f.getGlyph(*p, tx, textY, scale);
-            r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                               g.u0, g.v0, g.u1, g.v1,
-                               Theme::textPrimary, f.textureId());
-            tx += g.xAdvance;
+        if (t == m_renameTrack) {
+            // Inline rename text box — matches normal text position
+            float boxX = x + 7, boxY = ty + 2;
+            float boxW = kTrackHeaderW - 12, boxH = baseH / 2 - 2;
+            r.drawRect(boxX, boxY, boxW, boxH, Color{20, 22, 28, 255});
+            r.drawRectOutline(boxX, boxY, boxW, boxH, Theme::transportAccent);
+            float cx = boxX + 4;
+            float textY = ty + 4;
+            if (m_renameCursor == 0)
+                r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+            for (int i = 0; i < static_cast<int>(m_renameText.size()); ++i) {
+                auto g = f.getGlyph(m_renameText[i], cx, textY, scale);
+                if (cx + g.xAdvance > boxX + boxW - 4) break;
+                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                   g.u0, g.v0, g.u1, g.v1,
+                                   Theme::textPrimary, f.textureId());
+                cx += g.xAdvance;
+                if (i == m_renameCursor - 1)
+                    r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+            }
+        } else {
+            float tx = x + 10;
+            float textY = ty + 4;
+            float maxNameX = x + kTrackHeaderW - 6;
+            for (const char* p = tr.name.c_str(); *p && tx < maxNameX; ++p) {
+                auto g = f.getGlyph(*p, tx, textY, scale);
+                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                   g.u0, g.v0, g.u1, g.v1,
+                                   Theme::textPrimary, f.textureId());
+                tx += g.xAdvance;
+            }
         }
 
         // Button row (bottom area)

@@ -19,6 +19,7 @@ namespace yawn { namespace audio { class AudioEngine; class Clip; } }
 #include "core/Constants.h"
 #include <cstdio>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <cstdlib>
 #include <string>
@@ -96,6 +97,45 @@ public:
 
     // ─── Scroll callback ───────────────────────────────────────────────
     void setOnScrollChanged(std::function<void(float)> cb) { m_onScrollChanged = std::move(cb); }
+
+    // ─── Track rename ──────────────────────────────────────────────────
+    using RenameCallback = std::function<void(int track, const std::string& oldName, const std::string& newName)>;
+    void setOnTrackRenamed(RenameCallback cb) { m_onTrackRenamed = std::move(cb); }
+
+    void startTrackRename(int track) {
+        if (!m_project || track < 0 || track >= m_project->numTracks()) return;
+        m_renameTrack = track;
+        m_renameText = m_project->track(track).name;
+        m_renameSavedText = m_renameText;
+        m_renameCursor = static_cast<int>(m_renameText.size());
+    }
+
+    void cancelTrackRename() { m_renameTrack = -1; }
+
+    bool isRenamingTrack() const { return m_renameTrack >= 0; }
+
+    bool handleRenameKeyDown(int keyCode) {
+        if (m_renameTrack < 0) return false;
+        if (keyCode == 0x0D || keyCode == 0x4000009C) { commitRename(); return true; }
+        if (keyCode == 0x1B) { cancelTrackRename(); return true; }
+        if (keyCode == 0x08 && m_renameCursor > 0) {
+            m_renameText.erase(m_renameCursor - 1, 1);
+            m_renameCursor--;
+            return true;
+        }
+        if (keyCode == 0x7F && m_renameCursor < static_cast<int>(m_renameText.size())) {
+            m_renameText.erase(m_renameCursor, 1);
+            return true;
+        }
+        return true;
+    }
+
+    bool handleRenameTextInput(const char* text) {
+        if (m_renameTrack < 0) return false;
+        m_renameText.insert(m_renameCursor, text);
+        m_renameCursor += static_cast<int>(std::strlen(text));
+        return true;
+    }
 
     // ─── Slot query (used by App for double-click → piano roll) ─────────
 
@@ -310,6 +350,29 @@ private:
     bool  m_hoveredIcon  = false;
 
     std::function<void(float)> m_onScrollChanged;
+    RenameCallback m_onTrackRenamed;
+
+    // Inline track rename state
+    int         m_renameTrack = -1;
+    std::string m_renameText;
+    std::string m_renameSavedText;
+    int         m_renameCursor = 0;
+
+    void commitRename() {
+        if (m_renameTrack < 0 || !m_project) { m_renameTrack = -1; return; }
+        // Trim whitespace
+        auto trimmed = m_renameText;
+        while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(0, 1);
+        while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+        if (trimmed.empty()) trimmed = m_renameSavedText;
+        m_renameText = trimmed;
+        if (m_renameText != m_renameSavedText) {
+            m_project->track(m_renameTrack).name = m_renameText;
+            if (m_onTrackRenamed)
+                m_onTrackRenamed(m_renameTrack, m_renameSavedText, m_renameText);
+        }
+        m_renameTrack = -1;
+    }
 
     static constexpr float kScrollbarH    = 12.0f;
     static constexpr int kVisibleScenes  = 8;

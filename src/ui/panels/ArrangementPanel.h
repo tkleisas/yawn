@@ -18,6 +18,7 @@
 #include "util/UndoManager.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <set>
@@ -72,6 +73,45 @@ public:
     void setOnPlayheadClick(PlayheadClickCallback cb)   { m_onPlayheadClick = std::move(cb); }
     void setOnClipChange(ClipChangeCallback cb)         { m_onClipChange = std::move(cb); }
     void setOnTrackArrToggle(TrackArrToggleCallback cb) { m_onTrackArrToggle = std::move(cb); }
+
+    // ─── Track rename ─────────────────────────────────────────────────
+    using RenameCallback = std::function<void(int track, const std::string& oldName, const std::string& newName)>;
+    void setOnTrackRenamed(RenameCallback cb) { m_onTrackRenamed = std::move(cb); }
+
+    void startTrackRename(int track) {
+        if (!m_project || track < 0 || track >= m_project->numTracks()) return;
+        m_renameTrack = track;
+        m_renameText = m_project->track(track).name;
+        m_renameSavedText = m_renameText;
+        m_renameCursor = static_cast<int>(m_renameText.size());
+    }
+
+    void cancelTrackRename() { m_renameTrack = -1; }
+
+    bool isRenamingTrack() const { return m_renameTrack >= 0; }
+
+    bool handleRenameKeyDown(int keyCode) {
+        if (m_renameTrack < 0) return false;
+        if (keyCode == 0x0D || keyCode == 0x4000009C) { commitRename(); return true; }
+        if (keyCode == 0x1B) { cancelTrackRename(); return true; }
+        if (keyCode == 0x08 && m_renameCursor > 0) {
+            m_renameText.erase(m_renameCursor - 1, 1);
+            m_renameCursor--;
+            return true;
+        }
+        if (keyCode == 0x7F && m_renameCursor < static_cast<int>(m_renameText.size())) {
+            m_renameText.erase(m_renameCursor, 1);
+            return true;
+        }
+        return true;
+    }
+
+    bool handleRenameTextInput(const char* text) {
+        if (m_renameTrack < 0) return false;
+        m_renameText.insert(m_renameCursor, text);
+        m_renameCursor += static_cast<int>(std::strlen(text));
+        return true;
+    }
 
     // ─── Snap grid ─────────────────────────────────────────────────────
 
@@ -197,6 +237,29 @@ private:
     ClipChangeCallback     m_onClipChange;
     TrackArrToggleCallback m_onTrackArrToggle;
     LoopChangeCallback     m_onLoopChange;
+    RenameCallback         m_onTrackRenamed;
+
+    // Inline track rename state
+    int         m_renameTrack = -1;
+    std::string m_renameText;
+    std::string m_renameSavedText;
+    int         m_renameCursor = 0;
+
+    void commitRename() {
+        if (m_renameTrack < 0 || !m_project) { m_renameTrack = -1; return; }
+        // Trim whitespace
+        auto trimmed = m_renameText;
+        while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(0, 1);
+        while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+        if (trimmed.empty()) trimmed = m_renameSavedText;
+        m_renameText = trimmed;
+        if (m_renameText != m_renameSavedText) {
+            m_project->track(m_renameTrack).name = m_renameText;
+            if (m_onTrackRenamed)
+                m_onTrackRenamed(m_renameTrack, m_renameSavedText, m_renameText);
+        }
+        m_renameTrack = -1;
+    }
 
     // Snap grid
     Snap m_snap = Snap::Beat;
