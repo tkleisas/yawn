@@ -277,6 +277,7 @@ class FwKnob : public Widget {
 public:
     using ValueCallback = std::function<void(float)>;
     using FormatCallback = std::function<std::string(float)>;
+    using TouchCallback = std::function<void(bool)>; // true=begin, false=end
 
     FwKnob() = default;
 
@@ -285,6 +286,7 @@ public:
     void setRange(float mn, float mx) { m_min = mn; m_max = mx; }
     void setDefault(float d) { m_default = d; }
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb) { m_onTouch = std::move(cb); }
     void setLabel(const std::string& l) { m_label = l; }
     void setSensitivity(float s) { m_sensitivity = s; }
     void setStep(float s) { m_step = s; }  // snap to step (0 = continuous)
@@ -341,6 +343,7 @@ public:
             m_lastY = e.y;
             m_rawValue = m_value;  // sync raw tracker on drag start
             captureMouse();
+            if (m_onTouch) m_onTouch(true);
             return true;
         }
         if (e.button == MouseButton::Right) {
@@ -353,9 +356,9 @@ public:
     }
 
     bool onMouseUp(MouseEvent&) override {
-        if (m_dragging && m_step > 0) {
-            // Snap visual to final discrete value on release
-            m_rawValue = m_value;
+        if (m_dragging) {
+            if (m_step > 0) m_rawValue = m_value;
+            if (m_onTouch) m_onTouch(false);
         }
         m_dragging = false;
         releaseMouse();
@@ -449,6 +452,7 @@ private:
     bool m_dragging = false;
     float m_lastY = 0;
     ValueCallback m_onChange;
+    TouchCallback m_onTouch;
     FormatCallback m_formatCb;
     std::string m_label;
 

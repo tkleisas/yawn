@@ -1,10 +1,26 @@
-# GenerateVersion.cmake — run at build time to embed git hash into Version.h
+# GenerateVersion.cmake — run at build time to embed git tag + hash into Version.h
 # Called via add_custom_target with cmake -P
 
-# Read the base version from the cache
+# Fallback version from CMake project()
 set(VERSION_MAJOR "${VERSION_MAJOR}")
 set(VERSION_MINOR "${VERSION_MINOR}")
 set(VERSION_PATCH "${VERSION_PATCH}")
+
+# Try to get version from latest git tag (e.g. v0.8.2 → 0.8.2)
+execute_process(
+    COMMAND git describe --tags --abbrev=0
+    WORKING_DIRECTORY "${SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE GIT_TAG_RESULT
+)
+
+if(GIT_TAG_RESULT EQUAL 0 AND GIT_TAG MATCHES "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+    set(VERSION_MAJOR "${CMAKE_MATCH_1}")
+    set(VERSION_MINOR "${CMAKE_MATCH_2}")
+    set(VERSION_PATCH "${CMAKE_MATCH_3}")
+endif()
 
 # Get short git commit hash
 execute_process(

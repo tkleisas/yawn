@@ -11,6 +11,7 @@
 #include "midi/MidiTypes.h"
 #include "midi/MidiClip.h"
 #include "midi/MidiEngine.h"
+#include "automation/AutomationEngine.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
 #include <atomic>
@@ -67,6 +68,9 @@ public:
     const Mixer& mixer() const { return m_mixer; }
     Metronome& metronome() { return m_metronome; }
     midi::MidiEffectChain& midiEffectChain(int track) { return m_midiEffectChains[track]; }
+    automation::AutomationEngine& automationEngine() { return m_automationEngine; }
+    std::vector<automation::AutomationLane>& trackAutoLanes(int track) { return m_trackAutoLanes[track]; }
+    const std::vector<automation::AutomationLane>& trackAutoLanes(int track) const { return m_trackAutoLanes[track]; }
 
     // Instrument management (call before start or with appropriate sync)
     void setInstrument(int track, std::unique_ptr<instruments::Instrument> inst) {
@@ -142,6 +146,9 @@ private:
     MidiClipEngine m_midiClipEngine;
     Mixer m_mixer;
     Metronome m_metronome;
+    automation::AutomationEngine m_automationEngine;
+    // Per-track automation lanes for recording (written by automation engine)
+    std::vector<automation::AutomationLane> m_trackAutoLanes[kMaxTracks];
     midi::MidiEffectChain m_midiEffectChains[kMaxMidiTracks];
     std::unique_ptr<instruments::Instrument> m_instruments[kMaxTracks];
     // Heap-allocated to avoid stack overflow (~1MB for 64 MidiBuffers)

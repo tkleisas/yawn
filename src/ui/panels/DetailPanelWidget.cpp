@@ -41,13 +41,14 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
 
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
         float overviewH = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+        float autoH = (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0) ? kAutoSectionH : 24.0f;
         float clipHeaderH = kClipTitleRowH + kClipWaveformH + overviewH
-                          + kClipPropsH + kClipSectionGap * 2;
+                          + kClipPropsH + kClipSectionGap * 2 + autoH + kClipSectionGap;
         float scrollY = bodyY + clipHeaderH;
         float scrollH = std::max(0.0f, bodyH - clipHeaderH);
         m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
         m_scroll.layout(Rect{bounds.x, scrollY, bounds.w, scrollH}, ctx);
-    } else {
+    }else {
         m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
         m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
     }
@@ -111,6 +112,8 @@ void DetailPanelWidget::paint(UIContext& ctx) {
     // Dropdown overlay must render outside clip region
     if (m_viewMode == ViewMode::AudioClip && m_warpModeDropdown.isOpen())
         m_warpModeDropdown.paintOverlay(ctx);
+    if (m_viewMode == ViewMode::AudioClip && m_autoTargetDropdown.isOpen())
+        m_autoTargetDropdown.paintOverlay(ctx);
 }
 
 bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
@@ -144,12 +147,20 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         // When dropdown is open, forward ALL clicks to it (select item or close)
         if (m_warpModeDropdown.isOpen())
             return m_warpModeDropdown.onMouseDown(e);
+        if (m_autoTargetDropdown.isOpen())
+            return m_autoTargetDropdown.onMouseDown(e);
         auto& wb = m_waveformWidget.bounds();
         if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
             e.lx = mx - wb.x;
             e.ly = my - wb.y;
             if (m_waveformWidget.onMouseDown(e)) return true;
         }
+        // Automation envelope editor
+        if (hitWidget(m_autoEnvelopeWidget, mx, my))
+            return m_autoEnvelopeWidget.onMouseDown(e);
+        // Automation target dropdown
+        if (hitWidget(m_autoTargetDropdown, mx, my))
+            return m_autoTargetDropdown.onMouseDown(e);
         // Warp mode dropdown
         if (hitWidget(m_warpModeDropdown, mx, my))
             return m_warpModeDropdown.onMouseDown(e);
@@ -331,8 +342,37 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
 
     // ── Effects separator ──
     float fxSepY = stripY + labelH + 2.0f + knobH + 6.0f;
-    renderer.drawRect(sectionX, fxSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
 
+    // ── Automation section ──
+    float autoY = fxSepY;
+    renderer.drawRect(sectionX, autoY, sectionW, 1.0f, Color{50, 50, 55, 255});
+    float autoLabelY = autoY + 3.0f;
+    font.drawText(renderer, "Automation", sectionX, autoLabelY, labelScale, Theme::textDim);
+
+    // Target picker dropdown
+    float dropW = 160.0f;
+    float dropX = sectionX + 80.0f;
+    float dropY = autoLabelY - 1.0f;
+    m_autoTargetDropdown.layout(Rect{dropX, dropY, dropW, 16.0f}, ctx);
+    m_autoTargetDropdown.paint(ctx);
+
+    float envelopeY = autoLabelY + 18.0f;
+
+    if (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0 &&
+        m_autoSelectedLaneIdx < static_cast<int>(m_clipAutoLanes->size())) {
+        // Sync envelope display from clip data
+        syncEnvelopeFromLane();
+        float envH = 60.0f;
+        float envW = sectionW;
+        m_autoEnvelopeWidget.layout(Rect{sectionX, envelopeY, envW, envH}, ctx);
+        m_autoEnvelopeWidget.paint(ctx);
+        fxSepY = envelopeY + envH + kClipSectionGap;
+    } else {
+        fxSepY = envelopeY + kClipSectionGap;
+    }
+
+    // ── Effects section ──
+    renderer.drawRect(sectionX, fxSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
     float fxLabelY = fxSepY + 3.0f;
     font.drawText(renderer, "Audio Effects", sectionX, fxLabelY, labelScale, Theme::textDim);
 

@@ -11,13 +11,14 @@ namespace audio {
 
 void MidiClipEngine::scheduleClip(int trackIndex, int sceneIndex,
                                   const midi::MidiClip* clip,
-                                  QuantizeMode quantize) {
+                                  QuantizeMode quantize,
+                                  const std::vector<automation::AutomationLane>* clipAutomation) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
     if (quantize == QuantizeMode::None) {
-        if (clip) launchNow(trackIndex, sceneIndex, clip);
+        if (clip) launchNow(trackIndex, sceneIndex, clip, clipAutomation);
         else stopNow(trackIndex);
     } else {
-        m_pending[trackIndex] = {trackIndex, sceneIndex, clip, quantize, true};
+        m_pending[trackIndex] = {trackIndex, sceneIndex, clip, quantize, true, clipAutomation};
     }
 }
 
@@ -55,7 +56,7 @@ void MidiClipEngine::checkAndFirePending() {
         }
 
         if (m_pending[t].clip) {
-            launchNow(t, m_pending[t].sceneIndex, m_pending[t].clip);
+            launchNow(t, m_pending[t].sceneIndex, m_pending[t].clip, m_pending[t].clipAutomation);
         } else {
             stopNow(t);
         }
@@ -116,7 +117,8 @@ void MidiClipEngine::process(midi::MidiBuffer* trackMidiBuffers, int numFrames) 
 }
 
 void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
-                               const midi::MidiClip* clip) {
+                               const midi::MidiClip* clip,
+                               const std::vector<automation::AutomationLane>* clipAutomation) {
     auto& state = m_tracks[trackIndex];
     // Send note-offs for any currently active notes before switching
     // (handled by stopNow if previously active)
@@ -128,6 +130,7 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
     state.active = true;
     state.stopping = false;
     state.sceneIndex = sceneIndex;
+    state.clipAutomation = clipAutomation;
     LOG_DEBUG("MIDI", "MidiClipEngine launchNow track=%d scene=%d notes=%d len=%.2f",
                 trackIndex, sceneIndex,
                 clip ? static_cast<int>(clip->noteCount()) : 0,

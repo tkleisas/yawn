@@ -21,6 +21,7 @@
 #include "effects/EffectChain.h"
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
+#include "midi/LFO.h"
 #include "util/Factory.h"
 #include "util/FileIO.h"
 

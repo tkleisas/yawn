@@ -4,6 +4,7 @@
 #include "audio/Clip.h"
 #include "audio/ClipEngine.h"
 #include "midi/MidiClip.h"
+#include "automation/AutomationLane.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -29,6 +30,10 @@ struct Track {
     bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
+
+    // Per-track automation lanes (arrangement-level, absolute beat times)
+    std::vector<automation::AutomationLane> automationLanes;
+    automation::AutoMode autoMode = automation::AutoMode::Off;
 };
 
 struct Scene {
@@ -47,11 +52,14 @@ struct ClipSlot {
 
     bool empty() const { return !audioClip && !midiClip; }
 
-    void clear() { audioClip.reset(); midiClip.reset(); }
+    void clear() { audioClip.reset(); midiClip.reset(); clipAutomation.clear(); }
 
     std::unique_ptr<audio::Clip> audioClip;
     std::unique_ptr<midi::MidiClip> midiClip;
     audio::QuantizeMode launchQuantize = audio::QuantizeMode::NextBar;
+
+    // Per-clip automation lanes (times relative to clip start, loop with clip)
+    std::vector<automation::AutomationLane> clipAutomation;
 };
 
 // Project model: holds tracks, scenes, and the 2D clip grid.

@@ -1703,6 +1703,337 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// AutomationEnvelopeWidget — Editable breakpoint envelope display.
+// Used in clip/track automation views. Shows breakpoints as draggable
+// circles connected by lines, with grid background and value axis.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class AutomationEnvelopeWidget : public Widget {
+public:
+    AutomationEnvelopeWidget() { setName("AutoEnvelope"); }
+
+    void setTimeRange(double start, double end) { m_timeStart = start; m_timeEnd = end; }
+    void setValueRange(float minV, float maxV) { m_valueMin = minV; m_valueMax = maxV; }
+
+    void setPoints(const std::vector<std::pair<double,float>>& pts) { m_points = pts; }
+
+    // Callbacks for user interaction
+    using PointCallback = std::function<void(int idx, double time, float value)>;
+    using AddCallback = std::function<void(double time, float value)>;
+    using RemoveCallback = std::function<void(int idx)>;
+
+    void setOnPointMove(PointCallback cb) { m_onPointMove = std::move(cb); }
+    void setOnPointAdd(AddCallback cb)    { m_onPointAdd = std::move(cb); }
+    void setOnPointRemove(RemoveCallback cb) { m_onPointRemove = std::move(cb); }
+
+    int dragIndex() const { return m_dragIdx; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({200.0f, 60.0f});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void paint(UIContext&) override {}
+#else
+    void paint(UIContext& ctx) override {
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+        float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w, h = m_bounds.h;
+
+        // Background
+        r.drawRect(x, y, w, h, Color{20, 20, 25, 255});
+        r.drawRectOutline(x, y, w, h, Color{50, 50, 55, 255});
+
+        // Grid lines (time divisions)
+        double timeSpan = m_timeEnd - m_timeStart;
+        if (timeSpan > 0) {
+            double step = 1.0;
+            if (timeSpan > 16) step = 4.0;
+            else if (timeSpan > 8) step = 2.0;
+            else if (timeSpan > 4) step = 1.0;
+            else step = 0.5;
+
+            double t = std::ceil(m_timeStart / step) * step;
+            while (t < m_timeEnd) {
+                float gx = timeToX(t);
+                r.drawRect(gx, y + 1, 1.0f, h - 2, Color{35, 35, 40, 255});
+                t += step;
+            }
+        }
+
+        // Horizontal center line (value = 0.5 for normalized params)
+        float midY = valueToY((m_valueMin + m_valueMax) * 0.5f);
+        r.drawRect(x + 1, midY, w - 2, 1.0f, Color{40, 40, 48, 255});
+
+        if (m_points.empty()) {
+            float ts = 10.0f / f.pixelHeight();
+            f.drawText(r, "Click to add points", x + w * 0.3f, y + h * 0.4f, ts,
+                       Color{80, 80, 90, 255});
+            return;
+        }
+
+        // Draw connecting lines between points
+        for (size_t i = 0; i + 1 < m_points.size(); ++i) {
+            float x0 = timeToX(m_points[i].first);
+            float y0 = valueToY(m_points[i].second);
+            float x1 = timeToX(m_points[i + 1].first);
+            float y1 = valueToY(m_points[i + 1].second);
+            drawLine(r, x0, y0, x1, y1, Color{100, 180, 255, 200});
+        }
+
+        // Extend line from edges
+        if (!m_points.empty()) {
+            float firstX = timeToX(m_points.front().first);
+            float firstY = valueToY(m_points.front().second);
+            if (firstX > x + 1)
+                drawLine(r, x + 1, firstY, firstX, firstY, Color{100, 180, 255, 100});
+            float lastX = timeToX(m_points.back().first);
+            float lastY = valueToY(m_points.back().second);
+            if (lastX < x + w - 1)
+                drawLine(r, lastX, lastY, x + w - 1, lastY, Color{100, 180, 255, 100});
+        }
+
+        // Draw breakpoints as circles
+        for (size_t i = 0; i < m_points.size(); ++i) {
+            float px = timeToX(m_points[i].first);
+            float py = valueToY(m_points[i].second);
+            Color col = (static_cast<int>(i) == m_dragIdx)
+                ? Color{255, 220, 80, 255} : Color{100, 180, 255, 255};
+            r.drawFilledCircle(px, py, kPointRadius, col, 12);
+            r.drawFilledCircle(px, py, kPointRadius - 1.5f, Color{30, 30, 40, 255}, 12);
+            r.drawFilledCircle(px, py, kPointRadius - 2.5f, col, 12);
+        }
+    }
+#endif
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button == MouseButton::Right) {
+            // Right-click removes nearest point
+            int nearest = findNearestPoint(e.x, e.y);
+            if (nearest >= 0 && m_onPointRemove) {
+                m_onPointRemove(nearest);
+                return true;
+            }
+            return false;
+        }
+        int hit = findNearestPoint(e.x, e.y);
+        if (hit >= 0) {
+            m_dragIdx = hit;
+            captureMouse();
+            return true;
+        }
+        // Click empty area — add point
+        double t = xToTime(e.x);
+        float v = yToValue(e.y);
+        if (m_onPointAdd) m_onPointAdd(t, v);
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_dragIdx >= 0 && m_dragIdx < static_cast<int>(m_points.size())) {
+            double t = std::clamp(xToTime(e.x), m_timeStart, m_timeEnd);
+            float v = std::clamp(yToValue(e.y), m_valueMin, m_valueMax);
+            m_points[m_dragIdx] = {t, v};
+            if (m_onPointMove) m_onPointMove(m_dragIdx, t, v);
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_dragIdx >= 0) {
+            m_dragIdx = -1;
+            releaseMouse();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    static constexpr float kPointRadius = 4.0f;
+    static constexpr float kHitRadius = 8.0f;
+
+    double m_timeStart = 0.0, m_timeEnd = 4.0;
+    float  m_valueMin = 0.0f, m_valueMax = 1.0f;
+    std::vector<std::pair<double,float>> m_points;
+    int m_dragIdx = -1;
+
+    PointCallback  m_onPointMove;
+    AddCallback    m_onPointAdd;
+    RemoveCallback m_onPointRemove;
+
+    float timeToX(double t) const {
+        double span = m_timeEnd - m_timeStart;
+        if (span <= 0) return m_bounds.x;
+        float frac = static_cast<float>((t - m_timeStart) / span);
+        return m_bounds.x + frac * m_bounds.w;
+    }
+    float valueToY(float v) const {
+        float span = m_valueMax - m_valueMin;
+        if (span <= 0) return m_bounds.y + m_bounds.h * 0.5f;
+        float frac = (v - m_valueMin) / span;
+        return m_bounds.y + m_bounds.h - frac * m_bounds.h; // higher value = higher on screen
+    }
+    double xToTime(float px) const {
+        double span = m_timeEnd - m_timeStart;
+        float frac = (px - m_bounds.x) / std::max(1.0f, m_bounds.w);
+        return m_timeStart + frac * span;
+    }
+    float yToValue(float py) const {
+        float span = m_valueMax - m_valueMin;
+        float frac = 1.0f - (py - m_bounds.y) / std::max(1.0f, m_bounds.h);
+        return m_valueMin + frac * span;
+    }
+
+    int findNearestPoint(float mx, float my) const {
+        int best = -1;
+        float bestDist = kHitRadius * kHitRadius;
+        for (size_t i = 0; i < m_points.size(); ++i) {
+            float px = timeToX(m_points[i].first);
+            float py = valueToY(m_points[i].second);
+            float dx = mx - px, dy = my - py;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bestDist) { bestDist = d2; best = static_cast<int>(i); }
+        }
+        return best;
+    }
+
+#ifndef YAWN_TEST_BUILD
+    void drawLine(Renderer2D& r, float x0, float y0, float x1, float y1, Color c) const {
+        float dx = x1 - x0, dy = y1 - y0;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 0.5f) { r.drawRect(x0, y0, 1, 1, c); return; }
+        float steps = std::max(1.0f, len);
+        float sx = dx / steps, sy = dy / steps;
+        for (float i = 0; i < steps; i += 1.0f)
+            r.drawRect(x0 + i * sx, y0 + i * sy, 1.0f, 1.0f, c);
+    }
+#endif
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LFODisplayWidget — Draws LFO waveform shape with animated phase dot.
+// Used as a custom panel inside DeviceWidget for LFO MIDI effects.
+// Shows one full cycle of the current waveform, depth-scaled, with a dot
+// indicating the current output position.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class LFODisplayWidget : public Widget {
+public:
+    LFODisplayWidget() { setName("LFODisplay"); }
+
+    // 0=Sine, 1=Triangle, 2=Saw, 3=Square, 4=S&H
+    void setShape(int s) { m_shape = std::clamp(s, 0, 4); }
+    void setDepth(float d) { m_depth = std::clamp(d, 0.0f, 1.0f); }
+    void setPhaseOffset(float p) { m_phaseOffset = std::clamp(p, 0.0f, 1.0f); }
+    void setCurrentValue(float v) { m_currentValue = std::clamp(v, -1.0f, 1.0f); }
+    void setCurrentPhase(double p) { m_currentPhase = p - std::floor(p); }
+    void setLinked(bool linked) { m_linked = linked; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({c.maxW, 52.0f});
+    }
+    void layout(const Rect& bounds, const UIContext& ctx) override {
+        Widget::layout(bounds, ctx);
+    }
+
+    void paint([[maybe_unused]] UIContext& ctx) override {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.renderer || !ctx.font) return;
+        auto& r = *ctx.renderer;
+        auto& f = *ctx.font;
+
+        // Background
+        r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, Color{20, 20, 26, 255});
+        r.drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                          Color{50, 50, 60, 255});
+
+        float wx = m_bounds.x + 4;
+        float wy = m_bounds.y + 10;
+        float ww = m_bounds.w - 8;
+        float wh = m_bounds.h - 14;
+        if (ww < 10 || wh < 6) return;
+
+        float midY = wy + wh / 2;
+
+        // Center line
+        r.drawRect(wx, midY, ww, 1, Color{35, 35, 45, 255});
+
+        // Waveform color (dimmer when depth is low)
+        uint8_t alpha = static_cast<uint8_t>(100 + 155 * m_depth);
+        Color waveCol{80, 180, 255, alpha};
+        float amp = wh / 2 * std::max(m_depth, 0.15f);
+
+        // Draw waveform (one full cycle with phase offset applied)
+        int steps = static_cast<int>(ww);
+        float prevX = wx, prevY = midY;
+        for (int i = 0; i <= steps; ++i) {
+            float t = static_cast<float>(i) / steps;
+            float phase = t + m_phaseOffset;
+            phase = phase - std::floor(phase);
+            float val = computeShape(phase);
+            float curX = wx + static_cast<float>(i);
+            float curY = midY - val * amp;
+            if (i > 0)
+                r.drawLine(prevX, prevY, curX, curY, waveCol, 1.5f);
+            prevX = curX;
+            prevY = curY;
+        }
+
+        // Animated phase dot — shows current position on the waveform
+        float dotPhase = static_cast<float>(m_currentPhase) + m_phaseOffset;
+        dotPhase = dotPhase - std::floor(dotPhase);
+        float dotX = wx + dotPhase * ww;
+        float dotVal = computeShape(dotPhase);
+        float dotY = midY - dotVal * amp;
+        Color dotCol{255, 200, 60, 255};
+        r.drawRect(dotX - 3, dotY - 3, 6, 6, dotCol);
+
+        // Shape label (top-left)
+        float lblScale = 7.0f / Theme::kFontSize;
+        static const char* shapeNames[] = {"Sin", "Tri", "Saw", "Sqr", "S&H"};
+        const char* sn = (m_shape >= 0 && m_shape <= 4) ? shapeNames[m_shape] : "?";
+        f.drawText(r, sn, m_bounds.x + 3, m_bounds.y + 1, lblScale,
+                   Color{180, 180, 200, 200});
+
+        // Link indicator (top-right)
+        if (m_linked) {
+            float tw = f.textWidth("Link", lblScale);
+            f.drawText(r, "Link", m_bounds.x + m_bounds.w - tw - 3, m_bounds.y + 1,
+                       lblScale, Color{100, 220, 140, 200});
+        }
+#endif
+    }
+
+private:
+    float computeShape(float phase) const {
+        switch (m_shape) {
+            case 0: return std::sin(phase * 6.283185307f);
+            case 1: // Triangle
+                if (phase < 0.25f) return phase * 4.0f;
+                if (phase < 0.75f) return 2.0f - phase * 4.0f;
+                return phase * 4.0f - 4.0f;
+            case 2: return 2.0f * phase - 1.0f;           // Saw
+            case 3: return (phase < 0.5f) ? 1.0f : -1.0f; // Square
+            case 4: { // S&H — pseudo-random per 1/8 segments
+                int seg = static_cast<int>(phase * 8.0f);
+                uint32_t hash = static_cast<uint32_t>(seg) * 1664525u + 1013904223u;
+                return (static_cast<float>(hash & 0xFFFF) / 32767.5f) - 1.0f;
+            }
+            default: return 0.0f;
+        }
+    }
+
+    int    m_shape        = 0;
+    float  m_depth        = 0.5f;
+    float  m_phaseOffset  = 0.0f;
+    float  m_currentValue = 0.0f;
+    double m_currentPhase = 0.0;
+    bool   m_linked       = false;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CustomDeviceBody — Abstract base for custom instrument body layouts.
 // Replaces the flat knob grid in DeviceWidget when set.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1713,6 +2044,7 @@ public:
     virtual void updateParamValue(int index, float value) = 0;
     virtual float preferredBodyWidth() const = 0;
     virtual void setOnParamChange(std::function<void(int, float)> cb) = 0;
+    virtual void setOnParamTouch(std::function<void(int, float, bool)> cb) { (void)cb; }
 
     // Text-edit support for knob double-click entry
     virtual bool hasEditingKnob() const { return false; }
@@ -1897,6 +2229,9 @@ public:
                 k->setOnChange([this, pidx = pd.index](float v) {
                     if (m_onParamChange) m_onParamChange(pidx, v);
                 });
+                k->setOnTouch([this, pidx = pd.index, k](bool touching) {
+                    if (m_onParamTouch) m_onParamTouch(pidx, k->value(), touching);
+                });
                 sec.knobs.push_back({pd.index, k});
             }
             m_sections.push_back(std::move(sec));
@@ -1922,6 +2257,10 @@ public:
 
     void setOnParamChange(std::function<void(int, float)> cb) override {
         m_onParamChange = std::move(cb);
+    }
+
+    void setOnParamTouch(std::function<void(int, float, bool)> cb) override {
+        m_onParamTouch = std::move(cb);
     }
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -2069,6 +2408,7 @@ private:
     float   m_displayWidth = 0;
     std::vector<InternalSection> m_sections;
     std::function<void(int, float)> m_onParamChange;
+    std::function<void(int, float, bool)> m_onParamTouch;
 
     static int sectionCols(const InternalSection& s) {
         int n = static_cast<int>(s.knobs.size());

@@ -67,15 +67,56 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
         return true;
     }
 
-    // Track header click — select track
+    // Track header click — select track or toggle automation mode dropdown
     if (my >= headerY && my < gridY && mx >= gridX) {
         float cmx = mx + m_scrollX;
         int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
         if (ti >= 0 && ti < m_project->numTracks()) {
+            float tx = gridX + ti * Theme::kTrackWidth - m_scrollX;
+            float tw = Theme::kTrackWidth;
+            float bw = 22.0f, bh = 16.0f;
+            float bx = tx + tw - bw - 4;
+            float by = headerY + (Theme::kTrackHeaderHeight - bh) * 0.5f;
+
+            // Click on automation badge → toggle dropdown
+            if (mx >= bx && mx < bx + bw && my >= by && my < by + bh) {
+                if (m_autoModeOpenTrack == ti)
+                    m_autoModeOpenTrack = -1;
+                else {
+                    m_autoModeOpenTrack = ti;
+                    m_autoModeHoverItem = -1;
+                }
+                return true;
+            }
+
+            // Close any open dropdown on other header clicks
+            m_autoModeOpenTrack = -1;
             m_selectedTrack = ti;
             m_lastClickTrack = ti;
             return true;
         }
+    }
+
+    // Automation dropdown popup click (below track header)
+    if (m_autoModeOpenTrack >= 0 && my >= gridY) {
+        int t = m_autoModeOpenTrack;
+        float tx = gridX + t * Theme::kTrackWidth - m_scrollX;
+        float tw = Theme::kTrackWidth;
+        float popupW = 50.0f, itemH = 18.0f;
+        float popupX = tx + tw - popupW - 4;
+        float popupY = headerY + Theme::kTrackHeaderHeight;
+
+        if (mx >= popupX && mx < popupX + popupW && my >= popupY && my < popupY + 4 * itemH) {
+            int item = static_cast<int>((my - popupY) / itemH);
+            if (item >= 0 && item < 4) {
+                m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(item)});
+                m_project->track(t).autoMode = static_cast<automation::AutoMode>(item);
+                m_autoModeOpenTrack = -1;
+                return true;
+            }
+        }
+        m_autoModeOpenTrack = -1;
+        // fall through to normal click handling
     }
 
     if (my < gridY) return false;
@@ -90,9 +131,9 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* slot = m_project->getSlot(t, si);
                 if (slot && slot->audioClip)
-                    m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get(), slot->launchQuantize});
+                    m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get(), slot->launchQuantize, &slot->clipAutomation});
                 else if (slot && slot->midiClip)
-                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize});
+                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation});
                 else {
                     m_engine->sendCommand(audio::StopClipMsg{t});
                     m_engine->sendCommand(audio::StopMidiClipMsg{t});
@@ -142,9 +183,9 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                 } else if (hasClip) {
                     auto lq = slot->launchQuantize;
                     if (slot->audioClip)
-                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq});
+                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation});
                     else if (slot->midiClip)
-                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq});
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation});
                 } else if (trackArmed) {
                     if (m_project->track(ti).type == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
@@ -155,9 +196,9 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                 m_selectedTrack  = ti;
                 m_lastClickTrack = ti;
                 if (slot && slot->audioClip) {
-                    m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), slot->launchQuantize});
+                    m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), slot->launchQuantize, &slot->clipAutomation});
                 } else if (slot && slot->midiClip) {
-                    m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), slot->launchQuantize});
+                    m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation});
                 } else if (trackArmed) {
                     if (m_project->track(ti).type == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
@@ -224,7 +265,7 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
                                    g.u0, g.v0, g.u1, g.v1,
                                    Theme::textPrimary, f.textureId());
                 textX += g.xAdvance;
-                if (textX > tx + tw - 6) break;
+                if (textX > tx + tw - 42) break;
             }
         }
 
@@ -257,9 +298,72 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
             }
         }
 
+        // Automation mode badge (right side of track header)
+        {
+            auto mode = m_project->track(t).autoMode;
+            const char* labels[] = {"Off", "R", "T", "L"};
+            Color badgeColors[] = {
+                Color{60, 60, 65, 200},    // Off — dim
+                Color{50, 120, 50, 230},   // Read — green
+                Color{180, 120, 40, 230},  // Touch — orange
+                Color{180, 50, 50, 230}    // Latch — red
+            };
+            int mi = static_cast<int>(mode);
+            float bw = 22.0f, bh = 16.0f;
+            float bx = tx + tw - bw - 4;
+            float by = y + (h - bh) * 0.5f;
+
+            bool isOpen = (m_autoModeOpenTrack == t);
+            Color bg = isOpen ? Color{70, 70, 80, 255} : badgeColors[mi];
+            r.drawRect(bx, by, bw, bh, bg);
+            r.drawRectOutline(bx, by, bw, bh,
+                isOpen ? Color{100, 160, 220, 255} : Color{80, 80, 90, 200});
+
+            if (f.isLoaded()) {
+                float ts = (Theme::kSmallFontSize - 1.0f) / f.pixelHeight();
+                drawText(r, f, labels[mi], bx + 3, by + 2, ts, Color{220,220,225,255});
+            }
+        }
+
         r.drawRect(tx + tw - 1, y, 1, h, Theme::clipSlotBorder);
     }
     r.popClip();
+
+    // Overlay pass: draw dropdown popup on top of everything (not clipped)
+    if (m_autoModeOpenTrack >= 0 && m_autoModeOpenTrack < m_project->numTracks()) {
+        int t = m_autoModeOpenTrack;
+        float tx = x + t * Theme::kTrackWidth - m_scrollX;
+        float tw = Theme::kTrackWidth;
+        float bw = 50.0f, itemH = 18.0f;
+        float bx = tx + tw - bw - 4;
+        float popupY = y + h;
+        float popupH = 4 * itemH;
+
+        r.drawRect(bx, popupY, bw, popupH, Color{30, 30, 34, 255});
+        r.drawRectOutline(bx, popupY, bw, popupH, Color{90, 140, 200, 255});
+
+        const char* items[] = {"Off", "Read", "Touch", "Latch"};
+        int selected = static_cast<int>(m_project->track(t).autoMode);
+        float ts = (Theme::kSmallFontSize - 1.0f) / f.pixelHeight();
+
+        for (int i = 0; i < 4; ++i) {
+            float iy = popupY + i * itemH;
+            Color itemBg, textCol;
+            if (m_autoModeHoverItem == i) {
+                itemBg = Color{200, 200, 210, 255};
+                textCol = Color{15, 15, 20, 255};
+            } else if (i == selected) {
+                itemBg = Color{60, 110, 180, 255};
+                textCol = Color{255, 255, 255, 255};
+            } else {
+                itemBg = Color{30, 30, 34, 255};
+                textCol = Theme::textPrimary;
+            }
+            r.drawRect(bx + 1, iy, bw - 2, itemH, itemBg);
+            if (f.isLoaded())
+                drawText(r, f, items[i], bx + 6, iy + 3, ts, textCol);
+        }
+    }
 }
 
 void SessionPanel::paintSceneLabels(Renderer2D& r, Font& f, float x, float y, float h) {

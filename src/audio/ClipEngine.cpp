@@ -5,7 +5,8 @@
 namespace yawn {
 namespace audio {
 
-void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, QuantizeMode quantize) {
+void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, QuantizeMode quantize,
+                              const std::vector<automation::AutomationLane>* clipAutomation) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
 
     if (quantize == QuantizeMode::None) {
@@ -17,6 +18,7 @@ void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, 
         state.stopping = false;
         state.fadeGain = 0.0f;
         state.sceneIndex = sceneIndex;
+        state.clipAutomation = clipAutomation;
 
         // Initialize stretcher for pitch-preserving modes
         if (clip && clip->warpMode != WarpMode::Off && clip->warpMode != WarpMode::Repitch) {
@@ -31,6 +33,7 @@ void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, 
         m_pending[trackIndex].clip = clip;
         m_pending[trackIndex].quantizeMode = quantize;
         m_pending[trackIndex].valid = true;
+        m_pending[trackIndex].clipAutomation = clipAutomation;
     }
 }
 
@@ -122,6 +125,7 @@ void ClipEngine::checkPendingLaunches() {
             state.stopping = false;
             state.fadeGain = 0.0f;
             state.sceneIndex = m_pending[t].sceneIndex;
+            state.clipAutomation = m_pending[t].clipAutomation;
 
             // Initialize stretcher for pitch-preserving modes
             if (clip->warpMode != WarpMode::Off && clip->warpMode != WarpMode::Repitch) {

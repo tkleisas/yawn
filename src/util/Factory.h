@@ -39,6 +39,7 @@
 #include "midi/VelocityEffect.h"
 #include "midi/MidiRandom.h"
 #include "midi/MidiPitch.h"
+#include "midi/LFO.h"
 
 namespace yawn {
 
@@ -93,6 +94,7 @@ inline std::unique_ptr<midi::MidiEffect> createMidiEffect(const std::string& id)
         {"velocity",   [] { return std::make_unique<midi::VelocityEffect>(); }},
         {"random",     [] { return std::make_unique<midi::MidiRandom>(); }},
         {"pitch",      [] { return std::make_unique<midi::MidiPitch>(); }},
+        {"lfo",        [] { return std::make_unique<midi::LFO>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;

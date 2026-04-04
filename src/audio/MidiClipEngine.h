@@ -3,12 +3,14 @@
 #include "core/Constants.h"
 #include "audio/ClipEngine.h"
 #include "audio/Transport.h"
+#include "automation/AutomationLane.h"
 #include "midi/MidiClip.h"
 #include "midi/MidiTypes.h"
 #include <array>
 #include <bitset>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 namespace yawn {
 namespace audio {
@@ -20,6 +22,7 @@ struct MidiClipPlayState {
     bool active = false;
     bool stopping = false;
     int sceneIndex = -1;          // which scene slot is playing
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
 };
 
 // Pending MIDI clip launch (for quantized launching)
@@ -29,6 +32,7 @@ struct PendingMidiLaunch {
     const midi::MidiClip* clip = nullptr;
     QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
 };
 
 // MidiClipEngine: plays MidiClips on the audio thread, generating MIDI
@@ -42,7 +46,8 @@ public:
 
     // Schedule a MIDI clip to launch on a track
     void scheduleClip(int trackIndex, int sceneIndex, const midi::MidiClip* clip,
-                      QuantizeMode quantize = QuantizeMode::NextBar);
+                      QuantizeMode quantize = QuantizeMode::NextBar,
+                      const std::vector<automation::AutomationLane>* clipAutomation = nullptr);
 
     void scheduleStop(int trackIndex,
                       QuantizeMode quantize = QuantizeMode::NextBar);
@@ -65,7 +70,8 @@ public:
     }
 
 private:
-    void launchNow(int trackIndex, int sceneIndex, const midi::MidiClip* clip);
+    void launchNow(int trackIndex, int sceneIndex, const midi::MidiClip* clip,
+                   const std::vector<automation::AutomationLane>* clipAutomation = nullptr);
     void stopNow(int trackIndex);
 
     void scanAndEmit(midi::MidiBuffer& buffer, const midi::MidiClip* clip,

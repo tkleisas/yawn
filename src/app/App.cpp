@@ -29,6 +29,7 @@
 #include "midi/VelocityEffect.h"
 #include "midi/MidiRandom.h"
 #include "midi/MidiPitch.h"
+#include "midi/LFO.h"
 #include "util/ProjectSerializer.h"
 #include "util/Logger.h"
 #include <glad/gl.h>
@@ -482,6 +483,10 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::MidiPitch>());
         markDirty();
     }});
+    midiItems.push_back({"LFO", [this, trackIndex]() {
+        m_audioEngine.midiEffectChain(trackIndex).addEffect(std::make_unique<midi::LFO>());
+        markDirty();
+    }});
     items.push_back({"Add MIDI Effect", nullptr, false, true, std::move(midiItems)});
 
     // Record quantize submenu
@@ -617,12 +622,16 @@ void App::updateDetailForSelectedTrack() {
         return;
     }
 
+    m_detailPanel->setTrackIndex(m_selectedTrack);
+
     // Check if the selected slot has an audio clip — show clip detail view
-    auto* audioClip = m_project.getClip(m_selectedTrack, m_selectedScene);
+    auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+    auto* audioClip = slot ? slot->audioClip.get() : nullptr;
     if (audioClip) {
         auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
         m_detailPanel->setAudioClip(audioClip, fxChain,
                                      static_cast<int>(m_audioEngine.sampleRate()));
+        m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
         return;
     }
 
@@ -631,6 +640,11 @@ void App::updateDetailForSelectedTrack() {
     auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
 
     m_detailPanel->setDeviceChain(midiChain, inst, fxChain);
+
+    // Wire clip automation if a MIDI clip is selected
+    if (slot && slot->midiClip) {
+        m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
+    }
 }
 
 bool App::init() {
@@ -778,6 +792,11 @@ bool App::init() {
         markDirty();
     });
 
+    // Wire automation recording: knob touch → AutoParamTouchMsg
+    m_detailPanel->setOnParamTouch([this](int track, uint8_t tt, int ci, int pi, float v, bool touching) {
+        m_audioEngine.sendCommand(audio::AutoParamTouchMsg{track, tt, ci, pi, v, touching});
+    });
+
     LOG_INFO("App", "Y.A.W.N initialized successfully");
     LOG_INFO("App", "  [Space] Play/Stop        [Up/Down] BPM +/-");
     LOG_INFO("App", "  [Home] Reset position    [M] Toggle mixer");
@@ -842,8 +861,10 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     LOG_INFO("File", "Loaded '%s' -> Track %d, Scene %d",
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
+    auto* slot = m_project.getSlot(trackIndex, sceneIndex);
     m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr,
-        m_project.getSlot(trackIndex, sceneIndex) ? m_project.getSlot(trackIndex, sceneIndex)->launchQuantize : audio::QuantizeMode::NextBar});
+        slot ? slot->launchQuantize : audio::QuantizeMode::NextBar,
+        slot ? &slot->clipAutomation : nullptr});
     markDirty();
     return true;
 }
@@ -1727,7 +1748,8 @@ void App::update() {
                         if (clipPtr) {
                             auto* slot = m_project.getSlot(ti, si);
                             auto lq = slot ? slot->launchQuantize : audio::QuantizeMode::NextBar;
-                            m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq});
+                            m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq,
+                                slot ? &slot->clipAutomation : nullptr});
                         }
                     }
                     // Always clear recording state in UI
@@ -1785,7 +1807,8 @@ void App::update() {
                         if (clipPtr) {
                             auto* recSlot = m_project.getSlot(ti, si);
                             auto lq = recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar;
-                            m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr, lq});
+                            m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr, lq,
+                                recSlot ? &recSlot->clipAutomation : nullptr});
                         }
                     }
                     // Clear recording state in UI

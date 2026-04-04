@@ -2,8 +2,10 @@
 
 #include "util/RingBuffer.h"
 #include "audio/ClipEngine.h"
+#include "automation/AutomationLane.h"
 #include <cstdint>
 #include <variant>
+#include <vector>
 
 namespace yawn {
 namespace midi { class MidiClip; }
@@ -36,6 +38,7 @@ struct LaunchClipMsg {
     int sceneIndex;
     const Clip* clip;
     QuantizeMode quantize = QuantizeMode::NextBar;
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
 };
 
 struct StopClipMsg {
@@ -136,6 +139,7 @@ struct LaunchMidiClipMsg {
     int sceneIndex;
     const midi::MidiClip* clip;
     QuantizeMode quantize = QuantizeMode::NextBar;
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
 };
 
 // Stop a MIDI clip on a track
@@ -225,6 +229,20 @@ struct ResetMidiEffectChainMsg {
     int trackIndex;
 };
 
+struct SetAutoModeMsg {
+    int trackIndex;
+    uint8_t mode; // automation::AutoMode as uint8_t
+};
+
+struct AutoParamTouchMsg {
+    int trackIndex;
+    uint8_t targetType;   // automation::TargetType as uint8_t
+    int chainIndex;
+    int paramIndex;
+    float value;
+    bool touching;        // true = begin, false = release
+};
+
 using AudioCommand = std::variant<
     TransportPlayMsg,
     TransportStopMsg,
@@ -267,7 +285,9 @@ using AudioCommand = std::variant<
     SetTrackMidiOutputMsg,
     MoveMidiEffectMsg,
     MoveAudioEffectMsg,
-    ResetMidiEffectChainMsg
+    ResetMidiEffectChainMsg,
+    SetAutoModeMsg,
+    AutoParamTouchMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

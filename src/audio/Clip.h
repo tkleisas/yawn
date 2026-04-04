@@ -2,6 +2,7 @@
 
 #include "audio/AudioBuffer.h"
 #include "audio/WarpMarker.h"
+#include "automation/AutomationLane.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -75,6 +76,7 @@ struct ClipPlayState {
     bool active = false;
     bool stopping = false;        // fade-out before stop
     int sceneIndex = -1;          // which scene slot is playing
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
 
     float fadeGain = 1.0f;        // for fade-in/fade-out
     static constexpr float kFadeIncrement = 0.002f; // ~5ms at 44.1kHz per sample

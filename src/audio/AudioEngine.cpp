@@ -2,6 +2,7 @@
 #include "util/Logger.h"
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -438,6 +439,133 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         m_trackMidiBuffers[t].clear();
     }
 
+    // Apply automation envelopes to parameters before mixer runs
+    {
+        automation::AutomationEngine::Context actx;
+        actx.positionInBeats = m_transport.positionInBeats();
+        actx.isPlaying = m_transport.isPlaying() && !m_transport.isCountingIn();
+        actx.mixer = &m_mixer;
+        for (int t = 0; t < kMaxTracks; ++t) {
+            actx.instruments[t] = m_instruments[t].get();
+            actx.trackFx[t] = &m_mixer.trackEffects(t);
+            actx.midiEffectChains[t] = &m_midiEffectChains[t];
+            actx.trackLanes[t] = &m_trackAutoLanes[t];
+
+            // Audio clip automation
+            const auto& audioState = m_clipEngine.trackState(t);
+            if (audioState.active && audioState.clip && audioState.clipAutomation) {
+                actx.clips[t].playing = true;
+                // Convert frame position to beats
+                double spb = m_transport.samplesPerBeat();
+                actx.clips[t].clipLocalBeat = (spb > 0.0) ?
+                    static_cast<double>(audioState.playPosition - audioState.clip->loopStart) / spb : 0.0;
+                actx.clips[t].clipLengthBeats = (spb > 0.0) ?
+                    static_cast<double>(audioState.clip->lengthInFrames()) / spb : 0.0;
+                actx.clips[t].clipLanes = audioState.clipAutomation;
+            }
+
+            // MIDI clip automation (overrides audio clip if both active)
+            const auto& midiState = m_midiClipEngine.trackState(t);
+            if (midiState.active && midiState.clip && midiState.clipAutomation) {
+                actx.clips[t].playing = true;
+                actx.clips[t].clipLocalBeat = midiState.playPositionBeats;
+                actx.clips[t].clipLengthBeats = midiState.clip->lengthBeats();
+                actx.clips[t].clipLanes = midiState.clipAutomation;
+            }
+        }
+        m_automationEngine.process(actx);
+    }
+
+    // Resolve LFO phase links: linked LFOs recompute output using leader's base phase
+    for (int t = 0; t < kMaxTracks; ++t) {
+        auto& chain = m_midiEffectChains[t];
+        for (int e = 0; e < chain.count(); ++e) {
+            auto* fx = chain.effect(e);
+            if (!fx || fx->bypassed() || !fx->isLinkedToSource()) continue;
+
+            uint32_t targetId = fx->linkSourceId();
+            if (targetId == fx->instanceId()) continue; // no self-link
+
+            // Scan all chains for leader with matching instanceId
+            midi::MidiEffect* leader = nullptr;
+            for (int lt = 0; lt < kMaxTracks && !leader; ++lt) {
+                auto& lchain = m_midiEffectChains[lt];
+                for (int le = 0; le < lchain.count(); ++le) {
+                    auto* lfx = lchain.effect(le);
+                    if (lfx && lfx->instanceId() == targetId) {
+                        leader = lfx;
+                        break;
+                    }
+                }
+            }
+            if (leader && !leader->bypassed())
+                fx->overridePhase(leader->currentPhase());
+        }
+    }
+
+    // Apply LFO modulation offsets (after automation sets base values)
+    for (int t = 0; t < kMaxTracks; ++t) {
+        auto& chain = m_midiEffectChains[t];
+        for (int e = 0; e < chain.count(); ++e) {
+            auto* fx = chain.effect(e);
+            if (!fx || fx->bypassed() || !fx->hasModulationOutput()) continue;
+
+            float modVal = fx->modulationValue();
+            int tgtType  = fx->modulationTargetType();
+            int tgtChain = fx->modulationTargetChain();
+            int tgtParam = fx->modulationTargetParam();
+
+            // Apply modulation as offset on current parameter value
+            switch (tgtType) {
+            case 0: // Instrument
+                if (m_instruments[t]) {
+                    float cur = m_instruments[t]->getParameter(tgtParam);
+                    auto info = m_instruments[t]->parameterInfo(tgtParam);
+                    float range = info.maxValue - info.minValue;
+                    float newVal = std::clamp(cur + modVal * range, info.minValue, info.maxValue);
+                    m_instruments[t]->setParameter(tgtParam, newVal);
+                }
+                break;
+            case 1: { // Audio effect
+                auto* afx = m_mixer.trackEffects(t).effectAt(tgtChain);
+                if (afx) {
+                    float cur = afx->getParameter(tgtParam);
+                    auto info = afx->parameterInfo(tgtParam);
+                    float range = info.maxValue - info.minValue;
+                    float newVal = std::clamp(cur + modVal * range, info.minValue, info.maxValue);
+                    afx->setParameter(tgtParam, newVal);
+                }
+                break;
+            }
+            case 2: { // MIDI effect (on same track, different slot)
+                auto* mfx = chain.effect(tgtChain);
+                if (mfx && tgtChain != e) { // don't self-modulate
+                    float cur = mfx->getParameter(tgtParam);
+                    auto info = mfx->parameterInfo(tgtParam);
+                    float range = info.maxValue - info.minValue;
+                    float newVal = std::clamp(cur + modVal * range, info.minValue, info.maxValue);
+                    mfx->setParameter(tgtParam, newVal);
+                }
+                break;
+            }
+            case 3: { // Mixer
+                // tgtParam maps to MixerParam enum: 0=Volume, 1=Pan, 2=Mute, 3-10=SendLevel0-7
+                const auto& ch = m_mixer.trackChannel(t);
+                if (tgtParam == 0) { // Volume
+                    m_mixer.setTrackVolume(t, std::clamp(ch.volume + modVal * 2.0f, 0.0f, 2.0f));
+                } else if (tgtParam == 1) { // Pan
+                    m_mixer.setTrackPan(t, std::clamp(ch.pan + modVal * 2.0f, -1.0f, 1.0f));
+                } else if (tgtParam >= 3 && tgtParam <= 10) { // Send levels
+                    int sendIdx = tgtParam - 3;
+                    float cur = ch.sends[sendIdx].level;
+                    m_mixer.setSendLevel(t, sendIdx, std::clamp(cur + modVal, 0.0f, 1.0f));
+                }
+                break;
+            }
+            }
+        }
+    }
+
     // Run mixer: per-track fader/pan/mute/solo, sends→returns, master
     // Mixer clears output before writing
     m_mixer.process(m_trackBufferPtrs, kMaxTracks, output, nf, nc);
@@ -524,7 +652,7 @@ void AudioEngine::processCommands() {
                 m_testTone.phase = 0.0;
             }
             else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
-                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize);
+                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation);
                 if (!m_transport.isPlaying())
                     m_transport.play();
             }
@@ -602,7 +730,7 @@ void AudioEngine::processCommands() {
                     LOG_DEBUG("MIDI", "LaunchMidiClip track=%d scene=%d clip=%p len=%.2f",
                                 msg.trackIndex, msg.sceneIndex, (const void*)msg.clip,
                                 msg.clip ? msg.clip->lengthBeats() : 0.0);
-                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize);
+                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation);
                     // Auto-start transport if not playing
                     if (!m_transport.isPlaying())
                         m_transport.play();
@@ -790,6 +918,18 @@ void AudioEngine::processCommands() {
                     // Reset all MIDI effects on this track to clear stale state
                     m_midiEffectChains[msg.trackIndex].reset();
                 }
+            }
+            else if constexpr (std::is_same_v<T, SetAutoModeMsg>) {
+                m_automationEngine.setTrackAutoMode(msg.trackIndex,
+                    static_cast<automation::AutoMode>(msg.mode));
+            }
+            else if constexpr (std::is_same_v<T, AutoParamTouchMsg>) {
+                automation::AutomationTarget target;
+                target.type       = static_cast<automation::TargetType>(msg.targetType);
+                target.trackIndex = msg.trackIndex;
+                target.chainIndex = msg.chainIndex;
+                target.paramIndex = msg.paramIndex;
+                m_automationEngine.handleParamTouch(msg.trackIndex, target, msg.value, msg.touching);
             }
         }, cmd);
     }

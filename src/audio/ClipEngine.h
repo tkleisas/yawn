@@ -25,6 +25,7 @@ struct PendingLaunch {
     const Clip* clip = nullptr;   // nullptr means stop
     QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
 };
 
 // Per-track time stretcher state (one stretcher per channel, max 2 for stereo)
@@ -92,7 +93,8 @@ public:
 
     // Schedule a clip to launch on a track (called from audio thread after command processing)
     void scheduleClip(int trackIndex, int sceneIndex, const Clip* clip,
-                      QuantizeMode quantize = QuantizeMode::NextBar);
+                      QuantizeMode quantize = QuantizeMode::NextBar,
+                      const std::vector<automation::AutomationLane>* clipAutomation = nullptr);
 
     // Schedule a track to stop
     void scheduleStop(int trackIndex,

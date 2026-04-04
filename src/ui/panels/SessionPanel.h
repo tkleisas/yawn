@@ -184,6 +184,21 @@ public:
         float sbY = gridY + gridH;
         m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW);
 
+        // Automation dropdown hover tracking
+        if (m_autoModeOpenTrack >= 0 && m_project) {
+            int t = m_autoModeOpenTrack;
+            float tx = gridX + t * Theme::kTrackWidth - m_scrollX;
+            float tw = Theme::kTrackWidth;
+            float popupW = 50.0f, itemH = 18.0f;
+            float popupX = tx + tw - popupW - 4;
+            float popupY = m_bounds.y + Theme::kTrackHeaderHeight;
+            if (mx >= popupX && mx < popupX + popupW && my >= popupY && my < popupY + 4 * itemH) {
+                m_autoModeHoverItem = static_cast<int>((my - popupY) / itemH);
+            } else {
+                m_autoModeHoverItem = -1;
+            }
+        }
+
         // Track hover over clip slot icon zone
         if (my >= gridY && my < gridY + gridH && mx >= gridX) {
             float cmx = mx + m_scrollX;
@@ -304,6 +319,10 @@ private:
     int   m_hoveredTrack = -1;
     int   m_hoveredScene = -1;
     bool  m_hoveredIcon  = false;
+
+    // Automation mode dropdown state
+    int   m_autoModeOpenTrack = -1;   // which track's dropdown is open (-1 = none)
+    int   m_autoModeHoverItem = -1;   // hovered item in open dropdown (0-3)
 
     std::function<void(float)> m_onScrollChanged;
 

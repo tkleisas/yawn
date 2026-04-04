@@ -30,6 +30,8 @@
 #include "effects/EffectChain.h"
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
+#include "midi/LFO.h"
+#include "automation/AutomationLane.h"
 #include <string>
 #include <vector>
 #include <functional>
@@ -72,6 +74,7 @@ public:
     static constexpr float kClipSectionGap   = 4.0f;
     static constexpr float kClipLabelW       = 60.0f;
     static constexpr float kClipValueW       = 80.0f;
+    static constexpr float kAutoSectionH     = 90.0f;   // automation target picker + envelope
 
     // --- Public API ---
 
@@ -93,6 +96,13 @@ public:
     void setOnMoveDevice(std::function<void(DeviceType, int, int)> cb) {
         m_onMoveDevice = std::move(cb);
     }
+
+    // Callback fired when a knob drag begins/ends (for automation recording).
+    // Args: trackIndex, targetType, chainIndex, paramIndex, value, touching
+    using ParamTouchCallback = std::function<void(int, uint8_t, int, int, float, bool)>;
+    void setOnParamTouch(ParamTouchCallback cb) { m_onParamTouch = std::move(cb); }
+
+    void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
 
     ViewMode viewMode() const { return m_viewMode; }
 
@@ -250,6 +260,17 @@ public:
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
 
+        // Set envelope editor time range from clip length
+        if (clip->buffer && sampleRate > 0) {
+            double clipBeats = static_cast<double>(clip->lengthInFrames()) / sampleRate * 2.0; // rough 120BPM
+            if (clip->originalBPM > 0)
+                clipBeats = static_cast<double>(clip->lengthInFrames()) / sampleRate * clip->originalBPM / 60.0;
+            m_autoEnvelopeWidget.setTimeRange(0.0, std::max(1.0, clipBeats));
+        } else {
+            m_autoEnvelopeWidget.setTimeRange(0.0, 4.0);
+        }
+        m_autoEnvelopeWidget.setValueRange(0.0f, 1.0f);
+
         m_lastMidiChain = nullptr;
         m_lastInst      = nullptr;
         m_lastFxChain   = fxChain;
@@ -305,6 +326,49 @@ public:
     void setClipPlayPosition(int64_t pos) { m_waveformWidget.setPlayPosition(pos); }
     void setClipPlaying(bool playing)     { m_waveformWidget.setPlaying(playing); }
 
+    // Set clip automation context for the envelope editor
+    void setClipAutomation(std::vector<automation::AutomationLane>* lanes, int trackIndex) {
+        m_clipAutoLanes = lanes;
+        m_autoTrackIndex = trackIndex;
+
+        buildAutoTargetList();
+        m_autoTargetDropdown.setOnChange([this](int idx) {
+            if (idx <= 0) {
+                m_autoSelectedLaneIdx = -1;
+                m_autoEnvelopeWidget.setPoints({});
+                return;
+            }
+            auto tgt = targetFromDropdownIndex(idx);
+            int laneIdx = findAutoLaneForTarget(tgt);
+            if (laneIdx < 0 && m_clipAutoLanes) {
+                // Create a new lane
+                m_clipAutoLanes->push_back({tgt, {}, false});
+                laneIdx = static_cast<int>(m_clipAutoLanes->size()) - 1;
+            }
+            m_autoSelectedLaneIdx = laneIdx;
+            syncEnvelopeFromLane();
+        });
+
+        m_autoEnvelopeWidget.setOnPointAdd([this](double time, float value) {
+            if (!m_clipAutoLanes || m_autoSelectedLaneIdx < 0 ||
+                m_autoSelectedLaneIdx >= static_cast<int>(m_clipAutoLanes->size())) return;
+            (*m_clipAutoLanes)[m_autoSelectedLaneIdx].envelope.addPoint(time, value);
+            syncEnvelopeFromLane();
+        });
+        m_autoEnvelopeWidget.setOnPointMove([this](int idx, double time, float value) {
+            if (!m_clipAutoLanes || m_autoSelectedLaneIdx < 0 ||
+                m_autoSelectedLaneIdx >= static_cast<int>(m_clipAutoLanes->size())) return;
+            (*m_clipAutoLanes)[m_autoSelectedLaneIdx].envelope.movePoint(idx, time, value);
+            syncEnvelopeFromLane();
+        });
+        m_autoEnvelopeWidget.setOnPointRemove([this](int idx) {
+            if (!m_clipAutoLanes || m_autoSelectedLaneIdx < 0 ||
+                m_autoSelectedLaneIdx >= static_cast<int>(m_clipAutoLanes->size())) return;
+            (*m_clipAutoLanes)[m_autoSelectedLaneIdx].envelope.removePoint(idx);
+            syncEnvelopeFromLane();
+        });
+    }
+
     WaveformWidget&       waveformWidget()       { return m_waveformWidget; }
     const WaveformWidget& waveformWidget() const { return m_waveformWidget; }
 
@@ -351,7 +415,8 @@ public:
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
-                configureDeviceWidget(dw, ref);
+                if (!setupMidiEffectDisplay(dw, fx, ref))
+                    configureDeviceWidget(dw, ref);
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
@@ -571,6 +636,10 @@ public:
                 m_warpModeDropdown.onMouseMove(e);
                 return true;
             }
+            if (m_autoTargetDropdown.isOpen()) {
+                m_autoTargetDropdown.onMouseMove(e);
+                return true;
+            }
             // Forward to draggable number inputs (they don't capture the mouse)
             if (m_transposeKnob.onMouseMove(e)) return true;
             if (m_detuneKnob.onMouseMove(e)) return true;
@@ -756,6 +825,22 @@ private:
             DeviceRef r = ref;
             r.setParam(idx, v);
         });
+
+        // Automation recording: forward knob touch begin/end
+        {
+            uint8_t tt = 0;
+            if (ref.type == DeviceType::Instrument)
+                tt = static_cast<uint8_t>(automation::TargetType::Instrument);
+            else if (ref.type == DeviceType::AudioFx)
+                tt = static_cast<uint8_t>(automation::TargetType::AudioEffect);
+            else
+                tt = static_cast<uint8_t>(automation::TargetType::MidiEffect);
+            int ci = ref.chainIndex;
+            dw->setOnParamTouch([this, tt, ci](int idx, float v, bool touching) {
+                if (m_onParamTouch && m_autoTrackIndex >= 0)
+                    m_onParamTouch(m_autoTrackIndex, tt, ci, idx, v, touching);
+            });
+        }
 
         dw->setOnBypassToggle([ref](bool) {
             DeviceRef r = ref;
@@ -1130,6 +1215,32 @@ private:
         return true;
     }
 
+    // ── Build custom display for MIDI effects (currently LFO) ──
+    bool setupMidiEffectDisplay(DeviceWidget* dw, midi::MidiEffect* fx,
+                                const DeviceRef& ref) {
+        if (!fx) return false;
+        std::string nm = fx->id();
+
+        if (nm == "lfo") {
+            auto* lfoDisp = new LFODisplayWidget();
+            dw->setCustomPanel(lfoDisp, 52.0f, 200.0f);
+            configureDeviceWidget(dw, ref);
+
+            m_displayUpdaters.push_back([lfoDisp, fx]() {
+                auto* lfo = static_cast<midi::LFO*>(fx);
+                lfoDisp->setShape(static_cast<int>(lfo->getParameter(midi::LFO::kShape)));
+                lfoDisp->setDepth(lfo->getParameter(midi::LFO::kDepth));
+                lfoDisp->setPhaseOffset(lfo->getParameter(midi::LFO::kPhase));
+                lfoDisp->setCurrentValue(lfo->currentValue());
+                lfoDisp->setCurrentPhase(lfo->currentPhase());
+                lfoDisp->setLinked(lfo->linkTargetId() != 0);
+            });
+            return true;
+        }
+
+        return false;
+    }
+
     // ── Right-click knob reset (matches old geometry-based hit-test) ──
 #ifdef YAWN_TEST_BUILD
     bool handleKnobRightClick(size_t, float, float) { return false; }
@@ -1188,6 +1299,7 @@ private:
 
     std::function<void(DeviceType, int)> m_onRemoveDevice;
     std::function<void(DeviceType, int, int)> m_onMoveDevice;
+    ParamTouchCallback m_onParamTouch;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;
@@ -1215,6 +1327,91 @@ private:
     FwButton m_loopToggleBtn;
     FwKnob m_bpmKnob;
     float m_lastMouseX = 0, m_lastMouseY = 0;
+
+    // Automation lane editor
+    FwDropDown m_autoTargetDropdown;
+    AutomationEnvelopeWidget m_autoEnvelopeWidget;
+    int m_autoSelectedLaneIdx = -1;
+    std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
+    int m_autoTrackIndex = -1;
+
+    void buildAutoTargetList() {
+        std::vector<std::string> items;
+        items.push_back("(none)");
+        // Mixer params
+        items.push_back("Volume");
+        items.push_back("Pan");
+        // Instrument params (from current device chain)
+        if (m_lastInst) {
+            int pc = m_lastInst->parameterCount();
+            for (int i = 0; i < pc && i < 16; ++i) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "Inst: %s", m_lastInst->parameterInfo(i).name);
+                items.push_back(buf);
+            }
+        }
+        // Audio effect params
+        if (m_lastFxChain) {
+            for (int c = 0; c < m_lastFxChain->count(); ++c) {
+                auto* fx = m_lastFxChain->effectAt(c);
+                if (!fx) continue;
+                int pc = fx->parameterCount();
+                for (int p = 0; p < pc && p < 8; ++p) {
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "%s: %s", fx->name(), fx->parameterInfo(p).name);
+                    items.push_back(buf);
+                }
+            }
+        }
+        m_autoTargetDropdown.setItems(items);
+        m_autoTargetDropdown.setSelected(0);
+    }
+
+    automation::AutomationTarget targetFromDropdownIndex(int idx) const {
+        if (idx <= 0) return {};
+        idx -= 1; // skip "(none)"
+        // Mixer: Volume=0, Pan=1
+        if (idx == 0) return automation::AutomationTarget::mixer(m_autoTrackIndex, automation::MixerParam::Volume);
+        if (idx == 1) return automation::AutomationTarget::mixer(m_autoTrackIndex, automation::MixerParam::Pan);
+        idx -= 2;
+        // Instrument params
+        if (m_lastInst) {
+            int pc = std::min(m_lastInst->parameterCount(), 16);
+            if (idx < pc) return automation::AutomationTarget::instrument(m_autoTrackIndex, idx);
+            idx -= pc;
+        }
+        // Audio effect params
+        if (m_lastFxChain) {
+            for (int c = 0; c < m_lastFxChain->count(); ++c) {
+                auto* fx = m_lastFxChain->effectAt(c);
+                if (!fx) continue;
+                int pc = std::min(fx->parameterCount(), 8);
+                if (idx < pc) return automation::AutomationTarget::audioEffect(m_autoTrackIndex, c, idx);
+                idx -= pc;
+            }
+        }
+        return {};
+    }
+
+    void syncEnvelopeFromLane() {
+        if (!m_clipAutoLanes || m_autoSelectedLaneIdx < 0 ||
+            m_autoSelectedLaneIdx >= static_cast<int>(m_clipAutoLanes->size())) {
+            m_autoEnvelopeWidget.setPoints({});
+            return;
+        }
+        auto& env = (*m_clipAutoLanes)[m_autoSelectedLaneIdx].envelope;
+        std::vector<std::pair<double,float>> pts;
+        for (int i = 0; i < env.pointCount(); ++i)
+            pts.push_back({env.point(i).time, env.point(i).value});
+        m_autoEnvelopeWidget.setPoints(pts);
+    }
+
+    int findAutoLaneForTarget(const automation::AutomationTarget& tgt) const {
+        if (!m_clipAutoLanes) return -1;
+        for (size_t i = 0; i < m_clipAutoLanes->size(); ++i)
+            if ((*m_clipAutoLanes)[i].target == tgt) return static_cast<int>(i);
+        return -1;
+    }
 
     // ── Audio clip view rendering ──
 #ifdef YAWN_TEST_BUILD

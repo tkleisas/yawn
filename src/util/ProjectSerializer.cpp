@@ -50,8 +50,11 @@ json serializeMidiEffectChain(const midi::MidiEffectChain& chain) {
         if (!fx) continue;
         json j;
         j["id"] = fx->id();
+        j["instanceId"] = fx->instanceId();
         j["bypassed"] = fx->bypassed();
         j["params"] = serializeParams(*fx);
+        if (fx->isLinkedToSource())
+            j["linkTargetId"] = fx->linkSourceId();
         arr.push_back(j);
     }
     return arr;
@@ -66,8 +69,15 @@ void deserializeMidiEffectChain(midi::MidiEffectChain& chain, const json& arr,
         if (!fx) continue;
         fx->init(sampleRate);
         fx->setBypassed(j.value("bypassed", false));
+        if (j.contains("instanceId"))
+            fx->setInstanceId(j["instanceId"].get<uint32_t>());
         if (j.contains("params"))
             deserializeParams(*fx, j["params"]);
+        // Restore LFO link target ID
+        if (j.contains("linkTargetId") && id == "lfo") {
+            auto* lfo = static_cast<midi::LFO*>(fx.get());
+            lfo->setLinkTargetId(j["linkTargetId"].get<uint32_t>());
+        }
         chain.addEffect(std::move(fx));
     }
 }
@@ -572,6 +582,11 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["midiInputChannel"] = tr.midiInputChannel;
         tj["armed"] = tr.armed;
 
+        // Automation mode and lanes
+        tj["autoMode"] = static_cast<int>(tr.autoMode);
+        if (!tr.automationLanes.empty())
+            tj["automationLanes"] = automation::lanesToJson(tr.automationLanes);
+
         // Instrument
         auto* inst = const_cast<audio::AudioEngine&>(engine).instrument(t);
         if (inst) {
@@ -604,10 +619,14 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
             auto* slot = project.getSlot(t, s);
             if (!slot || slot->empty()) continue;
             std::string key = std::to_string(t) + ":" + std::to_string(s);
+            json clipJ;
             if (slot->audioClip)
-                clips[key] = serializeAudioClip(*slot->audioClip, samplesDir, sampleCounter);
+                clipJ = serializeAudioClip(*slot->audioClip, samplesDir, sampleCounter);
             else if (slot->midiClip)
-                clips[key] = serializeMidiClip(*slot->midiClip);
+                clipJ = serializeMidiClip(*slot->midiClip);
+            if (!slot->clipAutomation.empty())
+                clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
+            clips[key] = clipJ;
         }
     }
     root["clips"] = clips;
@@ -681,6 +700,11 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.midiInputChannel = tj.value("midiInputChannel", -1);
             tr.armed = tj.value("armed", false);
 
+            // Automation mode and lanes
+            tr.autoMode = static_cast<automation::AutoMode>(tj.value("autoMode", 0));
+            if (tj.contains("automationLanes"))
+                tr.automationLanes = automation::lanesFromJson(tj["automationLanes"]);
+
             // Instrument
             if (tj.contains("instrument")) {
                 const auto& instJ = tj["instrument"];
@@ -735,6 +759,13 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 auto clip = deserializeMidiClip(val);
                 if (clip)
                     project.setMidiClip(trackIdx, sceneIdx, std::move(clip));
+            }
+
+            // Clip-level automation
+            if (val.contains("clipAutomation")) {
+                auto* slot = project.getSlot(trackIdx, sceneIdx);
+                if (slot)
+                    slot->clipAutomation = automation::lanesFromJson(val["clipAutomation"]);
             }
         }
     }

@@ -32,6 +32,7 @@ class DeviceWidget : public Widget {
 public:
     using RemoveCallback     = std::function<void()>;
     using ParamChangeCallback = std::function<void(int paramIndex, float value)>;
+    using ParamTouchCallback  = std::function<void(int paramIndex, float value, bool touching)>;
 
     // Per-parameter descriptor used to (re)build the knob grid.
     struct ParamInfo {
@@ -182,6 +183,7 @@ public:
 
     void setOnRemove(RemoveCallback cb) { m_onRemove = std::move(cb); }
     void setOnParamChange(ParamChangeCallback cb) { m_onParamChange = std::move(cb); }
+    void setOnParamTouch(ParamTouchCallback cb) { m_onParamTouch = std::move(cb); }
     void setOnBypassToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onBypassToggle = std::move(cb); }
     void setOnExpandToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onExpandToggle = std::move(cb); }
     void setOnDragStart(DeviceHeaderWidget::ActionCallback cb) {
@@ -416,6 +418,7 @@ private:
 
     RemoveCallback                    m_onRemove;
     ParamChangeCallback               m_onParamChange;
+    ParamTouchCallback                m_onParamTouch;
     DeviceHeaderWidget::ToggleCallback m_onBypassToggle;
     DeviceHeaderWidget::ToggleCallback m_onExpandToggle;
     DeviceHeaderWidget::ActionCallback m_onDragStart;
@@ -445,6 +448,9 @@ private:
             });
             k->setOnChange([this, idx = p.index](float v) {
                 if (m_onParamChange) m_onParamChange(idx, v);
+            });
+            k->setOnTouch([this, idx = p.index, k](bool touching) {
+                if (m_onParamTouch) m_onParamTouch(idx, k->value(), touching);
             });
             knobs.push_back(k);
             grid.addChild(k);
