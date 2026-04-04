@@ -14,6 +14,7 @@
 #include "ui/Theme.h"
 #include "audio/Mixer.h"
 #include "app/Project.h"
+#include "util/UndoManager.h"
 
 namespace yawn { namespace audio { class AudioEngine; } }
 namespace yawn { namespace midi { class MidiEngine; } }
@@ -62,10 +63,13 @@ public:
         }
     }
 
-    void init(Project* project, audio::AudioEngine* engine, midi::MidiEngine* midiEngine = nullptr) {
+    void init(Project* project, audio::AudioEngine* engine,
+              midi::MidiEngine* midiEngine = nullptr,
+              undo::UndoManager* undoMgr = nullptr) {
         m_project = project;
         m_engine  = engine;
         m_midiEngine = midiEngine;
+        m_undoManager = undoMgr;
     }
 
     void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
@@ -175,6 +179,7 @@ private:
         MeterWidget meter;
         Label nameLabel;
         Label dbLabel;
+        float panDragStart = 0.0f;  // captured on touch start for undo
     };
 
     bool hitWidget(Widget& w, float mx, float my) {
@@ -214,6 +219,7 @@ private:
     Project*            m_project    = nullptr;
     audio::AudioEngine* m_engine     = nullptr;
     midi::MidiEngine*   m_midiEngine = nullptr;
+    undo::UndoManager*  m_undoManager = nullptr;
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
     TrackStrip m_strips[kMaxTracks];

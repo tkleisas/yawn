@@ -218,6 +218,7 @@ public:
     float value() const { return m_value; }
     void setRange(float mn, float mx) { m_min = mn; m_max = mx; m_value = detail::cclamp(m_value, mn, mx); }
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setOnDragEnd(ValueCallback cb) { m_onDragEnd = std::move(cb); }
     void setTrackColor(Color c) { m_trackColor = c; }
     void setSensitivity(float s) { m_sensitivity = s; }
 
@@ -235,11 +236,13 @@ public:
         if (e.button != MouseButton::Left) return false;
         m_dragging = true;
         m_lastY = e.y;
+        m_dragStartValue = m_value;
         captureMouse();
         return true;
     }
 
     bool onMouseUp(MouseEvent&) override {
+        if (m_dragging && m_onDragEnd) m_onDragEnd(m_dragStartValue);
         m_dragging = false;
         releaseMouse();
         return true;
@@ -265,7 +268,9 @@ private:
     float m_sensitivity = 1.0f;
     bool m_dragging = false;
     float m_lastY = 0;
+    float m_dragStartValue = 0.0f;
     ValueCallback m_onChange;
+    ValueCallback m_onDragEnd;  // called on drag end with the value at drag start
     Color m_trackColor{80, 200, 80, 255};
 };
 
@@ -835,12 +840,14 @@ private:
 class PanWidget : public Widget {
 public:
     using ValueCallback = std::function<void(float)>;
+    using TouchCallback = std::function<void(bool)>; // true=begin, false=end
 
     PanWidget() = default;
 
     void setValue(float v) { m_value = detail::cclamp(v, -1.0f, 1.0f); }
     float value() const { return m_value; }
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb) { m_onTouch = std::move(cb); }
     void setThumbColor(Color c) { m_thumbColor = c; }
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -858,6 +865,7 @@ public:
             m_dragging = true;
             m_lastX = e.x;
             captureMouse();
+            if (m_onTouch) m_onTouch(true);
             return true;
         }
         if (e.button == MouseButton::Right) {
@@ -869,8 +877,11 @@ public:
     }
 
     bool onMouseUp(MouseEvent&) override {
-        m_dragging = false;
-        releaseMouse();
+        if (m_dragging) {
+            m_dragging = false;
+            releaseMouse();
+            if (m_onTouch) m_onTouch(false);
+        }
         return true;
     }
 
@@ -893,6 +904,7 @@ private:
     bool m_dragging = false;
     float m_lastX = 0;
     ValueCallback m_onChange;
+    TouchCallback m_onTouch;
     Color m_thumbColor{100, 180, 255};
 };
 

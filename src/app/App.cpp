@@ -521,14 +521,29 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     // Record quantize submenu
     auto curRQ = track.recordQuantize;
     std::vector<ui::ContextMenu::Item> rqItems;
-    rqItems.push_back({"None", [this, trackIndex]() {
+    rqItems.push_back({"None", [this, trackIndex, curRQ]() {
         m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::None;
+        m_undoManager.push({"Change Record Quantize",
+            [this, trackIndex, curRQ]{ m_project.track(trackIndex).recordQuantize = curRQ; },
+            [this, trackIndex]{ m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::None; },
+            ""});
+        markDirty();
     }, false, curRQ != audio::QuantizeMode::None});
-    rqItems.push_back({"Beat", [this, trackIndex]() {
+    rqItems.push_back({"Beat", [this, trackIndex, curRQ]() {
         m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBeat;
+        m_undoManager.push({"Change Record Quantize",
+            [this, trackIndex, curRQ]{ m_project.track(trackIndex).recordQuantize = curRQ; },
+            [this, trackIndex]{ m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBeat; },
+            ""});
+        markDirty();
     }, false, curRQ != audio::QuantizeMode::NextBeat});
-    rqItems.push_back({"Bar", [this, trackIndex]() {
+    rqItems.push_back({"Bar", [this, trackIndex, curRQ]() {
         m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBar;
+        m_undoManager.push({"Change Record Quantize",
+            [this, trackIndex, curRQ]{ m_project.track(trackIndex).recordQuantize = curRQ; },
+            [this, trackIndex]{ m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBar; },
+            ""});
+        markDirty();
     }, false, curRQ != audio::QuantizeMode::NextBar});
     items.push_back({"Record Quantize", nullptr, false, true, std::move(rqItems)});
 
@@ -713,8 +728,8 @@ bool App::init() {
     setupMenuBar();
     buildWidgetTree();
     m_pianoRoll->setTransport(&m_audioEngine.transport());
-    m_sessionPanel->init(&m_project, &m_audioEngine);
-    m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine);
+    m_sessionPanel->init(&m_project, &m_audioEngine, &m_undoManager);
+    m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine, &m_undoManager);
     m_transportPanel->init(&m_project, &m_audioEngine);
     m_returnMasterPanel->init(&m_project, &m_audioEngine);
 

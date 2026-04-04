@@ -152,10 +152,19 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             return s.armBtn.onMouseDown(e);
         if (hitWidget(s.monBtn, mx, my)) {
             if (rightClick) {
+                auto oldMode = m_project->track(t).monitorMode;
                 m_project->track(t).monitorMode = Track::MonitorMode::Auto;
                 m_engine->sendCommand(
                     audio::SetTrackMonitorMsg{t,
                         static_cast<uint8_t>(Track::MonitorMode::Auto)});
+                if (m_undoManager) {
+                    m_undoManager->push({"Reset Monitor",
+                        [this, t, oldMode]{ m_project->track(t).monitorMode = oldMode;
+                            m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(oldMode)}); },
+                        [this, t]{ m_project->track(t).monitorMode = Track::MonitorMode::Auto;
+                            m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(Track::MonitorMode::Auto)}); },
+                        ""});
+                }
                 return true;
             }
             return s.monBtn.onMouseDown(e);
@@ -181,7 +190,17 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             return s.pan.onMouseDown(e);
         if (hitWidget(s.fader, mx, my)) {
             if (rightClick) {
+                float oldVal = s.fader.value();
+                s.fader.setValue(1.0f);
                 m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
+                if (m_undoManager) {
+                    m_undoManager->push({"Reset Volume",
+                        [this, t, oldVal]{ m_strips[t].fader.setValue(oldVal);
+                            m_engine->sendCommand(audio::SetTrackVolumeMsg{t, oldVal}); },
+                        [this, t]{ m_strips[t].fader.setValue(1.0f);
+                            m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f}); },
+                        ""});
+                }
                 return true;
             }
             return s.fader.onMouseDown(e);
@@ -204,6 +223,13 @@ void MixerPanel::setupStripCallbacks(int t) {
         if (!m_engine) return;
         bool cur = m_engine->mixer().trackChannel(t).muted;
         m_engine->sendCommand(audio::SetTrackMuteMsg{t, !cur});
+        if (m_undoManager) {
+            bool newVal = !cur;
+            m_undoManager->push({"Toggle Mute",
+                [this, t, cur]{ m_engine->sendCommand(audio::SetTrackMuteMsg{t, cur}); },
+                [this, t, newVal]{ m_engine->sendCommand(audio::SetTrackMuteMsg{t, newVal}); },
+                ""});
+        }
     });
 
     s.soloBtn.setLabel("S");
@@ -211,6 +237,13 @@ void MixerPanel::setupStripCallbacks(int t) {
         if (!m_engine) return;
         bool cur = m_engine->mixer().trackChannel(t).soloed;
         m_engine->sendCommand(audio::SetTrackSoloMsg{t, !cur});
+        if (m_undoManager) {
+            bool newVal = !cur;
+            m_undoManager->push({"Toggle Solo",
+                [this, t, cur]{ m_engine->sendCommand(audio::SetTrackSoloMsg{t, cur}); },
+                [this, t, newVal]{ m_engine->sendCommand(audio::SetTrackSoloMsg{t, newVal}); },
+                ""});
+        }
     });
 
     s.armBtn.setLabel("R");
@@ -220,26 +253,54 @@ void MixerPanel::setupStripCallbacks(int t) {
         m_project->track(t).armed = !cur;
         m_engine->sendCommand(audio::SetTrackArmedMsg{t, !cur});
         if (m_onTrackArmed) m_onTrackArmed(t, !cur);
+        if (m_undoManager) {
+            bool newVal = !cur;
+            m_undoManager->push({"Toggle Arm",
+                [this, t, cur]{ m_project->track(t).armed = cur;
+                    m_engine->sendCommand(audio::SetTrackArmedMsg{t, cur}); },
+                [this, t, newVal]{ m_project->track(t).armed = newVal;
+                    m_engine->sendCommand(audio::SetTrackArmedMsg{t, newVal}); },
+                ""});
+        }
     });
 
     s.monBtn.setOnClick([this, t]() {
         if (!m_project || !m_engine) return;
         auto& track = m_project->track(t);
+        auto oldMode = track.monitorMode;
         if (track.monitorMode == Track::MonitorMode::Auto)
             track.monitorMode = Track::MonitorMode::In;
         else if (track.monitorMode == Track::MonitorMode::In)
             track.monitorMode = Track::MonitorMode::Off;
         else
             track.monitorMode = Track::MonitorMode::Auto;
+        auto newMode = track.monitorMode;
         m_engine->sendCommand(
             audio::SetTrackMonitorMsg{t,
-                static_cast<uint8_t>(track.monitorMode)});
+                static_cast<uint8_t>(newMode)});
+        if (m_undoManager) {
+            m_undoManager->push({"Change Monitor",
+                [this, t, oldMode]{ m_project->track(t).monitorMode = oldMode;
+                    m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(oldMode)}); },
+                [this, t, newMode]{ m_project->track(t).monitorMode = newMode;
+                    m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(newMode)}); },
+                ""});
+        }
     });
 
     s.audioInputDrop.setOnChange([this, t](int idx) {
         if (!m_project || !m_engine) return;
+        int oldVal = m_project->track(t).audioInputCh;
         m_project->track(t).audioInputCh = idx;
         m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, idx});
+        if (m_undoManager) {
+            m_undoManager->push({"Change Audio Input",
+                [this, t, oldVal]{ m_project->track(t).audioInputCh = oldVal;
+                    m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, oldVal}); },
+                [this, t, idx]{ m_project->track(t).audioInputCh = idx;
+                    m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, idx}); },
+                ""});
+        }
     });
 
     s.monoBtn.setLabel("S");
@@ -248,45 +309,121 @@ void MixerPanel::setupStripCallbacks(int t) {
         bool cur = m_project->track(t).mono;
         m_project->track(t).mono = !cur;
         m_engine->sendCommand(audio::SetTrackMonoMsg{t, !cur});
+        if (m_undoManager) {
+            bool newVal = !cur;
+            m_undoManager->push({"Toggle Mono",
+                [this, t, cur]{ m_project->track(t).mono = cur;
+                    m_engine->sendCommand(audio::SetTrackMonoMsg{t, cur}); },
+                [this, t, newVal]{ m_project->track(t).mono = newVal;
+                    m_engine->sendCommand(audio::SetTrackMonoMsg{t, newVal}); },
+                ""});
+        }
     });
 
     s.midiInDrop.setOnChange([this, t](int idx) {
         if (!m_project) return;
+        int oldVal = m_project->track(t).midiInputPort;
         if (idx == 0) m_project->track(t).midiInputPort = -1;
         else if (idx == 1) m_project->track(t).midiInputPort = -2;
         else m_project->track(t).midiInputPort = idx - 2;
+        int newVal = m_project->track(t).midiInputPort;
+        if (m_undoManager) {
+            m_undoManager->push({"Change MIDI Input",
+                [this, t, oldVal]{ m_project->track(t).midiInputPort = oldVal; },
+                [this, t, newVal]{ m_project->track(t).midiInputPort = newVal; },
+                ""});
+        }
     });
 
     s.midiInChDrop.setOnChange([this, t](int idx) {
         if (!m_project) return;
+        int oldVal = m_project->track(t).midiInputChannel;
         m_project->track(t).midiInputChannel = (idx == 0) ? -1 : idx - 1;
+        int newVal = m_project->track(t).midiInputChannel;
+        if (m_undoManager) {
+            m_undoManager->push({"Change MIDI Input Ch",
+                [this, t, oldVal]{ m_project->track(t).midiInputChannel = oldVal; },
+                [this, t, newVal]{ m_project->track(t).midiInputChannel = newVal; },
+                ""});
+        }
     });
 
     s.midiOutDrop.setOnChange([this, t](int idx) {
         if (!m_project) return;
+        int oldPort = m_project->track(t).midiOutputPort;
         m_project->track(t).midiOutputPort = (idx == 0) ? -1 : idx - 1;
+        int newPort = m_project->track(t).midiOutputPort;
+        int ch = m_project->track(t).midiOutputChannel;
         if (m_engine) m_engine->sendCommand(
-            audio::SetTrackMidiOutputMsg{t, m_project->track(t).midiOutputPort,
-                                          m_project->track(t).midiOutputChannel});
+            audio::SetTrackMidiOutputMsg{t, newPort, ch});
+        if (m_undoManager) {
+            m_undoManager->push({"Change MIDI Output",
+                [this, t, oldPort, ch]{ m_project->track(t).midiOutputPort = oldPort;
+                    if (m_engine) m_engine->sendCommand(audio::SetTrackMidiOutputMsg{t, oldPort, ch}); },
+                [this, t, newPort, ch]{ m_project->track(t).midiOutputPort = newPort;
+                    if (m_engine) m_engine->sendCommand(audio::SetTrackMidiOutputMsg{t, newPort, ch}); },
+                ""});
+        }
     });
 
     s.midiOutChDrop.setOnChange([this, t](int idx) {
         if (!m_project) return;
+        int oldCh = m_project->track(t).midiOutputChannel;
         m_project->track(t).midiOutputChannel = (idx == 0) ? -1 : idx - 1;
+        int newCh = m_project->track(t).midiOutputChannel;
+        int port = m_project->track(t).midiOutputPort;
         if (m_engine) m_engine->sendCommand(
-            audio::SetTrackMidiOutputMsg{t, m_project->track(t).midiOutputPort,
-                                          m_project->track(t).midiOutputChannel});
+            audio::SetTrackMidiOutputMsg{t, port, newCh});
+        if (m_undoManager) {
+            m_undoManager->push({"Change MIDI Output Ch",
+                [this, t, oldCh, port]{ m_project->track(t).midiOutputChannel = oldCh;
+                    if (m_engine) m_engine->sendCommand(audio::SetTrackMidiOutputMsg{t, port, oldCh}); },
+                [this, t, newCh, port]{ m_project->track(t).midiOutputChannel = newCh;
+                    if (m_engine) m_engine->sendCommand(audio::SetTrackMidiOutputMsg{t, port, newCh}); },
+                ""});
+        }
     });
 
+    // Pan knob — uses onTouch for undo capture
     s.pan.setOnChange([this, t](float v) {
         if (!m_engine) return;
         m_engine->sendCommand(audio::SetTrackPanMsg{t, v});
     });
+    s.pan.setOnTouch([this, t](bool touching) {
+        if (!m_undoManager || !m_engine) return;
+        if (touching) {
+            m_strips[t].panDragStart = m_strips[t].pan.value();
+        } else {
+            float oldVal = m_strips[t].panDragStart;
+            float newVal = m_strips[t].pan.value();
+            if (oldVal != newVal) {
+                m_undoManager->push({"Change Pan",
+                    [this, t, oldVal]{ m_strips[t].pan.setValue(oldVal);
+                        m_engine->sendCommand(audio::SetTrackPanMsg{t, oldVal}); },
+                    [this, t, newVal]{ m_strips[t].pan.setValue(newVal);
+                        m_engine->sendCommand(audio::SetTrackPanMsg{t, newVal}); },
+                    ""});
+            }
+        }
+    });
 
+    // Volume fader — uses onDragEnd for undo capture
     s.fader.setRange(0.0f, 2.0f);
     s.fader.setOnChange([this, t](float v) {
         if (!m_engine) return;
         m_engine->sendCommand(audio::SetTrackVolumeMsg{t, v});
+    });
+    s.fader.setOnDragEnd([this, t](float dragStartVal) {
+        if (!m_undoManager || !m_engine) return;
+        float newVal = m_strips[t].fader.value();
+        if (dragStartVal != newVal) {
+            m_undoManager->push({"Change Volume",
+                [this, t, dragStartVal]{ m_strips[t].fader.setValue(dragStartVal);
+                    m_engine->sendCommand(audio::SetTrackVolumeMsg{t, dragStartVal}); },
+                [this, t, newVal]{ m_strips[t].fader.setValue(newVal);
+                    m_engine->sendCommand(audio::SetTrackVolumeMsg{t, newVal}); },
+                ""});
+        }
     });
 }
 

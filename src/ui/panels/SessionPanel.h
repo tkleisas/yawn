@@ -13,6 +13,7 @@
 #endif
 #include "ui/Theme.h"
 #include "app/Project.h"
+#include "util/UndoManager.h"
 
 namespace yawn { namespace audio { class AudioEngine; class Clip; } }
 #include "core/Constants.h"
@@ -42,9 +43,11 @@ class SessionPanel : public Widget {
 public:
     SessionPanel() = default;
 
-    void init(Project* project, audio::AudioEngine* engine) {
+    void init(Project* project, audio::AudioEngine* engine,
+              undo::UndoManager* undoMgr = nullptr) {
         m_project = project;
         m_engine  = engine;
+        m_undoManager = undoMgr;
     }
 
     // ─── State updates (called from App) ────────────────────────────────
@@ -294,6 +297,7 @@ private:
 
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
+    undo::UndoManager*  m_undoManager = nullptr;
 
     ClipSlotUIState m_trackStates[kMaxTracks] = {};
 

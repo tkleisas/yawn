@@ -109,8 +109,18 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
         if (mx >= popupX && mx < popupX + popupW && my >= popupY && my < popupY + 4 * itemH) {
             int item = static_cast<int>((my - popupY) / itemH);
             if (item >= 0 && item < 4) {
+                auto oldMode = m_project->track(t).autoMode;
                 m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(item)});
                 m_project->track(t).autoMode = static_cast<automation::AutoMode>(item);
+                if (m_undoManager) {
+                    auto newMode = static_cast<automation::AutoMode>(item);
+                    m_undoManager->push({"Change Auto Mode",
+                        [this, t, oldMode]{ m_project->track(t).autoMode = oldMode;
+                            m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(oldMode)}); },
+                        [this, t, newMode]{ m_project->track(t).autoMode = newMode;
+                            m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(newMode)}); },
+                        ""});
+                }
                 m_autoModeOpenTrack = -1;
                 return true;
             }
