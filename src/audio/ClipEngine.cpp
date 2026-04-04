@@ -6,7 +6,8 @@ namespace yawn {
 namespace audio {
 
 void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, QuantizeMode quantize,
-                              const std::vector<automation::AutomationLane>* clipAutomation) {
+                              const std::vector<automation::AutomationLane>* clipAutomation,
+                              const FollowAction& followAction) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
 
     if (quantize == QuantizeMode::None) {
@@ -19,6 +20,9 @@ void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, 
         state.fadeGain = 0.0f;
         state.sceneIndex = sceneIndex;
         state.clipAutomation = clipAutomation;
+        state.followAction = followAction;
+        state.barsPlayed = 0;
+        state.barStartSample = m_transport ? m_transport->positionInSamples() : 0;
 
         // Initialize stretcher for pitch-preserving modes
         if (clip && clip->warpMode != WarpMode::Off && clip->warpMode != WarpMode::Repitch) {
@@ -34,6 +38,7 @@ void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, 
         m_pending[trackIndex].quantizeMode = quantize;
         m_pending[trackIndex].valid = true;
         m_pending[trackIndex].clipAutomation = clipAutomation;
+        m_pending[trackIndex].followAction = followAction;
     }
 }
 
@@ -53,6 +58,9 @@ void ClipEngine::scheduleStop(int trackIndex, QuantizeMode quantize) {
 void ClipEngine::process(float* output, int numFrames, int numChannels) {
     // Check if any pending launches should trigger at a quantize boundary
     checkPendingLaunches();
+
+    // Check follow actions (bar counting)
+    checkFollowActions();
 
     // Process each active track
     for (int t = 0; t < kMaxTracks; ++t) {
@@ -76,6 +84,69 @@ void ClipEngine::checkAndFirePending() {
 bool ClipEngine::isTrackPlaying(int trackIndex) const {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return false;
     return m_tracks[trackIndex].active;
+}
+
+void ClipEngine::checkFollowActions() {
+    if (!m_transport || !m_transport->isPlaying()) return;
+
+    int64_t pos = m_transport->positionInSamples();
+    double samplesPerBar = m_transport->samplesPerBar();
+    if (samplesPerBar <= 0.0) return;
+
+    for (int t = 0; t < kMaxTracks; ++t) {
+        auto& state = m_tracks[t];
+        if (!state.active || state.stopping) continue;
+        if (!state.followAction.enabled) continue;
+        // Don't fire if there's already a pending launch for this track
+        if (m_pending[t].valid) continue;
+
+        // Count bars elapsed since clip started
+        int64_t elapsed = pos - state.barStartSample;
+        int64_t currentBar = static_cast<int64_t>(elapsed / samplesPerBar);
+        if (currentBar > state.barsPlayed) {
+            state.barsPlayed = currentBar;
+
+            // Check if we've reached the target bar count
+            if (state.barsPlayed >= state.followAction.barCount) {
+                // Resolve A vs B by probability
+                int roll = static_cast<int>(m_rng() % 100);
+                FollowActionType action = (roll < state.followAction.chanceA)
+                    ? state.followAction.actionA
+                    : state.followAction.actionB;
+
+                if (action == FollowActionType::None) {
+                    // Reset counter and loop again
+                    state.barsPlayed = 0;
+                    state.barStartSample = pos;
+                    continue;
+                }
+
+                if (action == FollowActionType::Stop) {
+                    state.stopping = true;
+                    continue;
+                }
+
+                if (action == FollowActionType::PlayAgain) {
+                    // Restart this clip from the beginning
+                    if (state.clip) {
+                        state.playPosition = state.clip->loopStart;
+                        state.fractionalPosition = static_cast<double>(state.clip->loopStart);
+                    }
+                    state.barsPlayed = 0;
+                    state.barStartSample = pos;
+                    continue;
+                }
+
+                // For navigation actions, notify the UI to resolve the target
+                if (m_followActionCb) {
+                    m_followActionCb(t, state.sceneIndex, action);
+                }
+                // Reset bar counter — the UI will schedule the next clip
+                state.barsPlayed = 0;
+                state.barStartSample = pos;
+            }
+        }
+    }
 }
 
 void ClipEngine::checkPendingLaunches() {
@@ -126,6 +197,9 @@ void ClipEngine::checkPendingLaunches() {
             state.fadeGain = 0.0f;
             state.sceneIndex = m_pending[t].sceneIndex;
             state.clipAutomation = m_pending[t].clipAutomation;
+            state.followAction = m_pending[t].followAction;
+            state.barsPlayed = 0;
+            state.barStartSample = m_transport ? m_transport->positionInSamples() : 0;
 
             // Initialize stretcher for pitch-preserving modes
             if (clip->warpMode != WarpMode::Off && clip->warpMode != WarpMode::Repitch) {

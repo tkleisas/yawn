@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/AudioBuffer.h"
+#include "audio/FollowAction.h"
 #include "audio/WarpMarker.h"
 #include "automation/AutomationLane.h"
 #include <memory>
@@ -80,6 +81,11 @@ struct ClipPlayState {
 
     float fadeGain = 1.0f;        // for fade-in/fade-out
     static constexpr float kFadeIncrement = 0.002f; // ~5ms at 44.1kHz per sample
+
+    // Follow action tracking
+    int64_t barsPlayed = 0;       // number of complete bars played
+    int64_t barStartSample = 0;   // sample position when current bar started
+    FollowAction followAction;    // copied from ClipSlot at launch time
 };
 
 } // namespace audio

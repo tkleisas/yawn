@@ -12,13 +12,14 @@ namespace audio {
 void MidiClipEngine::scheduleClip(int trackIndex, int sceneIndex,
                                   const midi::MidiClip* clip,
                                   QuantizeMode quantize,
-                                  const std::vector<automation::AutomationLane>* clipAutomation) {
+                                  const std::vector<automation::AutomationLane>* clipAutomation,
+                                  const FollowAction& followAction) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
     if (quantize == QuantizeMode::None) {
-        if (clip) launchNow(trackIndex, sceneIndex, clip, clipAutomation);
+        if (clip) launchNow(trackIndex, sceneIndex, clip, clipAutomation, followAction);
         else stopNow(trackIndex);
     } else {
-        m_pending[trackIndex] = {trackIndex, sceneIndex, clip, quantize, true, clipAutomation};
+        m_pending[trackIndex] = {trackIndex, sceneIndex, clip, quantize, true, clipAutomation, followAction};
     }
 }
 
@@ -56,7 +57,7 @@ void MidiClipEngine::checkAndFirePending() {
         }
 
         if (m_pending[t].clip) {
-            launchNow(t, m_pending[t].sceneIndex, m_pending[t].clip, m_pending[t].clipAutomation);
+            launchNow(t, m_pending[t].sceneIndex, m_pending[t].clip, m_pending[t].clipAutomation, m_pending[t].followAction);
         } else {
             stopNow(t);
         }
@@ -66,8 +67,59 @@ void MidiClipEngine::checkAndFirePending() {
     m_lastQuantizeCheck = pos;
 }
 
+void MidiClipEngine::checkFollowActions() {
+    if (!m_transport || !m_transport->isPlaying()) return;
+
+    int64_t pos = m_transport->positionInSamples();
+    double samplesPerBar = m_transport->samplesPerBar();
+    if (samplesPerBar <= 0.0) return;
+
+    for (int t = 0; t < kMaxTracks; ++t) {
+        auto& state = m_tracks[t];
+        if (!state.active || state.stopping) continue;
+        if (!state.followAction.enabled) continue;
+        if (m_pending[t].valid) continue;
+
+        int64_t elapsed = pos - state.barStartSample;
+        int64_t currentBar = static_cast<int64_t>(elapsed / samplesPerBar);
+        if (currentBar > state.barsPlayed) {
+            state.barsPlayed = currentBar;
+
+            if (state.barsPlayed >= state.followAction.barCount) {
+                int roll = static_cast<int>(m_rng() % 100);
+                FollowActionType action = (roll < state.followAction.chanceA)
+                    ? state.followAction.actionA
+                    : state.followAction.actionB;
+
+                if (action == FollowActionType::None) {
+                    state.barsPlayed = 0;
+                    state.barStartSample = pos;
+                    continue;
+                }
+                if (action == FollowActionType::Stop) {
+                    stopNow(t);
+                    continue;
+                }
+                if (action == FollowActionType::PlayAgain) {
+                    state.playPositionBeats = 0.0;
+                    state.barsPlayed = 0;
+                    state.barStartSample = pos;
+                    continue;
+                }
+                if (m_followActionCb) {
+                    m_followActionCb(t, state.sceneIndex, action);
+                }
+                state.barsPlayed = 0;
+                state.barStartSample = pos;
+            }
+        }
+    }
+}
+
 void MidiClipEngine::process(midi::MidiBuffer* trackMidiBuffers, int numFrames) {
     if (!m_transport) return;
+
+    checkFollowActions();
 
     double bpm = m_transport->bpm();
     double sampleRate = m_sampleRate;
@@ -118,10 +170,9 @@ void MidiClipEngine::process(midi::MidiBuffer* trackMidiBuffers, int numFrames) 
 
 void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
                                const midi::MidiClip* clip,
-                               const std::vector<automation::AutomationLane>* clipAutomation) {
+                               const std::vector<automation::AutomationLane>* clipAutomation,
+                               const FollowAction& followAction) {
     auto& state = m_tracks[trackIndex];
-    // Send note-offs for any currently active notes before switching
-    // (handled by stopNow if previously active)
     if (state.active) {
         stopNow(trackIndex);
     }
@@ -131,6 +182,9 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
     state.stopping = false;
     state.sceneIndex = sceneIndex;
     state.clipAutomation = clipAutomation;
+    state.followAction = followAction;
+    state.barsPlayed = 0;
+    state.barStartSample = m_transport ? m_transport->positionInSamples() : 0;
     LOG_DEBUG("MIDI", "MidiClipEngine launchNow track=%d scene=%d notes=%d len=%.2f",
                 trackIndex, sceneIndex,
                 clip ? static_cast<int>(clip->noteCount()) : 0,

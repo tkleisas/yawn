@@ -686,6 +686,16 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                 clipJ = serializeMidiClip(*slot->midiClip);
             if (!slot->clipAutomation.empty())
                 clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
+            // Follow action
+            if (slot->followAction.enabled) {
+                json fa;
+                fa["enabled"] = true;
+                fa["barCount"] = slot->followAction.barCount;
+                fa["actionA"] = static_cast<int>(slot->followAction.actionA);
+                fa["actionB"] = static_cast<int>(slot->followAction.actionB);
+                fa["chanceA"] = slot->followAction.chanceA;
+                clipJ["followAction"] = fa;
+            }
             clips[key] = clipJ;
         }
     }
@@ -836,6 +846,18 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 auto* slot = project.getSlot(trackIdx, sceneIdx);
                 if (slot)
                     slot->clipAutomation = automation::lanesFromJson(val["clipAutomation"]);
+            }
+            // Follow action
+            if (val.contains("followAction")) {
+                auto* slot = project.getSlot(trackIdx, sceneIdx);
+                if (slot) {
+                    auto& fa = val["followAction"];
+                    slot->followAction.enabled  = fa.value("enabled", false);
+                    slot->followAction.barCount = fa.value("barCount", 1);
+                    slot->followAction.actionA  = static_cast<FollowActionType>(fa.value("actionA", 0));
+                    slot->followAction.actionB  = static_cast<FollowActionType>(fa.value("actionB", 0));
+                    slot->followAction.chanceA  = fa.value("chanceA", 100);
+                }
             }
         }
     }

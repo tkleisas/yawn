@@ -2,10 +2,13 @@
 
 #include "core/Constants.h"
 #include "audio/Clip.h"
+#include "audio/FollowAction.h"
 #include "audio/Transport.h"
 #include "audio/TimeStretcher.h"
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <random>
 #include <vector>
 
 namespace yawn {
@@ -26,6 +29,7 @@ struct PendingLaunch {
     QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+    FollowAction followAction;
 };
 
 // Per-track time stretcher state (one stretcher per channel, max 2 for stereo)
@@ -94,7 +98,8 @@ public:
     // Schedule a clip to launch on a track (called from audio thread after command processing)
     void scheduleClip(int trackIndex, int sceneIndex, const Clip* clip,
                       QuantizeMode quantize = QuantizeMode::NextBar,
-                      const std::vector<automation::AutomationLane>* clipAutomation = nullptr);
+                      const std::vector<automation::AutomationLane>* clipAutomation = nullptr,
+                      const FollowAction& followAction = FollowAction{});
 
     // Schedule a track to stop
     void scheduleStop(int trackIndex,
@@ -114,8 +119,14 @@ public:
     bool isTrackPlaying(int trackIndex) const;
     const ClipPlayState& trackState(int trackIndex) const { return m_tracks[trackIndex]; }
 
+    // Follow action callback: called when a follow action triggers
+    // Parameters: trackIndex, sceneIndex, resolvedAction
+    using FollowActionCallback = std::function<void(int, int, FollowActionType)>;
+    void setFollowActionCallback(FollowActionCallback cb) { m_followActionCb = std::move(cb); }
+
 private:
     void checkPendingLaunches();
+    void checkFollowActions();
     void processTrack(int trackIndex, float* output, int numFrames, int numChannels);
     void processTrackStretched(int trackIndex, float* output, int numFrames, int numChannels);
     double computeLocalSpeedRatio(const Clip& clip, double samplePos, double projectBPM) const;
@@ -129,6 +140,8 @@ private:
     std::array<TrackStretcher, kMaxTracks> m_stretchers{};
 
     int64_t m_lastQuantizeCheck = -1;
+    FollowActionCallback m_followActionCb;
+    std::mt19937 m_rng{std::random_device{}()};
 };
 
 } // namespace audio

@@ -4,6 +4,7 @@
 #include "app/ArrangementClip.h"
 #include "audio/Clip.h"
 #include "audio/ClipEngine.h"
+#include "audio/FollowAction.h"
 #include "midi/MidiClip.h"
 #include "automation/AutomationLane.h"
 #include <vector>
@@ -61,6 +62,7 @@ struct Scene {
 };
 
 // A clip slot can hold either an audio clip or a MIDI clip (or be empty)
+
 struct ClipSlot {
     enum class Type { Empty, Audio, Midi };
 
@@ -77,6 +79,9 @@ struct ClipSlot {
     std::unique_ptr<audio::Clip> audioClip;
     std::unique_ptr<midi::MidiClip> midiClip;
     audio::QuantizeMode launchQuantize = audio::QuantizeMode::NextBar;
+
+    // Follow action — triggers after clip plays for N bars
+    FollowAction followAction;
 
     // Per-clip automation lanes (times relative to clip start, loop with clip)
     std::vector<automation::AutomationLane> clipAutomation;

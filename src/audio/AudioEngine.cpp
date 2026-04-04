@@ -67,6 +67,13 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_midiClipEngine.setTransport(&m_transport);
     m_midiClipEngine.setSampleRate(config.sampleRate);
 
+    // Set up follow action callbacks — push events to UI thread
+    auto followCb = [this](int trackIndex, int sceneIndex, FollowActionType action) {
+        m_eventQueue.push(FollowActionTriggeredEvent{trackIndex, sceneIndex, action});
+    };
+    m_clipEngine.setFollowActionCallback(followCb);
+    m_midiClipEngine.setFollowActionCallback(followCb);
+
     m_arrPlayback.setTransport(&m_transport);
     m_arrPlayback.setSampleRate(config.sampleRate);
 
@@ -669,7 +676,7 @@ void AudioEngine::processCommands() {
                 m_testTone.phase = 0.0;
             }
             else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
-                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation);
+                m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation, msg.followAction);
                 if (!m_transport.isPlaying())
                     m_transport.play();
             }
@@ -747,7 +754,7 @@ void AudioEngine::processCommands() {
                     LOG_DEBUG("MIDI", "LaunchMidiClip track=%d scene=%d clip=%p len=%.2f",
                                 msg.trackIndex, msg.sceneIndex, (const void*)msg.clip,
                                 msg.clip ? msg.clip->lengthBeats() : 0.0);
-                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation);
+                    m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation, msg.followAction);
                     // Auto-start transport if not playing
                     if (!m_transport.isPlaying())
                         m_transport.play();

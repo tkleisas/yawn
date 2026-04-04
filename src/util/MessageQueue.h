@@ -2,6 +2,7 @@
 
 #include "util/RingBuffer.h"
 #include "audio/ClipEngine.h"
+#include "audio/FollowAction.h"
 #include "audio/ArrangementPlayback.h"
 #include "automation/AutomationLane.h"
 #include <cstdint>
@@ -40,6 +41,7 @@ struct LaunchClipMsg {
     const Clip* clip;
     QuantizeMode quantize = QuantizeMode::NextBar;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+    FollowAction followAction;  // copied from ClipSlot at launch
 };
 
 struct StopClipMsg {
@@ -141,6 +143,7 @@ struct LaunchMidiClipMsg {
     const midi::MidiClip* clip;
     QuantizeMode quantize = QuantizeMode::NextBar;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+    FollowAction followAction;  // copied from ClipSlot at launch
 };
 
 // Stop a MIDI clip on a track
@@ -359,6 +362,13 @@ struct RecordBufferFullEvent {
     int64_t frameCount;
 };
 
+// Audio thread detected a follow action should fire — UI resolves the target
+struct FollowActionTriggeredEvent {
+    int trackIndex;
+    int sceneIndex;         // scene of the clip that triggered the action
+    FollowActionType resolvedAction; // A or B already chosen by probability
+};
+
 using AudioEvent = std::variant<
     TransportPositionUpdate,
     ClipStateUpdate,
@@ -366,7 +376,8 @@ using AudioEvent = std::variant<
     TransportRecordStateUpdate,
     MidiRecordCompleteEvent,
     AudioRecordCompleteEvent,
-    RecordBufferFullEvent
+    RecordBufferFullEvent,
+    FollowActionTriggeredEvent
 >;
 
 // Command queue: UI → Audio (1024 slots)

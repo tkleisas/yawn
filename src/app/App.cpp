@@ -816,6 +816,7 @@ void App::updateDetailForSelectedTrack() {
         auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
         m_detailPanel->setAudioClip(audioClip, fxChain,
                                      static_cast<int>(m_audioEngine.sampleRate()));
+        m_detailPanel->setFollowAction(slot ? &slot->followAction : nullptr);
         m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
         return;
     }
@@ -826,8 +827,9 @@ void App::updateDetailForSelectedTrack() {
 
     m_detailPanel->setDeviceChain(midiChain, inst, fxChain);
 
-    // Wire clip automation if a MIDI clip is selected
+    // Wire clip automation and follow action if a MIDI clip is selected
     if (slot && slot->midiClip) {
+        m_detailPanel->setFollowAction(&slot->followAction);
         m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
     }
 }
@@ -1103,7 +1105,8 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     auto* slot = m_project.getSlot(trackIndex, sceneIndex);
     m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr,
         slot ? slot->launchQuantize : audio::QuantizeMode::NextBar,
-        slot ? &slot->clipAutomation : nullptr});
+        slot ? &slot->clipAutomation : nullptr,
+        slot ? slot->followAction : FollowAction{}});
     markDirty();
     return true;
 }
@@ -2234,7 +2237,8 @@ void App::update() {
                             auto* slot = m_project.getSlot(ti, si);
                             auto lq = slot ? slot->launchQuantize : audio::QuantizeMode::NextBar;
                             m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq,
-                                slot ? &slot->clipAutomation : nullptr});
+                                slot ? &slot->clipAutomation : nullptr,
+                                slot ? slot->followAction : FollowAction{}});
                         }
                     }
                     // Always clear recording state in UI
@@ -2293,7 +2297,8 @@ void App::update() {
                             auto* recSlot = m_project.getSlot(ti, si);
                             auto lq = recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar;
                             m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr, lq,
-                                recSlot ? &recSlot->clipAutomation : nullptr});
+                                recSlot ? &recSlot->clipAutomation : nullptr,
+                                recSlot ? recSlot->followAction : FollowAction{}});
                         }
                     }
                     // Clear recording state in UI
@@ -2307,6 +2312,75 @@ void App::update() {
             else if constexpr (std::is_same_v<T, audio::RecordBufferFullEvent>) {
                 LOG_WARN("Audio", "Recording buffer full on Track %d (%.0f sec limit). Auto-saved.",
                          msg.trackIndex + 1, 300.0);
+            }
+            else if constexpr (std::is_same_v<T, audio::FollowActionTriggeredEvent>) {
+                // Resolve follow action target and launch the next clip
+                int ti = msg.trackIndex;
+                int si = msg.sceneIndex;
+                int numScenes = m_project.numScenes();
+                if (ti < 0 || ti >= m_project.numTracks() || numScenes <= 0) return;
+
+                // Build list of occupied scenes for this track
+                std::vector<int> occupied;
+                for (int s = 0; s < numScenes; ++s) {
+                    auto* slot = m_project.getSlot(ti, s);
+                    if (slot && !slot->empty()) occupied.push_back(s);
+                }
+                if (occupied.empty()) return;
+
+                int targetScene = -1;
+                switch (msg.resolvedAction) {
+                    case FollowActionType::Next: {
+                        // Find next occupied scene after current
+                        for (int s : occupied) {
+                            if (s > si) { targetScene = s; break; }
+                        }
+                        if (targetScene < 0) targetScene = occupied.front(); // wrap
+                        break;
+                    }
+                    case FollowActionType::Previous: {
+                        for (int i = (int)occupied.size() - 1; i >= 0; --i) {
+                            if (occupied[i] < si) { targetScene = occupied[i]; break; }
+                        }
+                        if (targetScene < 0) targetScene = occupied.back(); // wrap
+                        break;
+                    }
+                    case FollowActionType::First:
+                        targetScene = occupied.front();
+                        break;
+                    case FollowActionType::Last:
+                        targetScene = occupied.back();
+                        break;
+                    case FollowActionType::Random:
+                        targetScene = occupied[std::rand() % occupied.size()];
+                        break;
+                    case FollowActionType::Any: {
+                        // Any other clip (exclude self)
+                        std::vector<int> others;
+                        for (int s : occupied) { if (s != si) others.push_back(s); }
+                        if (!others.empty())
+                            targetScene = others[std::rand() % others.size()];
+                        else
+                            targetScene = si; // only one clip, play again
+                        break;
+                    }
+                    default: return;
+                }
+
+                if (targetScene < 0) return;
+                auto* slot = m_project.getSlot(ti, targetScene);
+                if (!slot || slot->empty()) return;
+
+                auto lq = slot->launchQuantize;
+                if (slot->audioClip) {
+                    m_audioEngine.sendCommand(audio::LaunchClipMsg{
+                        ti, targetScene, slot->audioClip.get(), lq,
+                        &slot->clipAutomation, slot->followAction});
+                } else if (slot->midiClip) {
+                    m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
+                        ti, targetScene, slot->midiClip.get(), lq,
+                        &slot->clipAutomation, slot->followAction});
+                }
             }
         }, evt);
     }

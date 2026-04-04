@@ -2,6 +2,7 @@
 
 #include "core/Constants.h"
 #include "audio/ClipEngine.h"
+#include "audio/FollowAction.h"
 #include "audio/Transport.h"
 #include "automation/AutomationLane.h"
 #include "midi/MidiClip.h"
@@ -10,6 +11,8 @@
 #include <bitset>
 #include <cmath>
 #include <cstdio>
+#include <functional>
+#include <random>
 #include <vector>
 
 namespace yawn {
@@ -23,6 +26,11 @@ struct MidiClipPlayState {
     bool stopping = false;
     int sceneIndex = -1;          // which scene slot is playing
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+
+    // Follow action tracking
+    int64_t barsPlayed = 0;
+    int64_t barStartSample = 0;
+    FollowAction followAction;
 };
 
 // Pending MIDI clip launch (for quantized launching)
@@ -33,6 +41,7 @@ struct PendingMidiLaunch {
     QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+    FollowAction followAction;
 };
 
 // MidiClipEngine: plays MidiClips on the audio thread, generating MIDI
@@ -47,7 +56,8 @@ public:
     // Schedule a MIDI clip to launch on a track
     void scheduleClip(int trackIndex, int sceneIndex, const midi::MidiClip* clip,
                       QuantizeMode quantize = QuantizeMode::NextBar,
-                      const std::vector<automation::AutomationLane>* clipAutomation = nullptr);
+                      const std::vector<automation::AutomationLane>* clipAutomation = nullptr,
+                      const FollowAction& followAction = FollowAction{});
 
     void scheduleStop(int trackIndex,
                       QuantizeMode quantize = QuantizeMode::NextBar);
@@ -69,10 +79,16 @@ public:
         return m_tracks[trackIndex];
     }
 
+    // Follow action callback
+    using FollowActionCallback = std::function<void(int, int, FollowActionType)>;
+    void setFollowActionCallback(FollowActionCallback cb) { m_followActionCb = std::move(cb); }
+
 private:
     void launchNow(int trackIndex, int sceneIndex, const midi::MidiClip* clip,
-                   const std::vector<automation::AutomationLane>* clipAutomation = nullptr);
+                   const std::vector<automation::AutomationLane>* clipAutomation = nullptr,
+                   const FollowAction& followAction = FollowAction{});
     void stopNow(int trackIndex);
+    void checkFollowActions();
 
     void scanAndEmit(midi::MidiBuffer& buffer, const midi::MidiClip* clip,
                      double scanStart, double scanEnd,
@@ -84,6 +100,9 @@ private:
 
     std::array<MidiClipPlayState, kMaxTracks> m_tracks{};
     std::array<PendingMidiLaunch, kMaxTracks> m_pending{};
+
+    FollowActionCallback m_followActionCb;
+    std::mt19937 m_rng{std::random_device{}()};
 
     // Reusable scratch buffers (avoid per-buffer allocations)
     std::vector<int> m_noteIndices;

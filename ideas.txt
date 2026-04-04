@@ -1,9 +1,18 @@
-Tuner
-Render to track
+Clip launching with actions. Playback for a number of measures, then move on to the next or move to the first, and A and B actions with probabilities.
+Tuner for tuning instruments
+Render audio to track. Render Arrangement view, or loop region of arrangements
+Resample, record an instrument to an audio track
 Convolution reverb
-Wavetable editor
-Wave editor (allows detailed editing of waveforms)
-New UI widgets (dented knob, 360 degree knob, toggle switch (left or right value), number selection
+Wavetable editor for preparing wavetables for use by the wavetable instrument.
+Wave editor (allows detailed editing of waveforms), cutting, splicing, normalizing etc.
+New UI widgets (dented knob, 360 degree knob, toggle switch (left or right value), number selection etc.
+Scripting language? puredata integration?
+Sound browser, sound packs
+
+Preallocated memory management (how much memory to preallocate). Also use disk streaming in the future?
+Disk free display (display the free diskspace)
+CPU meter (display the cpu usage)
+
 
 
 
