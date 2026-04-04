@@ -177,18 +177,18 @@ public:
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
         static const InstrumentParameterInfo p[kNumParams] = {
-            {"Root Note",   0, 127, 60, "", false},
+            {"Root Note",   0, 127, 60, "", false, false, WidgetHint::StepSelector},
             {"Attack",      0.001f, 5, 0.005f, "s", false},
             {"Decay",       0.001f, 5, 0.1f, "s", false},
-            {"Sustain",     0, 1, 1, "", false},
+            {"Sustain",     0, 1, 1, "", false, false, WidgetHint::DentedKnob},
             {"Release",     0.001f, 5, 0.1f, "s", false},
             {"Filter Cut",  20, 20000, 20000, "Hz", false},
             {"Filter Reso", 0, 1, 0, "", false},
-            {"Volume",      0, 1, 0.8f, "", false},
+            {"Volume",      0, 1, 0.8f, "", false, false, WidgetHint::DentedKnob},
             {"Loop Start",  0, 1, 0, "", false},
             {"Loop End",    0, 1, 1, "", false},
             {"Reverse",     0, 1, 0, "", true},
-            {"Sample Gain", 0, 2, 1, "x", false},
+            {"Sample Gain", 0, 2, 1, "x", false, false, WidgetHint::DentedKnob},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

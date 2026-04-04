@@ -86,12 +86,12 @@ public:
 
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
-            {"Time",        1.0f, 4000.0f, 500.0f, "ms",  false},
-            {"Feedback",    0.0f, 0.95f,   0.4f,   "",    false},
-            {"Wet/Dry",     0.0f, 1.0f,    0.3f,   "",    false},
-            {"Ping-Pong",   0.0f, 1.0f,    0.0f,   "",    true},
-            {"Filter",      200.0f, 20000.0f, 8000.0f, "Hz", false},
-            {"Tempo Sync",  0.0f, 1.0f,    0.0f,   "",    true},
+            {"Time",       1.0f, 4000.0f, 500.0f, "ms",  false},
+            {"Feedback",   0.0f, 0.95f,   0.4f,   "",    false},
+            {"Wet/Dry",    0.0f, 1.0f,    0.3f,   "",    false, false, WidgetHint::DentedKnob},
+            {"Ping-Pong",  0.0f, 1.0f,    0.0f,   "",    true},
+            {"Filter",     200.0f, 20000.0f, 8000.0f, "Hz", false},
+            {"Tempo Sync", 0.0f, 1.0f,    0.0f,   "",    true},
         };
         return infos[index];
     }

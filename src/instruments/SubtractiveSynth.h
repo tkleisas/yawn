@@ -151,26 +151,32 @@ public:
     int parameterCount() const override { return kNumParams; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kOscWaveLabels[] = {"Sine", "Tri", "Saw", "Sq", "Noise"};
+        static constexpr const char* kFilterTypeLabels[] = {"LP", "BP", "HP"};
         static const InstrumentParameterInfo p[kNumParams] = {
-            {"Osc1 Wave",     0,4,1,"",false}, {"Osc1 Level",    0,1,0.8f,"",false},
-            {"Osc2 Wave",     0,4,1,"",false}, {"Osc2 Level",    0,1,0,"",false},
-            {"Osc2 Detune",  -1,1,0,"st",false}, {"Osc2 Octave",  -2,2,0,"",false},
-            {"Sub Level",     0,1,0,"",false}, {"Noise Level",   0,1,0,"",false},
+            {"Osc1 Wave",     0,4,1,"",false, false, WidgetHint::StepSelector, kOscWaveLabels, 5},
+            {"Osc1 Level",    0,1,0.8f,"",false, false, WidgetHint::DentedKnob},
+            {"Osc2 Wave",     0,4,1,"",false, false, WidgetHint::StepSelector, kOscWaveLabels, 5},
+            {"Osc2 Level",    0,1,0,"",false},
+            {"Osc2 Detune",  -1,1,0,"st",false, false, WidgetHint::DentedKnob},
+            {"Osc2 Octave",  -2,2,0,"",false, false, WidgetHint::StepSelector},
+            {"Sub Level",     0,1,0,"",false},
+            {"Noise Level",   0,1,0,"",false},
             {"Filter Cutoff", 20,20000,5000,"Hz",false},
             {"Filter Reso",   0,1,0,"",false},
-            {"Filter Type",   0,2,0,"",false},
-            {"Filter Env",   -1,1,0.3f,"",false},
+            {"Filter Type",   0,2,0,"",false, false, WidgetHint::StepSelector, kFilterTypeLabels, 3},
+            {"Filter Env",   -1,1,0.3f,"",false, false, WidgetHint::DentedKnob},
             {"Amp Attack",    0.001f,5,0.01f,"s",false},
             {"Amp Decay",     0.001f,5,0.1f,"s",false},
-            {"Amp Sustain",   0,1,0.7f,"",false},
+            {"Amp Sustain",   0,1,0.7f,"",false, false, WidgetHint::DentedKnob},
             {"Amp Release",   0.001f,5,0.3f,"s",false},
             {"Filt Attack",   0.001f,5,0.01f,"s",false},
             {"Filt Decay",    0.001f,5,0.3f,"s",false},
-            {"Filt Sustain",  0,1,0.3f,"",false},
+            {"Filt Sustain",  0,1,0.3f,"",false, false, WidgetHint::DentedKnob},
             {"Filt Release",  0.001f,5,0.3f,"s",false},
             {"LFO Rate",      0.1f,20,2,"Hz",false},
             {"LFO Depth",     0,1,0,"",false},
-            {"Volume",        0,1,0.7f,"",false},
+            {"Volume",        0,1,0.7f,"",false, false, WidgetHint::DentedKnob},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

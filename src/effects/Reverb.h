@@ -102,11 +102,11 @@ public:
 
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
-            {"Room Size", 0.0f, 1.0f, 0.7f, "", false},
-            {"Damping",   0.0f, 1.0f, 0.5f, "", false},
-            {"Wet/Dry",   0.0f, 1.0f, 0.3f, "", false},
+            {"Room Size", 0.0f, 1.0f, 0.7f, "",   false, false, WidgetHint::DentedKnob},
+            {"Damping",   0.0f, 1.0f, 0.5f, "",   false, false, WidgetHint::DentedKnob},
+            {"Wet/Dry",   0.0f, 1.0f, 0.3f, "",   false, false, WidgetHint::DentedKnob},
             {"Pre-Delay", 0.0f, 250.0f, 10.0f, "ms", false},
-            {"Width",     0.0f, 1.0f, 1.0f, "", false},
+            {"Width",     0.0f, 1.0f, 1.0f, "",   false, false, WidgetHint::DentedKnob},
         };
         return infos[index];
     }

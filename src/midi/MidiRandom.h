@@ -65,10 +65,10 @@ public:
 
     const MidiEffectParameterInfo& parameterInfo(int index) const override {
         static const MidiEffectParameterInfo p[kNumParams] = {
-            {"Pitch Range",    0.0f, 24.0f, 0.0f, "st", false},
-            {"Velocity Range", 0.0f, 127.0f, 0.0f, "", false},
+            {"Pitch Range",    0.0f, 24.0f, 0.0f, "st",     false},
+            {"Velocity Range", 0.0f, 127.0f, 0.0f, "",      false},
             {"Timing Jitter",  0.0f, 500.0f, 0.0f, "frames", false},
-            {"Probability",    0.0f, 1.0f, 1.0f, "", false},
+            {"Probability",    0.0f, 1.0f, 1.0f, "",        false, false, WidgetHint::DentedKnob},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

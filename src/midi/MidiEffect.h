@@ -1,6 +1,7 @@
 #pragma once
 
 #include "midi/MidiTypes.h"
+#include "WidgetHint.h"
 #include <atomic>
 #include <cstdint>
 
@@ -27,6 +28,9 @@ struct MidiEffectParameterInfo {
     const char* unit    = "";
     bool isBoolean      = false;
     bool isPerVoice     = false;
+    WidgetHint widgetHint = WidgetHint::Knob;
+    const char* const* valueLabels = nullptr;
+    int valueLabelCount = 0;
 };
 
 // Abstract base class for all MIDI effects.

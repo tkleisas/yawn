@@ -71,12 +71,12 @@ public:
 
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
-            {"Threshold",  -60.0f, 0.0f,  -20.0f, "dB", false},
-            {"Ratio",      1.0f,   20.0f, 4.0f,   ":1", false},
-            {"Attack",     0.1f,   100.0f, 10.0f,  "ms", false},
-            {"Release",    10.0f,  1000.0f, 100.0f, "ms", false},
-            {"Makeup Gain", 0.0f,  24.0f,  0.0f,   "dB", false},
-            {"Knee",       0.0f,   12.0f,  6.0f,   "dB", false},
+            {"Threshold",   -60.0f, 0.0f,    -20.0f, "dB", false},
+            {"Ratio",       1.0f,   20.0f,   4.0f,   ":1", false, false, WidgetHint::DentedKnob},
+            {"Attack",      0.1f,   100.0f,  10.0f,  "ms", false},
+            {"Release",     10.0f,  1000.0f, 100.0f, "ms", false},
+            {"Makeup Gain", 0.0f,   24.0f,   0.0f,   "dB", false},
+            {"Knee",        0.0f,   12.0f,   6.0f,   "dB", false, false, WidgetHint::DentedKnob},
         };
         return infos[index];
     }

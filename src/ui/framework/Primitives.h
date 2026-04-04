@@ -1228,6 +1228,7 @@ private:
 class FwToggleSwitch : public Widget {
 public:
     using Callback = std::function<void(bool)>;
+    using TouchCallback = std::function<void(bool)>;
 
     FwToggleSwitch() = default;
 
@@ -1235,14 +1236,17 @@ public:
         m_leftLabel = left;
         m_rightLabel = right;
     }
+    void setLabel(const std::string& l) { m_topLabel = l; }
     void setState(bool rightActive) { m_state = rightActive; }
     bool state() const { return m_state; }
     void setOnChange(Callback cb) { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb) { m_onTouch = std::move(cb); }
     void setActiveColor(Color c) { m_activeColor = c; }
 
     Size measure(const Constraints& c, const UIContext&) override {
         float w = (m_leftLabel.size() + m_rightLabel.size()) * 7.0f + 32.0f;
-        return c.constrain({w, 24.0f});
+        float h = m_topLabel.empty() ? 24.0f : 36.0f;
+        return c.constrain({w, h});
     }
 
 #ifdef YAWN_TEST_BUILD
@@ -1256,8 +1260,10 @@ public:
         float mid = m_bounds.x + m_bounds.w * 0.5f;
         bool newState = (e.x >= mid);
         if (newState != m_state) {
+            if (m_onTouch) m_onTouch(true);
             m_state = newState;
             if (m_onChange) m_onChange(m_state);
+            if (m_onTouch) m_onTouch(false);
         }
         return true;
     }
@@ -1266,8 +1272,10 @@ private:
     bool m_state = false;
     std::string m_leftLabel = "Off";
     std::string m_rightLabel = "On";
+    std::string m_topLabel;
     float m_animPos = 0.0f;
     Callback m_onChange;
+    TouchCallback m_onTouch;
     Color m_activeColor{0, 160, 255, 255};
 };
 
@@ -1279,6 +1287,7 @@ class FwStepSelector : public Widget {
 public:
     using ValueCallback = std::function<void(int)>;
     using FormatCallback = std::function<std::string(int)>;
+    using TouchCallback = std::function<void(bool)>;
 
     FwStepSelector() = default;
 
@@ -1288,6 +1297,7 @@ public:
     void setStep(int s)                { m_step = std::max(1, s); }
     void setWrap(bool w)               { m_wrap = w; }
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb)  { m_onTouch = std::move(cb); }
     void setFormat(FormatCallback cb)  { m_formatCb = std::move(cb); }
     void setLabel(const std::string& l){ m_label = l; }
 
@@ -1311,19 +1321,25 @@ public:
         float dispH = m_bounds.h - (m_label.empty() ? 0.0f : 12.0f);
 
         if (e.x < gx + arrowW && e.y >= dispY && e.y < dispY + dispH) {
+            if (m_onTouch) m_onTouch(true);
             stepValue(-m_step);
+            if (m_onTouch) m_onTouch(false);
             return true;
         }
         // Right arrow region
         if (e.x >= gx + m_bounds.w - arrowW && e.y >= dispY && e.y < dispY + dispH) {
+            if (m_onTouch) m_onTouch(true);
             stepValue(m_step);
+            if (m_onTouch) m_onTouch(false);
             return true;
         }
         return false;
     }
 
     bool onScroll(ScrollEvent& e) override {
+        if (m_onTouch) m_onTouch(true);
         stepValue(e.dy > 0 ? m_step : -m_step);
+        if (m_onTouch) m_onTouch(false);
         return true;
     }
 
@@ -1348,6 +1364,7 @@ private:
     bool m_wrap = false;
     std::string m_label;
     ValueCallback m_onChange;
+    TouchCallback m_onTouch;
     FormatCallback m_formatCb;
     Color m_activeColor{0, 160, 255, 255};
 };

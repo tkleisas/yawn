@@ -11,6 +11,7 @@
 #include "InstrumentDisplayWidget.h"
 #include "Primitives.h"
 #include "VisualizerWidget.h"
+#include "../../WidgetHint.h"
 
 #include <algorithm>
 #include <cmath>
@@ -41,6 +42,48 @@ public:
         std::string unit;
         float       minVal, maxVal, defaultVal;
         bool        isBoolean;
+        WidgetHint  widgetHint = WidgetHint::Knob;
+        std::vector<std::string> valueLabels;  // for StepSelector display
+    };
+
+    // Type-erased wrapper around different parameter widget types.
+    struct ParamSlot {
+        enum Type { TKnob, TDentedKnob, TStepSelector, TToggle, TKnob360 };
+        Widget* widget = nullptr;
+        Type type = TKnob;
+
+        void setValue(float v) {
+            switch (type) {
+            case TKnob:         static_cast<FwKnob*>(widget)->setValue(v); break;
+            case TDentedKnob:   static_cast<FwDentedKnob*>(widget)->setValue(v); break;
+            case TStepSelector: static_cast<FwStepSelector*>(widget)->setValue(static_cast<int>(v + 0.5f)); break;
+            case TToggle:       static_cast<FwToggleSwitch*>(widget)->setState(v > 0.5f); break;
+            case TKnob360:      static_cast<FwKnob360*>(widget)->setValue(v); break;
+            }
+        }
+
+        float getValue() const {
+            switch (type) {
+            case TKnob:         return static_cast<FwKnob*>(widget)->value();
+            case TDentedKnob:   return static_cast<FwDentedKnob*>(widget)->value();
+            case TStepSelector: return static_cast<float>(static_cast<FwStepSelector*>(widget)->value());
+            case TToggle:       return static_cast<FwToggleSwitch*>(widget)->state() ? 1.0f : 0.0f;
+            case TKnob360:      return static_cast<FwKnob360*>(widget)->value();
+            }
+            return 0.0f;
+        }
+
+        bool isEditing() const {
+            return (type == TKnob) ? static_cast<FwKnob*>(widget)->isEditing() : false;
+        }
+
+        bool forwardKeyDown(KeyEvent& ke) const {
+            return (type == TKnob) ? static_cast<FwKnob*>(widget)->onKeyDown(ke) : false;
+        }
+
+        bool forwardTextInput(TextInputEvent& te) const {
+            return (type == TKnob) ? static_cast<FwKnob*>(widget)->onTextInput(te) : false;
+        }
     };
 
     // ─── Constants (matching DetailPanelWidget) ─────────────────────────
@@ -169,8 +212,9 @@ public:
 
     void updateParamValue(int index, float value) {
         if (m_customBody) { m_customBody->updateParamValue(index, value); return; }
-        for (auto* k : m_knobs)    if (k->name() == std::to_string(index)) { k->setValue(value); return; }
-        for (auto* k : m_vizKnobs) if (k->name() == std::to_string(index)) { k->setValue(value); return; }
+        std::string key = std::to_string(index);
+        for (auto& s : m_knobs)    if (s.widget->name() == key) { s.setValue(value); return; }
+        for (auto& s : m_vizKnobs) if (s.widget->name() == key) { s.setValue(value); return; }
     }
 
     // ─── Visualizer data feed ───────────────────────────────────────────
@@ -197,16 +241,16 @@ public:
 
     bool hasEditingKnob() const {
         if (m_customBody) return m_customBody->hasEditingKnob();
-        for (auto* k : m_knobs)    if (k->isEditing()) return true;
-        for (auto* k : m_vizKnobs) if (k->isEditing()) return true;
+        for (auto& s : m_knobs)    if (s.isEditing()) return true;
+        for (auto& s : m_vizKnobs) if (s.isEditing()) return true;
         return false;
     }
 
     bool forwardKeyDown(int key) {
         if (m_customBody) return m_customBody->forwardKeyDown(key);
         KeyEvent ke; ke.keyCode = key;
-        for (auto* k : m_knobs)    if (k->isEditing()) return k->onKeyDown(ke);
-        for (auto* k : m_vizKnobs) if (k->isEditing()) return k->onKeyDown(ke);
+        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardKeyDown(ke);
+        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardKeyDown(ke);
         return false;
     }
 
@@ -215,16 +259,16 @@ public:
         TextInputEvent te;
         std::strncpy(te.text, text, sizeof(te.text) - 1);
         te.text[sizeof(te.text) - 1] = '\0';
-        for (auto* k : m_knobs)    if (k->isEditing()) return k->onTextInput(te);
-        for (auto* k : m_vizKnobs) if (k->isEditing()) return k->onTextInput(te);
+        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardTextInput(te);
+        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardTextInput(te);
         return false;
     }
 
     void cancelEditingKnobs() {
         if (m_customBody) { m_customBody->cancelEditingKnobs(); return; }
         KeyEvent ke; ke.keyCode = 27;
-        for (auto* k : m_knobs)    if (k->isEditing()) k->onKeyDown(ke);
-        for (auto* k : m_vizKnobs) if (k->isEditing()) k->onKeyDown(ke);
+        for (auto& s : m_knobs)    if (s.isEditing()) s.forwardKeyDown(ke);
+        for (auto& s : m_vizKnobs) if (s.isEditing()) s.forwardKeyDown(ke);
     }
 
     // ─── Width calculation (matches DetailPanelWidget::DevicePanel::deviceWidth) ─
@@ -348,18 +392,18 @@ public:
 
         if (m_isVisualizer && m_vizKnobGrid) {
             if (m_vizKnobGrid->bounds().contains(e.x, e.y)) {
-                for (auto* k : m_vizKnobs) {
-                    if (k->bounds().contains(e.x, e.y))
-                        return k->onMouseDown(e);
+                for (auto& s : m_vizKnobs) {
+                    if (s.widget->bounds().contains(e.x, e.y))
+                        return s.widget->onMouseDown(e);
                 }
             }
         } else if (m_customBody) {
             return m_customBody->onMouseDown(e);
         } else {
             if (m_knobGrid.bounds().contains(e.x, e.y)) {
-                for (auto* k : m_knobs) {
-                    if (k->bounds().contains(e.x, e.y))
-                        return k->onMouseDown(e);
+                for (auto& s : m_knobs) {
+                    if (s.widget->bounds().contains(e.x, e.y))
+                        return s.widget->onMouseDown(e);
                 }
             }
         }
@@ -373,13 +417,13 @@ public:
         if (!m_expanded) return false;
 
         if (m_isVisualizer) {
-            for (auto* k : m_vizKnobs)
-                if (k->bounds().contains(e.x, e.y)) return k->onMouseUp(e);
+            for (auto& s : m_vizKnobs)
+                if (s.widget->bounds().contains(e.x, e.y)) return s.widget->onMouseUp(e);
         } else if (m_customBody) {
             return m_customBody->onMouseUp(e);
         } else {
-            for (auto* k : m_knobs)
-                if (k->bounds().contains(e.x, e.y)) return k->onMouseUp(e);
+            for (auto& s : m_knobs)
+                if (s.widget->bounds().contains(e.x, e.y)) return s.widget->onMouseUp(e);
         }
         return false;
     }
@@ -387,13 +431,13 @@ public:
     bool onMouseMove(MouseMoveEvent& e) override {
         // Captured knobs receive moves regardless of position
         if (m_isVisualizer) {
-            for (auto* k : m_vizKnobs)
-                if (k->onMouseMove(e)) return true;
+            for (auto& s : m_vizKnobs)
+                if (s.widget->onMouseMove(e)) return true;
         } else if (m_customBody) {
             return m_customBody->onMouseMove(e);
         } else {
-            for (auto* k : m_knobs)
-                if (k->onMouseMove(e)) return true;
+            for (auto& s : m_knobs)
+                if (s.widget->onMouseMove(e)) return true;
         }
         return false;
     }
@@ -401,10 +445,10 @@ public:
 private:
     DeviceHeaderWidget          m_header;
     FwGrid                      m_knobGrid;
-    std::vector<FwKnob*>        m_knobs;        // owned
+    std::vector<ParamSlot>      m_knobs;        // owned
     VisualizerWidget*           m_visualizer   = nullptr;  // owned, null if not visualizer
     FwGrid*                     m_vizKnobGrid  = nullptr;  // owned, single-row grid for viz knobs
-    std::vector<FwKnob*>        m_vizKnobs;     // owned
+    std::vector<ParamSlot>      m_vizKnobs;     // owned
 
     bool        m_isVisualizer = false;
     bool        m_expanded     = true;
@@ -426,34 +470,142 @@ private:
     // ─── Knob management ────────────────────────────────────────────────
 
     void clearKnobs() {
-        for (auto* k : m_knobs)    { m_knobGrid.removeChild(k); delete k; }
+        for (auto& s : m_knobs)    { m_knobGrid.removeChild(s.widget); delete s.widget; }
         m_knobs.clear();
-        for (auto* k : m_vizKnobs) { if (m_vizKnobGrid) m_vizKnobGrid->removeChild(k); delete k; }
+        for (auto& s : m_vizKnobs) { if (m_vizKnobGrid) m_vizKnobGrid->removeChild(s.widget); delete s.widget; }
         m_vizKnobs.clear();
     }
 
     void buildKnobs(const std::vector<ParamInfo>& params,
-                    std::vector<FwKnob*>& knobs, FwGrid& grid, int maxRows) {
+                    std::vector<ParamSlot>& slots, FwGrid& grid, int maxRows) {
         grid.setMaxRows(maxRows);
         for (const auto& p : params) {
-            auto* k = new FwKnob();
-            k->setName(std::to_string(p.index));  // used as key for updateParamValue
-            k->setRange(p.minVal, p.maxVal);
-            k->setDefault(p.defaultVal);
-            k->setValue(p.defaultVal);
-            k->setLabel(p.name);
-            k->setBoolean(p.isBoolean);
-            k->setFormatCallback([unit = p.unit, isBool = p.isBoolean](float v) {
-                return formatValue(v, unit, isBool);
-            });
-            k->setOnChange([this, idx = p.index](float v) {
-                if (m_onParamChange) m_onParamChange(idx, v);
-            });
-            k->setOnTouch([this, idx = p.index, k](bool touching) {
-                if (m_onParamTouch) m_onParamTouch(idx, k->value(), touching);
-            });
-            knobs.push_back(k);
-            grid.addChild(k);
+            ParamSlot slot;
+            WidgetHint hint = p.widgetHint;
+
+            // Auto-resolve: booleans become toggles
+            if (hint == WidgetHint::Knob && p.isBoolean)
+                hint = WidgetHint::Toggle;
+
+            switch (hint) {
+            case WidgetHint::DentedKnob: {
+                auto* dk = new FwDentedKnob();
+                dk->setName(std::to_string(p.index));
+                dk->setRange(p.minVal, p.maxVal);
+                dk->setDefault(p.defaultVal);
+                dk->setValue(p.defaultVal);
+                dk->setLabel(p.name);
+                dk->addDetent(p.defaultVal, 0.04f);
+                dk->setFormat([unit = p.unit](float v) {
+                    return formatValue(v, unit, false);
+                });
+                dk->setOnChange([this, idx = p.index](float v) {
+                    if (m_onParamChange) m_onParamChange(idx, v);
+                });
+                dk->setOnTouch([this, idx = p.index, dk](bool touching) {
+                    if (m_onParamTouch) m_onParamTouch(idx, dk->value(), touching);
+                });
+                slot.widget = dk;
+                slot.type = ParamSlot::TDentedKnob;
+                break;
+            }
+            case WidgetHint::StepSelector: {
+                auto* ss = new FwStepSelector();
+                ss->setName(std::to_string(p.index));
+                ss->setRange(static_cast<int>(p.minVal + 0.5f),
+                             static_cast<int>(p.maxVal + 0.5f));
+                ss->setValue(static_cast<int>(p.defaultVal + 0.5f));
+                ss->setLabel(p.name);
+                if (!p.valueLabels.empty()) {
+                    auto labels = p.valueLabels;
+                    int mn = static_cast<int>(p.minVal + 0.5f);
+                    ss->setFormat([labels, mn](int v) -> std::string {
+                        int idx = v - mn;
+                        if (idx >= 0 && idx < static_cast<int>(labels.size()))
+                            return labels[idx];
+                        return std::to_string(v);
+                    });
+                } else {
+                    ss->setFormat([unit = p.unit](int v) -> std::string {
+                        if (unit == "st") return std::to_string(v);
+                        return std::to_string(v);
+                    });
+                }
+                ss->setOnChange([this, idx = p.index](int v) {
+                    if (m_onParamChange) m_onParamChange(idx, static_cast<float>(v));
+                });
+                ss->setOnTouch([this, idx = p.index, ss](bool touching) {
+                    if (m_onParamTouch)
+                        m_onParamTouch(idx, static_cast<float>(ss->value()), touching);
+                });
+                slot.widget = ss;
+                slot.type = ParamSlot::TStepSelector;
+                break;
+            }
+            case WidgetHint::Toggle: {
+                auto* ts = new FwToggleSwitch();
+                ts->setName(std::to_string(p.index));
+                ts->setState(p.defaultVal > 0.5f);
+                ts->setLabel(p.name);
+                if (p.valueLabels.size() >= 2)
+                    ts->setLabels(p.valueLabels[0], p.valueLabels[1]);
+                else
+                    ts->setLabels("Off", "On");
+                ts->setOnChange([this, idx = p.index](bool state) {
+                    if (m_onParamChange) m_onParamChange(idx, state ? 1.0f : 0.0f);
+                });
+                ts->setOnTouch([this, idx = p.index, ts](bool touching) {
+                    if (m_onParamTouch)
+                        m_onParamTouch(idx, ts->state() ? 1.0f : 0.0f, touching);
+                });
+                slot.widget = ts;
+                slot.type = ParamSlot::TToggle;
+                break;
+            }
+            case WidgetHint::Knob360: {
+                auto* k360 = new FwKnob360();
+                k360->setName(std::to_string(p.index));
+                k360->setRange(p.minVal, p.maxVal);
+                k360->setDefault(p.defaultVal);
+                k360->setValue(p.defaultVal);
+                k360->setLabel(p.name);
+                k360->setFormat([unit = p.unit](float v) {
+                    return formatValue(v, unit, false);
+                });
+                k360->setOnChange([this, idx = p.index](float v) {
+                    if (m_onParamChange) m_onParamChange(idx, v);
+                });
+                k360->setOnTouch([this, idx = p.index, k360](bool touching) {
+                    if (m_onParamTouch) m_onParamTouch(idx, k360->value(), touching);
+                });
+                slot.widget = k360;
+                slot.type = ParamSlot::TKnob360;
+                break;
+            }
+            default: /* WidgetHint::Knob */ {
+                auto* k = new FwKnob();
+                k->setName(std::to_string(p.index));
+                k->setRange(p.minVal, p.maxVal);
+                k->setDefault(p.defaultVal);
+                k->setValue(p.defaultVal);
+                k->setLabel(p.name);
+                k->setBoolean(p.isBoolean);
+                k->setFormatCallback([unit = p.unit, isBool = p.isBoolean](float v) {
+                    return formatValue(v, unit, isBool);
+                });
+                k->setOnChange([this, idx = p.index](float v) {
+                    if (m_onParamChange) m_onParamChange(idx, v);
+                });
+                k->setOnTouch([this, idx = p.index, k](bool touching) {
+                    if (m_onParamTouch) m_onParamTouch(idx, k->value(), touching);
+                });
+                slot.widget = k;
+                slot.type = ParamSlot::TKnob;
+                break;
+            }
+            }
+            slots.push_back(slot);
+            grid.addChild(slot.widget);
         }
     }
 

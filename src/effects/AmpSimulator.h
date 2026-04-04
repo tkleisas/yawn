@@ -115,16 +115,18 @@ public:
 
     int parameterCount() const override { return kParamCount; }
 
+    static constexpr const char* kAmpTypeLabels[] = {"Clean", "Crunch", "Lead", "HiGain"};
+
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
             {"Gain",     0.0f,   48.0f, 12.0f, "dB", false},
-            {"Bass",    -12.0f,  12.0f,  0.0f, "dB", false},
-            {"Mid",     -12.0f,  12.0f,  0.0f, "dB", false},
-            {"Treble",  -12.0f,  12.0f,  0.0f, "dB", false},
-            {"Presence", -6.0f,   6.0f,  0.0f, "dB", false},
-            {"Output",  -24.0f,   6.0f, -6.0f, "dB", false},
-            {"Type",     0.0f,    3.0f,  1.0f, "",   false},
-            {"Cabinet",  0.0f,    1.0f,  0.8f, "",   false},
+            {"Bass",    -12.0f,  12.0f,  0.0f, "dB", false, false, WidgetHint::DentedKnob},
+            {"Mid",     -12.0f,  12.0f,  0.0f, "dB", false, false, WidgetHint::DentedKnob},
+            {"Treble",  -12.0f,  12.0f,  0.0f, "dB", false, false, WidgetHint::DentedKnob},
+            {"Presence", -6.0f,   6.0f,  0.0f, "dB", false, false, WidgetHint::DentedKnob},
+            {"Output",  -24.0f,   6.0f, -6.0f, "dB", false, false, WidgetHint::DentedKnob},
+            {"Type",     0.0f,    3.0f,  1.0f, "",   false, false, WidgetHint::StepSelector, kAmpTypeLabels, 4},
+            {"Cabinet",  0.0f,    1.0f,  0.8f, "",   false, false, WidgetHint::DentedKnob},
         };
         return infos[index];
     }

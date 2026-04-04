@@ -166,15 +166,16 @@ public:
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kExciterLabels[] = {"Noise", "Bright", "Saw", "Sine"};
         static const InstrumentParameterInfo infos[] = {
-            {"Exciter",    0.0f,  3.0f,  0.0f,   "",  false},
+            {"Exciter",    0.0f,  3.0f,  0.0f,   "",  false, false, WidgetHint::StepSelector, kExciterLabels, 4},
             {"Damping",    0.0f,  1.0f,  0.3f,   "",  false},
             {"Brightness", 0.0f,  1.0f,  0.7f,   "",  false},
             {"Decay",      0.0f,  1.0f,  0.8f,   "",  false},
             {"Body",       0.0f,  1.0f,  0.2f,   "",  false},
             {"Stretch",    0.0f,  1.0f,  0.0f,   "",  false},
             {"Attack",     0.001f, 0.1f, 0.005f, "s", false},
-            {"Volume",     0.0f,  1.0f,  0.7f,   "",  false},
+            {"Volume",     0.0f,  1.0f,  0.7f,   "",  false, false, WidgetHint::DentedKnob},
         };
         return infos[std::clamp(index, 0, kParamCount - 1)];
     }

@@ -45,12 +45,14 @@ public:
 
     int parameterCount() const override { return kNumParams; }
 
+    static constexpr const char* kCurveLabels[] = {"Linear", "Exp", "Log", "SCurve"};
+
     const MidiEffectParameterInfo& parameterInfo(int index) const override {
         static const MidiEffectParameterInfo p[kNumParams] = {
-            {"Min Out", 0.0f, 127.0f, 1.0f, "", false},
+            {"Min Out", 0.0f, 127.0f, 1.0f, "",   false},
             {"Max Out", 0.0f, 127.0f, 127.0f, "", false},
-            {"Curve",   0.0f, 3.0f, 0.0f, "", false},
-            {"Random",  0.0f, 127.0f, 0.0f, "", false},
+            {"Curve",   0.0f, 3.0f, 0.0f, "",     false, false, WidgetHint::StepSelector, kCurveLabels, 4},
+            {"Random",  0.0f, 127.0f, 0.0f, "",   false},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

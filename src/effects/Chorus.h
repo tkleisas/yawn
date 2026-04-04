@@ -83,10 +83,10 @@ public:
 
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
-            {"Rate",   0.1f, 5.0f, 1.0f, "Hz", false},
-            {"Depth",  0.0f, 1.0f, 0.5f, "",   false},
-            {"Wet/Dry", 0.0f, 1.0f, 0.5f, "",   false},
-            {"Voices", 1.0f, 4.0f, 2.0f, "",   false},
+            {"Rate",    0.1f, 5.0f, 1.0f, "Hz", false},
+            {"Depth",   0.0f, 1.0f, 0.5f, "",   false, false, WidgetHint::DentedKnob},
+            {"Wet/Dry", 0.0f, 1.0f, 0.5f, "",   false, false, WidgetHint::DentedKnob},
+            {"Voices",  1.0f, 4.0f, 2.0f, "",   false, false, WidgetHint::StepSelector},
         };
         return infos[index];
     }

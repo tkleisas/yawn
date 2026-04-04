@@ -214,24 +214,25 @@ public:
     int parameterCount() const override { return kNumParams; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kSliceModeLabels[] = {"Equal", "Transient", "Beat"};
         static const InstrumentParameterInfo p[kNumParams] = {
             // Global
-            {"Slice Count", 2,  16, 8,       "",    false, false},
-            {"Slice Mode",  0,   2, 0,       "",    false, false},
-            {"Orig BPM",   30, 300, 120,     "BPM", false, false},
-            {"Base Note",   0, 112, 36,      "",    false, false},
+            {"Slice Count", 2,  16, 8,       "",    false, false, WidgetHint::StepSelector},
+            {"Slice Mode",  0,   2, 0,       "",    false, false, WidgetHint::StepSelector, kSliceModeLabels, 3},
+            {"Orig BPM",   30, 300, 120,     "BPM", false, false, WidgetHint::DentedKnob},
+            {"Base Note",   0, 112, 36,      "",    false, false, WidgetHint::StepSelector},
             {"Swing",       0,   1, 0,       "",    false, false},
-            {"Volume",      0,   1, 0.8f,    "",    false, false},
+            {"Volume",      0,   1, 0.8f,    "",    false, false, WidgetHint::DentedKnob},
             // Per-pad (isPerVoice = true)
-            {"Pad Vol",     0,     2,     1.0f,     "x",  false, true},
-            {"Pad Pan",    -1,     1,     0.0f,     "%",  false, true},
-            {"Pad Pitch", -24,    24,     0.0f,     "st", false, true},
+            {"Pad Vol",     0,     2,     1.0f,     "x",  false, true, WidgetHint::DentedKnob},
+            {"Pad Pan",    -1,     1,     0.0f,     "%",  false, true, WidgetHint::DentedKnob},
+            {"Pad Pitch", -24,    24,     0.0f,     "st", false, true, WidgetHint::DentedKnob},
             {"Pad Rev",     0,     1,     0.0f,     "",  true,  true},
             {"Pad Cutoff", 20, 20000, 20000.0f,     "Hz", false, true},
             {"Pad Reso",    0,     1,     0.0f,     "",  false, true},
             {"Pad Atk",     0.001f, 2.0f, 0.001f,  "s", false, true},
             {"Pad Dec",     0.001f, 2.0f, 0.05f,   "s", false, true},
-            {"Pad Sus",     0,     1,     1.0f,     "",  false, true},
+            {"Pad Sus",     0,     1,     1.0f,     "",  false, true, WidgetHint::DentedKnob},
             {"Pad Rel",     0.001f, 2.0f, 0.05f,   "s", false, true},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];

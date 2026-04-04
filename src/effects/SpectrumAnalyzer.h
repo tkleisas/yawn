@@ -87,8 +87,8 @@ public:
 
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo p[kParamCount] = {
-            {"Smooth", 0.0f, 0.99f, 0.85f, "", false},
-            {"Gain",   0.1f, 10.0f, 1.0f,  "", false},
+            {"Smooth", 0.0f, 0.99f, 0.85f, "", false, false, WidgetHint::DentedKnob},
+            {"Gain",   0.1f, 10.0f, 1.0f,  "", false, false, WidgetHint::DentedKnob},
             {"Freeze", 0.0f, 1.0f,  0.0f,  "", true},
         };
         return p[std::clamp(index, 0, kParamCount - 1)];

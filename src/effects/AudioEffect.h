@@ -4,6 +4,7 @@
 // All values stored as float, processed in interleaved stereo buffers.
 // Effects must be real-time safe: no allocations in process(), all memory preallocated in init().
 
+#include "WidgetHint.h"
 #include <cstdint>
 
 namespace yawn {
@@ -17,6 +18,9 @@ struct ParameterInfo {
     const char* unit;       // "dB", "ms", "Hz", "%", ""
     bool isBoolean;         // If true, 0.0 = off, 1.0 = on
     bool isPerVoice = false;
+    WidgetHint widgetHint = WidgetHint::Knob;
+    const char* const* valueLabels = nullptr;
+    int valueLabelCount = 0;
 };
 
 class AudioEffect {

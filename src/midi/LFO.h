@@ -87,16 +87,19 @@ public:
 
     int parameterCount() const override { return kNumParams; }
 
+    static constexpr const char* kShapeLabels[]  = {"Sine", "Tri", "Saw", "Sqr", "S&H"};
+    static constexpr const char* kTargetLabels[] = {"Inst", "FX", "MIDI", "Mix"};
+
     const MidiEffectParameterInfo& parameterInfo(int index) const override {
         static const MidiEffectParameterInfo p[kNumParams] = {
-            {"Shape",    0.0f, static_cast<float>(kNumShapes - 1), 0.0f, "",   false, false},
+            {"Shape",    0.0f, static_cast<float>(kNumShapes - 1), 0.0f, "",   false, false, WidgetHint::StepSelector, kShapeLabels, 5},
             {"Rate",     0.0625f, 16.0f,  1.0f,  "beats", false, false},
             {"Sync",     0.0f,    1.0f,   1.0f,  "",      true,  false},
-            {"Depth",    0.0f,    1.0f,   0.5f,  "",      false, false},
-            {"Phase",    0.0f,    1.0f,   0.0f,  "°",     false, false},
-            {"Target",   0.0f,    3.0f,   0.0f,  "",      false, false},
-            {"Chain",    0.0f,    7.0f,   0.0f,  "",      false, false},
-            {"Param",    0.0f,    63.0f,  0.0f,  "",      false, false},
+            {"Depth",    0.0f,    1.0f,   0.5f,  "",      false, false, WidgetHint::DentedKnob},
+            {"Phase",    0.0f,    1.0f,   0.0f,  "°",     false, false, WidgetHint::Knob360},
+            {"Target",   0.0f,    3.0f,   0.0f,  "",      false, false, WidgetHint::StepSelector, kTargetLabels, 4},
+            {"Chain",    0.0f,    7.0f,   0.0f,  "",      false, false, WidgetHint::StepSelector},
+            {"Param",    0.0f,    63.0f,  0.0f,  "",      false, false, WidgetHint::StepSelector},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

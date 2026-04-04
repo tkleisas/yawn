@@ -114,18 +114,18 @@ public:
         static const InstrumentParameterInfo info[kParamCount] = {
             {"Amp Attack",    0.001f,  5.0f,  0.005f, "s",   false},
             {"Amp Decay",     0.001f,  5.0f,  0.1f,   "s",   false},
-            {"Amp Sustain",   0.0f,    1.0f,  1.0f,   "",    false},
+            {"Amp Sustain",   0.0f,    1.0f,  1.0f,   "",    false, false, WidgetHint::DentedKnob},
             {"Amp Release",   0.001f, 10.0f,  0.3f,   "s",   false},
             {"Filter Cut",   20.0f, 20000.0f, 20000.0f, "Hz", false},
             {"Filter Reso",   0.0f,    1.0f,  0.0f,   "",    false},
-            {"Filt Env Amt",-10000.0f,10000.0f,0.0f,   "Hz",  false},
+            {"Filt Env Amt",-10000.0f,10000.0f,0.0f,   "Hz",  false, false, WidgetHint::DentedKnob},
             {"Filt Attack",   0.001f,  5.0f,  0.01f,  "s",   false},
             {"Filt Decay",    0.001f,  5.0f,  0.3f,   "s",   false},
-            {"Filt Sustain",  0.0f,    1.0f,  0.5f,   "",    false},
+            {"Filt Sustain",  0.0f,    1.0f,  0.5f,   "",    false, false, WidgetHint::DentedKnob},
             {"Filt Release",  0.001f, 10.0f,  0.3f,   "s",   false},
             {"Glide",         0.0f,    1.0f,  0.0f,   "s",   false},
             {"Vel Crossfade", 0.0f,    1.0f,  0.0f,   "",    false},
-            {"Volume",        0.0f,    1.0f,  0.8f,   "",    false},
+            {"Volume",        0.0f,    1.0f,  0.8f,   "",    false, false, WidgetHint::DentedKnob},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }

@@ -12,6 +12,7 @@ class Filter : public AudioEffect {
 public:
     enum Param { kCutoff, kResonance, kType, kParamCount };
     enum FilterType { LP = 0, HP = 1, BP = 2, Notch = 3 };
+    static constexpr const char* kFilterTypeLabels[] = {"LP", "HP", "BP", "Notch"};
 
     const char* name() const override { return "Filter"; }
     const char* id()   const override { return "filter"; }
@@ -39,8 +40,8 @@ public:
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
             {"Cutoff",    20.0f, 20000.0f, 1000.0f, "Hz", false},
-            {"Resonance", 0.1f,  20.0f,    0.707f,  "",   false},
-            {"Type",      0.0f,  3.0f,     0.0f,    "",   false},
+            {"Resonance", 0.1f,  20.0f,    0.707f,  "",   false, false, WidgetHint::DentedKnob},
+            {"Type",      0.0f,  3.0f,     0.0f,    "",   false, false, WidgetHint::StepSelector, kFilterTypeLabels, 4},
         };
         return infos[index];
     }

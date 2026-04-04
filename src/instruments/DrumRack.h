@@ -147,10 +147,10 @@ public:
 
     const InstrumentParameterInfo& parameterInfo(int idx) const override {
         static const InstrumentParameterInfo infos[] = {
-            {"Volume",     0,   1,   0.8f, "",   false},
-            {"Pad Volume", 0,   2,   1.0f, "",   false},
-            {"Pad Pan",   -1,   1,   0.0f, "",   false},
-            {"Pad Pitch", -24,  24,  0.0f, "st", false},
+            {"Volume",     0,   1,   0.8f, "",   false, false, WidgetHint::DentedKnob},
+            {"Pad Volume", 0,   2,   1.0f, "",   false, false, WidgetHint::DentedKnob},
+            {"Pad Pan",   -1,   1,   0.0f, "",   false, false, WidgetHint::DentedKnob},
+            {"Pad Pitch", -24,  24,  0.0f, "st", false, false, WidgetHint::DentedKnob},
         };
         return infos[std::clamp(idx, 0, 3)];
     }

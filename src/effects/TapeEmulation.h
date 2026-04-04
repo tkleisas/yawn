@@ -148,7 +148,7 @@ public:
             {"Flutter",    0.0f, 1.0f,     0.1f,    "",   false},
             {"Hiss",       0.0f, 1.0f,     0.05f,   "",   false},
             {"Tone",       200.0f, 20000.0f, 8000.0f, "Hz", false},
-            {"Wet/Dry",    0.0f, 1.0f,     1.0f,    "",   false},
+            {"Wet/Dry",    0.0f, 1.0f,     1.0f,    "",   false, false, WidgetHint::DentedKnob},
         };
         return infos[index];
     }

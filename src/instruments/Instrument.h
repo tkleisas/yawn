@@ -1,6 +1,7 @@
 #pragma once
 
 #include "midi/MidiTypes.h"
+#include "WidgetHint.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -16,6 +17,9 @@ struct InstrumentParameterInfo {
     const char* unit    = "";
     bool isBoolean      = false;
     bool isPerVoice     = false;  // true = per-voice/pad (applies to selected voice)
+    WidgetHint widgetHint = WidgetHint::Knob;
+    const char* const* valueLabels = nullptr;
+    int valueLabelCount = 0;
 };
 
 inline float noteToFreq(int note) {

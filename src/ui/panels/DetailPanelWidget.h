@@ -803,16 +803,25 @@ private:
                 pi.name = info.name; pi.unit = info.unit;
                 pi.minVal = info.minValue; pi.maxVal = info.maxValue;
                 pi.defaultVal = info.defaultValue; pi.isBoolean = info.isBoolean;
+                pi.widgetHint = info.widgetHint;
+                if (info.valueLabels && info.valueLabelCount > 0)
+                    pi.valueLabels.assign(info.valueLabels, info.valueLabels + info.valueLabelCount);
             } else if (ref.instrument) {
                 auto& info = ref.instrument->parameterInfo(p);
                 pi.name = info.name; pi.unit = info.unit;
                 pi.minVal = info.minValue; pi.maxVal = info.maxValue;
                 pi.defaultVal = info.defaultValue; pi.isBoolean = info.isBoolean;
+                pi.widgetHint = info.widgetHint;
+                if (info.valueLabels && info.valueLabelCount > 0)
+                    pi.valueLabels.assign(info.valueLabels, info.valueLabels + info.valueLabelCount);
             } else if (ref.audioEffect) {
                 auto& info = ref.audioEffect->parameterInfo(p);
                 pi.name = info.name; pi.unit = info.unit;
                 pi.minVal = info.minValue; pi.maxVal = info.maxValue;
                 pi.defaultVal = info.defaultValue; pi.isBoolean = info.isBoolean;
+                pi.widgetHint = info.widgetHint;
+                if (info.valueLabels && info.valueLabelCount > 0)
+                    pi.valueLabels.assign(info.valueLabels, info.valueLabels + info.valueLabelCount);
             }
             params.push_back(std::move(pi));
         }

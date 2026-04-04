@@ -617,21 +617,35 @@ void FwToggleSwitch::paint(UIContext& ctx) {
 
     float x = m_bounds.x, y = m_bounds.y;
     float w = m_bounds.w, h = m_bounds.h;
+
+    // Top label (parameter name)
+    float labelScale = 9.0f / Theme::kFontSize;
+    float labelH = 0;
+    if (!m_topLabel.empty()) {
+        float tw = ctx.font->textWidth(m_topLabel, labelScale);
+        float tx = x + (w - tw) * 0.5f;
+        ctx.font->drawText(*ctx.renderer, m_topLabel.c_str(), tx, y + 1,
+                           labelScale, Color{170, 175, 185, 255});
+        labelH = 12.0f;
+    }
+
+    float switchY = y + labelH;
+    float switchH = h - labelH;
     float halfW = w * 0.5f;
 
     // Background track
-    ctx.renderer->drawRoundedRect(x, y, w, h, h * 0.4f, Color{35, 35, 40, 255});
-    ctx.renderer->drawRectOutline(x, y, w, h, Color{60, 60, 65, 255});
+    ctx.renderer->drawRoundedRect(x, switchY, w, switchH, switchH * 0.4f, Color{35, 35, 40, 255});
+    ctx.renderer->drawRectOutline(x, switchY, w, switchH, Color{60, 60, 65, 255});
 
     // Sliding pill indicator
     float pillX = x + m_animPos * halfW;
     Color pillCol = m_state ? m_activeColor : Color{80, 80, 90, 255};
-    ctx.renderer->drawRoundedRect(pillX + 1, y + 1, halfW - 2, h - 2, (h - 2) * 0.4f, pillCol);
+    ctx.renderer->drawRoundedRect(pillX + 1, switchY + 1, halfW - 2, switchH - 2, (switchH - 2) * 0.4f, pillCol);
 
     // Labels
     float scale = 9.0f / Theme::kFontSize;
     float lh = ctx.font->lineHeight(scale);
-    float ty = y + (h - lh) * 0.5f - lh * 0.15f;
+    float ty = switchY + (switchH - lh) * 0.5f - lh * 0.15f;
 
     Color leftCol  = m_state ? Theme::textDim : Theme::textPrimary;
     Color rightCol = m_state ? Theme::textPrimary : Theme::textDim;

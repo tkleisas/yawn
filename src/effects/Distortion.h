@@ -54,12 +54,14 @@ public:
 
     int parameterCount() const override { return kParamCount; }
 
+    static constexpr const char* kDistTypeLabels[] = {"Soft", "Hard", "Tube", "Fold"};
+
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
             {"Drive",   0.0f, 48.0f,  12.0f,    "dB", false},
             {"Tone",    200.0f, 20000.0f, 8000.0f, "Hz", false},
-            {"Wet/Dry", 0.0f, 1.0f,   1.0f,     "",   false},
-            {"Type",    0.0f, 3.0f,   0.0f,     "",   false},
+            {"Wet/Dry", 0.0f, 1.0f,   1.0f,     "",   false, false, WidgetHint::DentedKnob},
+            {"Type",    0.0f, 3.0f,   0.0f,     "",   false, false, WidgetHint::StepSelector, kDistTypeLabels, 4},
         };
         return infos[index];
     }

@@ -172,13 +172,15 @@ public:
 
     int parameterCount() const override { return kNumParams; }
 
+    static constexpr const char* kDirectionLabels[] = {"Up", "Down", "UpDn", "DnUp", "Rand", "Played"};
+
     const MidiEffectParameterInfo& parameterInfo(int index) const override {
         static const MidiEffectParameterInfo p[kNumParams] = {
-            {"Direction", 0.0f, 5.0f, 0.0f, "", false},
+            {"Direction", 0.0f, 5.0f, 0.0f, "",      false, false, WidgetHint::StepSelector, kDirectionLabels, 6},
             {"Rate",      0.0625f, 2.0f, 0.25f, "beats", false},
-            {"Gate",      0.1f, 1.0f, 0.8f, "", false},
-            {"Octaves",   1.0f, 4.0f, 1.0f, "", false},
-            {"Swing",     0.0f, 1.0f, 0.0f, "", false},
+            {"Gate",      0.1f, 1.0f, 0.8f, "",      false},
+            {"Octaves",   1.0f, 4.0f, 1.0f, "",      false, false, WidgetHint::StepSelector},
+            {"Swing",     0.0f, 1.0f, 0.0f, "",      false},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

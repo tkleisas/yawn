@@ -87,21 +87,23 @@ public:
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kCarrierLabels[] = {"Saw", "Sqr", "Pulse", "Noise"};
+        static constexpr const char* kModSourceLabels[] = {"Sample", "A", "E", "I", "O", "U"};
         static const InstrumentParameterInfo info[kParamCount] = {
-            {"Bands",         4.0f,   32.0f,  16.0f, "",    false},
-            {"Carrier Type",  0.0f,    3.0f,   0.0f, "",    false},
-            {"Mod Source",    0.0f,    5.0f,   1.0f, "",    false},
-            {"Bandwidth",     0.1f,    2.0f,   1.0f, "",    false},
+            {"Bands",         4.0f,   32.0f,  16.0f, "",    false, false, WidgetHint::StepSelector},
+            {"Carrier Type",  0.0f,    3.0f,   0.0f, "",    false, false, WidgetHint::StepSelector, kCarrierLabels, 4},
+            {"Mod Source",    0.0f,    5.0f,   1.0f, "",    false, false, WidgetHint::StepSelector, kModSourceLabels, 6},
+            {"Bandwidth",     0.1f,    2.0f,   1.0f, "",    false, false, WidgetHint::DentedKnob},
             {"Env Attack",    1.0f,  200.0f,   5.0f, "ms",  false},
             {"Env Release",   1.0f,  500.0f,  20.0f, "ms",  false},
-            {"Formant Shift",-12.0f,  12.0f,   0.0f, "st",  false},
-            {"HF Tilt",      -6.0f,    6.0f,   0.0f, "dB",  false},
+            {"Formant Shift",-12.0f,  12.0f,   0.0f, "st",  false, false, WidgetHint::DentedKnob},
+            {"HF Tilt",      -6.0f,    6.0f,   0.0f, "dB",  false, false, WidgetHint::DentedKnob},
             {"Unvoiced",      0.0f,    1.0f,   0.3f, "",    false},
             {"Dry Carrier",   0.0f,    1.0f,   0.0f, "",    false},
             {"Amp Attack",    1.0f, 5000.0f,   5.0f, "ms",  false},
             {"Amp Release",   1.0f, 5000.0f, 200.0f, "ms",  false},
             {"Output Filter",200.0f,20000.0f,20000.0f,"Hz", false},
-            {"Volume",        0.0f,    1.0f,   0.8f, "",    false},
+            {"Volume",        0.0f,    1.0f,   0.8f, "",    false, false, WidgetHint::DentedKnob},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }

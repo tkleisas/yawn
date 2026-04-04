@@ -53,12 +53,12 @@ public:
     const ParameterInfo& parameterInfo(int index) const override {
         static const ParameterInfo infos[] = {
             {"Low Freq",  20.0f, 2000.0f,  200.0f,  "Hz", false},
-            {"Low Gain",  -24.0f, 24.0f,   0.0f,    "dB", false},
+            {"Low Gain",  -24.0f, 24.0f,   0.0f,    "dB", false, false, WidgetHint::DentedKnob},
             {"Mid Freq",  100.0f, 10000.0f, 1000.0f, "Hz", false},
-            {"Mid Gain",  -24.0f, 24.0f,   0.0f,    "dB", false},
-            {"Mid Q",     0.1f,  10.0f,    1.0f,    "",   false},
+            {"Mid Gain",  -24.0f, 24.0f,   0.0f,    "dB", false, false, WidgetHint::DentedKnob},
+            {"Mid Q",     0.1f,  10.0f,    1.0f,    "",   false, false, WidgetHint::DentedKnob},
             {"High Freq", 2000.0f, 20000.0f, 5000.0f, "Hz", false},
-            {"High Gain", -24.0f, 24.0f,   0.0f,    "dB", false},
+            {"High Gain", -24.0f, 24.0f,   0.0f,    "dB", false, false, WidgetHint::DentedKnob},
         };
         return infos[index];
     }

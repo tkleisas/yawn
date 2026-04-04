@@ -214,25 +214,26 @@ public:
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kTableLabels[] = {"Basic", "Saw", "Sqr", "Pulse", "Noise"};
         static const InstrumentParameterInfo infos[] = {
-            {"Table",       0.0f,  4.0f,   0.0f,  "",   false},
+            {"Table",       0.0f,  4.0f,   0.0f,  "",   false, false, WidgetHint::StepSelector, kTableLabels, 5},
             {"Position",    0.0f,  1.0f,   0.0f,  "",   false},
             {"Filter Cut",  20.0f, 20000.0f, 5000.0f, "Hz", false},
             {"Filter Res",  0.0f,  1.0f,   0.0f,  "",   false},
-            {"Filter Env", -1.0f,  1.0f,   0.3f,  "",   false},
+            {"Filter Env", -1.0f,  1.0f,   0.3f,  "",   false, false, WidgetHint::DentedKnob},
             {"Amp Atk",     0.001f, 5.0f,  0.01f, "s",  false},
             {"Amp Dec",     0.001f, 5.0f,  0.1f,  "s",  false},
-            {"Amp Sus",     0.0f,  1.0f,   0.7f,  "",   false},
+            {"Amp Sus",     0.0f,  1.0f,   0.7f,  "",   false, false, WidgetHint::DentedKnob},
             {"Amp Rel",     0.001f, 5.0f,  0.3f,  "s",  false},
             {"Filt Atk",    0.001f, 5.0f,  0.01f, "s",  false},
             {"Filt Dec",    0.001f, 5.0f,  0.3f,  "s",  false},
-            {"Filt Sus",    0.0f,  1.0f,   0.3f,  "",   false},
+            {"Filt Sus",    0.0f,  1.0f,   0.3f,  "",   false, false, WidgetHint::DentedKnob},
             {"Filt Rel",    0.001f, 5.0f,  0.3f,  "s",  false},
             {"LFO Rate",    0.1f,  20.0f,  2.0f,  "Hz", false},
             {"LFO Amt",     0.0f,  1.0f,   0.0f,  "",   false},
             {"Sub Level",   0.0f,  1.0f,   0.0f,  "",   false},
             {"Unison Det",  0.0f,  1.0f,   0.0f,  "st", false},
-            {"Volume",      0.0f,  1.0f,   0.7f,  "",   false},
+            {"Volume",      0.0f,  1.0f,   0.7f,  "",   false, false, WidgetHint::DentedKnob},
         };
         return infos[std::clamp(index, 0, kParamCount - 1)];
     }

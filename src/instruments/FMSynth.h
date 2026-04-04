@@ -123,18 +123,27 @@ public:
     int parameterCount() const override { return kNumParams; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kAlgoLabels[] = {"1", "2", "3", "4", "5", "6", "7", "8"};
         static const InstrumentParameterInfo p[kNumParams] = {
-            {"Algorithm",  0, 7, 0,"",false},
+            {"Algorithm",  0, 7, 0,"",false, false, WidgetHint::StepSelector, kAlgoLabels, 8},
             {"Feedback",   0, 1, 0.2f,"",false},
-            {"Op1 Level",  0, 1, 1,"",false},   {"Op1 Ratio", 0.5f, 16, 1,"x",false},
-            {"Op1 Attack", 0.001f, 5, 0.01f,"s",false}, {"Op1 Release", 0.001f, 5, 0.3f,"s",false},
-            {"Op2 Level",  0, 1, 0.8f,"",false}, {"Op2 Ratio", 0.5f, 16, 2,"x",false},
-            {"Op2 Attack", 0.001f, 5, 0.01f,"s",false}, {"Op2 Release", 0.001f, 5, 0.3f,"s",false},
-            {"Op3 Level",  0, 1, 0.6f,"",false}, {"Op3 Ratio", 0.5f, 16, 3,"x",false},
-            {"Op3 Attack", 0.001f, 5, 0.01f,"s",false}, {"Op3 Release", 0.001f, 5, 0.5f,"s",false},
-            {"Op4 Level",  0, 1, 0.4f,"",false}, {"Op4 Ratio", 0.5f, 16, 4,"x",false},
-            {"Op4 Attack", 0.001f, 5, 0.01f,"s",false}, {"Op4 Release", 0.001f, 5, 0.5f,"s",false},
-            {"Volume",     0, 1, 0.5f,"",false},
+            {"Op1 Level",  0, 1, 1,"",false, false, WidgetHint::DentedKnob},
+            {"Op1 Ratio", 0.5f, 16, 1,"x",false, false, WidgetHint::DentedKnob},
+            {"Op1 Attack", 0.001f, 5, 0.01f,"s",false},
+            {"Op1 Release", 0.001f, 5, 0.3f,"s",false},
+            {"Op2 Level",  0, 1, 0.8f,"",false, false, WidgetHint::DentedKnob},
+            {"Op2 Ratio", 0.5f, 16, 2,"x",false, false, WidgetHint::DentedKnob},
+            {"Op2 Attack", 0.001f, 5, 0.01f,"s",false},
+            {"Op2 Release", 0.001f, 5, 0.3f,"s",false},
+            {"Op3 Level",  0, 1, 0.6f,"",false, false, WidgetHint::DentedKnob},
+            {"Op3 Ratio", 0.5f, 16, 3,"x",false, false, WidgetHint::DentedKnob},
+            {"Op3 Attack", 0.001f, 5, 0.01f,"s",false},
+            {"Op3 Release", 0.001f, 5, 0.5f,"s",false},
+            {"Op4 Level",  0, 1, 0.4f,"",false, false, WidgetHint::DentedKnob},
+            {"Op4 Ratio", 0.5f, 16, 4,"x",false, false, WidgetHint::DentedKnob},
+            {"Op4 Attack", 0.001f, 5, 0.01f,"s",false},
+            {"Op4 Release", 0.001f, 5, 0.5f,"s",false},
+            {"Volume",     0, 1, 0.5f,"",false, false, WidgetHint::DentedKnob},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
     }

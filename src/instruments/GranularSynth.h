@@ -87,23 +87,24 @@ public:
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
+        static constexpr const char* kShapeLabels[] = {"Hann", "Tri", "Gauss", "Tukey"};
         static const InstrumentParameterInfo info[kParamCount] = {
-            {"Position",      0.0f,   1.0f,   0.5f,  "",    false},
+            {"Position",      0.0f,   1.0f,   0.5f,  "",    false, false, WidgetHint::DentedKnob},
             {"Grain Size",   10.0f, 500.0f, 100.0f,  "ms",  false},
             {"Density",       1.0f,  40.0f,   8.0f,  "g/s", false},
             {"Spread",        0.0f,   1.0f,   0.1f,  "",    false},
-            {"Pitch",       -24.0f,  24.0f,   0.0f,  "st",  false},
+            {"Pitch",       -24.0f,  24.0f,   0.0f,  "st",  false, false, WidgetHint::DentedKnob},
             {"Spray",         0.0f, 100.0f,  10.0f,  "ms",  false},
-            {"Shape",         0.0f,   3.0f,   0.0f,  "",    false},
-            {"Scan",         -1.0f,   1.0f,   0.0f,  "",    false},
+            {"Shape",         0.0f,   3.0f,   0.0f,  "",    false, false, WidgetHint::StepSelector, kShapeLabels, 4},
+            {"Scan",         -1.0f,   1.0f,   0.0f,  "",    false, false, WidgetHint::DentedKnob},
             {"Filter Cut",  200.0f, 20000.0f, 20000.0f, "Hz", false},
             {"Filter Reso",   0.0f,   1.0f,   0.0f,  "",    false},
             {"Attack",        1.0f, 5000.0f,  10.0f, "ms",  false},
             {"Release",       1.0f, 5000.0f, 200.0f, "ms",  false},
-            {"Stereo Width",  0.0f,   1.0f,   0.5f,  "",    false},
+            {"Stereo Width",  0.0f,   1.0f,   0.5f,  "",    false, false, WidgetHint::DentedKnob},
             {"Reverse",       0.0f,   1.0f,   0.0f,  "",    true},
             {"Jitter",        0.0f,   1.0f,   0.0f,  "",    false},
-            {"Volume",        0.0f,   1.0f,   0.8f,  "",    false},
+            {"Volume",        0.0f,   1.0f,   0.8f,  "",    false, false, WidgetHint::DentedKnob},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }

@@ -143,13 +143,13 @@ public:
 
     const InstrumentParameterInfo& parameterInfo(int idx) const override {
         static const InstrumentParameterInfo infos[] = {
-            {"Volume",       0,   1,    1.0f,  "",  false},
-            {"Chain Vol",    0,   1,    1.0f,  "",  false},
-            {"Chain Pan",   -1,   1,    0.0f,  "",  false},
-            {"Key Low",      0, 127,    0.0f,  "",  false},
-            {"Key High",     0, 127,  127.0f,  "",  false},
-            {"Vel Low",      0, 127,    1.0f,  "",  false},
-            {"Vel High",     0, 127,  127.0f,  "",  false},
+            {"Volume",       0,   1,    1.0f,  "",  false, false, WidgetHint::DentedKnob},
+            {"Chain Vol",    0,   1,    1.0f,  "",  false, false, WidgetHint::DentedKnob},
+            {"Chain Pan",   -1,   1,    0.0f,  "",  false, false, WidgetHint::DentedKnob},
+            {"Key Low",      0, 127,    0.0f,  "",  false, false, WidgetHint::StepSelector},
+            {"Key High",     0, 127,  127.0f,  "",  false, false, WidgetHint::StepSelector},
+            {"Vel Low",      0, 127,    1.0f,  "",  false, false, WidgetHint::StepSelector},
+            {"Vel High",     0, 127,  127.0f,  "",  false, false, WidgetHint::StepSelector},
         };
         return infos[std::clamp(idx, 0, 6)];
     }
