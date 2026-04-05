@@ -111,8 +111,6 @@ public:
     bool hasEditingKnob() const {
         if (m_transposeKnob.isEditing() || m_detuneKnob.isEditing() || m_bpmKnob.isEditing())
             return true;
-        if (m_faBarCountKnob.isEditing() || m_faChanceAKnob.isEditing())
-            return true;
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return true;
         return false;
@@ -125,8 +123,6 @@ public:
         if (m_transposeKnob.isEditing()) return m_transposeKnob.onKeyDown(ke);
         if (m_detuneKnob.isEditing()) return m_detuneKnob.onKeyDown(ke);
         if (m_bpmKnob.isEditing()) return m_bpmKnob.onKeyDown(ke);
-        if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onKeyDown(ke);
-        if (m_faChanceAKnob.isEditing()) return m_faChanceAKnob.onKeyDown(ke);
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return dw->forwardKeyDown(key);
         return false;
@@ -140,8 +136,6 @@ public:
         if (m_transposeKnob.isEditing()) return m_transposeKnob.onTextInput(te);
         if (m_detuneKnob.isEditing()) return m_detuneKnob.onTextInput(te);
         if (m_bpmKnob.isEditing()) return m_bpmKnob.onTextInput(te);
-        if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onTextInput(te);
-        if (m_faChanceAKnob.isEditing()) return m_faChanceAKnob.onTextInput(te);
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return dw->forwardTextInput(text);
         return false;
@@ -152,8 +146,6 @@ public:
         if (m_transposeKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_transposeKnob.onKeyDown(ke); }
         if (m_detuneKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_detuneKnob.onKeyDown(ke); }
         if (m_bpmKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_bpmKnob.onKeyDown(ke); }
-        if (m_faBarCountKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_faBarCountKnob.onKeyDown(ke); }
-        if (m_faChanceAKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_faChanceAKnob.onKeyDown(ke); }
         for (auto* dw : m_deviceWidgets) dw->cancelEditingKnobs();
     }
 
@@ -261,65 +253,6 @@ public:
                 mc->looping = !mc->looping;
                 m_loopToggleBtn.setLabel(mc->looping ? "On" : "Off");
             }
-        });
-
-        // Follow action widgets
-        m_faEnableBtn.setLabel(m_followActionPtr && m_followActionPtr->enabled ? "On" : "Off");
-        m_faEnableBtn.setOnClick([this]() {
-            if (m_followActionPtr) {
-                m_followActionPtr->enabled = !m_followActionPtr->enabled;
-                m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
-            }
-        });
-
-        m_faBarCountKnob.setRange(1.0f, 64.0f);
-        m_faBarCountKnob.setDefault(1.0f);
-        m_faBarCountKnob.setValue(m_followActionPtr ? static_cast<float>(m_followActionPtr->barCount) : 1.0f);
-        m_faBarCountKnob.setStep(1.0f);
-        m_faBarCountKnob.setSensitivity(0.3f);
-        m_faBarCountKnob.setLabel("");
-        m_faBarCountKnob.setFormatCallback([](float v) -> std::string {
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(v));
-            return buf;
-        });
-        m_faBarCountKnob.setOnChange([this](float v) {
-            if (m_followActionPtr)
-                m_followActionPtr->barCount = static_cast<int>(v);
-        });
-
-        static const std::vector<std::string> kFollowActionNames = {
-            "None", "Stop", "Play Again", "Next", "Previous",
-            "First", "Last", "Random", "Any"
-        };
-        m_faActionADropdown.setItems(kFollowActionNames);
-        m_faActionADropdown.setSelected(m_followActionPtr ? static_cast<int>(m_followActionPtr->actionA) : 0);
-        m_faActionADropdown.setOnChange([this](int idx) {
-            if (m_followActionPtr)
-                m_followActionPtr->actionA = static_cast<FollowActionType>(idx);
-        });
-
-        m_faActionBDropdown.setItems(kFollowActionNames);
-        m_faActionBDropdown.setSelected(m_followActionPtr ? static_cast<int>(m_followActionPtr->actionB) : 0);
-        m_faActionBDropdown.setOnChange([this](int idx) {
-            if (m_followActionPtr)
-                m_followActionPtr->actionB = static_cast<FollowActionType>(idx);
-        });
-
-        m_faChanceAKnob.setRange(0.0f, 100.0f);
-        m_faChanceAKnob.setDefault(100.0f);
-        m_faChanceAKnob.setValue(m_followActionPtr ? static_cast<float>(m_followActionPtr->chanceA) : 100.0f);
-        m_faChanceAKnob.setStep(1.0f);
-        m_faChanceAKnob.setSensitivity(0.3f);
-        m_faChanceAKnob.setLabel("");
-        m_faChanceAKnob.setFormatCallback([](float v) -> std::string {
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(v));
-            return buf;
-        });
-        m_faChanceAKnob.setOnChange([this](float v) {
-            if (m_followActionPtr)
-                m_followActionPtr->chanceA = static_cast<int>(v);
         });
 
         saveExpandedStates();
@@ -468,7 +401,6 @@ public:
 
         m_viewMode = ViewMode::Devices;
         m_clipPtr  = nullptr;
-        m_followActionPtr = nullptr;
 
         saveExpandedStates();
 
@@ -723,20 +655,10 @@ public:
                 m_autoTargetDropdown.onMouseMove(e);
                 return true;
             }
-            if (m_faActionADropdown.isOpen()) {
-                m_faActionADropdown.onMouseMove(e);
-                return true;
-            }
-            if (m_faActionBDropdown.isOpen()) {
-                m_faActionBDropdown.onMouseMove(e);
-                return true;
-            }
             // Forward to draggable number inputs (they don't capture the mouse)
             if (m_transposeKnob.onMouseMove(e)) return true;
             if (m_detuneKnob.onMouseMove(e)) return true;
             if (m_bpmKnob.onMouseMove(e)) return true;
-            if (m_faBarCountKnob.onMouseMove(e)) return true;
-            if (m_faChanceAKnob.onMouseMove(e)) return true;
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
@@ -786,10 +708,6 @@ public:
         if (m_viewMode == ViewMode::AudioClip) {
             if (m_warpModeDropdown.isOpen())
                 return m_warpModeDropdown.onMouseUp(e);
-            if (m_faActionADropdown.isOpen())
-                return m_faActionADropdown.onMouseUp(e);
-            if (m_faActionBDropdown.isOpen())
-                return m_faActionBDropdown.onMouseUp(e);
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
@@ -806,15 +724,6 @@ public:
             if (m_bpmKnob.onMouseUp(e)) return true;
             if (hitWidget(m_loopToggleBtn, e.x, e.y))
                 return m_loopToggleBtn.onMouseUp(e);
-            // Follow action controls
-            if (hitWidget(m_faEnableBtn, e.x, e.y))
-                return m_faEnableBtn.onMouseUp(e);
-            if (m_faBarCountKnob.onMouseUp(e)) return true;
-            if (hitWidget(m_faActionADropdown, e.x, e.y))
-                return m_faActionADropdown.onMouseUp(e);
-            if (hitWidget(m_faActionBDropdown, e.x, e.y))
-                return m_faActionBDropdown.onMouseUp(e);
-            if (m_faChanceAKnob.onMouseUp(e)) return true;
         }
         for (auto* dw : m_deviceWidgets) {
             auto& db = dw->bounds();

@@ -42,9 +42,8 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
         float overviewH = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
         float autoH = (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0) ? kAutoSectionH : 24.0f;
-        float followH = 80.0f; // follow actions section height
         float clipHeaderH = kClipTitleRowH + kClipWaveformH + overviewH
-                          + kClipPropsH + kClipSectionGap * 2 + followH + autoH + kClipSectionGap;
+                          + kClipPropsH + kClipSectionGap * 2 + autoH + kClipSectionGap;
         float scrollY = bodyY + clipHeaderH;
         float scrollH = std::max(0.0f, bodyH - clipHeaderH);
         m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
@@ -115,10 +114,6 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         m_warpModeDropdown.paintOverlay(ctx);
     if (m_viewMode == ViewMode::AudioClip && m_autoTargetDropdown.isOpen())
         m_autoTargetDropdown.paintOverlay(ctx);
-    if (m_viewMode == ViewMode::AudioClip && m_faActionADropdown.isOpen())
-        m_faActionADropdown.paintOverlay(ctx);
-    if (m_viewMode == ViewMode::AudioClip && m_faActionBDropdown.isOpen())
-        m_faActionBDropdown.paintOverlay(ctx);
 }
 
 bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
@@ -154,10 +149,6 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
             return m_warpModeDropdown.onMouseDown(e);
         if (m_autoTargetDropdown.isOpen())
             return m_autoTargetDropdown.onMouseDown(e);
-        if (m_faActionADropdown.isOpen())
-            return m_faActionADropdown.onMouseDown(e);
-        if (m_faActionBDropdown.isOpen())
-            return m_faActionBDropdown.onMouseDown(e);
         auto& wb = m_waveformWidget.bounds();
         if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
             e.lx = mx - wb.x;
@@ -191,17 +182,6 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         // Loop toggle
         if (hitWidget(m_loopToggleBtn, mx, my))
             return m_loopToggleBtn.onMouseDown(e);
-        // Follow action controls
-        if (hitWidget(m_faEnableBtn, mx, my))
-            return m_faEnableBtn.onMouseDown(e);
-        if (hitWidget(m_faBarCountKnob, mx, my))
-            return m_faBarCountKnob.onMouseDown(e);
-        if (hitWidget(m_faActionADropdown, mx, my))
-            return m_faActionADropdown.onMouseDown(e);
-        if (hitWidget(m_faActionBDropdown, mx, my))
-            return m_faActionBDropdown.onMouseDown(e);
-        if (hitWidget(m_faChanceAKnob, mx, my))
-            return m_faChanceAKnob.onMouseDown(e);
     }
 
     if (m_deviceWidgets.empty()) return false;
@@ -360,61 +340,8 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
     m_loopToggleBtn.paint(ctx);
 
-    // ── Follow Actions section ──
-    float faSepY = stripY + labelH + 2.0f + knobH + 6.0f;
-    renderer.drawRect(sectionX, faSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
-    float faLabelY = faSepY + 3.0f;
-    font.drawText(renderer, "Follow Actions", sectionX, faLabelY, labelScale, Theme::textDim);
-
-    // Sync widget values from follow action data
-    if (m_followActionPtr) {
-        m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
-        if (!m_faBarCountKnob.isEditing())
-            m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
-        m_faActionADropdown.setSelected(static_cast<int>(m_followActionPtr->actionA));
-        m_faActionBDropdown.setSelected(static_cast<int>(m_followActionPtr->actionB));
-        if (!m_faChanceAKnob.isEditing())
-            m_faChanceAKnob.setValue(static_cast<float>(m_followActionPtr->chanceA));
-    }
-
-    float faRowY = faLabelY + 14.0f;
-    float faCx = sectionX;
-    float faDropW = 100.0f;
-
-    // Enable toggle
-    font.drawText(renderer, "Enable", faCx, faRowY, labelScale, Theme::textDim);
-    float faInputY = faRowY + labelH + 2.0f;
-    m_faEnableBtn.layout(Rect{faCx, faInputY, 50.0f, inputH}, ctx);
-    m_faEnableBtn.paint(ctx);
-    faCx += 50.0f + sectionGap;
-
-    // Bar count
-    font.drawText(renderer, "Bars", faCx, faRowY, labelScale, Theme::textDim);
-    m_faBarCountKnob.layout(Rect{faCx, faInputY - 14.0f, knobW, knobH}, ctx);
-    m_faBarCountKnob.paint(ctx);
-    faCx += knobW + sectionGap;
-
-    // Action A
-    font.drawText(renderer, "Action A", faCx, faRowY, labelScale, Theme::textDim);
-    m_faActionADropdown.layout(Rect{faCx, faInputY, faDropW, inputH}, ctx);
-    m_faActionADropdown.paint(ctx);
-    faCx += faDropW + gap;
-
-    // Action B
-    font.drawText(renderer, "Action B", faCx, faRowY, labelScale, Theme::textDim);
-    m_faActionBDropdown.layout(Rect{faCx, faInputY, faDropW, inputH}, ctx);
-    m_faActionBDropdown.paint(ctx);
-    faCx += faDropW + gap;
-
-    // Chance A
-    font.drawText(renderer, "Chance A", faCx, faRowY, labelScale, Theme::textDim);
-    m_faChanceAKnob.layout(Rect{faCx, faInputY - 14.0f, knobW, knobH}, ctx);
-    m_faChanceAKnob.paint(ctx);
-
-    float faBottomY = faInputY + knobH - 8.0f;
-
     // ── Automation section ──
-    float autoY = faBottomY;
+    float autoY = stripY + labelH + 2.0f + knobH + 6.0f;
     renderer.drawRect(sectionX, autoY, sectionW, 1.0f, Color{50, 50, 55, 255});
     float autoLabelY = autoY + 3.0f;
     font.drawText(renderer, "Automation", sectionX, autoLabelY, labelScale, Theme::textDim);

@@ -80,12 +80,12 @@ TEST(FollowAction, ClipSlotFollowActionPersistence) {
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-static fs::path followActionTestDir() {
-    return fs::temp_directory_path() / "yawn_test_followaction.yawn";
+static fs::path followActionTestDir(const std::string& suffix) {
+    return fs::temp_directory_path() / ("yawn_test_followaction_" + suffix + ".yawn");
 }
 
 TEST(FollowAction, SerializationRoundTrip) {
-    auto dir = followActionTestDir();
+    auto dir = followActionTestDir("roundtrip");
     if (fs::exists(dir)) fs::remove_all(dir);
 
     // Setup project with follow action on a clip slot
@@ -145,7 +145,7 @@ TEST(FollowAction, SerializationRoundTrip) {
 }
 
 TEST(FollowAction, DisabledNotSerialized) {
-    auto dir = followActionTestDir();
+    auto dir = followActionTestDir("disabled");
     if (fs::exists(dir)) fs::remove_all(dir);
 
     Project project;

@@ -804,19 +804,23 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
 void App::updateDetailForSelectedTrack() {
     if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) {
         m_detailPanel->clear();
+        m_browserPanel->setFollowAction(nullptr);
         return;
     }
 
     m_detailPanel->setTrackIndex(m_selectedTrack);
 
-    // Check if the selected slot has an audio clip — show clip detail view
+    // Update browser panel follow action for any clip slot
     auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+    bool hasClip = slot && (slot->audioClip || slot->midiClip);
+    m_browserPanel->setFollowAction(hasClip ? &slot->followAction : nullptr);
+
+    // Check if the selected slot has an audio clip — show clip detail view
     auto* audioClip = slot ? slot->audioClip.get() : nullptr;
     if (audioClip) {
         auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
         m_detailPanel->setAudioClip(audioClip, fxChain,
                                      static_cast<int>(m_audioEngine.sampleRate()));
-        m_detailPanel->setFollowAction(slot ? &slot->followAction : nullptr);
         m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
         return;
     }
@@ -827,9 +831,8 @@ void App::updateDetailForSelectedTrack() {
 
     m_detailPanel->setDeviceChain(midiChain, inst, fxChain);
 
-    // Wire clip automation and follow action if a MIDI clip is selected
+    // Wire clip automation if a MIDI clip is selected
     if (slot && slot->midiClip) {
-        m_detailPanel->setFollowAction(&slot->followAction);
         m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
     }
 }
@@ -1638,6 +1641,14 @@ void App::processEvents() {
                         break;
                     }
                 }
+                // Browser panel knob text-edit mode
+                if (m_browserPanel->hasEditingKnob()) {
+                    if (m_browserPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
+                        if (!m_browserPanel->hasEditingKnob())
+                            SDL_StopTextInput(m_mainWindow.getHandle());
+                        break;
+                    }
+                }
 
                 // Piano roll keyboard shortcuts
                 if (m_pianoRoll->isOpen()) {
@@ -1760,6 +1771,11 @@ void App::processEvents() {
                 // Detail panel knob text-edit mode
                 if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
                     m_detailPanel->forwardTextInput(event.text.text);
+                    break;
+                }
+                // Browser panel knob text-edit mode
+                if (m_browserPanel->hasEditingKnob()) {
+                    m_browserPanel->forwardTextInput(event.text.text);
                     break;
                 }
                 if (m_inputState.focused()) {
@@ -1897,6 +1913,27 @@ void App::processEvents() {
                 }
                 m_detailPanel->setFocused(false);
 
+                // Browser panel — dispatch via widget tree
+                {
+                    bool hadBrowserKnob = m_browserPanel->hasEditingKnob();
+                    if (!rightClick) {
+                        ui::fw::MouseEvent me;
+                        me.x = mx; me.y = my;
+                        me.button = ui::fw::MouseButton::Left;
+                        if (m_browserPanel->onMouseDown(me)) {
+                            if (m_browserPanel->hasEditingKnob() && !hadBrowserKnob)
+                                SDL_StartTextInput(m_mainWindow.getHandle());
+                            else if (!m_browserPanel->hasEditingKnob() && hadBrowserKnob)
+                                SDL_StopTextInput(m_mainWindow.getHandle());
+                            break;
+                        }
+                    }
+                    if (hadBrowserKnob) {
+                        m_browserPanel->cancelEditingKnobs();
+                        SDL_StopTextInput(m_mainWindow.getHandle());
+                    }
+                }
+
                 // Piano roll click handling
                 if (m_pianoRoll->isOpen()) {
                     if (rightClick) {
@@ -2011,6 +2048,9 @@ void App::processEvents() {
                     int selScene = m_sessionPanel->lastClickScene();
                     if (selScene >= 0) {
                         m_selectedScene = selScene;
+                    }
+                    if (selTrack >= 0 || selScene >= 0) {
+                        updateDetailForSelectedTrack();
                     }
                     // Right-click on clip slot → show clip context menu
                     int rcTrack = m_sessionPanel->lastRightClickTrack();
