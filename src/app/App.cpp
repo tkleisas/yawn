@@ -3077,11 +3077,11 @@ void App::openExportDialog() {
             LOG_INFO("Export", "Dialog OK, showing save dialog (format: %s)", ext);
 
             // Store filter data as members so they survive until async callback
+            // SDL pattern wants just the extension without dot (e.g. "wav" not "*.wav")
             m_exportFilterDesc = "Audio Files (*";
             m_exportFilterDesc += ext;
             m_exportFilterDesc += ")";
-            m_exportFilterPattern = "*";
-            m_exportFilterPattern += ext;
+            m_exportFilterPattern = ext + 1; // skip leading dot
             m_exportDefaultName = "export";
             m_exportDefaultName += ext;
 
@@ -3091,6 +3091,9 @@ void App::openExportDialog() {
             SDL_ShowSaveFileDialog(onExportSaveResult, this,
                                    m_mainWindow.getHandle(),
                                    &m_exportFilter, 1, m_exportDefaultName.c_str());
+            const char* err = SDL_GetError();
+            if (err && err[0])
+                LOG_INFO("Export", "SDL_ShowSaveFileDialog error: %s", err);
         }
     });
 
