@@ -1725,7 +1725,10 @@ void App::processEvents() {
                     case SDLK_D:
                         if (!shift) {
                             m_showDetailPanel = !m_showDetailPanel;
-                            if (m_showDetailPanel) m_detailPanel->setOpen(true);
+                            if (m_showDetailPanel) {
+                                m_detailPanel->setOpen(true);
+                                updateDetailForSelectedTrack();
+                            }
                         }
                         break;
 
@@ -2245,6 +2248,11 @@ void App::processEvents() {
                         // Modulator loaded into Vocoder — done
                     } else {
                         loadClipToSlot(file, targetTrack, targetScene);
+                        m_selectedTrack = targetTrack;
+                        m_selectedScene = targetScene;
+                        m_sessionPanel->setSelectedTrack(m_selectedTrack);
+                        m_sessionPanel->setSelectedScene(m_selectedScene);
+                        updateDetailForSelectedTrack();
                         // Advance scene for next drop on same track
                         m_nextDropScene = targetScene + 1;
                         if (m_nextDropScene >= m_project.numScenes()) m_nextDropScene = 0;
