@@ -174,6 +174,44 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
     return false;
 }
 
+bool SessionPanel::launchOrStopSlot(int ti, int si) {
+    if (!m_project || !m_engine) return false;
+    if (ti < 0 || ti >= m_project->numTracks()) return false;
+    if (si < 0 || si >= m_project->numScenes()) return false;
+
+    auto* slot = m_project->getSlot(ti, si);
+    bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
+    bool isRecording = m_trackStates[ti].recording && m_trackStates[ti].recordingScene == si;
+    bool trackArmed = m_project->track(ti).armed;
+
+    if (isRecording) {
+        auto recQ = m_project->track(ti).recordQuantize;
+        if (m_project->track(ti).type == Track::Type::Midi)
+            m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
+        else
+            m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
+    } else if (isPlaying) {
+        if (slot && slot->audioClip)
+            m_engine->sendCommand(audio::StopClipMsg{ti});
+        else
+            m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+    } else if (slot && slot->audioClip) {
+        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
+            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+    } else if (slot && slot->midiClip) {
+        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
+            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+    } else if (trackArmed) {
+        if (m_project->track(ti).type == Track::Type::Midi)
+            m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
+        else
+            m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, true});
+    } else {
+        return false;
+    }
+    return true;
+}
+
 void SessionPanel::drawText(Renderer2D& r, Font& f, const char* text,
               float x, float y, float scale, Color color) {
     if (!f.isLoaded()) return;
@@ -335,6 +373,17 @@ void SessionPanel::paintClipGrid(Renderer2D& r, Font& f, float x, float y, float
             paintClipSlot(r, f, t, s, sx, sy, sw, sh);
         }
     }
+
+    // Controller grid region overlay
+    if (m_showGridRegion) {
+        float rx = x + m_gridOriginTrack * Theme::kTrackWidth - m_scrollX;
+        float ry = y + m_gridOriginScene * Theme::kClipSlotHeight - m_scrollY;
+        float rw = m_gridCols * Theme::kTrackWidth;
+        float rh = m_gridRows * Theme::kClipSlotHeight;
+        r.drawRect(rx, ry, rw, rh, Color{255, 80, 80, 25});
+        r.drawRectOutline(rx, ry, rw, rh, Color{255, 80, 80, 160}, 2.0f);
+    }
+
     r.popClip();
 }
 
@@ -501,6 +550,15 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
         Color recCol = Color{220, 40, 40}.withAlpha(
             static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
         r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
+    }
+
+    // Selection highlight (shown when not playing/recording to avoid visual clash)
+    bool isSelected = (ti == m_selectedTrack && si == m_selectedScene);
+    if (isSelected && !isPlaying && !isRecording) {
+        r.drawRectOutline(ix, iy, iw, ih, Color{255, 255, 255, 200}, 2.0f);
+    } else if (isSelected) {
+        // Subtle inner highlight when playing/recording already draws an outline
+        r.drawRectOutline(ix + 2, iy + 2, iw - 4, ih - 4, Color{255, 255, 255, 80}, 1.0f);
     }
 
     r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);

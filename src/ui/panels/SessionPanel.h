@@ -79,6 +79,36 @@ public:
     float scrollY() const        { return m_scrollY; }
     void setScrollX(float sx)    { m_scrollX = sx; }
 
+    // Auto-scroll so the selected clip slot is visible in the grid viewport
+    void ensureSelectionVisible() {
+        if (!m_project) return;
+        float gridX = m_bounds.x + Theme::kSceneLabelWidth;
+        float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
+        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+        float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
+
+        float slotX = m_selectedTrack * Theme::kTrackWidth;
+        float slotY = m_selectedScene * Theme::kClipSlotHeight;
+
+        // Horizontal
+        if (slotX < m_scrollX)
+            m_scrollX = slotX;
+        else if (slotX + Theme::kTrackWidth > m_scrollX + gridW)
+            m_scrollX = slotX + Theme::kTrackWidth - gridW;
+
+        // Vertical
+        if (slotY < m_scrollY)
+            m_scrollY = slotY;
+        else if (slotY + Theme::kClipSlotHeight > m_scrollY + gridH)
+            m_scrollY = slotY + Theme::kClipSlotHeight - gridH;
+
+        float maxScrollX = std::max(0.0f, m_project->numTracks() * Theme::kTrackWidth - gridW);
+        float maxScrollY = std::max(0.0f, m_project->numScenes() * Theme::kClipSlotHeight - gridH);
+        m_scrollX = std::clamp(m_scrollX, 0.0f, maxScrollX);
+        m_scrollY = std::clamp(m_scrollY, 0.0f, maxScrollY);
+        if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
+    }
+
     void setGlobalRecordArmed(bool armed) { m_globalRecordArmed = armed; }
     void setTrackRecording(int trackIndex, bool recording, int recordingScene = -1) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks) {
@@ -87,6 +117,23 @@ public:
         }
     }
     void updateAnimTimer(float dt) { m_animTimer += dt; }
+
+    // ─── Controller grid region ─────────────────────────────────────────
+    void toggleGridRegion()        { m_showGridRegion = !m_showGridRegion; }
+    bool gridRegionVisible() const { return m_showGridRegion; }
+
+    void moveGridRegion(int dTrack, int dScene) {
+        if (!m_project) return;
+        m_gridOriginTrack = std::clamp(m_gridOriginTrack + dTrack,
+            0, std::max(0, m_project->numTracks() - m_gridCols));
+        m_gridOriginScene = std::clamp(m_gridOriginScene + dScene,
+            0, std::max(0, m_project->numScenes() - m_gridRows));
+    }
+
+    int gridOriginTrack() const { return m_gridOriginTrack; }
+    int gridOriginScene() const { return m_gridOriginScene; }
+    int gridCols() const        { return m_gridCols; }
+    int gridRows() const        { return m_gridRows; }
 
     float preferredHeight() const {
         int scenes = m_project
@@ -154,6 +201,9 @@ public:
         sceneOut = scene;
         return true;
     }
+
+    // Launch or stop the clip at (track, scene). Returns true if action was taken.
+    bool launchOrStopSlot(int ti, int si);
 
     // ─── Scroll (forwarded from App) ────────────────────────────────────
 
@@ -348,6 +398,13 @@ private:
     int   m_hoveredTrack = -1;
     int   m_hoveredScene = -1;
     bool  m_hoveredIcon  = false;
+
+    // Controller grid region (for future Push/Move mapping)
+    int   m_gridOriginTrack = 0;
+    int   m_gridOriginScene = 0;
+    int   m_gridCols        = 8;    // controller pad columns
+    int   m_gridRows        = 8;    // controller pad rows
+    bool  m_showGridRegion  = false;
 
     std::function<void(float)> m_onScrollChanged;
     RenameCallback m_onTrackRenamed;

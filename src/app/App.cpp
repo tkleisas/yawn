@@ -1741,6 +1741,70 @@ void App::processEvents() {
                         break;
                     }
 
+                    // Arrow key clip navigation (session view only)
+                    // Shift+Arrow moves the controller grid region
+                    case SDLK_UP:
+                        if (m_project.viewMode() == ViewMode::Session) {
+                            if (shift) {
+                                m_sessionPanel->moveGridRegion(0, -1);
+                            } else {
+                                m_selectedScene = std::max(0, m_selectedScene - 1);
+                                m_sessionPanel->setSelectedScene(m_selectedScene);
+                                m_sessionPanel->ensureSelectionVisible();
+                                updateDetailForSelectedTrack();
+                            }
+                        }
+                        break;
+                    case SDLK_DOWN:
+                        if (m_project.viewMode() == ViewMode::Session) {
+                            if (shift) {
+                                m_sessionPanel->moveGridRegion(0, 1);
+                            } else {
+                                m_selectedScene = std::min(m_project.numScenes() - 1, m_selectedScene + 1);
+                                m_sessionPanel->setSelectedScene(m_selectedScene);
+                                m_sessionPanel->ensureSelectionVisible();
+                                updateDetailForSelectedTrack();
+                            }
+                        }
+                        break;
+                    case SDLK_LEFT:
+                        if (m_project.viewMode() == ViewMode::Session) {
+                            if (shift) {
+                                m_sessionPanel->moveGridRegion(-1, 0);
+                            } else {
+                                m_selectedTrack = std::max(0, m_selectedTrack - 1);
+                                m_sessionPanel->setSelectedTrack(m_selectedTrack);
+                                m_sessionPanel->ensureSelectionVisible();
+                                updateDetailForSelectedTrack();
+                            }
+                        }
+                        break;
+                    case SDLK_RIGHT:
+                        if (m_project.viewMode() == ViewMode::Session) {
+                            if (shift) {
+                                m_sessionPanel->moveGridRegion(1, 0);
+                            } else {
+                                m_selectedTrack = std::min(m_project.numTracks() - 1, m_selectedTrack + 1);
+                                m_sessionPanel->setSelectedTrack(m_selectedTrack);
+                                m_sessionPanel->ensureSelectionVisible();
+                                updateDetailForSelectedTrack();
+                            }
+                        }
+                        break;
+
+                    // Enter launches/stops selected clip
+                    case SDLK_RETURN:
+                    case SDLK_KP_ENTER:
+                        if (m_project.viewMode() == ViewMode::Session)
+                            m_sessionPanel->launchOrStopSlot(m_selectedTrack, m_selectedScene);
+                        break;
+
+                    // G toggles controller grid region overlay
+                    case SDLK_G:
+                        if (m_project.viewMode() == ViewMode::Session)
+                            m_sessionPanel->toggleGridRegion();
+                        break;
+
                     default:
                         break;
                 }
