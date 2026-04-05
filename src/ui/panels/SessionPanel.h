@@ -204,6 +204,7 @@ public:
 
     // Launch or stop the clip at (track, scene). Returns true if action was taken.
     bool launchOrStopSlot(int ti, int si);
+    void launchSlotAt(int ti, int si);
 
     // ─── Scroll (forwarded from App) ────────────────────────────────────
 
@@ -257,6 +258,16 @@ public:
     int lastRightClickScene() const { return m_lastRightClickScene; }
     void clearRightClick() { m_lastRightClickTrack = -1; m_lastRightClickScene = -1; }
 
+    // Clip drag-and-drop results (for App to handle move/copy)
+    bool clipDragCompleted() const { return m_clipDragCompleted; }
+    int  dragSourceTrack()   const { return m_dragSourceTrack; }
+    int  dragSourceScene()   const { return m_dragSourceScene; }
+    int  dragTargetTrack()   const { return m_dragTargetTrack; }
+    int  dragTargetScene()   const { return m_dragTargetScene; }
+    bool dragIsCopy()        const { return m_clipDragIsCopy; }
+    bool isDraggingClip()    const { return m_clipDragging; }
+    void clearDragResult()         { m_clipDragCompleted = false; }
+
     bool onMouseMove(MouseMoveEvent& e) override {
         float mx = e.x, my = e.y;
         if (m_hsbDragging && m_project) {
@@ -269,6 +280,36 @@ public:
             if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
             return true;
         }
+
+        // Clip drag: check threshold then track target
+        if (m_clipDragPending && !m_clipDragging) {
+            float dx = mx - m_dragStartX;
+            float dy = my - m_dragStartY;
+            if (dx * dx + dy * dy > kDragThreshold * kDragThreshold) {
+                m_clipDragging = true;
+            }
+        }
+        if (m_clipDragging && m_project) {
+            m_dragCurrentX = mx;
+            m_dragCurrentY = my;
+            m_clipDragIsCopy = e.mods.ctrl;
+            float gridX = m_bounds.x + Theme::kSceneLabelWidth;
+            float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
+            float cmx = mx + m_scrollX;
+            float cmy = my + m_scrollY;
+            int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
+            int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
+            if (ti >= 0 && ti < m_project->numTracks() &&
+                si >= 0 && si < m_project->numScenes()) {
+                m_dragTargetTrack = ti;
+                m_dragTargetScene = si;
+            } else {
+                m_dragTargetTrack = -1;
+                m_dragTargetScene = -1;
+            }
+            return true;
+        }
+
         // Track scrollbar hover
         float gridX = m_bounds.x + Theme::kSceneLabelWidth;
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
@@ -303,10 +344,30 @@ public:
         return false;
     }
 
-    bool onMouseUp(MouseEvent&) override {
+    bool onMouseUp(MouseEvent& e) override {
         if (m_hsbDragging) {
             m_hsbDragging = false;
             releaseMouse();
+            return true;
+        }
+        if (m_clipDragging) {
+            // Finalize drag — compute final target
+            m_clipDragIsCopy = e.mods.ctrl;
+            if (m_dragTargetTrack >= 0 && m_dragTargetScene >= 0 &&
+                !(m_dragTargetTrack == m_dragSourceTrack &&
+                  m_dragTargetScene == m_dragSourceScene)) {
+                m_clipDragCompleted = true;
+            }
+            m_clipDragging = false;
+            m_clipDragPending = false;
+            releaseMouse();
+            return true;
+        }
+        if (m_clipDragPending) {
+            // Didn't exceed drag threshold — treat as a normal content-area click (launch)
+            m_clipDragPending = false;
+            releaseMouse();
+            launchSlotAt(m_dragSourceTrack, m_dragSourceScene);
             return true;
         }
         return false;
@@ -405,6 +466,21 @@ private:
     int   m_gridCols        = 8;    // controller pad columns
     int   m_gridRows        = 8;    // controller pad rows
     bool  m_showGridRegion  = false;
+
+    // Clip drag-and-drop state
+    bool  m_clipDragPending   = false;  // mouse down, waiting to exceed threshold
+    bool  m_clipDragging      = false;  // actively dragging a clip
+    int   m_dragSourceTrack   = -1;
+    int   m_dragSourceScene   = -1;
+    int   m_dragTargetTrack   = -1;
+    int   m_dragTargetScene   = -1;
+    float m_dragStartX        = 0;
+    float m_dragStartY        = 0;
+    float m_dragCurrentX      = 0;
+    float m_dragCurrentY      = 0;
+    bool  m_clipDragCompleted = false;
+    bool  m_clipDragIsCopy    = false;
+    static constexpr float kDragThreshold = 5.0f;
 
     std::function<void(float)> m_onScrollChanged;
     RenameCallback m_onTrackRenamed;

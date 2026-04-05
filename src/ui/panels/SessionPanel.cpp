@@ -157,10 +157,18 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
             } else {
                 m_selectedTrack  = ti;
                 m_lastClickTrack = ti;
-                if (slot && slot->audioClip) {
-                    m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
-                } else if (slot && slot->midiClip) {
-                    m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                if (slot && !slot->empty()) {
+                    // Start potential clip drag (launch deferred to mouseUp)
+                    m_clipDragPending = true;
+                    m_clipDragging    = false;
+                    m_dragSourceTrack = ti;
+                    m_dragSourceScene = si;
+                    m_dragStartX      = e.x;
+                    m_dragStartY      = e.y;
+                    m_dragTargetTrack = -1;
+                    m_dragTargetScene = -1;
+                    m_clipDragCompleted = false;
+                    captureMouse();  // ensure we receive mouse move events
                 } else if (trackArmed) {
                     if (m_project->track(ti).type == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
@@ -210,6 +218,19 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
         return false;
     }
     return true;
+}
+
+void SessionPanel::launchSlotAt(int ti, int si) {
+    if (!m_project || !m_engine) return;
+    if (ti < 0 || ti >= m_project->numTracks()) return;
+    if (si < 0 || si >= m_project->numScenes()) return;
+    auto* slot = m_project->getSlot(ti, si);
+    if (slot && slot->audioClip)
+        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
+            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+    else if (slot && slot->midiClip)
+        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
+            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
 }
 
 void SessionPanel::drawText(Renderer2D& r, Font& f, const char* text,
@@ -382,6 +403,36 @@ void SessionPanel::paintClipGrid(Renderer2D& r, Font& f, float x, float y, float
         float rh = m_gridRows * Theme::kClipSlotHeight;
         r.drawRect(rx, ry, rw, rh, Color{255, 80, 80, 25});
         r.drawRectOutline(rx, ry, rw, rh, Color{255, 80, 80, 160}, 2.0f);
+    }
+
+    // Clip drag visual feedback
+    if (m_clipDragging && m_dragSourceTrack >= 0) {
+        // Dim the source slot
+        float srcX = x + m_dragSourceTrack * Theme::kTrackWidth - m_scrollX;
+        float srcY = y + m_dragSourceScene * Theme::kClipSlotHeight - m_scrollY;
+        r.drawRect(srcX, srcY, Theme::kTrackWidth, Theme::kClipSlotHeight,
+                   Color{0, 0, 0, m_clipDragIsCopy ? (uint8_t)60 : (uint8_t)120});
+
+        // Highlight the target slot
+        if (m_dragTargetTrack >= 0 && m_dragTargetScene >= 0 &&
+            !(m_dragTargetTrack == m_dragSourceTrack &&
+              m_dragTargetScene == m_dragSourceScene)) {
+            float dstX = x + m_dragTargetTrack * Theme::kTrackWidth - m_scrollX;
+            float dstY = y + m_dragTargetScene * Theme::kClipSlotHeight - m_scrollY;
+            Color highlight = m_clipDragIsCopy ? Color{80, 180, 255, 60} : Color{80, 255, 80, 60};
+            r.drawRect(dstX, dstY, Theme::kTrackWidth, Theme::kClipSlotHeight, highlight);
+            Color border = m_clipDragIsCopy ? Color{80, 180, 255, 200} : Color{80, 255, 80, 200};
+            r.drawRectOutline(dstX, dstY, Theme::kTrackWidth, Theme::kClipSlotHeight, border, 2.0f);
+
+            // "+" indicator for copy mode
+            if (m_clipDragIsCopy) {
+                float cx = dstX + Theme::kTrackWidth - 14.0f;
+                float cy = dstY + 4.0f;
+                r.drawRect(cx, cy, 10, 10, Color{80, 180, 255, 220});
+                r.drawRect(cx + 4, cy + 2, 2, 6, Color{255, 255, 255, 255});
+                r.drawRect(cx + 2, cy + 4, 6, 2, Color{255, 255, 255, 255});
+            }
+        }
     }
 
     r.popClip();

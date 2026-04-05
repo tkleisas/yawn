@@ -801,6 +801,87 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     m_contextMenu.open(mx, my, std::move(items));
 }
 
+void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy) {
+    auto* srcSlot = m_project.getSlot(srcT, srcS);
+    auto* dstSlot = m_project.getSlot(dstT, dstS);
+    if (!srcSlot || !dstSlot || srcSlot->empty()) return;
+
+    // Capture state for undo
+    std::unique_ptr<audio::Clip> oldDstAudio;
+    std::unique_ptr<midi::MidiClip> oldDstMidi;
+    FollowAction oldDstFA = dstSlot->followAction;
+    auto oldDstAuto = dstSlot->clipAutomation;
+    auto oldDstQuant = dstSlot->launchQuantize;
+    if (dstSlot->audioClip) oldDstAudio = dstSlot->audioClip->clone();
+    if (dstSlot->midiClip) oldDstMidi = dstSlot->midiClip->clone();
+
+    std::unique_ptr<audio::Clip> oldSrcAudio;
+    std::unique_ptr<midi::MidiClip> oldSrcMidi;
+    FollowAction oldSrcFA = srcSlot->followAction;
+    auto oldSrcAuto = srcSlot->clipAutomation;
+    auto oldSrcQuant = srcSlot->launchQuantize;
+    if (srcSlot->audioClip) oldSrcAudio = srcSlot->audioClip->clone();
+    if (srcSlot->midiClip) oldSrcMidi = srcSlot->midiClip->clone();
+
+    // Stop playback on source track if moving (not copying)
+    if (!isCopy) {
+        if (srcSlot->audioClip)
+            m_audioEngine.sendCommand(audio::StopClipMsg{srcT});
+        else if (srcSlot->midiClip)
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{srcT});
+    }
+
+    // Stop playback on destination track if occupied
+    if (!dstSlot->empty()) {
+        if (dstSlot->audioClip)
+            m_audioEngine.sendCommand(audio::StopClipMsg{dstT});
+        else if (dstSlot->midiClip)
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{dstT});
+    }
+
+    // Perform the operation
+    if (isCopy)
+        m_project.copySlot(srcT, srcS, dstT, dstS);
+    else
+        m_project.moveSlot(srcT, srcS, dstT, dstS);
+
+    markDirty();
+
+    std::string action = isCopy ? "Copy Clip" : "Move Clip";
+    m_undoManager.push({action,
+        [this, srcT, srcS, dstT, dstS,
+         srcAudio = std::shared_ptr<audio::Clip>(std::move(oldSrcAudio)),
+         srcMidi = std::shared_ptr<midi::MidiClip>(std::move(oldSrcMidi)),
+         srcFA = oldSrcFA, srcAuto = oldSrcAuto, srcQuant = oldSrcQuant,
+         dstAudio = std::shared_ptr<audio::Clip>(std::move(oldDstAudio)),
+         dstMidi = std::shared_ptr<midi::MidiClip>(std::move(oldDstMidi)),
+         dstFA = oldDstFA, dstAuto = oldDstAuto, dstQuant = oldDstQuant]() {
+            // Undo: restore both slots to original state
+            auto* src = m_project.getSlot(srcT, srcS);
+            auto* dst = m_project.getSlot(dstT, dstS);
+            if (!src || !dst) return;
+            src->audioClip = srcAudio ? srcAudio->clone() : nullptr;
+            src->midiClip  = srcMidi  ? srcMidi->clone()  : nullptr;
+            src->followAction = srcFA;
+            src->clipAutomation = srcAuto;
+            src->launchQuantize = srcQuant;
+            dst->audioClip = dstAudio ? dstAudio->clone() : nullptr;
+            dst->midiClip  = dstMidi  ? dstMidi->clone()  : nullptr;
+            dst->followAction = dstFA;
+            dst->clipAutomation = dstAuto;
+            dst->launchQuantize = dstQuant;
+            markDirty();
+        },
+        [this, srcT, srcS, dstT, dstS, isCopy]() {
+            // Redo
+            if (isCopy) m_project.copySlot(srcT, srcS, dstT, dstS);
+            else        m_project.moveSlot(srcT, srcS, dstT, dstS);
+            markDirty();
+        },
+        ""
+    });
+}
+
 void App::updateDetailForSelectedTrack() {
     if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) {
         m_detailPanel->clear();
@@ -1865,6 +1946,10 @@ void App::processEvents() {
                 if (ui::fw::Widget::capturedWidget()) {
                     ui::fw::MouseMoveEvent me;
                     me.x = mx; me.y = my;
+                    auto sdlMod = SDL_GetModState();
+                    me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
+                    me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
+                    me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
                     m_rootLayout->dispatchMouseMove(me);
                 }
 
@@ -2096,6 +2181,10 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
                     me.clickCount = event.button.clicks;
+                    auto sdlMod = SDL_GetModState();
+                    me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
+                    me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
+                    me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
                     m_contentGrid->dispatchMouseDown(me);
                     // Start SDL text input if a track rename started
                     if (m_sessionPanel->isRenamingTrack() || m_arrangementPanel->isRenamingTrack()) {
@@ -2134,12 +2223,29 @@ void App::processEvents() {
                 float my = event.button.y;
                 int btn = event.button.button;
                 m_inputState.onMouseUp(mx, my, btn);
-                // Release mouse capture (mixer fader drag etc.)
+                // Release mouse capture (mixer fader drag, clip drag, etc.)
                 if (ui::fw::Widget::capturedWidget()) {
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
+                    auto sdlMod = SDL_GetModState();
+                    me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
+                    me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
+                    me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
                     m_rootLayout->dispatchMouseUp(me);
+                }
+                // Handle completed clip drag-and-drop
+                if (m_sessionPanel->clipDragCompleted()) {
+                    int srcT = m_sessionPanel->dragSourceTrack();
+                    int srcS = m_sessionPanel->dragSourceScene();
+                    int dstT = m_sessionPanel->dragTargetTrack();
+                    int dstS = m_sessionPanel->dragTargetScene();
+                    bool isCopy = m_sessionPanel->dragIsCopy();
+                    m_sessionPanel->clearDragResult();
+                    performClipDragDrop(srcT, srcS, dstT, dstS, isCopy);
+                    m_selectedTrack = dstT;
+                    m_selectedScene = dstS;
+                    updateDetailForSelectedTrack();
                 }
                 break;
             }

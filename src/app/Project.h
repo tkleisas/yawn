@@ -169,6 +169,39 @@ public:
         return slot->midiClip.get();
     }
 
+    // Move a clip slot's contents (audio or MIDI + follow action + automation)
+    void moveSlot(int srcTrack, int srcScene, int dstTrack, int dstScene) {
+        auto* src = getSlot(srcTrack, srcScene);
+        auto* dst = getSlot(dstTrack, dstScene);
+        if (!src || !dst || src == dst) return;
+        dst->audioClip      = std::move(src->audioClip);
+        dst->midiClip       = std::move(src->midiClip);
+        dst->followAction   = src->followAction;
+        dst->clipAutomation = std::move(src->clipAutomation);
+        dst->launchQuantize = src->launchQuantize;
+        src->followAction   = FollowAction{};
+        src->clipAutomation.clear();
+        src->launchQuantize = audio::QuantizeMode::NextBar;
+    }
+
+    // Copy a clip slot's contents (clones the clip)
+    void copySlot(int srcTrack, int srcScene, int dstTrack, int dstScene) {
+        auto* src = getSlot(srcTrack, srcScene);
+        auto* dst = getSlot(dstTrack, dstScene);
+        if (!src || !dst || src == dst) return;
+        if (src->audioClip)
+            dst->audioClip = src->audioClip->clone();
+        else
+            dst->audioClip.reset();
+        if (src->midiClip)
+            dst->midiClip = src->midiClip->clone();
+        else
+            dst->midiClip.reset();
+        dst->followAction   = src->followAction;
+        dst->clipAutomation = src->clipAutomation;
+        dst->launchQuantize = src->launchQuantize;
+    }
+
     void addTrack() {
         Track t;
         t.name = "Track " + std::to_string(m_tracks.size() + 1);
