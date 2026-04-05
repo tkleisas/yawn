@@ -244,6 +244,7 @@ bool DetailPanelWidget::handleKnobRightClick(size_t deviceIdx, float mx, float m
 void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
                         float x, float bodyY, float w, float bodyH,
                         float hScale, UIContext& ctx) {
+    if (!m_clipPtr) return;
     const auto& clip = *m_clipPtr;
     float pad = 8.0f;
     float sectionX = x + pad;

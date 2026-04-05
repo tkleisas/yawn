@@ -70,6 +70,10 @@ list(REMOVE_ITEM YAWN_SOURCES ${YAWN_CORE_SOURCES})
 
 add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
 
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${stb_SOURCE_DIR}

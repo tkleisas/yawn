@@ -364,8 +364,8 @@ void Renderer2D::drawWaveform(const float* samples, int sampleCount,
     float barWidth = w / numBars;
 
     for (int i = 0; i < numBars; ++i) {
-        int startSample = (i * sampleCount) / numBars;
-        int endSample = ((i + 1) * sampleCount) / numBars;
+        int startSample = static_cast<int>((static_cast<int64_t>(i) * sampleCount) / numBars);
+        int endSample   = static_cast<int>((static_cast<int64_t>(i + 1) * sampleCount) / numBars);
         if (endSample > sampleCount) endSample = sampleCount;
 
         float minVal = 0.0f, maxVal = 0.0f;
