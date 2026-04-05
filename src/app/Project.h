@@ -34,6 +34,10 @@ struct Track {
     MonitorMode monitorMode = MonitorMode::Auto;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
 
+    // Default clip: last-launched scene index per track (-1 = none)
+    // When transport plays, clips at defaultScene are re-launched.
+    int defaultScene = -1;
+
     // Per-track automation lanes (arrangement-level, absolute beat times)
     std::vector<automation::AutomationLane> automationLanes;
     automation::AutoMode autoMode = automation::AutoMode::Off;

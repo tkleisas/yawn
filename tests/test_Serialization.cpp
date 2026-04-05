@@ -259,6 +259,8 @@ TEST_F(ProjectSerializerTest, RoundTripTrackMetadata) {
     project.track(0).midiInputChannel = 3;
     project.track(1).name = "Drums";
     project.track(1).armed = true;
+    project.track(0).defaultScene = 1;
+    project.track(1).defaultScene = -1;
     project.scene(0).name = "Intro";
     project.scene(1).name = "Verse";
 
@@ -281,6 +283,8 @@ TEST_F(ProjectSerializerTest, RoundTripTrackMetadata) {
     EXPECT_EQ(project2.track(0).midiInputChannel, 3);
     EXPECT_EQ(project2.track(1).name, "Drums");
     EXPECT_TRUE(project2.track(1).armed);
+    EXPECT_EQ(project2.track(0).defaultScene, 1);
+    EXPECT_EQ(project2.track(1).defaultScene, -1);
     EXPECT_EQ(project2.scene(0).name, "Intro");
     EXPECT_EQ(project2.scene(1).name, "Verse");
 }

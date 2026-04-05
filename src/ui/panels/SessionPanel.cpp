@@ -92,13 +92,16 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
         if (si >= 0 && si < m_project->numScenes()) {
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* slot = m_project->getSlot(t, si);
-                if (slot && slot->audioClip)
+                if (slot && slot->audioClip) {
                     m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
-                else if (slot && slot->midiClip)
+                    m_project->track(t).defaultScene = si;
+                } else if (slot && slot->midiClip) {
                     m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
-                else {
+                    m_project->track(t).defaultScene = si;
+                } else {
                     m_engine->sendCommand(audio::StopClipMsg{t});
                     m_engine->sendCommand(audio::StopMidiClipMsg{t});
+                    m_project->track(t).defaultScene = -1;
                 }
             }
             m_activeScene = si;
@@ -142,12 +145,14 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                         m_engine->sendCommand(audio::StopClipMsg{ti});
                     else
                         m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+                    m_project->track(ti).defaultScene = -1;
                 } else if (hasClip) {
                     auto lq = slot->launchQuantize;
                     if (slot->audioClip)
                         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation, slot->followAction});
                     else if (slot->midiClip)
                         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation, slot->followAction});
+                    m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
                     if (m_project->track(ti).type == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
@@ -203,12 +208,15 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
             m_engine->sendCommand(audio::StopClipMsg{ti});
         else
             m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+        m_project->track(ti).defaultScene = -1;
     } else if (slot && slot->audioClip) {
         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+        m_project->track(ti).defaultScene = si;
     } else if (slot && slot->midiClip) {
         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+        m_project->track(ti).defaultScene = si;
     } else if (trackArmed) {
         if (m_project->track(ti).type == Track::Type::Midi)
             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
@@ -225,12 +233,15 @@ void SessionPanel::launchSlotAt(int ti, int si) {
     if (ti < 0 || ti >= m_project->numTracks()) return;
     if (si < 0 || si >= m_project->numScenes()) return;
     auto* slot = m_project->getSlot(ti, si);
-    if (slot && slot->audioClip)
+    if (slot && slot->audioClip) {
         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
-    else if (slot && slot->midiClip)
+        m_project->track(ti).defaultScene = si;
+    } else if (slot && slot->midiClip) {
         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+        m_project->track(ti).defaultScene = si;
+    }
 }
 
 void SessionPanel::drawText(Renderer2D& r, Font& f, const char* text,

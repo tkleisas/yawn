@@ -632,6 +632,7 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["midiInputPort"] = tr.midiInputPort;
         tj["midiInputChannel"] = tr.midiInputChannel;
         tj["armed"] = tr.armed;
+        tj["defaultScene"] = tr.defaultScene;
 
         // Automation mode and lanes
         tj["autoMode"] = static_cast<int>(tr.autoMode);
@@ -771,6 +772,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.midiInputPort = tj.value("midiInputPort", -1);
             tr.midiInputChannel = tj.value("midiInputChannel", -1);
             tr.armed = tj.value("armed", false);
+            tr.defaultScene = tj.value("defaultScene", -1);
 
             // Automation mode and lanes
             tr.autoMode = static_cast<automation::AutoMode>(tj.value("autoMode", 0));

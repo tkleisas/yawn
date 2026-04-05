@@ -1765,6 +1765,19 @@ void App::processEvents() {
                         if (m_displayPlaying) {
                             m_audioEngine.sendCommand(audio::TransportStopMsg{});
                         } else {
+                            // Re-launch default clips before starting transport
+                            for (int t = 0; t < m_project.numTracks(); ++t) {
+                                int ds = m_project.track(t).defaultScene;
+                                if (ds < 0 || ds >= m_project.numScenes()) continue;
+                                auto* slot = m_project.getSlot(t, ds);
+                                if (!slot) continue;
+                                if (slot->audioClip)
+                                    m_audioEngine.sendCommand(audio::LaunchClipMsg{t, ds, slot->audioClip.get(),
+                                        slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                                else if (slot->midiClip)
+                                    m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{t, ds, slot->midiClip.get(),
+                                        slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                            }
                             m_audioEngine.sendCommand(audio::TransportPlayMsg{});
                         }
                         break;
@@ -2396,6 +2409,11 @@ void App::update() {
                 m_sessionPanel->updateClipState(msg.trackIndex, msg.playing, msg.playPosition,
                                                 msg.playingScene, msg.isMidi, msg.clipLengthBeats);
                 m_sessionPanel->setTrackRecording(msg.trackIndex, msg.recording, msg.recordingScene);
+                // Sync defaultScene for follow actions (engine changed playing scene)
+                if (msg.playing && msg.playingScene >= 0 &&
+                    msg.trackIndex >= 0 && msg.trackIndex < m_project.numTracks()) {
+                    m_project.track(msg.trackIndex).defaultScene = msg.playingScene;
+                }
                 // Forward playhead to detail panel waveform
                 if (msg.trackIndex == m_selectedTrack &&
                     m_detailPanel->viewMode() == ui::fw::DetailPanelWidget::ViewMode::AudioClip &&
