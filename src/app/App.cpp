@@ -1105,11 +1105,6 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     LOG_INFO("File", "Loaded '%s' -> Track %d, Scene %d",
         name.c_str(), trackIndex + 1, sceneIndex + 1);
 
-    auto* slot = m_project.getSlot(trackIndex, sceneIndex);
-    m_audioEngine.sendCommand(audio::LaunchClipMsg{trackIndex, sceneIndex, clipPtr,
-        slot ? slot->launchQuantize : audio::QuantizeMode::NextBar,
-        slot ? &slot->clipAutomation : nullptr,
-        slot ? slot->followAction : FollowAction{}});
     markDirty();
     return true;
 }
