@@ -257,7 +257,8 @@ public:
         for (auto& t : m_tracks)
             for (auto& c : t.arrangementClips)
                 maxEnd = std::max(maxEnd, c.endBeat());
-        m_arrangementLength = maxEnd;
+        // Add 16 beats (4 bars) of padding beyond last clip
+        m_arrangementLength = maxEnd + 16.0;
     }
 
 private:

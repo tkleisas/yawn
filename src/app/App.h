@@ -59,6 +59,7 @@ private:
     void buildWidgetTree();
 
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
+    bool loadClipToArrangement(const std::string& path, int trackIndex, double beatPos);
     bool loadSampleToSampler(const std::string& path, int trackIndex);
     bool loadLoopToDrumSlop(const std::string& path, int trackIndex);
     bool loadSampleToDrumRack(const std::string& path, int trackIndex);
@@ -154,6 +155,12 @@ private:
     std::string m_pendingSavePath;
     std::string m_pendingExportPath;
     static void SDLCALL onExportSaveResult(void* userdata, const char* const* filelist, int filter);
+
+    // Persistent storage for async SDL file dialog filter (must outlive the dialog)
+    SDL_DialogFileFilter m_exportFilter{};
+    std::string m_exportFilterDesc;
+    std::string m_exportFilterPattern;
+    std::string m_exportDefaultName;
 
     // Mouse tracking for drag
     float m_lastMouseX = 0;

@@ -151,6 +151,7 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
                 m_loopEnd = snapped;
                 if (m_loopEnd <= m_loopStart) m_loopStart = std::max(0.0, m_loopEnd - 4.0);
             }
+            m_loopEnabled = true;
             if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
             return true;
         }
@@ -174,6 +175,8 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         }
 
         if (m_onPlayheadClick) m_onPlayheadClick(beat);
+        m_rulerDragging = true;
+        captureMouse();
         return true;
     }
 
@@ -463,6 +466,11 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
         releaseMouse();
         return true;
     }
+    if (m_rulerDragging) {
+        m_rulerDragging = false;
+        releaseMouse();
+        return true;
+    }
     if (m_scrollDragging) {
         m_scrollDragging = false;
         releaseMouse();
@@ -620,6 +628,14 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
             m_loopEnd = std::max(beat, m_loopStart + 0.25);
         }
         if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        return true;
+    }
+
+    // Ruler scrub drag — continuously update playhead
+    if (m_rulerDragging) {
+        float gridX = m_bounds.x + kTrackHeaderW;
+        double beat = std::max(0.0, static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat));
+        if (m_onPlayheadClick) m_onPlayheadClick(beat);
         return true;
     }
 
@@ -900,6 +916,28 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
         return true;
     }
 
+    // [ = set loop start to playhead position
+    if (e.keyCode == '[') {
+        double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
+        double snapped = snapBeat(cur);
+        m_loopStart = snapped;
+        if (m_loopEnd <= m_loopStart) m_loopEnd = m_loopStart + 4.0;
+        m_loopEnabled = true;
+        if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        return true;
+    }
+
+    // ] = set loop end to playhead position
+    if (e.keyCode == ']') {
+        double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
+        double snapped = snapBeat(cur);
+        m_loopEnd = snapped;
+        if (m_loopEnd <= m_loopStart) m_loopStart = std::max(0.0, m_loopEnd - 4.0);
+        m_loopEnabled = true;
+        if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        return true;
+    }
+
     return false;
 }
 
@@ -1135,6 +1173,19 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
         }
     }
 
+    // Loop region overlay on timeline body
+    if (m_loopEnabled && m_loopEnd > m_loopStart) {
+        float lx0 = x + static_cast<float>(m_loopStart) * m_pixelsPerBeat - m_scrollX;
+        float lx1 = x + static_cast<float>(m_loopEnd) * m_pixelsPerBeat - m_scrollX;
+        lx0 = std::max(lx0, x);
+        lx1 = std::min(lx1, x + w);
+        if (lx1 > lx0) {
+            r.drawRect(lx0, y, lx1 - lx0, h, Color{60, 120, 80, 30});
+            r.drawRect(lx0, y, 1, h, Color{100, 200, 120, 80});
+            r.drawRect(lx1 - 1, y, 1, h, Color{100, 200, 120, 80});
+        }
+    }
+
     // Track rows and clips
     for (int t = 0; t < numTracks; ++t) {
         float ty = y + trackYOffset(t) - m_scrollY;
@@ -1168,6 +1219,73 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
             Color bodyCol{clipCol.r, clipCol.g, clipCol.b,
                           static_cast<uint8_t>(selected ? 200 : 160)};
             r.drawRoundedRect(cx, cy, cw, ch, 2.0f, bodyCol, 4);
+
+            // Draw waveform for audio clips
+            if (clip.type == ArrangementClip::Type::Audio &&
+                clip.audioBuffer && clip.audioBuffer->numFrames() > 0 &&
+                cw > 4.0f && m_engine) {
+                float wfY = cy + 2;
+                float wfH = ch - 4;
+                double bpm = m_engine->transport().bpm();
+                double sampleRate = m_engine->sampleRate();
+                double beatsPerSec = bpm / 60.0;
+                int totalFrames = clip.audioBuffer->numFrames();
+
+                // Convert offsetBeats to frame offset
+                int startFrame = static_cast<int>(
+                    clip.offsetBeats / beatsPerSec * sampleRate);
+                startFrame = std::max(0, std::min(startFrame, totalFrames - 1));
+                int endFrame = static_cast<int>(
+                    (clip.offsetBeats + clip.lengthBeats) / beatsPerSec * sampleRate);
+                endFrame = std::max(startFrame + 1, std::min(endFrame, totalFrames));
+                int frameCount = endFrame - startFrame;
+
+                Color wfCol{255, 255, 255, 100};
+                r.pushClip(cx, cy, cw, ch);
+                int nch = clip.audioBuffer->numChannels();
+                if (nch >= 2) {
+                    r.drawWaveformStereo(
+                        clip.audioBuffer->channelData(0) + startFrame,
+                        clip.audioBuffer->channelData(1) + startFrame,
+                        frameCount, cx, wfY, cw, wfH, wfCol);
+                } else {
+                    r.drawWaveform(
+                        clip.audioBuffer->channelData(0) + startFrame,
+                        frameCount, cx, wfY, cw, wfH, wfCol);
+                }
+                r.popClip();
+            }
+
+            // Draw MIDI notes for MIDI clips
+            if (clip.type == ArrangementClip::Type::Midi &&
+                clip.midiClip && clip.midiClip->noteCount() > 0 &&
+                cw > 4.0f) {
+                float nY = cy + 2;
+                float nH = ch - 4;
+                Color noteCol{255, 255, 255, 140};
+                int minP = 127, maxP = 0;
+                for (int i = 0; i < clip.midiClip->noteCount(); ++i) {
+                    int p = clip.midiClip->note(i).pitch;
+                    if (p < minP) minP = p;
+                    if (p > maxP) maxP = p;
+                }
+                int pRange = std::max(1, maxP - minP + 1);
+                double len = clip.lengthBeats;
+                r.pushClip(cx, cy, cw, ch);
+                for (int i = 0; i < clip.midiClip->noteCount(); ++i) {
+                    const auto& n = clip.midiClip->note(i);
+                    double noteBeat = n.startBeat - clip.offsetBeats;
+                    if (noteBeat + n.duration < 0 || noteBeat > len) continue;
+                    float nx = cx + static_cast<float>(noteBeat / len) * cw;
+                    float nw = std::max(1.0f,
+                        static_cast<float>(n.duration / len) * cw);
+                    float ny = nY + nH -
+                        (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
+                    float nh = std::max(1.0f, nH / pRange);
+                    r.drawRect(nx, ny, nw, nh, noteCol);
+                }
+                r.popClip();
+            }
 
             r.drawRectOutline(cx, cy, cw, ch,
                 selected ? Color{255, 255, 255, 200} : clipCol.withAlpha(100));

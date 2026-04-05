@@ -1196,6 +1196,54 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     return true;
 }
 
+bool App::loadClipToArrangement(const std::string& path, int trackIndex, double beatPos) {
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    std::string name = path;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    auto dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
+
+    // Calculate length in beats from audio duration
+    double sampleRate = m_audioEngine.sampleRate();
+    double bpm = m_audioEngine.transport().bpm();
+    double durationSec = static_cast<double>(buffer->numFrames()) / sampleRate;
+    double durationBeats = durationSec * bpm / 60.0;
+
+    ArrangementClip clip;
+    clip.type = ArrangementClip::Type::Audio;
+    clip.startBeat = beatPos;
+    clip.lengthBeats = durationBeats;
+    clip.audioBuffer = buffer;
+    clip.name = name;
+    clip.colorIndex = m_project.track(trackIndex).colorIndex;
+
+    m_project.track(trackIndex).arrangementClips.push_back(std::move(clip));
+    m_project.track(trackIndex).sortArrangementClips();
+    m_project.updateArrangementLength();
+    syncArrangementClipsToEngine(trackIndex);
+
+    // Activate arrangement playback for this track
+    if (!m_project.track(trackIndex).arrangementActive) {
+        m_project.track(trackIndex).arrangementActive = true;
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{trackIndex, true});
+    }
+
+    LOG_INFO("File", "Loaded '%s' -> Arrangement Track %d at beat %.1f",
+        name.c_str(), trackIndex + 1, beatPos);
+
+    markDirty();
+    return true;
+}
+
 bool App::loadSampleToSampler(const std::string& path, int trackIndex) {
     auto* inst = m_audioEngine.instrument(trackIndex);
     auto* sampler = dynamic_cast<instruments::Sampler*>(inst);
@@ -1828,7 +1876,12 @@ void App::processEvents() {
                         break;
 
                     case SDLK_D:
-                        if (!shift) {
+                        if (ctrl && !shift && m_project.viewMode() == ViewMode::Arrangement) {
+                            ui::fw::KeyEvent ke;
+                            ke.keyCode = 'd';
+                            ke.mods.ctrl = true;
+                            m_arrangementPanel->onKeyDown(ke);
+                        } else if (!shift && !ctrl) {
                             m_showDetailPanel = !m_showDetailPanel;
                             if (m_showDetailPanel) {
                                 m_detailPanel->setOpen(true);
@@ -1839,12 +1892,18 @@ void App::processEvents() {
 
                     case SDLK_DELETE:
                     case SDLK_BACKSPACE: {
-                        auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
-                        if (slot && !slot->empty()) {
-                            m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
-                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
-                            slot->clear();
-                            markDirty();
+                        if (m_project.viewMode() == ViewMode::Arrangement) {
+                            ui::fw::KeyEvent ke;
+                            ke.keyCode = static_cast<int>(event.key.key);
+                            m_arrangementPanel->onKeyDown(ke);
+                        } else {
+                            auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                            if (slot && !slot->empty()) {
+                                m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                                slot->clear();
+                                markDirty();
+                            }
                         }
                         break;
                     }
@@ -1911,6 +1970,18 @@ void App::processEvents() {
                     case SDLK_G:
                         if (m_project.viewMode() == ViewMode::Session)
                             m_sessionPanel->toggleGridRegion();
+                        break;
+
+                    // Arrangement-mode key forwarding (L=loop, F=follow)
+                    case SDLK_L:
+                    case SDLK_F:
+                    case SDLK_LEFTBRACKET:
+                    case SDLK_RIGHTBRACKET:
+                        if (m_project.viewMode() == ViewMode::Arrangement) {
+                            ui::fw::KeyEvent ke;
+                            ke.keyCode = static_cast<int>(event.key.key);
+                            m_arrangementPanel->onKeyDown(ke);
+                        }
                         break;
 
                     default:
@@ -2134,8 +2205,8 @@ void App::processEvents() {
                     }
                 }
 
-                // Right-click on track headers → open context menu
-                if (rightClick) {
+                // Right-click on track headers → open context menu (session view only)
+                if (rightClick && m_project.viewMode() == ViewMode::Session) {
                     auto sb = m_sessionPanel->bounds();
                     float headerY = sb.y;
                     float headerEnd = headerY + ui::Theme::kTrackHeaderHeight;
@@ -2360,7 +2431,33 @@ void App::processEvents() {
                         break;
                     }
 
-                    // Try to determine target track/scene from drop position
+                    // Arrangement view: drop audio file onto timeline
+                    if (m_project.viewMode() == ViewMode::Arrangement) {
+                        auto ab = m_arrangementPanel->bounds();
+                        float arrGridX = ab.x + ui::fw::ArrangementPanel::kTrackHeaderW;
+                        float arrGridY = ab.y + ui::fw::ArrangementPanel::kRulerH;
+                        if (dropX >= arrGridX && dropY >= arrGridY) {
+                            float relX = (dropX - arrGridX) + m_arrangementPanel->scrollX();
+                            float relY = (dropY - arrGridY) + m_arrangementPanel->scrollY();
+                            int trackIdx = m_arrangementPanel->trackAtY(relY);
+                            double beatPos = static_cast<double>(relX) / m_arrangementPanel->zoom();
+                            beatPos = m_arrangementPanel->snapBeat(beatPos);
+                            if (trackIdx >= 0 && trackIdx < m_project.numTracks()) {
+                                if (m_project.track(trackIdx).type == Track::Type::Audio) {
+                                    loadClipToArrangement(file, trackIdx, beatPos);
+                                } else {
+                                    // For MIDI tracks, try loading as sample to instrument
+                                    if (!loadSampleToSampler(file, trackIdx))
+                                        if (!loadSampleToDrumRack(file, trackIdx))
+                                            if (!loadSampleToGranular(file, trackIdx))
+                                                LOG_WARN("Drop", "Cannot drop audio on MIDI arrangement track");
+                                }
+                            }
+                        }
+                        break;
+                    }
+
+                    // Session view: determine target track/scene from drop position
                     auto sb = m_sessionPanel->bounds();
                     float headerY = sb.y + ui::Theme::kTrackHeaderHeight;
                     float gridX = sb.x + ui::Theme::kSceneLabelWidth;
@@ -2977,24 +3074,23 @@ void App::openExportDialog() {
             // Show native save file dialog
             auto& cfg = m_exportDialog->config();
             const char* ext = util::formatExtension(cfg.format);
+            LOG_INFO("Export", "Dialog OK, showing save dialog (format: %s)", ext);
 
-            // Build default filename
-            std::string defaultName = "export";
-            defaultName += ext;
+            // Store filter data as members so they survive until async callback
+            m_exportFilterDesc = "Audio Files (*";
+            m_exportFilterDesc += ext;
+            m_exportFilterDesc += ")";
+            m_exportFilterPattern = "*";
+            m_exportFilterPattern += ext;
+            m_exportDefaultName = "export";
+            m_exportDefaultName += ext;
 
-            // Build file filter
-            SDL_DialogFileFilter filters[1];
-            std::string desc = "Audio Files (*";
-            desc += ext;
-            desc += ")";
-            std::string pattern = "*";
-            pattern += ext;
-            filters[0].name = desc.c_str();
-            filters[0].pattern = pattern.c_str();
+            m_exportFilter.name = m_exportFilterDesc.c_str();
+            m_exportFilter.pattern = m_exportFilterPattern.c_str();
 
             SDL_ShowSaveFileDialog(onExportSaveResult, this,
                                    m_mainWindow.getHandle(),
-                                   filters, 1, defaultName.c_str());
+                                   &m_exportFilter, 1, m_exportDefaultName.c_str());
         }
     });
 

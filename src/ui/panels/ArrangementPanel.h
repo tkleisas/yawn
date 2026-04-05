@@ -279,6 +279,9 @@ private:
     double m_loopDragOrigEnd = 0.0;
     float  m_loopDragMouseStart = 0.0f;
 
+    // Ruler scrub (drag to move playhead)
+    bool   m_rulerDragging = false;
+
     // Clip selection
     int m_selClipTrack = -1;
     int m_selClipIdx   = -1;

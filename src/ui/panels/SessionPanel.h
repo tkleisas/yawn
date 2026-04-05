@@ -364,10 +364,9 @@ public:
             return true;
         }
         if (m_clipDragPending) {
-            // Didn't exceed drag threshold — treat as a normal content-area click (launch)
+            // Didn't exceed drag threshold — treat as a select (not launch)
             m_clipDragPending = false;
             releaseMouse();
-            launchSlotAt(m_dragSourceTrack, m_dragSourceScene);
             return true;
         }
         return false;
