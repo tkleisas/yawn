@@ -14,6 +14,9 @@ struct AudioFileInfo {
     std::string format;
 };
 
+enum class ExportFormat { WAV, FLAC, OGG };
+enum class BitDepth { Int16, Int24, Float32 };
+
 // Load an audio file (WAV, FLAC, OGG, AIFF, MP3) into an AudioBuffer.
 // Returns nullptr on failure. Audio is stored non-interleaved.
 std::shared_ptr<audio::AudioBuffer> loadAudioFile(
@@ -29,16 +32,22 @@ std::shared_ptr<audio::AudioBuffer> resampleBuffer(
     double dstRate
 );
 
-// Save interleaved audio data to a WAV file.
-// Returns true on success.
+// Save interleaved audio data to a file with specified format and bit depth.
 bool saveAudioFile(const std::string& path,
                    const float* interleavedData, int numFrames, int numChannels,
-                   int sampleRate);
+                   int sampleRate,
+                   ExportFormat format = ExportFormat::WAV,
+                   BitDepth bitDepth = BitDepth::Float32);
 
-// Save a non-interleaved AudioBuffer to a WAV file.
+// Save a non-interleaved AudioBuffer to a file with specified format and bit depth.
 bool saveAudioBuffer(const std::string& path,
                      const audio::AudioBuffer& buffer,
-                     int sampleRate);
+                     int sampleRate,
+                     ExportFormat format = ExportFormat::WAV,
+                     BitDepth bitDepth = BitDepth::Float32);
+
+// Get file extension for a given format.
+const char* formatExtension(ExportFormat format);
 
 } // namespace util
 } // namespace yawn

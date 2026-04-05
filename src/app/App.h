@@ -12,6 +12,7 @@
 #include "ui/framework/AboutDialog.h"
 #include "ui/framework/ConfirmDialogWidget.h"
 #include "ui/panels/PreferencesDialog.h"
+#include "ui/framework/ExportDialog.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
 #include "ui/framework/ContentGrid.h"
@@ -79,6 +80,8 @@ private:
     void saveProjectAs();
     void doSaveProject(const std::filesystem::path& path);
     void doOpenProject(const std::filesystem::path& path);
+    void openExportDialog();
+    void startExportRender(const std::string& filePath);
     void syncTracksToEngine();
     void updateWindowTitle();
     void markDirty() { m_projectDirty = true; updateWindowTitle(); }
@@ -110,6 +113,7 @@ private:
     ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
     ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
     ui::fw::PreferencesDialog*    m_preferencesDialog = nullptr;
+    ui::fw::ExportDialog*         m_exportDialog = nullptr;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
     ui::fw::UIContext m_uiContext;
 
@@ -148,6 +152,8 @@ private:
     std::mutex m_dialogMutex;
     std::string m_pendingOpenPath;
     std::string m_pendingSavePath;
+    std::string m_pendingExportPath;
+    static void SDLCALL onExportSaveResult(void* userdata, const char* const* filelist, int filter);
 
     // Mouse tracking for drag
     float m_lastMouseX = 0;

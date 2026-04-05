@@ -49,6 +49,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ClipEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiClipEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/OfflineRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
 )
@@ -63,6 +64,10 @@ target_link_libraries(yawn_core PUBLIC
     sndfile
     rtmidi
     nlohmann_json::nlohmann_json
+    FLAC
+    ogg
+    vorbis
+    vorbisenc
 )
 
 # Remove core sources from main exe (they're in yawn_core now)

@@ -50,7 +50,44 @@ elseif(TARGET portaudio)
 endif()
 
 # ──────────────────────────────────────────────
-# libsndfile (audio file I/O: WAV, FLAC, OGG)
+# Ogg, Vorbis, FLAC (for direct FLAC/OGG export, not through libsndfile)
+# ──────────────────────────────────────────────
+FetchContent_Declare(
+    Ogg
+    GIT_REPOSITORY https://github.com/xiph/ogg.git
+    GIT_TAG        v1.3.5
+    GIT_SHALLOW    TRUE
+    OVERRIDE_FIND_PACKAGE
+)
+FetchContent_MakeAvailable(Ogg)
+if(NOT TARGET Ogg::ogg)
+    add_library(Ogg::ogg ALIAS ogg)
+endif()
+
+FetchContent_Declare(
+    Vorbis
+    GIT_REPOSITORY https://github.com/xiph/vorbis.git
+    GIT_TAG        v1.3.7
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(Vorbis)
+
+set(BUILD_CXXLIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(INSTALL_MANPAGES OFF CACHE BOOL "" FORCE)
+set(WITH_OGG ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    FLAC
+    GIT_REPOSITORY https://github.com/xiph/flac.git
+    GIT_TAG        1.4.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(FLAC)
+
+# ──────────────────────────────────────────────
+# libsndfile (audio file I/O: WAV reading/writing, other format reading)
 # ──────────────────────────────────────────────
 FetchContent_Declare(
     libsndfile

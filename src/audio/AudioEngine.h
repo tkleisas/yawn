@@ -89,6 +89,11 @@ public:
     const AudioEngineConfig& config() const { return m_config; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
+    // Render a single buffer offline (for export). Must be called with stream stopped.
+    void renderBuffer(float* output, unsigned long numFrames) {
+        processAudio(nullptr, output, numFrames);
+    }
+
     // MidiEngine integration — called from App after init
     void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
 

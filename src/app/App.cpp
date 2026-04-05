@@ -33,10 +33,13 @@
 #include "midi/LFO.h"
 #include "util/ProjectSerializer.h"
 #include "util/Logger.h"
+#include "util/FileIO.h"
+#include "audio/OfflineRenderer.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cinttypes>
 #include <cstring>
+#include <thread>
 
 namespace yawn {
 
@@ -118,7 +121,7 @@ void App::setupMenuBar() {
         {"Open Project",  "Ctrl+O",       [this]() { openProject(); }},
         {"Save Project",  "Ctrl+S",       [this]() { saveProject(); }},
         {"Save As...",    "Ctrl+Shift+S", [this]() { saveProjectAs(); }},
-        {"Export Audio",  "",             nullptr, true},
+        {"Export Audio",  "",             [this]() { openExportDialog(); }, true},
         {"Quit",          "Ctrl+Q",       [this]() { m_running = false; }, true},
     });
 
@@ -246,6 +249,7 @@ void App::buildWidgetTree() {
     auto aboutDlg   = std::make_unique<AboutDialog>();
     auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
     auto prefsDlg   = std::make_unique<PreferencesDialog>();
+    auto exportDlg  = std::make_unique<ExportDialog>();
 
     // ContentGrid fills remaining space
     gridP->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
@@ -264,6 +268,7 @@ void App::buildWidgetTree() {
     m_aboutDialog       = aboutDlg.get();
     m_confirmDialog     = confirmDlg.get();
     m_preferencesDialog = prefsDlg.get();
+    m_exportDialog      = exportDlg.get();
 
     m_preferencesDialog->setOnResult([this](ui::fw::DialogResult result) {
         if (result == ui::fw::DialogResult::OK) {
@@ -383,6 +388,7 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(aboutDlg));
     m_wrappers.push_back(std::move(confirmDlg));
     m_wrappers.push_back(std::move(prefsDlg));
+    m_wrappers.push_back(std::move(exportDlg));
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
@@ -1487,6 +1493,16 @@ void App::processEvents() {
                     break;
                 }
 
+                // Block keys when export dialog is open
+                if (m_exportDialog->isOpen()) {
+                    if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN) {
+                        ui::fw::KeyEvent ke;
+                        ke.keyCode = (event.key.key == SDLK_ESCAPE) ? 27 : 13;
+                        m_exportDialog->onKeyDown(ke);
+                    }
+                    break;
+                }
+
                 // Transport editing (BPM / time signature) takes priority
                 if (m_transportPanel->isEditing()) {
                     int kc = 0;
@@ -2020,6 +2036,15 @@ void App::processEvents() {
                     break;
                 }
 
+                // Export dialog (modal)
+                if (m_exportDialog->isOpen()) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = ui::fw::MouseButton::Left;
+                    m_exportDialog->onMouseDown(me);
+                    break;
+                }
+
                 // Context menu takes priority when open
                 if (m_contextMenu.isOpen()) {
                     m_contextMenu.handleClick(mx, my);
@@ -2395,6 +2420,24 @@ void App::update() {
             m_pendingSavePath.clear();
             doSaveProject(path);
         }
+        if (!m_pendingExportPath.empty()) {
+            std::string path = std::move(m_pendingExportPath);
+            m_pendingExportPath.clear();
+            startExportRender(path);
+        }
+    }
+
+    // Check if render completed
+    if (m_exportDialog->isRendering() && m_exportDialog->progress().done.load()) {
+        m_exportDialog->setRendering(false);
+        m_exportDialog->forceClose();
+        if (m_exportDialog->progress().failed.load()) {
+            LOG_ERROR("Export", "Render failed");
+        } else if (m_exportDialog->progress().cancelled.load()) {
+            LOG_INFO("Export", "Render cancelled by user");
+        } else {
+            LOG_INFO("Export", "Export completed successfully");
+        }
     }
 
     audio::AudioEvent evt;
@@ -2668,6 +2711,10 @@ void App::render() {
             m_preferencesDialog->layout(screenBounds, m_uiContext);
             m_preferencesDialog->paint(m_uiContext);
         }
+        if (m_exportDialog->isOpen()) {
+            m_exportDialog->layout(screenBounds, m_uiContext);
+            m_exportDialog->paint(m_uiContext);
+        }
     }
 
     m_renderer.endFrame();
@@ -2903,6 +2950,110 @@ void SDLCALL App::onSaveFolderResult(void* userdata, const char* const* filelist
 
     std::lock_guard<std::mutex> lock(app->m_dialogMutex);
     app->m_pendingSavePath = filelist[0];
+}
+
+void SDLCALL App::onExportSaveResult(void* userdata, const char* const* filelist, int /*filter*/) {
+    auto* app = static_cast<App*>(userdata);
+    if (!filelist || !filelist[0]) return;
+
+    std::lock_guard<std::mutex> lock(app->m_dialogMutex);
+    app->m_pendingExportPath = filelist[0];
+}
+
+// ---------------------------------------------------------------------------
+// Export Audio
+// ---------------------------------------------------------------------------
+
+void App::openExportDialog() {
+    ui::fw::ExportDialog::Config cfg;
+    cfg.arrangementLengthBeats = m_project.arrangementLength();
+    cfg.loopEnabled = m_audioEngine.transport().isLoopEnabled();
+    cfg.loopStartBeats = m_audioEngine.transport().loopStartBeats();
+    cfg.loopEndBeats = m_audioEngine.transport().loopEndBeats();
+    cfg.sampleRate = static_cast<int>(m_audioEngine.sampleRate());
+
+    m_exportDialog->setOnResult([this](ui::fw::DialogResult result) {
+        if (result == ui::fw::DialogResult::OK) {
+            // Show native save file dialog
+            auto& cfg = m_exportDialog->config();
+            const char* ext = util::formatExtension(cfg.format);
+
+            // Build default filename
+            std::string defaultName = "export";
+            defaultName += ext;
+
+            // Build file filter
+            SDL_DialogFileFilter filters[1];
+            std::string desc = "Audio Files (*";
+            desc += ext;
+            desc += ")";
+            std::string pattern = "*";
+            pattern += ext;
+            filters[0].name = desc.c_str();
+            filters[0].pattern = pattern.c_str();
+
+            SDL_ShowSaveFileDialog(onExportSaveResult, this,
+                                   m_mainWindow.getHandle(),
+                                   filters, 1, defaultName.c_str());
+        }
+    });
+
+    m_exportDialog->open(cfg);
+}
+
+void App::startExportRender(const std::string& filePath) {
+    if (!m_exportDialog) return;
+
+    auto& cfg = m_exportDialog->config();
+
+    // Determine render range
+    double startBeat = 0.0;
+    double endBeat = m_project.arrangementLength();
+    if (cfg.scope == 1) {
+        startBeat = cfg.loopStartBeats;
+        endBeat = cfg.loopEndBeats;
+    }
+
+    // Build render config
+    audio::RenderConfig renderCfg;
+    renderCfg.startBeat = startBeat;
+    renderCfg.endBeat = endBeat;
+    renderCfg.targetSampleRate = cfg.sampleRate;
+    renderCfg.channels = 2;
+
+    // Ensure file has correct extension
+    std::string outPath = filePath;
+    const char* ext = util::formatExtension(cfg.format);
+    if (outPath.size() < 4 || outPath.substr(outPath.size() - std::strlen(ext)) != ext) {
+        outPath += ext;
+    }
+
+    // Copy format settings for the thread
+    util::ExportFormat format = cfg.format;
+    util::BitDepth bitDepth = cfg.bitDepth;
+    int sampleRate = cfg.sampleRate;
+
+    // Re-open the dialog in rendering mode
+    m_exportDialog->open(m_exportDialog->config());
+    m_exportDialog->setRendering(true);
+
+    auto& progress = m_exportDialog->progress();
+
+    // Launch render on a detached thread
+    std::thread([this, renderCfg, outPath, format, bitDepth, sampleRate, &progress]() {
+        auto buffer = audio::OfflineRenderer::render(m_audioEngine, renderCfg, progress);
+
+        if (buffer && !progress.cancelled.load()) {
+            bool ok = util::saveAudioBuffer(outPath, *buffer, sampleRate, format, bitDepth);
+            if (!ok) {
+                LOG_ERROR("Export", "Failed to write: %s", outPath.c_str());
+                progress.failed.store(true);
+            } else {
+                LOG_INFO("Export", "Written: %s", outPath.c_str());
+            }
+        }
+        progress.done.store(true);
+    }).detach();
 }
 
 } // namespace yawn
