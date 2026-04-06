@@ -256,7 +256,11 @@ public:
     // Right-click on clip slot (for App to show context menu)
     int lastRightClickTrack() const { return m_lastRightClickTrack; }
     int lastRightClickScene() const { return m_lastRightClickScene; }
-    void clearRightClick() { m_lastRightClickTrack = -1; m_lastRightClickScene = -1; }
+    void clearRightClick() { m_lastRightClickTrack = -1; m_lastRightClickScene = -1; m_rightClickSceneLabel = -1; }
+
+    // Right-click on scene label (for App to show scene context menu)
+    int rightClickSceneLabel() const { return m_rightClickSceneLabel; }
+    void clearRightClickSceneLabel() { m_rightClickSceneLabel = -1; }
 
     // Clip drag-and-drop results (for App to handle move/copy)
     bool clipDragCompleted() const { return m_clipDragCompleted; }
@@ -451,6 +455,7 @@ private:
     int   m_lastClickScene = -1;
     int   m_lastRightClickTrack = -1;
     int   m_lastRightClickScene = -1;
+    int   m_rightClickSceneLabel = -1;
     float m_animTimer      = 0.0f;
     bool  m_globalRecordArmed = false;
 

@@ -70,6 +70,7 @@ private:
     void setupMenuBar();
     void showTrackContextMenu(int trackIndex, float mx, float my);
     void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
+    void showSceneContextMenu(int sceneIndex, float mx, float my);
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
     void updateDetailForSelectedTrack();
     void switchToView(ViewMode mode);

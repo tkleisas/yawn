@@ -86,10 +86,14 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
     float cmx = mx + m_scrollX;
     float cmy = my + m_scrollY;
 
-    // Scene label click — launch scene
+    // Scene label click — launch scene (left) or context menu (right)
     if (mx >= x && mx < gridX) {
         int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
         if (si >= 0 && si < m_project->numScenes()) {
+            if (rightClick) {
+                m_rightClickSceneLabel = si;
+                return true;
+            }
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* slot = m_project->getSlot(t, si);
                 if (slot && slot->audioClip) {

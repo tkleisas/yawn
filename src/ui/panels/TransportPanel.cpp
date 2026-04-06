@@ -187,7 +187,8 @@ void TransportPanel::paint(UIContext& ctx) {
             if (mapping) {
                 auto lbl = mapping->label();
                 float tw = font.textWidth(lbl.c_str(), ccScale);
-                font.drawText(r, lbl.c_str(), bx + (bw - tw) * 0.5f, by + bh + 1, ccScale, ccCol);
+                float labelH = Theme::kFontSize * ccScale;
+                font.drawText(r, lbl.c_str(), bx + (bw - tw) * 0.5f, by - labelH - 1, ccScale, ccCol);
             }
         };
 

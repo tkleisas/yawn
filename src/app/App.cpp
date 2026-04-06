@@ -807,6 +807,100 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     m_contextMenu.open(mx, my, std::move(items));
 }
 
+void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
+    std::vector<ui::ContextMenu::Item> items;
+    bool canDelete = m_project.numScenes() > 1;
+
+    items.push_back({"Insert Scene", [this, sceneIndex]() {
+        m_project.insertScene(sceneIndex);
+        markDirty();
+        m_undoManager.push({"Insert Scene",
+            [this, sceneIndex]{
+                m_project.deleteScene(sceneIndex);
+                markDirty();
+            },
+            [this, sceneIndex]{
+                m_project.insertScene(sceneIndex);
+                markDirty();
+            }, ""});
+    }});
+
+    items.push_back({"Duplicate Scene", [this, sceneIndex]() {
+        m_project.duplicateScene(sceneIndex);
+        markDirty();
+        int dst = sceneIndex + 1;
+        m_undoManager.push({"Duplicate Scene",
+            [this, dst]{
+                m_project.deleteScene(dst);
+                markDirty();
+            },
+            [this, sceneIndex]{
+                m_project.duplicateScene(sceneIndex);
+                markDirty();
+            }, ""});
+    }});
+
+    items.push_back({"Delete Scene", [this, sceneIndex]() {
+        // Capture all clip data for undo
+        struct SlotBackup {
+            std::unique_ptr<audio::Clip> audioClip;
+            std::unique_ptr<midi::MidiClip> midiClip;
+            audio::QuantizeMode launchQuantize;
+            FollowAction followAction;
+            std::vector<automation::AutomationLane> clipAutomation;
+        };
+        auto sceneName = m_project.scene(sceneIndex).name;
+        std::vector<SlotBackup> backups;
+        for (int t = 0; t < m_project.numTracks(); ++t) {
+            auto* slot = m_project.getSlot(t, sceneIndex);
+            SlotBackup b;
+            if (slot) {
+                if (slot->audioClip) b.audioClip = slot->audioClip->clone();
+                if (slot->midiClip)  b.midiClip  = slot->midiClip->clone();
+                b.launchQuantize = slot->launchQuantize;
+                b.followAction   = slot->followAction;
+                b.clipAutomation = slot->clipAutomation;
+            }
+            backups.push_back(std::move(b));
+        }
+        // Stop any playing clips in this scene
+        for (int t = 0; t < m_project.numTracks(); ++t) {
+            m_audioEngine.sendCommand(audio::StopClipMsg{t});
+            m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
+        }
+        m_project.deleteScene(sceneIndex);
+        markDirty();
+        auto shared = std::make_shared<std::vector<SlotBackup>>(std::move(backups));
+        m_undoManager.push({"Delete Scene",
+            [this, sceneIndex, sceneName, shared]{
+                m_project.insertScene(sceneIndex);
+                m_project.scene(sceneIndex).name = sceneName;
+                for (int t = 0; t < m_project.numTracks() && t < static_cast<int>(shared->size()); ++t) {
+                    auto* slot = m_project.getSlot(t, sceneIndex);
+                    auto& b = (*shared)[t];
+                    if (slot) {
+                        if (b.audioClip) slot->audioClip = b.audioClip->clone();
+                        if (b.midiClip)  slot->midiClip  = b.midiClip->clone();
+                        slot->launchQuantize = b.launchQuantize;
+                        slot->followAction   = b.followAction;
+                        slot->clipAutomation = b.clipAutomation;
+                    }
+                }
+                markDirty();
+            },
+            [this, sceneIndex]{
+                for (int t = 0; t < m_project.numTracks(); ++t) {
+                    m_audioEngine.sendCommand(audio::StopClipMsg{t});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
+                }
+                m_project.deleteScene(sceneIndex);
+                markDirty();
+            }, ""});
+    }, false, canDelete});
+
+    m_contextMenu.open(mx, my, std::move(items));
+}
+
 void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy) {
     auto* srcSlot = m_project.getSlot(srcT, srcS);
     auto* dstSlot = m_project.getSlot(dstT, dstS);
@@ -2342,6 +2436,12 @@ void App::processEvents() {
                         m_selectedTrack = rcTrack;
                         m_selectedScene = rcScene;
                         showClipContextMenu(rcTrack, rcScene, mx, my);
+                    }
+                    // Right-click on scene label → show scene context menu
+                    int rcSceneLabel = m_sessionPanel->rightClickSceneLabel();
+                    if (rcSceneLabel >= 0) {
+                        m_selectedScene = rcSceneLabel;
+                        showSceneContextMenu(rcSceneLabel, mx, my);
                     }
                 }
                 if (wasEditing && !m_transportPanel->isEditing()) {

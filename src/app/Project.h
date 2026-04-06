@@ -244,6 +244,54 @@ public:
         }
     }
 
+    void insertScene(int index) {
+        if (index < 0 || index > static_cast<int>(m_scenes.size())) return;
+        Scene s;
+        s.name = std::to_string(index + 1);
+        m_scenes.insert(m_scenes.begin() + index, s);
+        for (auto& trackSlots : m_clipSlots) {
+            trackSlots.insert(trackSlots.begin() + index, ClipSlot{});
+        }
+        // Fix defaultScene for tracks whose active scene shifted
+        for (auto& t : m_tracks) {
+            if (t.defaultScene >= index) t.defaultScene++;
+        }
+    }
+
+    void deleteScene(int index) {
+        if (index < 0 || index >= static_cast<int>(m_scenes.size())) return;
+        if (m_scenes.size() <= 1) return; // keep at least 1 scene
+        m_scenes.erase(m_scenes.begin() + index);
+        for (auto& trackSlots : m_clipSlots) {
+            trackSlots.erase(trackSlots.begin() + index);
+        }
+        for (auto& t : m_tracks) {
+            if (t.defaultScene == index) t.defaultScene = -1;
+            else if (t.defaultScene > index) t.defaultScene--;
+        }
+    }
+
+    void duplicateScene(int index) {
+        if (index < 0 || index >= static_cast<int>(m_scenes.size())) return;
+        int dst = index + 1;
+        Scene s;
+        s.name = m_scenes[index].name + " copy";
+        m_scenes.insert(m_scenes.begin() + dst, s);
+        for (auto& trackSlots : m_clipSlots) {
+            auto srcSlot = ClipSlot{};
+            auto& orig = trackSlots[index];
+            if (orig.audioClip) srcSlot.audioClip = orig.audioClip->clone();
+            if (orig.midiClip) srcSlot.midiClip = orig.midiClip->clone();
+            srcSlot.launchQuantize = orig.launchQuantize;
+            srcSlot.followAction = orig.followAction;
+            srcSlot.clipAutomation = orig.clipAutomation;
+            trackSlots.insert(trackSlots.begin() + dst, std::move(srcSlot));
+        }
+        for (auto& t : m_tracks) {
+            if (t.defaultScene >= dst) t.defaultScene++;
+        }
+    }
+
     // ─── Arrangement view ──────────────────────────────────────────────
     ViewMode viewMode() const { return m_viewMode; }
     void setViewMode(ViewMode m) { m_viewMode = m; }
