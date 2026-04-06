@@ -120,6 +120,7 @@ private:
 
     audio::AudioEngine m_audioEngine;
     midi::MidiEngine m_midiEngine;
+    midi::MidiMonitorBuffer m_midiMonitor;
     Project m_project;
     undo::UndoManager m_undoManager;
     util::AppSettings m_settings;

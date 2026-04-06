@@ -1,8 +1,9 @@
 #pragma once
-// BrowserPanel — Tabbed panel (top-right) for Files, Presets, Clip, Config.
+// BrowserPanel — Tabbed panel (top-right) for Files, Presets, Clip, MIDI, Config.
 //
 // The "Clip" tab shows follow action controls for the currently selected
 // clip slot, giving them dedicated screen real-estate.
+// The "MIDI" tab shows a real-time MIDI monitor for debugging.
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
@@ -10,6 +11,7 @@
 #include "ui/Font.h"
 #include "ui/Theme.h"
 #include "audio/FollowAction.h"
+#include "midi/MidiMonitorBuffer.h"
 #include <vector>
 #include <string>
 #include <cstdio>
@@ -21,7 +23,7 @@ namespace fw {
 
 class BrowserPanel : public Widget {
 public:
-    enum class Tab { Files = 0, Presets, Clip, Config, COUNT };
+    enum class Tab { Files = 0, Presets, Clip, Midi, Config, COUNT };
 
     BrowserPanel() { initFollowActionWidgets(); }
 
@@ -47,6 +49,13 @@ public:
 
     FollowAction* followActionPtr() const { return m_followActionPtr; }
 
+    // ── MIDI monitor ──
+    void setMidiMonitor(midi::MidiMonitorBuffer* buf) { m_midiMonitor = buf; }
+
+    // Port name lookup callback (set by App to resolve port index → name)
+    using PortNameFn = std::function<std::string(int)>;
+    void setPortNameFn(PortNameFn fn) { m_portNameFn = std::move(fn); }
+
     // ── Events ──
     bool onMouseDown(MouseEvent& e) override {
         float mx = e.x, my = e.y;
@@ -63,6 +72,27 @@ public:
                 tx += kTabW;
             }
             return true;
+        }
+
+        // MIDI tab: toolbar buttons
+        if (m_activeTab == Tab::Midi && m_midiMonitor) {
+            float toolY = y + kTabH + 2.0f;
+            float toolH = 18.0f;
+            float btnW = 42.0f;
+            float bx = x + w - btnW - 4.0f;
+            // Auto-scroll button
+            if (mx >= bx && mx < bx + btnW && my >= toolY && my < toolY + toolH) {
+                m_midiAutoScroll = !m_midiAutoScroll;
+                return true;
+            }
+            bx -= btnW + 4.0f;
+            // Clear button
+            if (mx >= bx && mx < bx + btnW && my >= toolY && my < toolY + toolH) {
+                m_midiMonitor->clear();
+                m_midiScrollOffset = 0;
+                m_midiAutoScroll = true;
+                return true;
+            }
         }
 
         // Clip tab: follow action widgets
@@ -120,6 +150,16 @@ public:
         return false;
     }
 
+    bool onScroll(ScrollEvent& e) override {
+        if (m_activeTab == Tab::Midi && m_midiMonitor) {
+            m_midiScrollOffset += static_cast<int>(e.dy * 3);
+            if (m_midiScrollOffset < 0) m_midiScrollOffset = 0;
+            m_midiAutoScroll = false; // user scrolled manually
+            return true;
+        }
+        return false;
+    }
+
     // Knob text editing support
     bool hasEditingKnob() const {
         return m_faBarCountKnob.isEditing() || m_faChanceAKnob.isEditing();
@@ -161,7 +201,7 @@ public:
 
         if (f.isLoaded()) {
             float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.85f;
-            static const char* tabNames[] = {"Files", "Presets", "Clip", "Config"};
+            static const char* tabNames[] = {"Files", "Presets", "Clip", "MIDI", "Config"};
             float tx = x + 2.0f;
             for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i) {
                 bool active = (static_cast<Tab>(i) == m_activeTab);
@@ -182,6 +222,9 @@ public:
         case Tab::Clip:
             paintClipTab(r, f, x, bodyY, w, bodyH, ctx);
             break;
+        case Tab::Midi:
+            paintMidiTab(r, f, x, bodyY, w, bodyH);
+            break;
         default:
             paintPlaceholder(r, f, x, bodyY, w, bodyH);
             break;
@@ -200,9 +243,15 @@ public:
 
 private:
     static constexpr float kTabH = 24.0f;
-    static constexpr float kTabW = 65.0f;
+    static constexpr float kTabW = 55.0f;
 
     Tab m_activeTab = Tab::Files;
+
+    // MIDI monitor state
+    midi::MidiMonitorBuffer* m_midiMonitor = nullptr;
+    PortNameFn m_portNameFn;
+    int  m_midiScrollOffset = 0;
+    bool m_midiAutoScroll = true;
 
     // Follow action state
     FollowAction* m_followActionPtr = nullptr;
@@ -342,6 +391,216 @@ private:
         f.drawText(r, "Chance A", sx, rowY + 12.0f, labelScale, Theme::textDim);
         m_faChanceAKnob.layout(Rect{inputX, rowY, knobW, knobH}, ctx);
         m_faChanceAKnob.paint(ctx);
+    }
+
+    void paintMidiTab(Renderer2D& r, Font& f, float x, float y,
+                      float w, float bodyH) {
+        if (!f.isLoaded() || !m_midiMonitor) {
+            return;
+        }
+
+        float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
+        float rowH = 14.0f;
+
+        // ── Toolbar: [Clear] [Auto▼] ──
+        float toolY = y + 2.0f;
+        float toolH = 18.0f;
+        float btnW = 42.0f;
+
+        // Auto-scroll button (right-most)
+        float bx = x + w - btnW - 4.0f;
+        Color autoCol = m_midiAutoScroll ? Color{60, 130, 80} : Color{50, 50, 56};
+        r.drawRect(bx, toolY, btnW, toolH, autoCol);
+        f.drawText(r, "Auto", bx + 6, toolY + 3, scale, Theme::textPrimary);
+
+        // Clear button
+        bx -= btnW + 4.0f;
+        r.drawRect(bx, toolY, btnW, toolH, Color{50, 50, 56});
+        f.drawText(r, "Clear", bx + 4, toolY + 3, scale, Theme::textPrimary);
+
+        // Status: message count
+        {
+            char countBuf[32];
+            std::snprintf(countBuf, sizeof(countBuf), "%zu msgs",
+                          m_midiMonitor->count());
+            f.drawText(r, countBuf, x + 4, toolY + 3, scale, Theme::textDim);
+        }
+
+        float listY = toolY + toolH + 2.0f;
+        float listH = bodyH - (listY - y);
+        if (listH <= 0) return;
+
+        // ── Column header ──
+        float headerH = 13.0f;
+        r.drawRect(x, listY, w, headerH, Color{38, 38, 42});
+        float hScale = scale * 0.9f;
+        float cx = x + 4;
+        f.drawText(r, "Time",  cx, listY + 1, hScale, Theme::textDim);  cx += 52;
+        f.drawText(r, "Port",  cx, listY + 1, hScale, Theme::textDim);  cx += 28;
+        f.drawText(r, "Ch",    cx, listY + 1, hScale, Theme::textDim);  cx += 22;
+        f.drawText(r, "Type",  cx, listY + 1, hScale, Theme::textDim);  cx += 44;
+        f.drawText(r, "Data",  cx, listY + 1, hScale, Theme::textDim);
+
+        listY += headerH;
+        listH -= headerH;
+        if (listH <= 0) return;
+
+        r.pushClip(x, listY, w, listH);
+
+        size_t total = m_midiMonitor->count();
+        int visibleRows = static_cast<int>(listH / rowH);
+        if (visibleRows < 1) visibleRows = 1;
+
+        int maxScroll = static_cast<int>(total) - visibleRows;
+        if (maxScroll < 0) maxScroll = 0;
+
+        if (m_midiAutoScroll) {
+            m_midiScrollOffset = maxScroll;
+        } else {
+            if (m_midiScrollOffset > maxScroll)
+                m_midiScrollOffset = maxScroll;
+        }
+
+        size_t oldest = m_midiMonitor->oldestValid();
+        size_t head   = m_midiMonitor->headIndex();
+
+        // Render only visible rows
+        for (int row = 0; row < visibleRows && row + m_midiScrollOffset < static_cast<int>(total); ++row) {
+            size_t idx = oldest + static_cast<size_t>(m_midiScrollOffset + row);
+            if (idx >= head) break;
+
+            const auto& e = m_midiMonitor->at(idx);
+            float ry = listY + row * rowH;
+
+            // Alternating row bg
+            if (row & 1)
+                r.drawRect(x, ry, w, rowH, Color{36, 36, 40});
+
+            // Type-based color coding
+            Color typeCol = Theme::textPrimary;
+            using ET = midi::MidiMonitorEntry::Type;
+            switch (e.type) {
+            case ET::NoteOn:          typeCol = Color{100, 200, 120}; break;
+            case ET::NoteOff:         typeCol = Color{80, 150, 100};  break;
+            case ET::CC:              typeCol = Color{120, 160, 220}; break;
+            case ET::PitchBend:       typeCol = Color{200, 180, 100}; break;
+            case ET::ProgramChange:   typeCol = Color{180, 130, 200}; break;
+            case ET::ChannelPressure:
+            case ET::PolyPressure:    typeCol = Color{200, 150, 130}; break;
+            case ET::Clock:
+            case ET::Start:
+            case ET::Stop:
+            case ET::Continue:        typeCol = Color{140, 140, 160}; break;
+            case ET::SysEx:           typeCol = Color{200, 100, 100}; break;
+            default:                  typeCol = Theme::textDim;       break;
+            }
+
+            char buf[64];
+            cx = x + 4;
+
+            // Time (mm:ss.ms)
+            uint32_t ms = e.timestamp;
+            uint32_t sec = ms / 1000;
+            uint32_t min = sec / 60;
+            std::snprintf(buf, sizeof(buf), "%02u:%02u.%03u", min, sec % 60, ms % 1000);
+            f.drawText(r, buf, cx, ry + 1, scale, Theme::textDim);
+            cx += 52;
+
+            // Port
+            std::snprintf(buf, sizeof(buf), "%d", e.portIndex + 1);
+            f.drawText(r, buf, cx, ry + 1, scale, Theme::textDim);
+            cx += 28;
+
+            // Channel (1-based)
+            std::snprintf(buf, sizeof(buf), "%2d", e.channel + 1);
+            f.drawText(r, buf, cx, ry + 1, scale, Theme::textPrimary);
+            cx += 22;
+
+            // Type + Data
+            const char* typeName = "";
+            char dataBuf[48] = "";
+
+            switch (e.type) {
+            case ET::NoteOn:
+                typeName = "NoteOn";
+                std::snprintf(dataBuf, sizeof(dataBuf), "%s%d  vel %d",
+                              noteNameStr(e.data1), noteOctave(e.data1), e.data2);
+                break;
+            case ET::NoteOff:
+                typeName = "NoteOf";
+                std::snprintf(dataBuf, sizeof(dataBuf), "%s%d",
+                              noteNameStr(e.data1), noteOctave(e.data1));
+                break;
+            case ET::CC:
+                typeName = "CC";
+                std::snprintf(dataBuf, sizeof(dataBuf), "#%-3d  val %d",
+                              e.data1, e.data2);
+                break;
+            case ET::ProgramChange:
+                typeName = "PrgCh";
+                std::snprintf(dataBuf, sizeof(dataBuf), "%d", e.data1);
+                break;
+            case ET::PitchBend:
+                typeName = "PBend";
+                std::snprintf(dataBuf, sizeof(dataBuf), "%d",
+                              static_cast<int>(e.pitchBend) - 8192);
+                break;
+            case ET::ChannelPressure:
+                typeName = "ChanP";
+                std::snprintf(dataBuf, sizeof(dataBuf), "%d", e.data1);
+                break;
+            case ET::PolyPressure:
+                typeName = "PolyP";
+                std::snprintf(dataBuf, sizeof(dataBuf), "%s%d  %d",
+                              noteNameStr(e.data1), noteOctave(e.data1), e.data2);
+                break;
+            case ET::Clock:   typeName = "Clock"; break;
+            case ET::Start:   typeName = "Start"; break;
+            case ET::Stop:    typeName = "Stop";  break;
+            case ET::Continue: typeName = "Cont"; break;
+            case ET::SysEx:
+                typeName = "SysEx";
+                if (e.sysexLen > 0) {
+                    char* p = dataBuf;
+                    int n = (e.sysexLen < 8) ? e.sysexLen : 8;
+                    for (int i = 0; i < n; ++i) {
+                        p += std::snprintf(p, 4, "%02X ", e.sysexHead[i]);
+                    }
+                }
+                break;
+            default: typeName = "???"; break;
+            }
+
+            f.drawText(r, typeName, cx, ry + 1, scale, typeCol);
+            cx += 44;
+            if (dataBuf[0])
+                f.drawText(r, dataBuf, cx, ry + 1, scale, Theme::textPrimary);
+        }
+
+        r.popClip();
+
+        // Scrollbar indicator
+        if (total > static_cast<size_t>(visibleRows)) {
+            float sbX = x + w - 4;
+            float sbH = listH;
+            float thumbFrac = static_cast<float>(visibleRows) / static_cast<float>(total);
+            float thumbH = std::max(8.0f, sbH * thumbFrac);
+            float scrollFrac = (maxScroll > 0) ?
+                static_cast<float>(m_midiScrollOffset) / static_cast<float>(maxScroll) : 0.0f;
+            float thumbY = listY + scrollFrac * (sbH - thumbH);
+            r.drawRect(sbX, thumbY, 3, thumbH, Color{80, 80, 90});
+        }
+    }
+
+    static const char* noteNameStr(uint8_t note) {
+        static const char* names[] = {
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+        };
+        return names[note % 12];
+    }
+
+    static int noteOctave(uint8_t note) {
+        return static_cast<int>(note / 12) - 1;
     }
 
     void paintPlaceholder(Renderer2D& r, Font& f, float x, float y,

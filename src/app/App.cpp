@@ -993,6 +993,15 @@ bool App::init() {
     for (int i : m_settings.enabledMidiOutputs)
         m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
+    m_midiEngine.setMonitorBuffer(&m_midiMonitor);
+
+    // Wire MIDI monitor to browser panel
+    m_browserPanel->setMidiMonitor(&m_midiMonitor);
+    m_browserPanel->setPortNameFn([this](int idx) -> std::string {
+        if (idx >= 0 && idx < m_midiEngine.availableInputCount())
+            return m_midiEngine.availableInputName(idx);
+        return std::to_string(idx);
+    });
 
     // Apply metronome settings from saved preferences
     m_audioEngine.sendCommand(audio::MetronomeSetVolumeMsg{m_settings.metronomeVolume});

@@ -7,6 +7,7 @@
 #include "core/Constants.h"
 #include "midi/MidiTypes.h"
 #include "midi/MidiPort.h"
+#include "midi/MidiMonitorBuffer.h"
 #include <array>
 #include <memory>
 #include <string>
@@ -118,6 +119,11 @@ public:
     MpeConfig& mpeConfig() { return m_mpeConfig; }
     const MpeConfig& mpeConfig() const { return m_mpeConfig; }
 
+    // ---- Monitor ----
+
+    void setMonitorBuffer(MidiMonitorBuffer* buf) { m_monitor = buf; }
+    MidiMonitorBuffer* monitorBuffer() const { return m_monitor; }
+
     // ---- Audio-thread processing ----
 
     // Call once per audio buffer: collects all MIDI input and routes to per-track buffers
@@ -127,9 +133,21 @@ public:
 
         // Collect input from all open ports into the merge buffer
         m_mergeBuffer.clear();
-        for (auto& port : m_inputPorts) {
-            if (port && port->isOpen())
-                port->readMessages(m_mergeBuffer);
+        for (int p = 0; p < static_cast<int>(m_inputPorts.size()); ++p) {
+            auto& port = m_inputPorts[p];
+            if (!port || !port->isOpen()) continue;
+
+            int prevCount = m_mergeBuffer.count();
+            port->readMessages(m_mergeBuffer);
+
+            // Feed monitor buffer with port index
+            if (m_monitor && m_monitor->enabled()) {
+                uint32_t ts = m_monitor->elapsedMs();
+                for (int i = prevCount; i < m_mergeBuffer.count(); ++i) {
+                    m_monitor->push(makeMonitorEntry(m_mergeBuffer[i],
+                                                      static_cast<uint8_t>(p), ts));
+                }
+            }
         }
 
         if (m_mergeBuffer.empty()) return;
@@ -208,6 +226,9 @@ private:
 
     // MPE configuration
     MpeConfig m_mpeConfig;
+
+    // Monitor (optional, owned externally)
+    MidiMonitorBuffer* m_monitor = nullptr;
 };
 
 } // namespace midi
