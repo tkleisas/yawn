@@ -14,6 +14,21 @@ Disk free display (display the free diskspace)
 CPU meter (display the cpu usage)
 
 
+=== VIDEO & PROCEDURAL GRAPHICS ===
 
+Two new track types mirroring the audio/MIDI paradigm:
+  - Video Track (like audio): plays video file clips with trim/loop/fade
+  - Procedural Track (like MIDI): runs GLSL fragment shaders as visual instruments
 
+Visual effects chain: post-processing shaders on video/procedural tracks (blur, color grade, etc.)
+Visual mixer: layer compositing with opacity, blend modes (add, multiply, screen, overlay)
+Master visual output: renders to a separate SDL3 window (multi-window already supported)
 
+Audio-reactive uniforms: feed FFT bins, RMS, transient triggers, beat phase into shaders
+Automation: route existing automation system to shader uniform parameters (knobs control visuals)
+
+Shader engine: hot-reloadable GLSL with standard interface (iTime, iBeat, iFFT[], iTransient, custom params)
+Video decode: FFmpeg/libav on separate thread, frame textures uploaded to GPU
+Timing: video frames synced to transport position (not wall clock), scrubbing/looping works
+
+Compositing: layer stack with blend modes, or future node graph
