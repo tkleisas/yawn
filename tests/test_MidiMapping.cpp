@@ -285,3 +285,146 @@ TEST(AutomationTarget, TransportFactory) {
     auto stop = AutomationTarget::transport(TransportParam::Stop);
     EXPECT_NE(play, stop);
 }
+
+// ========================= Note-based mapping =========================
+
+TEST(MidiMapping, NoteToParam) {
+    MidiMapping m;
+    m.source = MappingSource::Note;
+    m.paramMin = 0.0f;
+    m.paramMax = 1.0f;
+    EXPECT_FLOAT_EQ(m.noteToParam(true), 1.0f);
+    EXPECT_FLOAT_EQ(m.noteToParam(false), 0.0f);
+}
+
+TEST(MidiMapping, MatchesNoteAnyChannel) {
+    MidiMapping m;
+    m.source = MappingSource::Note;
+    m.midiChannel = -1;
+    m.noteNumber = 60;
+    m.enabled = true;
+    EXPECT_TRUE(m.matchesNote(0, 60));
+    EXPECT_TRUE(m.matchesNote(15, 60));
+    EXPECT_FALSE(m.matchesNote(0, 61));
+}
+
+TEST(MidiMapping, MatchesNoteSpecificChannel) {
+    MidiMapping m;
+    m.source = MappingSource::Note;
+    m.midiChannel = 9;
+    m.noteNumber = 36;
+    m.enabled = true;
+    EXPECT_TRUE(m.matchesNote(9, 36));
+    EXPECT_FALSE(m.matchesNote(0, 36));
+}
+
+TEST(MidiMapping, MatchesNoteCCSourceDoesNotMatchNote) {
+    MidiMapping m;
+    m.source = MappingSource::CC;
+    m.midiChannel = -1;
+    m.ccNumber = 60;
+    m.enabled = true;
+    EXPECT_FALSE(m.matchesNote(0, 60));
+}
+
+TEST(MidiMapping, MatchesCCNoteSourceDoesNotMatchCC) {
+    MidiMapping m;
+    m.source = MappingSource::Note;
+    m.midiChannel = -1;
+    m.noteNumber = 7;
+    m.enabled = true;
+    EXPECT_FALSE(m.matchesCC(0, 7));
+}
+
+TEST(MidiMapping, LabelCC) {
+    MidiMapping m;
+    m.source = MappingSource::CC;
+    m.ccNumber = 74;
+    EXPECT_EQ(m.label(), "CC74");
+}
+
+TEST(MidiMapping, LabelNote) {
+    MidiMapping m;
+    m.source = MappingSource::Note;
+    m.noteNumber = 60;
+    EXPECT_EQ(m.label(), "N60");
+}
+
+TEST(MidiLearnManager, LearnNoteCreatesMapping) {
+    MidiLearnManager mgr;
+    auto target = AutomationTarget::transport(TransportParam::Play);
+    mgr.startLearn(target, 0.0f, 1.0f);
+
+    bool consumed = mgr.handleLearnNote(0, 60);
+    EXPECT_TRUE(consumed);
+    EXPECT_FALSE(mgr.isLearning());
+    EXPECT_EQ(mgr.size(), 1u);
+
+    auto* m = mgr.findByTarget(target);
+    ASSERT_NE(m, nullptr);
+    EXPECT_EQ(m->source, MappingSource::Note);
+    EXPECT_EQ(m->midiChannel, 0);
+    EXPECT_EQ(m->noteNumber, 60);
+}
+
+TEST(MidiLearnManager, FindByNote) {
+    MidiLearnManager mgr;
+
+    MidiMapping m1;
+    m1.source = MappingSource::Note;
+    m1.midiChannel = -1;
+    m1.noteNumber = 60;
+    m1.target = AutomationTarget::transport(TransportParam::Play);
+    mgr.addMapping(m1);
+
+    MidiMapping m2;
+    m2.source = MappingSource::CC;
+    m2.midiChannel = -1;
+    m2.ccNumber = 60;
+    m2.target = AutomationTarget::mixer(0, MixerParam::Volume);
+    mgr.addMapping(m2);
+
+    auto noteHits = mgr.findByNote(0, 60);
+    EXPECT_EQ(noteHits.size(), 1u);
+    EXPECT_EQ(noteHits[0]->target.type, TargetType::Transport);
+
+    auto ccHits = mgr.findByCC(0, 60);
+    EXPECT_EQ(ccHits.size(), 1u);
+    EXPECT_EQ(ccHits[0]->target.type, TargetType::Mixer);
+}
+
+TEST(MidiLearnManager, JsonRoundTripWithNotes) {
+    MidiLearnManager original;
+
+    MidiMapping m1;
+    m1.source = MappingSource::Note;
+    m1.midiChannel = 9;
+    m1.noteNumber = 36;
+    m1.target = AutomationTarget::transport(TransportParam::Play);
+    m1.paramMin = 0.0f;
+    m1.paramMax = 1.0f;
+    original.addMapping(m1);
+
+    MidiMapping m2;
+    m2.source = MappingSource::CC;
+    m2.midiChannel = 0;
+    m2.ccNumber = 7;
+    m2.target = AutomationTarget::mixer(0, MixerParam::Volume);
+    original.addMapping(m2);
+
+    auto j = original.toJson();
+    MidiLearnManager loaded;
+    loaded.fromJson(j);
+    EXPECT_EQ(loaded.size(), 2u);
+
+    auto* r1 = loaded.findByTarget(AutomationTarget::transport(TransportParam::Play));
+    ASSERT_NE(r1, nullptr);
+    EXPECT_EQ(r1->source, MappingSource::Note);
+    EXPECT_EQ(r1->midiChannel, 9);
+    EXPECT_EQ(r1->noteNumber, 36);
+
+    auto* r2 = loaded.findByTarget(AutomationTarget::mixer(0, MixerParam::Volume));
+    ASSERT_NE(r2, nullptr);
+    EXPECT_EQ(r2->source, MappingSource::CC);
+    EXPECT_EQ(r2->ccNumber, 7);
+}

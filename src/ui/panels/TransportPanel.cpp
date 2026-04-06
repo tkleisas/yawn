@@ -185,10 +185,9 @@ void TransportPanel::paint(UIContext& ctx) {
                                const automation::AutomationTarget& target) {
             auto* mapping = m_learnManager->findByTarget(target);
             if (mapping) {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "CC%d", mapping->ccNumber);
-                float tw = font.textWidth(buf, ccScale);
-                font.drawText(r, buf, bx + (bw - tw) * 0.5f, by + bh + 1, ccScale, ccCol);
+                auto lbl = mapping->label();
+                float tw = font.textWidth(lbl.c_str(), ccScale);
+                font.drawText(r, lbl.c_str(), bx + (bw - tw) * 0.5f, by + bh + 1, ccScale, ccCol);
             }
         };
 
@@ -492,10 +491,8 @@ void TransportPanel::openTransportLearnMenu(float mx, float my,
 
     if (hasMapping) {
         auto* mapping = m_learnManager->findByTarget(target);
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "Remove CC %d", mapping->ccNumber);
         Item removeItem;
-        removeItem.label = buf;
+        removeItem.label = "Remove " + mapping->label();
         removeItem.action = [this, target]() {
             if (m_learnManager) m_learnManager->removeByTarget(target);
         };

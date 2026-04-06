@@ -16,6 +16,9 @@
 #include "app/Project.h"
 #include "core/Constants.h"
 #include "util/UndoManager.h"
+#include "ui/ContextMenu.h"
+#include "automation/AutomationTypes.h"
+#include "midi/MidiMapping.h"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -145,6 +148,8 @@ public:
 
     bool isDragging() const { return Widget::capturedWidget() != nullptr; }
 
+    void setLearnManager(midi::MidiLearnManager* mgr) { m_learnManager = mgr; }
+
     // ─── Measure / Layout ───────────────────────────────────────────────
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -172,6 +177,8 @@ public:
 #endif
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_contextMenu.isOpen())
+            m_contextMenu.handleMouseMove(e.x, e.y);
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
         }
@@ -243,6 +250,16 @@ private:
     StripWidgets m_returnStrips[kMaxReturnBuses];
     StripWidgets m_masterStrip;
     FwButton     m_stopAllBtn;
+
+    midi::MidiLearnManager* m_learnManager = nullptr;
+    ui::ContextMenu m_contextMenu;
+
+#ifndef YAWN_TEST_BUILD
+    void openMidiLearnMenu(float mx, float my,
+                           const automation::AutomationTarget& target,
+                           float paramMin, float paramMax,
+                           std::function<void()> resetAction);
+#endif
 
     static constexpr float kMeterWidth     = 6.0f;
     static constexpr float kFaderWidth     = 20.0f;

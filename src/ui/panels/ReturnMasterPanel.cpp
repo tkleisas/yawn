@@ -35,6 +35,10 @@ void ReturnMasterPanel::paint(UIContext& ctx) {
 
     if (curX + kRetStripW <= x + w)
         paintMasterStrip(ctx, curX, stripY, kRetStripW, stripH);
+
+    // Render context menu on top
+    if (m_contextMenu.isOpen())
+        m_contextMenu.render(r, *ctx.font);
 }
 
 bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
@@ -42,6 +46,11 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
     float x = m_bounds.x, y = m_bounds.y;
+
+    // Context menu takes priority
+    if (m_contextMenu.isOpen()) {
+        return m_contextMenu.handleClick(mx, my);
+    }
 
     float curX = x + 4;
     for (int b = 0; b < kMaxReturnBuses; ++b) {
@@ -54,11 +63,29 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
             return rs.muteBtn.onMouseDown(e);
         }
         if (hitWidget(rs.pan, mx, my)) {
+            if (rightClick) {
+                // Return bus index encoded as trackIndex = -(b + 2) for
+                // return buses, using Mixer target type with Pan param.
+                // We use negative track indices: -2..-9 for returns.
+                openMidiLearnMenu(mx, my,
+                    automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Pan),
+                    -1.0f, 1.0f,
+                    [this, b]() {
+                        m_returnStrips[b].pan.setValue(0.0f);
+                        m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
+                    });
+                return true;
+            }
             return rs.pan.onMouseDown(e);
         }
         if (hitWidget(rs.fader, mx, my)) {
             if (rightClick) {
-                m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
+                openMidiLearnMenu(mx, my,
+                    automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Volume),
+                    0.0f, 2.0f,
+                    [this, b]() {
+                        m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
+                    });
                 return true;
             }
             return rs.fader.onMouseDown(e);
@@ -75,7 +102,12 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
         }
         if (hitWidget(m_masterStrip.fader, mx, my)) {
             if (rightClick) {
-                m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
+                openMidiLearnMenu(mx, my,
+                    automation::AutomationTarget::mixer(-1, automation::MixerParam::Volume),
+                    0.0f, 2.0f,
+                    [this]() {
+                        m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
+                    });
                 return true;
             }
             return m_masterStrip.fader.onMouseDown(e);
@@ -156,6 +188,19 @@ void ReturnMasterPanel::paintReturnStrip(UIContext& ctx, int idx, float x, float
                      m_returnMeters[idx].peakL,
                      m_returnMeters[idx].peakR,
                      rb.muted);
+
+    // CC labels for return bus volume/pan
+    if (m_learnManager) {
+        float ccScale = 7.0f / Theme::kFontSize;
+        Color ccCol{100, 180, 255};
+        int tIdx = -(idx + 2);
+        auto volTarget = automation::AutomationTarget::mixer(tIdx, automation::MixerParam::Volume);
+        auto* volMap = m_learnManager->findByTarget(volTarget);
+        if (volMap) {
+            auto lbl = volMap->label();
+            ctx.font->drawText(*ctx.renderer, lbl.c_str(), x + 4, y + h - 32, ccScale, ccCol);
+        }
+    }
 }
 
 void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
@@ -206,6 +251,67 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
     m_masterStrip.dbLabel.setFontScale(smallScale);
     m_masterStrip.dbLabel.layout(Rect{x + 4, y + h - 18, w - 8, 14}, ctx);
     m_masterStrip.dbLabel.paint(ctx);
+
+    // CC label for master volume
+    if (m_learnManager) {
+        auto target = automation::AutomationTarget::mixer(-1, automation::MixerParam::Volume);
+        auto* mapping = m_learnManager->findByTarget(target);
+        if (mapping) {
+            auto lbl = mapping->label();
+            float ccScale = 8.0f / Theme::kFontSize;
+            ctx.font->drawText(r, lbl.c_str(), x + 4, y + h - 32, ccScale, Color{100, 180, 255});
+        }
+    }
+}
+
+void ReturnMasterPanel::openMidiLearnMenu(float mx, float my,
+                                           const automation::AutomationTarget& target,
+                                           float paramMin, float paramMax,
+                                           std::function<void()> resetAction) {
+    using Item = ContextMenu::Item;
+    std::vector<Item> items;
+
+    bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
+    bool isLearning = m_learnManager && m_learnManager->isLearning() &&
+                      m_learnManager->learnTarget() == target;
+
+    if (isLearning) {
+        Item cancelItem;
+        cancelItem.label = "Cancel Learn";
+        cancelItem.action = [this]() {
+            if (m_learnManager) m_learnManager->cancelLearn();
+        };
+        items.push_back(std::move(cancelItem));
+    } else {
+        Item learnItem;
+        learnItem.label = "MIDI Learn";
+        learnItem.action = [this, target, paramMin, paramMax]() {
+            if (m_learnManager)
+                m_learnManager->startLearn(target, paramMin, paramMax);
+        };
+        items.push_back(std::move(learnItem));
+    }
+
+    if (hasMapping) {
+        auto* mapping = m_learnManager->findByTarget(target);
+        Item removeItem;
+        removeItem.label = "Remove " + mapping->label();
+        removeItem.action = [this, target]() {
+            if (m_learnManager) m_learnManager->removeByTarget(target);
+        };
+        items.push_back(std::move(removeItem));
+    }
+
+    Item sep;
+    sep.separator = true;
+    items.push_back(std::move(sep));
+
+    Item resetItem;
+    resetItem.label = "Reset to Default";
+    resetItem.action = std::move(resetAction);
+    items.push_back(std::move(resetItem));
+
+    m_contextMenu.open(mx, my, std::move(items));
 }
 
 } // namespace fw

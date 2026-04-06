@@ -35,7 +35,7 @@ public:
     using ParamChangeCallback = std::function<void(int paramIndex, float value)>;
     using ParamTouchCallback  = std::function<void(int paramIndex, float value, bool touching)>;
     using ParamRightClickCallback = std::function<void(int paramIndex, float x, float y)>;
-    using CCLabelCallback = std::function<int(int paramIndex)>;  // returns CC number or -1
+    using CCLabelCallback = std::function<std::string(int paramIndex)>;  // returns label or empty
 
     // Per-parameter descriptor used to (re)build the knob grid.
     struct ParamInfo {
@@ -394,13 +394,11 @@ public:
             auto drawLabels = [&](const std::vector<ParamSlot>& slots) {
                 for (auto& s : slots) {
                     int pi = std::stoi(s.widget->name());
-                    int cc = m_ccLabelCb(pi);
-                    if (cc >= 0) {
-                        char buf[16];
-                        std::snprintf(buf, sizeof(buf), "CC%d", cc);
+                    auto lbl = m_ccLabelCb(pi);
+                    if (!lbl.empty()) {
                         auto& b = s.widget->bounds();
-                        float tw = ctx.font->textWidth(buf, ccScale);
-                        ctx.font->drawText(*ctx.renderer, buf,
+                        float tw = ctx.font->textWidth(lbl.c_str(), ccScale);
+                        ctx.font->drawText(*ctx.renderer, lbl.c_str(),
                             b.x + (b.w - tw) * 0.5f, b.y + b.h - 2,
                             ccScale, ccCol);
                     }

@@ -1,9 +1,9 @@
 #pragma once
 // MidiMapping — MIDI Learn mapping types and manager.
 //
-// MidiMapping links a MIDI CC (channel + CC#) to an AutomationTarget.
+// MidiMapping links a MIDI source (CC or Note) to an AutomationTarget.
 // MidiLearnManager stores all mappings, handles learn mode, and provides
-// lookup for CC interception in the audio thread.
+// lookup for CC/Note interception in the audio thread.
 
 #include "automation/AutomationTypes.h"
 #include <vector>
@@ -15,13 +15,20 @@
 namespace yawn {
 namespace midi {
 
-// A single CC → parameter mapping
+enum class MappingSource : uint8_t {
+    CC   = 0,
+    Note = 1
+};
+
+// A single MIDI → parameter mapping
 struct MidiMapping {
+    MappingSource source = MappingSource::CC;
     int midiChannel = -1;       // -1 = any channel
-    int ccNumber    = 0;        // 0-127
+    int ccNumber    = 0;        // CC: 0-127 controller number
+    int noteNumber  = 0;        // Note: 0-127 MIDI note number
     automation::AutomationTarget target;
-    float paramMin  = 0.0f;     // CC 0   → paramMin
-    float paramMax  = 1.0f;     // CC 127 → paramMax
+    float paramMin  = 0.0f;     // CC 0 / NoteOff → paramMin
+    float paramMax  = 1.0f;     // CC 127 / NoteOn → paramMax
     bool  enabled   = true;
 
     // Convert CC value (0-127) to parameter value
@@ -30,14 +37,35 @@ struct MidiMapping {
         return paramMin + t * (paramMax - paramMin);
     }
 
+    // Convert note velocity (0=off, >0=on) to parameter value
+    float noteToParam(bool noteOn) const {
+        return noteOn ? paramMax : paramMin;
+    }
+
     bool matchesCC(int ch, int cc) const {
-        if (!enabled) return false;
+        if (!enabled || source != MappingSource::CC) return false;
         if (midiChannel != -1 && midiChannel != ch) return false;
         return ccNumber == cc;
     }
+
+    bool matchesNote(int ch, int noteNum) const {
+        if (!enabled || source != MappingSource::Note) return false;
+        if (midiChannel != -1 && midiChannel != ch) return false;
+        return noteNumber == noteNum;
+    }
+
+    // Label for display: "CC 7" or "N 60"
+    std::string label() const {
+        char buf[16];
+        if (source == MappingSource::Note)
+            std::snprintf(buf, sizeof(buf), "N%d", noteNumber);
+        else
+            std::snprintf(buf, sizeof(buf), "CC%d", ccNumber);
+        return buf;
+    }
 };
 
-// Manages MIDI CC → parameter mappings and learn mode
+// Manages MIDI → parameter mappings and learn mode
 class MidiLearnManager {
 public:
     // ── Learn mode ──
@@ -57,16 +85,32 @@ public:
     void cancelLearn() { m_learning = false; }
 
     // Called when a CC arrives while in learn mode.
-    // Returns true if the CC was consumed (mapping created).
     bool handleLearnCC(int channel, int cc) {
         if (!m_learning) return false;
-
-        // Remove any existing mapping for this target
         removeByTarget(m_learnTarget);
 
         MidiMapping m;
+        m.source      = MappingSource::CC;
         m.midiChannel = channel;
         m.ccNumber    = cc;
+        m.target      = m_learnTarget;
+        m.paramMin    = m_learnMin;
+        m.paramMax    = m_learnMax;
+        m_mappings.push_back(m);
+
+        m_learning = false;
+        return true;
+    }
+
+    // Called when a NoteOn arrives while in learn mode.
+    bool handleLearnNote(int channel, int noteNum) {
+        if (!m_learning) return false;
+        removeByTarget(m_learnTarget);
+
+        MidiMapping m;
+        m.source      = MappingSource::Note;
+        m.midiChannel = channel;
+        m.noteNumber  = noteNum;
         m.target      = m_learnTarget;
         m.paramMin    = m_learnMin;
         m.paramMax    = m_learnMax;
@@ -89,11 +133,19 @@ public:
         return nullptr;
     }
 
-    // Find all mappings for a given CC (may be multiple targets)
     std::vector<const MidiMapping*> findByCC(int channel, int cc) const {
         std::vector<const MidiMapping*> result;
         for (auto& m : m_mappings) {
             if (m.matchesCC(channel, cc))
+                result.push_back(&m);
+        }
+        return result;
+    }
+
+    std::vector<const MidiMapping*> findByNote(int channel, int noteNum) const {
+        std::vector<const MidiMapping*> result;
+        for (auto& m : m_mappings) {
+            if (m.matchesNote(channel, noteNum))
                 result.push_back(&m);
         }
         return result;
@@ -122,8 +174,10 @@ public:
         auto arr = nlohmann::json::array();
         for (auto& m : m_mappings) {
             arr.push_back({
+                {"src",   static_cast<int>(m.source)},
                 {"ch",    m.midiChannel},
                 {"cc",    m.ccNumber},
+                {"note",  m.noteNumber},
                 {"tType", static_cast<int>(m.target.type)},
                 {"tTrack", m.target.trackIndex},
                 {"tChain", m.target.chainIndex},
@@ -141,8 +195,10 @@ public:
         if (!j.is_array()) return;
         for (auto& item : j) {
             MidiMapping m;
+            m.source      = static_cast<MappingSource>(item.value("src", 0));
             m.midiChannel = item.value("ch", -1);
             m.ccNumber    = item.value("cc", 0);
+            m.noteNumber  = item.value("note", 0);
             m.target.type       = static_cast<automation::TargetType>(item.value("tType", 0));
             m.target.trackIndex = item.value("tTrack", 0);
             m.target.chainIndex = item.value("tChain", 0);

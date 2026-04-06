@@ -156,27 +156,41 @@ public:
         if (m_mergeBuffer.empty()) return;
         m_mergeBuffer.sortByFrame();
 
-        // ── MIDI Learn: intercept CC messages ──
+        // ── MIDI Learn: intercept CC and Note messages ──
         if (m_learnManager && m_sendCommand) {
             for (int i = 0; i < m_mergeBuffer.count(); ++i) {
                 const auto& msg = m_mergeBuffer[i];
-                if (!msg.isCC()) continue;
 
-                int ch = msg.channel;
-                int cc = static_cast<int>(msg.ccNumber);
-                int val = static_cast<int>(Convert::cc32to7(msg.value));
+                if (msg.isCC()) {
+                    int ch = msg.channel;
+                    int cc = static_cast<int>(msg.ccNumber);
+                    int val = static_cast<int>(Convert::cc32to7(msg.value));
 
-                // Learn mode: first CC assigns the mapping
-                if (m_learnManager->isLearning()) {
-                    m_learnManager->handleLearnCC(ch, cc);
-                    continue;
+                    if (m_learnManager->isLearning()) {
+                        m_learnManager->handleLearnCC(ch, cc);
+                        continue;
+                    }
+
+                    auto hits = m_learnManager->findByCC(ch, cc);
+                    for (auto* mapping : hits) {
+                        float paramVal = mapping->ccToParam(val);
+                        resolveAndSend(mapping->target, paramVal);
+                    }
                 }
+                else if (msg.isNoteOn() || msg.isNoteOff()) {
+                    int ch = msg.channel;
+                    int noteNum = msg.note;
 
-                // Apply existing mappings
-                auto hits = m_learnManager->findByCC(ch, cc);
-                for (auto* mapping : hits) {
-                    float paramVal = mapping->ccToParam(val);
-                    resolveAndSend(mapping->target, paramVal);
+                    if (m_learnManager->isLearning() && msg.isNoteOn()) {
+                        m_learnManager->handleLearnNote(ch, noteNum);
+                        continue;
+                    }
+
+                    auto hits = m_learnManager->findByNote(ch, noteNum);
+                    for (auto* mapping : hits) {
+                        float paramVal = mapping->noteToParam(msg.isNoteOn());
+                        resolveAndSend(mapping->target, paramVal);
+                    }
                 }
             }
         }
@@ -243,23 +257,37 @@ private:
         switch (target.type) {
         case TargetType::Mixer: {
             auto mp = static_cast<MixerParam>(target.paramIndex);
-            switch (mp) {
-            case MixerParam::Volume:
-                m_sendCommand(audio::SetTrackVolumeMsg{target.trackIndex, value * 2.0f});
-                break;
-            case MixerParam::Pan:
-                m_sendCommand(audio::SetTrackPanMsg{target.trackIndex, value * 2.0f - 1.0f});
-                break;
-            case MixerParam::Mute:
-                m_sendCommand(audio::SetTrackMuteMsg{target.trackIndex, value >= 0.5f});
-                break;
-            default:
-                // SendLevel0-7
-                if (mp >= MixerParam::SendLevel0 && mp <= MixerParam::SendLevel7) {
-                    int sendIdx = static_cast<int>(mp) - static_cast<int>(MixerParam::SendLevel0);
-                    m_sendCommand(audio::SetSendLevelMsg{target.trackIndex, sendIdx, value});
+            int ti = target.trackIndex;
+            if (ti == -1) {
+                // Master channel
+                if (mp == MixerParam::Volume)
+                    m_sendCommand(audio::SetMasterVolumeMsg{value * 2.0f});
+            } else if (ti <= -2 && ti >= -9) {
+                // Return buses: index = -(ti + 2)
+                int busIdx = -(ti + 2);
+                if (mp == MixerParam::Volume)
+                    m_sendCommand(audio::SetReturnVolumeMsg{busIdx, value * 2.0f});
+                else if (mp == MixerParam::Pan)
+                    m_sendCommand(audio::SetReturnPanMsg{busIdx, value * 2.0f - 1.0f});
+            } else {
+                // Regular tracks
+                switch (mp) {
+                case MixerParam::Volume:
+                    m_sendCommand(audio::SetTrackVolumeMsg{ti, value * 2.0f});
+                    break;
+                case MixerParam::Pan:
+                    m_sendCommand(audio::SetTrackPanMsg{ti, value * 2.0f - 1.0f});
+                    break;
+                case MixerParam::Mute:
+                    m_sendCommand(audio::SetTrackMuteMsg{ti, value >= 0.5f});
+                    break;
+                default:
+                    if (mp >= MixerParam::SendLevel0 && mp <= MixerParam::SendLevel7) {
+                        int sendIdx = static_cast<int>(mp) - static_cast<int>(MixerParam::SendLevel0);
+                        m_sendCommand(audio::SetSendLevelMsg{ti, sendIdx, value});
+                    }
+                    break;
                 }
-                break;
             }
             break;
         }

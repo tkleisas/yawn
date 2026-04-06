@@ -295,10 +295,8 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
 
     if (hasMapping) {
         auto* mapping = m_learnManager->findByTarget(target);
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "Remove CC %d", mapping->ccNumber);
         Item removeItem;
-        removeItem.label = buf;
+        removeItem.label = "Remove " + mapping->label();
         removeItem.action = [this, target]() {
             if (m_learnManager) m_learnManager->removeByTarget(target);
         };
@@ -672,11 +670,10 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         auto panTarget = automation::AutomationTarget::mixer(idx, automation::MixerParam::Pan);
         auto* panMap = m_learnManager->findByTarget(panTarget);
         if (panMap) {
-            char ccBuf[16];
-            std::snprintf(ccBuf, sizeof(ccBuf), "CC%d", panMap->ccNumber);
+            auto lbl = panMap->label();
             float ccScale = 8.0f / Theme::kFontSize;
-            ctx.font->drawText(*ctx.renderer, ccBuf,
-                ix + iw - 4 - ctx.font->textWidth(ccBuf, ccScale),
+            ctx.font->drawText(*ctx.renderer, lbl.c_str(),
+                ix + iw - 4 - ctx.font->textWidth(lbl.c_str(), ccScale),
                 curY + 2, ccScale, Color{100, 180, 255});
         }
     }
@@ -740,10 +737,9 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         auto volTarget = automation::AutomationTarget::mixer(idx, automation::MixerParam::Volume);
         auto* volMap = m_learnManager->findByTarget(volTarget);
         if (volMap) {
-            char ccBuf[16];
-            std::snprintf(ccBuf, sizeof(ccBuf), "CC%d", volMap->ccNumber);
+            auto lbl = volMap->label();
             float ccScale = 8.0f / Theme::kFontSize;
-            ctx.font->drawText(*ctx.renderer, ccBuf,
+            ctx.font->drawText(*ctx.renderer, lbl.c_str(),
                 ix + 4, stripY + stripH - 30, ccScale, Color{100, 180, 255});
         }
     }

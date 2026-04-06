@@ -126,6 +126,14 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
     if (my < m_bounds.y || my > m_bounds.y + height()) return false;
     if (mx < m_bounds.x || mx > m_bounds.x + m_bounds.w) return false;
 
+    // Close MIDI Learn context menu on any click
+#ifndef YAWN_TEST_BUILD
+    if (m_deviceContextMenu.isOpen()) {
+        m_deviceContextMenu.handleClick(mx, my);
+        return true;
+    }
+#endif
+
     m_panelFocused = true;
 
     if (my < m_bounds.y + kHandleHeight) {
@@ -453,10 +461,8 @@ void DetailPanelWidget::openDeviceMidiLearnMenu(float mx, float my,
 
     if (hasMapping) {
         auto* mapping = m_learnManager->findByTarget(target);
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "Remove CC %d", mapping->ccNumber);
         Item removeItem;
-        removeItem.label = buf;
+        removeItem.label = "Remove " + mapping->label();
         removeItem.action = [this, target]() {
             if (m_learnManager) m_learnManager->removeByTarget(target);
         };

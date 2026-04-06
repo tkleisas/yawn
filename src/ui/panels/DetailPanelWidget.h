@@ -915,15 +915,15 @@ private:
             else
                 tt = automation::TargetType::MidiEffect;
             int ci = ref.chainIndex;
-            dw->setCCLabelCallback([this, tt, ci](int paramIdx) -> int {
-                if (!m_learnManager || m_autoTrackIndex < 0) return -1;
+            dw->setCCLabelCallback([this, tt, ci](int paramIdx) -> std::string {
+                if (!m_learnManager || m_autoTrackIndex < 0) return {};
                 automation::AutomationTarget t;
                 t.type = tt;
                 t.trackIndex = m_autoTrackIndex;
                 t.chainIndex = ci;
                 t.paramIndex = paramIdx;
                 auto* m = m_learnManager->findByTarget(t);
-                return m ? m->ccNumber : -1;
+                return m ? m->label() : std::string{};
             });
         }
     }

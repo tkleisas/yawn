@@ -968,6 +968,7 @@ bool App::init() {
     m_transportPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_transportPanel->setLearnManager(&m_midiLearnManager);
     m_returnMasterPanel->init(&m_project, &m_audioEngine, &m_undoManager);
+    m_returnMasterPanel->setLearnManager(&m_midiLearnManager);
 
     m_settings = util::AppSettings::load();
 
