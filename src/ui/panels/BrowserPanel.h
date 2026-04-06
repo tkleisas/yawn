@@ -74,7 +74,7 @@ public:
             return true;
         }
 
-        // MIDI tab: toolbar buttons
+        // MIDI tab: toolbar buttons + filter checkboxes
         if (m_activeTab == Tab::Midi && m_midiMonitor) {
             float toolY = y + kTabH + 2.0f;
             float toolH = 18.0f;
@@ -92,6 +92,19 @@ public:
                 m_midiScrollOffset = 0;
                 m_midiAutoScroll = true;
                 return true;
+            }
+            // Filter checkboxes row
+            float filterY = toolY + toolH + 2.0f;
+            float filterH = 14.0f;
+            float cbW = 52.0f;
+            if (my >= filterY && my < filterY + filterH) {
+                float fx = x + 4;
+                if (mx >= fx && mx < fx + cbW) { m_midiShowClock = !m_midiShowClock; return true; }
+                fx += cbW + 4;
+                if (mx >= fx && mx < fx + cbW) { m_midiShowSysEx = !m_midiShowSysEx; return true; }
+                fx += cbW + 4;
+                cbW = 62.0f;
+                if (mx >= fx && mx < fx + cbW) { m_midiShowRealtime = !m_midiShowRealtime; return true; }
             }
         }
 
@@ -252,6 +265,9 @@ private:
     PortNameFn m_portNameFn;
     int  m_midiScrollOffset = 0;
     bool m_midiAutoScroll = true;
+    bool m_midiShowClock = false;
+    bool m_midiShowSysEx = true;
+    bool m_midiShowRealtime = true;  // Start/Stop/Continue
 
     // Follow action state
     FollowAction* m_followActionPtr = nullptr;
@@ -407,26 +423,57 @@ private:
         float toolH = 18.0f;
         float btnW = 42.0f;
 
-        // Auto-scroll button (right-most)
+        // Auto-scroll button (right-most) — centered text
         float bx = x + w - btnW - 4.0f;
         Color autoCol = m_midiAutoScroll ? Color{60, 130, 80} : Color{50, 50, 56};
         r.drawRect(bx, toolY, btnW, toolH, autoCol);
-        f.drawText(r, "Auto", bx + 6, toolY + 3, scale, Theme::textPrimary);
+        {
+            float tw = f.textWidth("Auto", scale);
+            f.drawText(r, "Auto", bx + (btnW - tw) * 0.5f, toolY + (toolH - rowH) * 0.5f + 1, scale, Theme::textPrimary);
+        }
 
-        // Clear button
+        // Clear button — centered text
         bx -= btnW + 4.0f;
         r.drawRect(bx, toolY, btnW, toolH, Color{50, 50, 56});
-        f.drawText(r, "Clear", bx + 4, toolY + 3, scale, Theme::textPrimary);
+        {
+            float tw = f.textWidth("Clear", scale);
+            f.drawText(r, "Clear", bx + (btnW - tw) * 0.5f, toolY + (toolH - rowH) * 0.5f + 1, scale, Theme::textPrimary);
+        }
 
         // Status: message count
         {
             char countBuf[32];
             std::snprintf(countBuf, sizeof(countBuf), "%zu msgs",
                           m_midiMonitor->count());
-            f.drawText(r, countBuf, x + 4, toolY + 3, scale, Theme::textDim);
+            f.drawText(r, countBuf, x + 4, toolY + (toolH - rowH) * 0.5f + 1, scale, Theme::textDim);
         }
 
-        float listY = toolY + toolH + 2.0f;
+        // ── Filter checkboxes row ──
+        float filterY = toolY + toolH + 2.0f;
+        float filterH = 14.0f;
+        float cbSize = 10.0f;
+        float cbTextOff = cbSize + 3.0f;
+        float cbW = 52.0f;
+        float fScale = scale * 0.9f;
+
+        auto drawCheckbox = [&](float fx, float fy, float cw, const char* label, bool checked) {
+            float cy = fy + (filterH - cbSize) * 0.5f;
+            r.drawRect(fx, cy, cbSize, cbSize, Color{50, 50, 56});
+            if (checked) {
+                r.drawRect(fx + 2, cy + 2, cbSize - 4, cbSize - 4, Color{100, 180, 120});
+            }
+            f.drawText(r, label, fx + cbTextOff, fy + 1, fScale,
+                       checked ? Theme::textPrimary : Theme::textDim);
+        };
+
+        float fx = x + 4;
+        drawCheckbox(fx, filterY, cbW, "Clock", m_midiShowClock);
+        fx += cbW + 4;
+        drawCheckbox(fx, filterY, cbW, "SysEx", m_midiShowSysEx);
+        fx += cbW + 4;
+        drawCheckbox(fx, filterY, 62.0f, "RT Msgs", m_midiShowRealtime);
+
+        float listY = filterY + filterH + 2.0f;
         float listH = bodyH - (listY - y);
         if (listH <= 0) return;
 
@@ -435,10 +482,10 @@ private:
         r.drawRect(x, listY, w, headerH, Color{38, 38, 42});
         float hScale = scale * 0.9f;
         float cx = x + 4;
-        f.drawText(r, "Time",  cx, listY + 1, hScale, Theme::textDim);  cx += 52;
-        f.drawText(r, "Port",  cx, listY + 1, hScale, Theme::textDim);  cx += 28;
-        f.drawText(r, "Ch",    cx, listY + 1, hScale, Theme::textDim);  cx += 22;
-        f.drawText(r, "Type",  cx, listY + 1, hScale, Theme::textDim);  cx += 44;
+        f.drawText(r, "Time",  cx, listY + 1, hScale, Theme::textDim);  cx += 64;
+        f.drawText(r, "Port",  cx, listY + 1, hScale, Theme::textDim);  cx += 32;
+        f.drawText(r, "Ch",    cx, listY + 1, hScale, Theme::textDim);  cx += 24;
+        f.drawText(r, "Type",  cx, listY + 1, hScale, Theme::textDim);  cx += 48;
         f.drawText(r, "Data",  cx, listY + 1, hScale, Theme::textDim);
 
         listY += headerH;
@@ -447,11 +494,32 @@ private:
 
         r.pushClip(x, listY, w, listH);
 
-        size_t total = m_midiMonitor->count();
+        // Build filtered index mapping for visible entries
+        size_t oldest = m_midiMonitor->oldestValid();
+        size_t head   = m_midiMonitor->headIndex();
+
+        // Count visible (filtered) entries
+        using ET = midi::MidiMonitorEntry::Type;
+        auto isVisible = [&](const midi::MidiMonitorEntry& e) -> bool {
+            switch (e.type) {
+            case ET::Clock:    return m_midiShowClock;
+            case ET::SysEx:    return m_midiShowSysEx;
+            case ET::Start:
+            case ET::Stop:
+            case ET::Continue: return m_midiShowRealtime;
+            default:           return true;
+            }
+        };
+
+        size_t filteredTotal = 0;
+        for (size_t i = oldest; i < head; ++i) {
+            if (isVisible(m_midiMonitor->at(i))) ++filteredTotal;
+        }
+
         int visibleRows = static_cast<int>(listH / rowH);
         if (visibleRows < 1) visibleRows = 1;
 
-        int maxScroll = static_cast<int>(total) - visibleRows;
+        int maxScroll = static_cast<int>(filteredTotal) - visibleRows;
         if (maxScroll < 0) maxScroll = 0;
 
         if (m_midiAutoScroll) {
@@ -461,24 +529,22 @@ private:
                 m_midiScrollOffset = maxScroll;
         }
 
-        size_t oldest = m_midiMonitor->oldestValid();
-        size_t head   = m_midiMonitor->headIndex();
+        // Render only visible rows with filtering
+        int skipCount = m_midiScrollOffset;
+        int rowsDrawn = 0;
+        for (size_t i = oldest; i < head && rowsDrawn < visibleRows; ++i) {
+            const auto& e = m_midiMonitor->at(i);
+            if (!isVisible(e)) continue;
+            if (skipCount > 0) { --skipCount; continue; }
 
-        // Render only visible rows
-        for (int row = 0; row < visibleRows && row + m_midiScrollOffset < static_cast<int>(total); ++row) {
-            size_t idx = oldest + static_cast<size_t>(m_midiScrollOffset + row);
-            if (idx >= head) break;
-
-            const auto& e = m_midiMonitor->at(idx);
-            float ry = listY + row * rowH;
+            float ry = listY + rowsDrawn * rowH;
 
             // Alternating row bg
-            if (row & 1)
+            if (rowsDrawn & 1)
                 r.drawRect(x, ry, w, rowH, Color{36, 36, 40});
 
             // Type-based color coding
             Color typeCol = Theme::textPrimary;
-            using ET = midi::MidiMonitorEntry::Type;
             switch (e.type) {
             case ET::NoteOn:          typeCol = Color{100, 200, 120}; break;
             case ET::NoteOff:         typeCol = Color{80, 150, 100};  break;
@@ -498,23 +564,23 @@ private:
             char buf[64];
             cx = x + 4;
 
-            // Time (mm:ss.ms)
+            // Time (mm:ss.ms) — wider column
             uint32_t ms = e.timestamp;
             uint32_t sec = ms / 1000;
             uint32_t min = sec / 60;
             std::snprintf(buf, sizeof(buf), "%02u:%02u.%03u", min, sec % 60, ms % 1000);
             f.drawText(r, buf, cx, ry + 1, scale, Theme::textDim);
-            cx += 52;
+            cx += 64;
 
-            // Port
+            // Port — wider column
             std::snprintf(buf, sizeof(buf), "%d", e.portIndex + 1);
             f.drawText(r, buf, cx, ry + 1, scale, Theme::textDim);
-            cx += 28;
+            cx += 32;
 
-            // Channel (1-based)
+            // Channel (1-based) — wider column
             std::snprintf(buf, sizeof(buf), "%2d", e.channel + 1);
             f.drawText(r, buf, cx, ry + 1, scale, Theme::textPrimary);
-            cx += 22;
+            cx += 24;
 
             // Type + Data
             const char* typeName = "";
@@ -572,18 +638,20 @@ private:
             }
 
             f.drawText(r, typeName, cx, ry + 1, scale, typeCol);
-            cx += 44;
+            cx += 48;
             if (dataBuf[0])
                 f.drawText(r, dataBuf, cx, ry + 1, scale, Theme::textPrimary);
+
+            ++rowsDrawn;
         }
 
         r.popClip();
 
         // Scrollbar indicator
-        if (total > static_cast<size_t>(visibleRows)) {
+        if (filteredTotal > static_cast<size_t>(visibleRows)) {
             float sbX = x + w - 4;
             float sbH = listH;
-            float thumbFrac = static_cast<float>(visibleRows) / static_cast<float>(total);
+            float thumbFrac = static_cast<float>(visibleRows) / static_cast<float>(filteredTotal);
             float thumbH = std::max(8.0f, sbH * thumbFrac);
             float scrollFrac = (maxScroll > 0) ?
                 static_cast<float>(m_midiScrollOffset) / static_cast<float>(maxScroll) : 0.0f;
