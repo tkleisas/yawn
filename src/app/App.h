@@ -30,6 +30,7 @@
 #include "util/FileIO.h"
 #include "util/AppSettings.h"
 #include "util/UndoManager.h"
+#include "util/IconLoader.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -128,6 +129,7 @@ private:
     undo::UndoManager m_undoManager;
     util::AppSettings m_settings;
     bool m_running = false;
+    GLuint m_iconTexture = 0;
     bool m_showMixer = true;
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;

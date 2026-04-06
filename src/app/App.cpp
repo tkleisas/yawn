@@ -1083,12 +1083,30 @@ bool App::init() {
         return false;
     }
 
+    // Load application icon — set window icon and create GL texture for About dialog
+    {
+        auto icon = util::loadIcon("assets/icon.png");
+        if (!icon.pixels.empty()) {
+            // SDL3 window icon
+            SDL_Surface* surface = SDL_CreateSurfaceFrom(
+                icon.width, icon.height, SDL_PIXELFORMAT_RGBA32,
+                icon.pixels.data(), icon.width * 4);
+            if (surface) {
+                SDL_SetWindowIcon(m_mainWindow.getHandle(), surface);
+                SDL_DestroySurface(surface);
+            }
+            // GL texture for About dialog
+            m_iconTexture = util::createGLTexture(icon);
+        }
+    }
+
     loadFont();
 
     m_project.init(8, 8);
     m_virtualKeyboard.init(&m_audioEngine);
     setupMenuBar();
     buildWidgetTree();
+    m_aboutDialog->setIconTexture(m_iconTexture);
     m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine, &m_undoManager);
@@ -1304,6 +1322,7 @@ void App::shutdown() {
     if (m_cursorEWResize) SDL_DestroyCursor(m_cursorEWResize);
     if (m_cursorNSResize) SDL_DestroyCursor(m_cursorNSResize);
     if (m_cursorMove)     SDL_DestroyCursor(m_cursorMove);
+    if (m_iconTexture) { glDeleteTextures(1, &m_iconTexture); m_iconTexture = 0; }
     m_renderer.shutdown();
     m_font.destroy();
     m_mainWindow.destroy();
