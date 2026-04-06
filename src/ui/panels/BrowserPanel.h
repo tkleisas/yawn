@@ -416,12 +416,13 @@ private:
         }
 
         float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
-        float rowH = 14.0f;
+        float textH = f.pixelHeight() * scale;
+        float rowH = textH + 4.0f;
 
         // ── Toolbar: [Clear] [Auto▼] ──
         float toolY = y + 2.0f;
-        float toolH = 18.0f;
-        float btnW = 42.0f;
+        float toolH = textH + 6.0f;
+        float btnW = 46.0f;
 
         // Auto-scroll button (right-most) — centered text
         float bx = x + w - btnW - 4.0f;
@@ -429,7 +430,7 @@ private:
         r.drawRect(bx, toolY, btnW, toolH, autoCol);
         {
             float tw = f.textWidth("Auto", scale);
-            f.drawText(r, "Auto", bx + (btnW - tw) * 0.5f, toolY + (toolH - rowH) * 0.5f + 1, scale, Theme::textPrimary);
+            f.drawText(r, "Auto", bx + (btnW - tw) * 0.5f, toolY + (toolH - textH) * 0.5f, scale, Theme::textPrimary);
         }
 
         // Clear button — centered text
@@ -437,7 +438,7 @@ private:
         r.drawRect(bx, toolY, btnW, toolH, Color{50, 50, 56});
         {
             float tw = f.textWidth("Clear", scale);
-            f.drawText(r, "Clear", bx + (btnW - tw) * 0.5f, toolY + (toolH - rowH) * 0.5f + 1, scale, Theme::textPrimary);
+            f.drawText(r, "Clear", bx + (btnW - tw) * 0.5f, toolY + (toolH - textH) * 0.5f, scale, Theme::textPrimary);
         }
 
         // Status: message count
@@ -445,24 +446,24 @@ private:
             char countBuf[32];
             std::snprintf(countBuf, sizeof(countBuf), "%zu msgs",
                           m_midiMonitor->count());
-            f.drawText(r, countBuf, x + 4, toolY + (toolH - rowH) * 0.5f + 1, scale, Theme::textDim);
+            f.drawText(r, countBuf, x + 4, toolY + (toolH - textH) * 0.5f, scale, Theme::textDim);
         }
 
         // ── Filter checkboxes row ──
         float filterY = toolY + toolH + 2.0f;
-        float filterH = 14.0f;
+        float filterH = textH + 2.0f;
         float cbSize = 10.0f;
         float cbTextOff = cbSize + 3.0f;
         float cbW = 52.0f;
         float fScale = scale * 0.9f;
 
-        auto drawCheckbox = [&](float fx, float fy, float cw, const char* label, bool checked) {
+        auto drawCheckbox = [&](float cbx, float fy, float, const char* label, bool checked) {
             float cy = fy + (filterH - cbSize) * 0.5f;
-            r.drawRect(fx, cy, cbSize, cbSize, Color{50, 50, 56});
+            r.drawRect(cbx, cy, cbSize, cbSize, Color{50, 50, 56});
             if (checked) {
-                r.drawRect(fx + 2, cy + 2, cbSize - 4, cbSize - 4, Color{100, 180, 120});
+                r.drawRect(cbx + 2, cy + 2, cbSize - 4, cbSize - 4, Color{100, 180, 120});
             }
-            f.drawText(r, label, fx + cbTextOff, fy + 1, fScale,
+            f.drawText(r, label, cbx + cbTextOff, fy + (filterH - textH * 0.9f) * 0.5f, fScale,
                        checked ? Theme::textPrimary : Theme::textDim);
         };
 
@@ -478,15 +479,16 @@ private:
         if (listH <= 0) return;
 
         // ── Column header ──
-        float headerH = 13.0f;
+        float headerH = textH + 2.0f;
         r.drawRect(x, listY, w, headerH, Color{38, 38, 42});
         float hScale = scale * 0.9f;
         float cx = x + 4;
-        f.drawText(r, "Time",  cx, listY + 1, hScale, Theme::textDim);  cx += 64;
-        f.drawText(r, "Port",  cx, listY + 1, hScale, Theme::textDim);  cx += 32;
-        f.drawText(r, "Ch",    cx, listY + 1, hScale, Theme::textDim);  cx += 24;
-        f.drawText(r, "Type",  cx, listY + 1, hScale, Theme::textDim);  cx += 48;
-        f.drawText(r, "Data",  cx, listY + 1, hScale, Theme::textDim);
+        float hTextY = listY + (headerH - textH * 0.9f) * 0.5f;
+        f.drawText(r, "Time",  cx, hTextY, hScale, Theme::textDim);  cx += 76;
+        f.drawText(r, "Port",  cx, hTextY, hScale, Theme::textDim);  cx += 36;
+        f.drawText(r, "Ch",    cx, hTextY, hScale, Theme::textDim);  cx += 24;
+        f.drawText(r, "Type",  cx, hTextY, hScale, Theme::textDim);  cx += 52;
+        f.drawText(r, "Data",  cx, hTextY, hScale, Theme::textDim);
 
         listY += headerH;
         listH -= headerH;
@@ -563,23 +565,24 @@ private:
 
             char buf[64];
             cx = x + 4;
+            float textY = ry + (rowH - textH) * 0.5f;
 
-            // Time (mm:ss.ms) — wider column
+            // Time (mm:ss.ms)
             uint32_t ms = e.timestamp;
             uint32_t sec = ms / 1000;
             uint32_t min = sec / 60;
             std::snprintf(buf, sizeof(buf), "%02u:%02u.%03u", min, sec % 60, ms % 1000);
-            f.drawText(r, buf, cx, ry + 1, scale, Theme::textDim);
-            cx += 64;
+            f.drawText(r, buf, cx, textY, scale, Theme::textDim);
+            cx += 76;
 
-            // Port — wider column
+            // Port
             std::snprintf(buf, sizeof(buf), "%d", e.portIndex + 1);
-            f.drawText(r, buf, cx, ry + 1, scale, Theme::textDim);
-            cx += 32;
+            f.drawText(r, buf, cx, textY, scale, Color{140, 140, 150});
+            cx += 36;
 
-            // Channel (1-based) — wider column
+            // Channel (1-based)
             std::snprintf(buf, sizeof(buf), "%2d", e.channel + 1);
-            f.drawText(r, buf, cx, ry + 1, scale, Theme::textPrimary);
+            f.drawText(r, buf, cx, textY, scale, Theme::textPrimary);
             cx += 24;
 
             // Type + Data
@@ -637,10 +640,10 @@ private:
             default: typeName = "???"; break;
             }
 
-            f.drawText(r, typeName, cx, ry + 1, scale, typeCol);
-            cx += 48;
+            f.drawText(r, typeName, cx, textY, scale, typeCol);
+            cx += 52;
             if (dataBuf[0])
-                f.drawText(r, dataBuf, cx, ry + 1, scale, Theme::textPrimary);
+                f.drawText(r, dataBuf, cx, textY, scale, Theme::textPrimary);
 
             ++rowsDrawn;
         }
