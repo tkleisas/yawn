@@ -14,6 +14,12 @@ bool DetailPanelWidget::handleRightClick(float mx, float my) {
     if (!m_open || my < m_bounds.y + kHandleHeight) return false;
     if (mx < m_bounds.x || mx > m_bounds.x + m_bounds.w) return false;
 
+    // If context menu is open, handle click on it
+    if (m_deviceContextMenu.isOpen()) {
+        m_deviceContextMenu.handleClick(mx, my);
+        return true;
+    }
+
     for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
         auto& db = m_deviceWidgets[i]->bounds();
         if (mx < db.x || mx >= db.x + db.w) continue;
@@ -22,11 +28,6 @@ bool DetailPanelWidget::handleRightClick(float mx, float my) {
         auto& ref = m_deviceRefs[i];
         if (!m_deviceWidgets[i]->isExpanded()) return true;
 
-        int paramCount = ref.paramCount();
-        for (int p = 0; p < paramCount; ++p) {
-            ref.setParam(p, ref.paramDefault(p));
-            m_deviceWidgets[i]->updateParamValue(p, ref.paramDefault(p));
-        }
         return handleKnobRightClick(i, mx, my);
     }
     return false;
@@ -114,6 +115,10 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         m_warpModeDropdown.paintOverlay(ctx);
     if (m_viewMode == ViewMode::AudioClip && m_autoTargetDropdown.isOpen())
         m_autoTargetDropdown.paintOverlay(ctx);
+
+    // MIDI Learn context menu overlay
+    if (m_deviceContextMenu.isOpen())
+        m_deviceContextMenu.render(renderer, font);
 }
 
 bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
@@ -231,9 +236,41 @@ bool DetailPanelWidget::handleKnobRightClick(size_t deviceIdx, float mx, float m
         float py = ky + row * cellH;
 
         if (mx >= px && mx < px + kKnobSize && my >= py && my < py + cellH) {
-            float def = ref.paramDefault(i);
-            ref.setParam(i, def);
-            dw->updateParamValue(i, def);
+            // Build AutomationTarget for this param
+            automation::AutomationTarget target;
+            if (ref.type == DeviceType::Instrument)
+                target = automation::AutomationTarget::instrument(m_autoTrackIndex, i);
+            else if (ref.type == DeviceType::AudioFx)
+                target = automation::AutomationTarget::audioEffect(m_autoTrackIndex, ref.chainIndex, i);
+            else
+                target = automation::AutomationTarget::midiEffect(m_autoTrackIndex, ref.chainIndex, i);
+
+            float pMin = 0.0f, pMax = 1.0f;
+            // Get param range
+            if (ref.midiEffect) {
+                auto& info = ref.midiEffect->parameterInfo(i);
+                pMin = info.minValue; pMax = info.maxValue;
+            } else if (ref.instrument) {
+                auto& info = ref.instrument->parameterInfo(i);
+                pMin = info.minValue; pMax = info.maxValue;
+            } else if (ref.audioEffect) {
+                auto& info = ref.audioEffect->parameterInfo(i);
+                pMin = info.minValue; pMax = info.maxValue;
+            }
+
+            if (m_learnManager) {
+                openDeviceMidiLearnMenu(mx, my, target, pMin, pMax, [this, &ref, dw, i]() {
+                    float def = ref.paramDefault(i);
+                    DeviceRef r = ref;
+                    r.setParam(i, def);
+                    dw->updateParamValue(i, def);
+                });
+            } else {
+                // Fallback: reset to default
+                float def = ref.paramDefault(i);
+                ref.setParam(i, def);
+                dw->updateParamValue(i, def);
+            }
             return true;
         }
     }
@@ -384,6 +421,58 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         font.drawText(renderer, "No effects", sectionX + 80.0f, noFxY,
                       labelScale, Theme::textDim);
     }
+}
+
+void DetailPanelWidget::openDeviceMidiLearnMenu(float mx, float my,
+                                                 const automation::AutomationTarget& target,
+                                                 float paramMin, float paramMax,
+                                                 std::function<void()> resetAction) {
+    using Item = ui::ContextMenu::Item;
+    std::vector<Item> items;
+
+    bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
+    bool isLearning = m_learnManager && m_learnManager->isLearning() &&
+                      m_learnManager->learnTarget() == target;
+
+    if (isLearning) {
+        Item cancelItem;
+        cancelItem.label = "Cancel Learn";
+        cancelItem.action = [this]() {
+            if (m_learnManager) m_learnManager->cancelLearn();
+        };
+        items.push_back(std::move(cancelItem));
+    } else {
+        Item learnItem;
+        learnItem.label = "MIDI Learn";
+        learnItem.action = [this, target, paramMin, paramMax]() {
+            if (m_learnManager)
+                m_learnManager->startLearn(target, paramMin, paramMax);
+        };
+        items.push_back(std::move(learnItem));
+    }
+
+    if (hasMapping) {
+        auto* mapping = m_learnManager->findByTarget(target);
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "Remove CC %d", mapping->ccNumber);
+        Item removeItem;
+        removeItem.label = buf;
+        removeItem.action = [this, target]() {
+            if (m_learnManager) m_learnManager->removeByTarget(target);
+        };
+        items.push_back(std::move(removeItem));
+    }
+
+    Item sep;
+    sep.separator = true;
+    items.push_back(std::move(sep));
+
+    Item resetItem;
+    resetItem.label = "Reset to Default";
+    resetItem.action = std::move(resetAction);
+    items.push_back(std::move(resetItem));
+
+    m_deviceContextMenu.open(mx, my, std::move(items));
 }
 
 } // namespace fw

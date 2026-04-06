@@ -592,7 +592,8 @@ ArrangementClip deserializeArrangementClip(const json& j,
 
 bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                                      const Project& project,
-                                     const audio::AudioEngine& engine) {
+                                     const audio::AudioEngine& engine,
+                                     const midi::MidiLearnManager* learnMgr) {
     // Create directory structure
     fs::create_directories(folderPath / "samples");
 
@@ -705,6 +706,11 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
     // Mixer
     root["mixer"] = serializeMixer(engine.mixer(), project.numTracks(), sr, blockSize);
 
+    // MIDI Mappings
+    if (learnMgr && !learnMgr->mappings().empty()) {
+        root["midiMappings"] = learnMgr->toJson();
+    }
+
     // Write project.json
     std::ofstream out(folderPath / "project.json");
     if (!out.is_open()) return false;
@@ -716,7 +722,8 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
 
 bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                                        Project& project,
-                                       audio::AudioEngine& engine) {
+                                       audio::AudioEngine& engine,
+                                       midi::MidiLearnManager* learnMgr) {
     fs::path jsonPath = folderPath / "project.json";
     if (!fs::exists(jsonPath)) return false;
 
@@ -867,6 +874,14 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
     // Mixer
     if (root.contains("mixer")) {
         deserializeMixer(engine.mixer(), root["mixer"], sr, blockSize);
+    }
+
+    // MIDI Mappings
+    if (learnMgr) {
+        learnMgr->clearAll();
+        if (root.contains("midiMappings")) {
+            learnMgr->fromJson(root["midiMappings"]);
+        }
     }
 
     return true;

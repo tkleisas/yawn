@@ -11,7 +11,8 @@ enum class TargetType : uint8_t {
     Instrument,     // Track instrument parameter
     AudioEffect,    // Audio effect chain parameter
     MidiEffect,     // MIDI effect chain parameter
-    Mixer           // Mixer channel control (volume, pan, send, etc.)
+    Mixer,          // Mixer channel control (volume, pan, send, etc.)
+    Transport       // Transport controls (BPM, play, stop, record)
 };
 
 // Sub-types for mixer automation (volume, pan, sends, etc.)
@@ -21,6 +22,14 @@ enum class MixerParam : uint8_t {
     Mute,
     SendLevel0, SendLevel1, SendLevel2, SendLevel3,
     SendLevel4, SendLevel5, SendLevel6, SendLevel7
+};
+
+// Transport parameter sub-types
+enum class TransportParam : uint8_t {
+    BPM,
+    Play,
+    Stop,
+    Record
 };
 
 // Uniquely identifies any automatable parameter in the project
@@ -56,6 +65,9 @@ struct AutomationTarget {
     }
     static AutomationTarget mixer(int track, MixerParam mp) {
         return {TargetType::Mixer, track, 0, static_cast<int>(mp)};
+    }
+    static AutomationTarget transport(TransportParam tp) {
+        return {TargetType::Transport, 0, 0, static_cast<int>(tp)};
     }
 };
 

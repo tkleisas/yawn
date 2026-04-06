@@ -22,6 +22,7 @@
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/LFO.h"
+#include "midi/MidiMapping.h"
 #include "util/Factory.h"
 #include "util/FileIO.h"
 
@@ -130,13 +131,15 @@ public:
     // Returns true on success.
     static bool saveToFolder(const fs::path& folderPath,
                              const Project& project,
-                             const audio::AudioEngine& engine);
+                             const audio::AudioEngine& engine,
+                             const midi::MidiLearnManager* learnMgr = nullptr);
 
     // Load a project from a .yawn folder.
     // Returns true on success.
     static bool loadFromFolder(const fs::path& folderPath,
                                Project& project,
-                               audio::AudioEngine& engine);
+                               audio::AudioEngine& engine,
+                               midi::MidiLearnManager* learnMgr = nullptr);
 };
 
 } // namespace yawn

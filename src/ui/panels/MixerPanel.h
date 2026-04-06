@@ -12,9 +12,11 @@
 #include "ui/Font.h"
 #endif
 #include "ui/Theme.h"
+#include "ui/ContextMenu.h"
 #include "audio/Mixer.h"
 #include "app/Project.h"
 #include "automation/AutomationTypes.h"
+#include "midi/MidiMapping.h"
 #include "util/UndoManager.h"
 
 namespace yawn { namespace audio { class AudioEngine; } }
@@ -74,6 +76,7 @@ public:
     }
 
     void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
+    void setLearnManager(midi::MidiLearnManager* mgr) { m_learnManager = mgr; }
 
     void updateMeter(int trackIndex, float peakL, float peakR) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks) {
@@ -111,6 +114,12 @@ public:
 #endif
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        // Context menu hover tracking
+        if (m_contextMenu.isOpen()) {
+            m_contextMenu.handleMouseMove(e.x, e.y);
+            return true;
+        }
+
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
         }
@@ -189,6 +198,11 @@ private:
         return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
     }
 
+    void openMidiLearnMenu(float mx, float my,
+                           const automation::AutomationTarget& target,
+                           float paramMin, float paramMax,
+                           std::function<void()> resetAction);
+
 #ifdef YAWN_TEST_BUILD
     void setupStripCallbacks(int) {}
 #else
@@ -222,6 +236,8 @@ private:
     audio::AudioEngine* m_engine     = nullptr;
     midi::MidiEngine*   m_midiEngine = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
+    midi::MidiLearnManager* m_learnManager = nullptr;
+    ContextMenu         m_contextMenu;
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
     TrackStrip m_strips[kMaxTracks];

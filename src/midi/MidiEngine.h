@@ -8,7 +8,10 @@
 #include "midi/MidiTypes.h"
 #include "midi/MidiPort.h"
 #include "midi/MidiMonitorBuffer.h"
+#include "midi/MidiMapping.h"
+#include "util/MessageQueue.h"
 #include <array>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -153,6 +156,31 @@ public:
         if (m_mergeBuffer.empty()) return;
         m_mergeBuffer.sortByFrame();
 
+        // ── MIDI Learn: intercept CC messages ──
+        if (m_learnManager && m_sendCommand) {
+            for (int i = 0; i < m_mergeBuffer.count(); ++i) {
+                const auto& msg = m_mergeBuffer[i];
+                if (!msg.isCC()) continue;
+
+                int ch = msg.channel;
+                int cc = static_cast<int>(msg.ccNumber);
+                int val = static_cast<int>(Convert::cc32to7(msg.value));
+
+                // Learn mode: first CC assigns the mapping
+                if (m_learnManager->isLearning()) {
+                    m_learnManager->handleLearnCC(ch, cc);
+                    continue;
+                }
+
+                // Apply existing mappings
+                auto hits = m_learnManager->findByCC(ch, cc);
+                for (auto* mapping : hits) {
+                    float paramVal = mapping->ccToParam(val);
+                    resolveAndSend(mapping->target, paramVal);
+                }
+            }
+        }
+
         // Route messages to tracks based on track input configuration
         for (int t = 0; t < kMaxMidiTracks; ++t) {
             const auto& input = m_trackInputs[t];
@@ -207,6 +235,75 @@ private:
         return true; // Source matches (AllPorts or specific port already filtered upstream)
     }
 
+    // Resolve an AutomationTarget to a command and send it
+    void resolveAndSend(const automation::AutomationTarget& target, float value) {
+        if (!m_sendCommand) return;
+        using namespace automation;
+
+        switch (target.type) {
+        case TargetType::Mixer: {
+            auto mp = static_cast<MixerParam>(target.paramIndex);
+            switch (mp) {
+            case MixerParam::Volume:
+                m_sendCommand(audio::SetTrackVolumeMsg{target.trackIndex, value * 2.0f});
+                break;
+            case MixerParam::Pan:
+                m_sendCommand(audio::SetTrackPanMsg{target.trackIndex, value * 2.0f - 1.0f});
+                break;
+            case MixerParam::Mute:
+                m_sendCommand(audio::SetTrackMuteMsg{target.trackIndex, value >= 0.5f});
+                break;
+            default:
+                // SendLevel0-7
+                if (mp >= MixerParam::SendLevel0 && mp <= MixerParam::SendLevel7) {
+                    int sendIdx = static_cast<int>(mp) - static_cast<int>(MixerParam::SendLevel0);
+                    m_sendCommand(audio::SetSendLevelMsg{target.trackIndex, sendIdx, value});
+                }
+                break;
+            }
+            break;
+        }
+        case TargetType::AudioEffect:
+            m_sendCommand(audio::SetEffectParamMsg{
+                target.trackIndex, target.chainIndex, target.paramIndex, value, true});
+            break;
+        case TargetType::MidiEffect:
+            m_sendCommand(audio::SetEffectParamMsg{
+                target.trackIndex, target.chainIndex, target.paramIndex, value, false});
+            break;
+        case TargetType::Instrument:
+            m_sendCommand(audio::SetEffectParamMsg{
+                target.trackIndex, 0, target.paramIndex, value, false});
+            break;
+        case TargetType::Transport: {
+            auto tp = static_cast<TransportParam>(target.paramIndex);
+            switch (tp) {
+            case TransportParam::BPM: {
+                // Map 0-1 to 20-300 BPM range
+                double bpm = 20.0 + static_cast<double>(value) * 280.0;
+                m_sendCommand(audio::TransportSetBPMMsg{bpm});
+                break;
+            }
+            case TransportParam::Play:
+                if (value >= 0.5f)
+                    m_sendCommand(audio::TransportPlayMsg{});
+                break;
+            case TransportParam::Stop:
+                if (value >= 0.5f)
+                    m_sendCommand(audio::TransportStopMsg{});
+                break;
+            case TransportParam::Record:
+                if (value >= 0.5f)
+                    m_sendCommand(audio::TransportRecordMsg{true, 0});
+                else
+                    m_sendCommand(audio::TransportRecordMsg{false, 0});
+                break;
+            }
+            break;
+        }
+        }
+    }
+
     // Available port names (refreshed by refreshPorts())
     std::vector<std::string> m_availableInputs;
     std::vector<std::string> m_availableOutputs;
@@ -229,6 +326,19 @@ private:
 
     // Monitor (optional, owned externally)
     MidiMonitorBuffer* m_monitor = nullptr;
+
+    // MIDI Learn (optional, owned externally)
+    MidiLearnManager* m_learnManager = nullptr;
+    std::function<void(const audio::AudioCommand&)> m_sendCommand;
+
+public:
+    void setLearnManager(MidiLearnManager* mgr) { m_learnManager = mgr; }
+    MidiLearnManager* learnManager() const { return m_learnManager; }
+
+    // Set callback for sending commands to AudioEngine (for MIDI-mapped params)
+    void setCommandSender(std::function<void(const audio::AudioCommand&)> fn) {
+        m_sendCommand = std::move(fn);
+    }
 };
 
 } // namespace midi

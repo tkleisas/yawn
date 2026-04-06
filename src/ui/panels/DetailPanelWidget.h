@@ -32,7 +32,11 @@
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/LFO.h"
+#include "midi/MidiMapping.h"
 #include "automation/AutomationLane.h"
+#ifndef YAWN_TEST_BUILD
+#include "ui/ContextMenu.h"
+#endif
 #include <string>
 #include <vector>
 #include <functional>
@@ -104,6 +108,8 @@ public:
     void setOnParamTouch(ParamTouchCallback cb) { m_onParamTouch = std::move(cb); }
 
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
+
+    void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
 
     ViewMode viewMode() const { return m_viewMode; }
 
@@ -568,6 +574,16 @@ public:
     bool handleRightClick(float mx, float my);
 #endif
 
+    // MIDI Learn context menu for device parameters
+#ifdef YAWN_TEST_BUILD
+    void handleDeviceContextMenuMouseMove(float, float) {}
+#else
+    void handleDeviceContextMenuMouseMove(float mx, float my) {
+        if (m_deviceContextMenu.isOpen())
+            m_deviceContextMenu.handleMouseMove(mx, my);
+    }
+#endif
+
     // ─── Measure / Layout ───────────────────────────────────────────────
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -888,6 +904,28 @@ private:
                 }
             }
         });
+
+        // CC label lookup for MIDI Learn visual feedback
+        if (m_learnManager) {
+            automation::TargetType tt;
+            if (ref.type == DeviceType::Instrument)
+                tt = automation::TargetType::Instrument;
+            else if (ref.type == DeviceType::AudioFx)
+                tt = automation::TargetType::AudioEffect;
+            else
+                tt = automation::TargetType::MidiEffect;
+            int ci = ref.chainIndex;
+            dw->setCCLabelCallback([this, tt, ci](int paramIdx) -> int {
+                if (!m_learnManager || m_autoTrackIndex < 0) return -1;
+                automation::AutomationTarget t;
+                t.type = tt;
+                t.trackIndex = m_autoTrackIndex;
+                t.chainIndex = ci;
+                t.paramIndex = paramIdx;
+                auto* m = m_learnManager->findByTarget(t);
+                return m ? m->ccNumber : -1;
+            });
+        }
     }
 
     // ── Sync param values from devices each frame ──
@@ -1272,6 +1310,13 @@ private:
     bool handleKnobRightClick(size_t deviceIdx, float mx, float my);
 #endif
 
+#ifndef YAWN_TEST_BUILD
+    void openDeviceMidiLearnMenu(float mx, float my,
+                                 const automation::AutomationTarget& target,
+                                 float paramMin, float paramMax,
+                                 std::function<void()> resetAction);
+#endif
+
     // ── Expanded state preservation across rebuilds ──
     struct ExpandState { void* ptr; bool expanded; };
 
@@ -1366,6 +1411,12 @@ private:
     int m_autoSelectedLaneIdx = -1;
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
     int m_autoTrackIndex = -1;
+
+    // MIDI Learn
+    midi::MidiLearnManager* m_learnManager = nullptr;
+#ifndef YAWN_TEST_BUILD
+    ui::ContextMenu m_deviceContextMenu;
+#endif
 
     void buildAutoTargetList() {
         std::vector<std::string> items;

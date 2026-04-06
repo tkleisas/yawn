@@ -247,6 +247,15 @@ struct AutoParamTouchMsg {
     bool touching;        // true = begin, false = release
 };
 
+// Set an effect parameter directly (used by MIDI Learn CC mapping)
+struct SetEffectParamMsg {
+    int trackIndex;
+    int chainIndex;       // slot in effect chain
+    int paramIndex;       // parameter index within the effect
+    float value;
+    bool isAudioEffect;   // true = audio effect chain, false = MIDI effect chain
+};
+
 // Arrangement playback control
 struct SetTrackArrActiveMsg {
     int trackIndex;
@@ -308,6 +317,7 @@ using AudioCommand = std::variant<
     ResetMidiEffectChainMsg,
     SetAutoModeMsg,
     AutoParamTouchMsg,
+    SetEffectParamMsg,
     SetTrackArrActiveMsg,
     TransportSetLoopEnabledMsg,
     TransportSetLoopRangeMsg

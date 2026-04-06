@@ -79,12 +79,22 @@ void MixerPanel::paint(UIContext& ctx) {
     m_scrollbar.setScrollPos(m_scrollX);
     m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, ctx);
     m_scrollbar.paint(ctx);
+
+    // Render context menu on top of everything
+    if (m_contextMenu.isOpen()) {
+        m_contextMenu.render(r, *ctx.font);
+    }
 }
 
 bool MixerPanel::onMouseDown(MouseEvent& e) {
     if (!m_project || !m_engine) return false;
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
+
+    // Context menu takes priority
+    if (m_contextMenu.isOpen()) {
+        return m_contextMenu.handleClick(mx, my);
+    }
 
     if (hitWidget(m_scrollbar, mx, my)) {
         return m_scrollbar.onMouseDown(e);
@@ -204,27 +214,107 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                 return s.midiOutChDrop.onMouseDown(e);
         }
 
-        if (hitWidget(s.pan, mx, my))
+        // Pan: right-click opens MIDI Learn context menu
+        if (hitWidget(s.pan, mx, my)) {
+            if (rightClick) {
+                openMidiLearnMenu(mx, my,
+                    automation::AutomationTarget::mixer(t, automation::MixerParam::Pan),
+                    -1.0f, 1.0f,
+                    [this, t]() {
+                        float oldVal = m_strips[t].pan.value();
+                        m_strips[t].pan.setValue(0.0f);
+                        m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f});
+                        if (m_undoManager) {
+                            m_undoManager->push({"Reset Pan",
+                                [this, t, oldVal]{ m_strips[t].pan.setValue(oldVal);
+                                    m_engine->sendCommand(audio::SetTrackPanMsg{t, oldVal}); },
+                                [this, t]{ m_strips[t].pan.setValue(0.0f);
+                                    m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f}); },
+                                ""});
+                        }
+                    });
+                return true;
+            }
             return s.pan.onMouseDown(e);
+        }
+
+        // Fader: right-click opens MIDI Learn context menu
         if (hitWidget(s.fader, mx, my)) {
             if (rightClick) {
-                float oldVal = s.fader.value();
-                s.fader.setValue(1.0f);
-                m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
-                if (m_undoManager) {
-                    m_undoManager->push({"Reset Volume",
-                        [this, t, oldVal]{ m_strips[t].fader.setValue(oldVal);
-                            m_engine->sendCommand(audio::SetTrackVolumeMsg{t, oldVal}); },
-                        [this, t]{ m_strips[t].fader.setValue(1.0f);
-                            m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f}); },
-                        ""});
-                }
+                openMidiLearnMenu(mx, my,
+                    automation::AutomationTarget::mixer(t, automation::MixerParam::Volume),
+                    0.0f, 2.0f,
+                    [this, t]() {
+                        float oldVal = m_strips[t].fader.value();
+                        m_strips[t].fader.setValue(1.0f);
+                        m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
+                        if (m_undoManager) {
+                            m_undoManager->push({"Reset Volume",
+                                [this, t, oldVal]{ m_strips[t].fader.setValue(oldVal);
+                                    m_engine->sendCommand(audio::SetTrackVolumeMsg{t, oldVal}); },
+                                [this, t]{ m_strips[t].fader.setValue(1.0f);
+                                    m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f}); },
+                                ""});
+                        }
+                    });
                 return true;
             }
             return s.fader.onMouseDown(e);
         }
     }
     return false;
+}
+
+void MixerPanel::openMidiLearnMenu(float mx, float my,
+                                    const automation::AutomationTarget& target,
+                                    float paramMin, float paramMax,
+                                    std::function<void()> resetAction) {
+    using Item = ContextMenu::Item;
+    std::vector<Item> items;
+
+    bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
+    bool isLearning = m_learnManager && m_learnManager->isLearning() &&
+                      m_learnManager->learnTarget() == target;
+
+    if (isLearning) {
+        Item cancelItem;
+        cancelItem.label = "Cancel Learn";
+        cancelItem.action = [this]() {
+            if (m_learnManager) m_learnManager->cancelLearn();
+        };
+        items.push_back(std::move(cancelItem));
+    } else {
+        Item learnItem;
+        learnItem.label = "MIDI Learn";
+        learnItem.action = [this, target, paramMin, paramMax]() {
+            if (m_learnManager)
+                m_learnManager->startLearn(target, paramMin, paramMax);
+        };
+        items.push_back(std::move(learnItem));
+    }
+
+    if (hasMapping) {
+        auto* mapping = m_learnManager->findByTarget(target);
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "Remove CC %d", mapping->ccNumber);
+        Item removeItem;
+        removeItem.label = buf;
+        removeItem.action = [this, target]() {
+            if (m_learnManager) m_learnManager->removeByTarget(target);
+        };
+        items.push_back(std::move(removeItem));
+    }
+
+    Item sep;
+    sep.separator = true;
+    items.push_back(std::move(sep));
+
+    Item resetItem;
+    resetItem.label = "Reset to Default";
+    resetItem.action = std::move(resetAction);
+    items.push_back(std::move(resetItem));
+
+    m_contextMenu.open(mx, my, std::move(items));
 }
 
 void MixerPanel::setupStripCallbacks(int t) {
@@ -577,6 +667,20 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, ctx);
     s.pan.paint(ctx);
 
+    // CC label for pan mapping
+    if (m_learnManager) {
+        auto panTarget = automation::AutomationTarget::mixer(idx, automation::MixerParam::Pan);
+        auto* panMap = m_learnManager->findByTarget(panTarget);
+        if (panMap) {
+            char ccBuf[16];
+            std::snprintf(ccBuf, sizeof(ccBuf), "CC%d", panMap->ccNumber);
+            float ccScale = 8.0f / Theme::kFontSize;
+            ctx.font->drawText(*ctx.renderer, ccBuf,
+                ix + iw - 4 - ctx.font->textWidth(ccBuf, ccScale),
+                curY + 2, ccScale, Color{100, 180, 255});
+        }
+    }
+
     curY += 16 + 4;
 
     // Send dots (only when toggled on)
@@ -630,6 +734,19 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.dbLabel.setFontScale(dbScale);
     s.dbLabel.layout(Rect{ix + 4, stripY + stripH - 18, iw - 8, 14}, ctx);
     s.dbLabel.paint(ctx);
+
+    // CC label for volume mapping
+    if (m_learnManager) {
+        auto volTarget = automation::AutomationTarget::mixer(idx, automation::MixerParam::Volume);
+        auto* volMap = m_learnManager->findByTarget(volTarget);
+        if (volMap) {
+            char ccBuf[16];
+            std::snprintf(ccBuf, sizeof(ccBuf), "CC%d", volMap->ccNumber);
+            float ccScale = 8.0f / Theme::kFontSize;
+            ctx.font->drawText(*ctx.renderer, ccBuf,
+                ix + 4, stripY + stripH - 30, ccScale, Color{100, 180, 255});
+        }
+    }
 
     r.drawRect(sx + stripW - 1, stripY, 1, stripH, Theme::clipSlotBorder);
 }

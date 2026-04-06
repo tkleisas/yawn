@@ -34,6 +34,8 @@ public:
     using RemoveCallback     = std::function<void()>;
     using ParamChangeCallback = std::function<void(int paramIndex, float value)>;
     using ParamTouchCallback  = std::function<void(int paramIndex, float value, bool touching)>;
+    using ParamRightClickCallback = std::function<void(int paramIndex, float x, float y)>;
+    using CCLabelCallback = std::function<int(int paramIndex)>;  // returns CC number or -1
 
     // Per-parameter descriptor used to (re)build the knob grid.
     struct ParamInfo {
@@ -231,6 +233,8 @@ public:
     void setOnRemove(RemoveCallback cb) { m_onRemove = std::move(cb); }
     void setOnParamChange(ParamChangeCallback cb) { m_onParamChange = std::move(cb); }
     void setOnParamTouch(ParamTouchCallback cb) { m_onParamTouch = std::move(cb); }
+    void setOnParamRightClick(ParamRightClickCallback cb) { m_onParamRightClick = std::move(cb); }
+    void setCCLabelCallback(CCLabelCallback cb) { m_ccLabelCb = std::move(cb); }
     void setOnBypassToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onBypassToggle = std::move(cb); }
     void setOnExpandToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onExpandToggle = std::move(cb); }
     void setOnDragStart(DeviceHeaderWidget::ActionCallback cb) {
@@ -382,6 +386,30 @@ public:
             if (m_customPanel) m_customPanel->paint(ctx);
             m_knobGrid.paint(ctx);
         }
+
+        // Draw CC labels on mapped knobs
+        if (m_ccLabelCb) {
+            float ccScale = 7.0f / Theme::kFontSize;
+            Color ccCol{100, 180, 255};
+            auto drawLabels = [&](const std::vector<ParamSlot>& slots) {
+                for (auto& s : slots) {
+                    int pi = std::stoi(s.widget->name());
+                    int cc = m_ccLabelCb(pi);
+                    if (cc >= 0) {
+                        char buf[16];
+                        std::snprintf(buf, sizeof(buf), "CC%d", cc);
+                        auto& b = s.widget->bounds();
+                        float tw = ctx.font->textWidth(buf, ccScale);
+                        ctx.font->drawText(*ctx.renderer, buf,
+                            b.x + (b.w - tw) * 0.5f, b.y + b.h - 2,
+                            ccScale, ccCol);
+                    }
+                }
+            };
+            drawLabels(m_knobs);
+            if (m_isVisualizer && m_vizKnobGrid)
+                drawLabels(m_vizKnobs);
+        }
 #endif
     }
 
@@ -392,6 +420,26 @@ public:
             return m_header.onMouseDown(e);
 
         if (!m_expanded) return false;
+
+        // Intercept right-clicks on knobs for MIDI Learn context menu
+        if (e.button == MouseButton::Right && m_onParamRightClick) {
+            auto tryRightClick = [&](std::vector<ParamSlot>& slots) -> bool {
+                for (auto& s : slots) {
+                    if (s.widget->bounds().contains(e.x, e.y)) {
+                        int idx = std::stoi(s.widget->name());
+                        m_onParamRightClick(idx, e.x, e.y);
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (m_isVisualizer && m_vizKnobGrid) {
+                if (m_vizKnobGrid->bounds().contains(e.x, e.y) && tryRightClick(m_vizKnobs))
+                    return true;
+            } else if (!m_customBody && m_knobGrid.bounds().contains(e.x, e.y)) {
+                if (tryRightClick(m_knobs)) return true;
+            }
+        }
 
         if (m_isVisualizer && m_vizKnobGrid) {
             if (m_vizKnobGrid->bounds().contains(e.x, e.y)) {
@@ -466,6 +514,8 @@ private:
     RemoveCallback                    m_onRemove;
     ParamChangeCallback               m_onParamChange;
     ParamTouchCallback                m_onParamTouch;
+    ParamRightClickCallback           m_onParamRightClick;
+    CCLabelCallback                   m_ccLabelCb;
     DeviceHeaderWidget::ToggleCallback m_onBypassToggle;
     DeviceHeaderWidget::ToggleCallback m_onExpandToggle;
     DeviceHeaderWidget::ActionCallback m_onDragStart;

@@ -963,7 +963,10 @@ bool App::init() {
     m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine, &m_undoManager);
+    m_mixerPanel->setLearnManager(&m_midiLearnManager);
+    m_detailPanel->setLearnManager(&m_midiLearnManager);
     m_transportPanel->init(&m_project, &m_audioEngine, &m_undoManager);
+    m_transportPanel->setLearnManager(&m_midiLearnManager);
     m_returnMasterPanel->init(&m_project, &m_audioEngine, &m_undoManager);
 
     m_settings = util::AppSettings::load();
@@ -994,6 +997,12 @@ bool App::init() {
         m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
     m_midiEngine.setMonitorBuffer(&m_midiMonitor);
+
+    // Wire MIDI Learn manager
+    m_midiEngine.setLearnManager(&m_midiLearnManager);
+    m_midiEngine.setCommandSender([this](const audio::AudioCommand& cmd) {
+        m_audioEngine.sendCommand(cmd);
+    });
 
     // Wire MIDI monitor to browser panel
     m_browserPanel->setMidiMonitor(&m_midiMonitor);
@@ -2045,6 +2054,10 @@ void App::processEvents() {
                 // Context menu hover
                 m_contextMenu.handleMouseMove(mx, my);
 
+                // Detail panel context menu hover
+                if (m_showDetailPanel)
+                    m_detailPanel->handleDeviceContextMenuMouseMove(mx, my);
+
                 // Menu bar hover
                 m_menuBar.handleMouseMove(mx, my);
 
@@ -2865,6 +2878,7 @@ void App::newProject() {
         m_projectPath.clear();
         m_projectDirty = false;
         m_undoManager.clear();
+        m_midiLearnManager.clearAll();
         m_selectedTrack = 0;
         m_showDetailPanel = false;
         m_pianoRoll->close();
@@ -2926,7 +2940,7 @@ void App::doSaveProject(const std::filesystem::path& path) {
     if (projectDir.extension() != ".yawn")
         projectDir += ".yawn";
 
-    if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine)) {
+    if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine, &m_midiLearnManager)) {
         m_projectPath = projectDir;
         m_projectDirty = false;
         updateWindowTitle();
@@ -2960,7 +2974,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
     m_audioEngine.mixer().masterEffects().clear();
 
     Project loadedProject;
-    if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine)) {
+    if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine, &m_midiLearnManager)) {
         m_project = std::move(loadedProject);
         syncTracksToEngine();
         m_projectPath = projectDir;

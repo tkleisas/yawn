@@ -26,6 +26,7 @@
 #include "audio/Clip.h"
 #include "app/Project.h"
 #include "midi/MidiEngine.h"
+#include "midi/MidiMapping.h"
 #include "util/FileIO.h"
 #include "util/AppSettings.h"
 #include "util/UndoManager.h"
@@ -121,6 +122,7 @@ private:
     audio::AudioEngine m_audioEngine;
     midi::MidiEngine m_midiEngine;
     midi::MidiMonitorBuffer m_midiMonitor;
+    midi::MidiLearnManager m_midiLearnManager;
     Project m_project;
     undo::UndoManager m_undoManager;
     util::AppSettings m_settings;

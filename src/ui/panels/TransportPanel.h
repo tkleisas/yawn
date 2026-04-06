@@ -12,7 +12,10 @@
 #include "ui/Font.h"
 #endif
 #include "ui/Theme.h"
+#include "ui/ContextMenu.h"
 #include "audio/AudioEngine.h"
+#include "automation/AutomationTypes.h"
+#include "midi/MidiMapping.h"
 #include "util/UndoManager.h"
 
 namespace yawn { class Project; }
@@ -136,6 +139,7 @@ public:
 
     void setSelectedScene(int scene) { m_selectedScene = scene; }
     void setCountInBars(int bars) { m_countInBars = bars; }
+    void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
 
     bool isEditing() const {
         return m_bpmInput.isEditing() || m_tsNumInput.isEditing() || m_tsDenInput.isEditing();
@@ -284,6 +288,15 @@ private:
     int    m_countInBars = 0;
     float  m_recPulse = 0.0f;
     bool   m_metronomeOn = false;
+
+    // MIDI Learn
+    midi::MidiLearnManager* m_learnManager = nullptr;
+    ui::ContextMenu m_contextMenu;
+
+    void openTransportLearnMenu(float mx, float my,
+                                const automation::AutomationTarget& target,
+                                float paramMin, float paramMax,
+                                std::function<void()> resetAction);
 };
 
 } // namespace fw

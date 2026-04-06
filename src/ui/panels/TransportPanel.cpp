@@ -175,6 +175,34 @@ void TransportPanel::paint(UIContext& ctx) {
     // Transport buttons (center)
     paintTransportButtons(r);
 
+    // CC labels for mapped transport controls
+    if (m_learnManager) {
+        auto& font = *ctx.font;
+        float ccScale = 7.0f / Theme::kFontSize;
+        Color ccCol{100, 180, 255};
+
+        auto drawCCLabel = [&](float bx, float by, float bw, float bh,
+                               const automation::AutomationTarget& target) {
+            auto* mapping = m_learnManager->findByTarget(target);
+            if (mapping) {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "CC%d", mapping->ccNumber);
+                float tw = font.textWidth(buf, ccScale);
+                font.drawText(r, buf, bx + (bw - tw) * 0.5f, by + bh + 1, ccScale, ccCol);
+            }
+        };
+
+        using TP = automation::TransportParam;
+        drawCCLabel(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH,
+                    automation::AutomationTarget::transport(TP::Stop));
+        drawCCLabel(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH,
+                    automation::AutomationTarget::transport(TP::Play));
+        drawCCLabel(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH,
+                    automation::AutomationTarget::transport(TP::Record));
+        drawCCLabel(m_bpmBoxX, m_bpmBoxY, m_bpmBoxW, m_bpmBoxH,
+                    automation::AutomationTarget::transport(TP::BPM));
+    }
+
     // Left group widgets
     m_bpmInput.paint(ctx);
     m_bpmLabel.paint(ctx);
@@ -214,6 +242,10 @@ void TransportPanel::paint(UIContext& ctx) {
         m_countInLabel.setText(ciBuf);
         m_countInLabel.paint(ctx);
     }
+
+    // Context menu overlay
+    if (m_contextMenu.isOpen())
+        m_contextMenu.render(r, *ctx.font);
 }
 
 // ─── Transport Buttons ──────────────────────────────────────────────────────
@@ -286,6 +318,34 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
 
+    // Context menu click handling
+    if (m_contextMenu.isOpen()) {
+        m_contextMenu.handleClick(mx, my);
+        return true;
+    }
+
+    // Right-click on transport buttons opens MIDI Learn menu
+    if (rightClick && m_learnManager) {
+        using namespace automation;
+        if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) {
+            openTransportLearnMenu(mx, my, AutomationTarget::transport(TransportParam::Stop),
+                0.0f, 1.0f, nullptr);
+            return true;
+        }
+        if (hitBtn(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH, mx, my)) {
+            openTransportLearnMenu(mx, my, AutomationTarget::transport(TransportParam::Play),
+                0.0f, 1.0f, nullptr);
+            return true;
+        }
+        // BPM right-click: MIDI Learn
+        if (mx >= m_bpmBoxX && mx < m_bpmBoxX + m_bpmBoxW &&
+            my >= m_bpmBoxY && my < m_bpmBoxY + m_bpmBoxH) {
+            openTransportLearnMenu(mx, my, AutomationTarget::transport(TransportParam::BPM),
+                0.0f, 1.0f, nullptr);
+            return true;
+        }
+    }
+
     // Stop
     if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) {
         m_engine->sendCommand(audio::TransportStopMsg{});
@@ -351,6 +411,11 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
 }
 
 bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
+    if (m_contextMenu.isOpen()) {
+        m_contextMenu.handleMouseMove(e.x, e.y);
+        return true;
+    }
+
     m_bpmInput.onMouseMove(e);
     m_tsNumInput.onMouseMove(e);
     m_tsDenInput.onMouseMove(e);
@@ -395,6 +460,60 @@ void TransportPanel::tapTempo() {
                 "bpm"});
         }
     }
+}
+
+void TransportPanel::openTransportLearnMenu(float mx, float my,
+                                             const automation::AutomationTarget& target,
+                                             float paramMin, float paramMax,
+                                             std::function<void()> resetAction) {
+    using Item = ui::ContextMenu::Item;
+    std::vector<Item> items;
+
+    bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
+    bool isLearning = m_learnManager && m_learnManager->isLearning() &&
+                      m_learnManager->learnTarget() == target;
+
+    if (isLearning) {
+        Item cancelItem;
+        cancelItem.label = "Cancel Learn";
+        cancelItem.action = [this]() {
+            if (m_learnManager) m_learnManager->cancelLearn();
+        };
+        items.push_back(std::move(cancelItem));
+    } else {
+        Item learnItem;
+        learnItem.label = "MIDI Learn";
+        learnItem.action = [this, target, paramMin, paramMax]() {
+            if (m_learnManager)
+                m_learnManager->startLearn(target, paramMin, paramMax);
+        };
+        items.push_back(std::move(learnItem));
+    }
+
+    if (hasMapping) {
+        auto* mapping = m_learnManager->findByTarget(target);
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "Remove CC %d", mapping->ccNumber);
+        Item removeItem;
+        removeItem.label = buf;
+        removeItem.action = [this, target]() {
+            if (m_learnManager) m_learnManager->removeByTarget(target);
+        };
+        items.push_back(std::move(removeItem));
+    }
+
+    if (resetAction) {
+        Item sep;
+        sep.separator = true;
+        items.push_back(std::move(sep));
+
+        Item resetItem;
+        resetItem.label = "Reset to Default";
+        resetItem.action = std::move(resetAction);
+        items.push_back(std::move(resetItem));
+    }
+
+    m_contextMenu.open(mx, my, std::move(items));
 }
 
 } // namespace fw

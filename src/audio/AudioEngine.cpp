@@ -955,6 +955,17 @@ void AudioEngine::processCommands() {
                 target.paramIndex = msg.paramIndex;
                 m_automationEngine.handleParamTouch(msg.trackIndex, target, msg.value, msg.touching);
             }
+            else if constexpr (std::is_same_v<T, SetEffectParamMsg>) {
+                if (msg.isAudioEffect) {
+                    auto* afx = m_mixer.trackEffects(msg.trackIndex).effectAt(msg.chainIndex);
+                    if (afx && msg.paramIndex < afx->parameterCount())
+                        afx->setParameter(msg.paramIndex, msg.value);
+                } else {
+                    auto* mfx = m_midiEffectChains[msg.trackIndex].effect(msg.chainIndex);
+                    if (mfx && msg.paramIndex < mfx->parameterCount())
+                        mfx->setParameter(msg.paramIndex, msg.value);
+                }
+            }
             else if constexpr (std::is_same_v<T, SetTrackArrActiveMsg>) {
                 m_arrPlayback.setTrackActive(msg.trackIndex, msg.active);
             }
