@@ -252,10 +252,10 @@ public:
         for (auto& trackSlots : m_clipSlots) {
             trackSlots.insert(trackSlots.begin() + index, ClipSlot{});
         }
-        // Fix defaultScene for tracks whose active scene shifted
         for (auto& t : m_tracks) {
             if (t.defaultScene >= index) t.defaultScene++;
         }
+        renumberScenes();
     }
 
     void deleteScene(int index) {
@@ -269,6 +269,7 @@ public:
             if (t.defaultScene == index) t.defaultScene = -1;
             else if (t.defaultScene > index) t.defaultScene--;
         }
+        renumberScenes();
     }
 
     void duplicateScene(int index) {
@@ -292,6 +293,19 @@ public:
         }
     }
 
+    void deleteTrack(int index) {
+        if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+        if (m_tracks.size() <= 1) return; // keep at least 1 track
+        m_tracks.erase(m_tracks.begin() + index);
+        m_clipSlots.erase(m_clipSlots.begin() + index);
+    }
+
+    void insertTrack(int index, const Track& track, std::vector<ClipSlot> slots) {
+        if (index < 0 || index > static_cast<int>(m_tracks.size())) return;
+        m_tracks.insert(m_tracks.begin() + index, track);
+        m_clipSlots.insert(m_clipSlots.begin() + index, std::move(slots));
+    }
+
     // ─── Arrangement view ──────────────────────────────────────────────
     ViewMode viewMode() const { return m_viewMode; }
     void setViewMode(ViewMode m) { m_viewMode = m; }
@@ -310,6 +324,11 @@ public:
     }
 
 private:
+    void renumberScenes() {
+        for (size_t i = 0; i < m_scenes.size(); ++i)
+            m_scenes[i].name = std::to_string(i + 1);
+    }
+
     std::vector<Track> m_tracks;
     std::vector<Scene> m_scenes;
     // m_clipSlots[trackIndex][sceneIndex]
