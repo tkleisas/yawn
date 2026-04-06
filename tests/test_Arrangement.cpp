@@ -105,7 +105,8 @@ TEST(ProjectArrangement, UpdateArrangementLength) {
     p.track(0).arrangementClips.push_back(c);
 
     p.updateArrangementLength();
-    EXPECT_DOUBLE_EQ(p.arrangementLength(), 116.0);
+    // 100 + 16 = 116 clip end, plus 16 beats padding = 132
+    EXPECT_DOUBLE_EQ(p.arrangementLength(), 132.0);
 }
 
 // ── ArrangementPlayback engine ─────────────────────────────────────────────
