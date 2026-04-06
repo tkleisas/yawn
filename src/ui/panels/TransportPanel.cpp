@@ -336,7 +336,11 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
                 0.0f, 1.0f, nullptr);
             return true;
         }
-        // BPM right-click: MIDI Learn
+        if (hitBtn(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH, mx, my)) {
+            openTransportLearnMenu(mx, my, AutomationTarget::transport(TransportParam::Record),
+                0.0f, 1.0f, nullptr);
+            return true;
+        }
         if (mx >= m_bpmBoxX && mx < m_bpmBoxX + m_bpmBoxW &&
             my >= m_bpmBoxY && my < m_bpmBoxY + m_bpmBoxH) {
             openTransportLearnMenu(mx, my, AutomationTarget::transport(TransportParam::BPM),
@@ -344,6 +348,9 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
             return true;
         }
     }
+
+    // Left-click only below this point
+    if (rightClick) return false;
 
     // Stop
     if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) {
@@ -363,18 +370,8 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
 
     // Record
     if (hitBtn(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH, mx, my)) {
-        if (rightClick) {
-            static const int countInValues[] = {0, 1, 2, 4};
-            int idx = 0;
-            for (int i = 0; i < 4; ++i) {
-                if (countInValues[i] == m_countInBars) { idx = (i + 1) % 4; break; }
-            }
-            m_countInBars = countInValues[idx];
-            m_engine->sendCommand(audio::TransportSetCountInMsg{m_countInBars});
-        } else {
-            bool newState = !m_recording;
-            m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
-        }
+        bool newState = !m_recording;
+        m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
         return true;
     }
 

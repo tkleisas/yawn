@@ -2296,11 +2296,11 @@ void App::processEvents() {
                         }
                     }
                 }
-                // Transport panel single-click (tap tempo button, dismiss editing)
+                // Transport panel click (tap tempo, dismiss editing, MIDI Learn right-click)
                 {
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
-                    me.button = ui::fw::MouseButton::Left;
+                    me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
                     m_transportPanel->onMouseDown(me);
                 }
                 // Stop text input if editing was cancelled by clicking elsewhere
