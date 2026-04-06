@@ -166,6 +166,16 @@ public:
 
     void decayPeaks();
 
+    void removeTrackSlot(int index, int last) {
+        for (int i = index; i < last; ++i) {
+            m_tracks[i] = std::move(m_tracks[i + 1]);
+            m_trackFx[i] = std::move(m_trackFx[i + 1]);
+        }
+        m_tracks[last] = TrackChannel{};
+        m_trackFx[last] = effects::EffectChain{};
+        updateSoloState();
+    }
+
 private:
     static constexpr float kPi = 3.14159265358979f;
     static constexpr float kPeakDecay = 0.95f;

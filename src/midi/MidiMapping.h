@@ -163,6 +163,24 @@ public:
         m_learning = false;
     }
 
+    // Remove all mappings targeting a specific track, and shift higher track indices down
+    void removeTrackMappings(int trackIndex) {
+        m_mappings.erase(
+            std::remove_if(m_mappings.begin(), m_mappings.end(),
+                           [&](const MidiMapping& m) {
+                               return m.target.trackIndex == trackIndex &&
+                                      m.target.type != automation::TargetType::Transport;
+                           }),
+            m_mappings.end());
+        // Shift higher track indices down
+        for (auto& m : m_mappings) {
+            if (m.target.type != automation::TargetType::Transport &&
+                m.target.trackIndex > trackIndex) {
+                m.target.trackIndex--;
+            }
+        }
+    }
+
     bool empty() const { return m_mappings.empty(); }
     size_t size() const { return m_mappings.size(); }
 

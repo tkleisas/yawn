@@ -85,6 +85,85 @@ public:
         return (track >= 0 && track < kMaxTracks) ? m_instruments[track].get() : nullptr;
     }
 
+    // Remove a track slot, shifting all higher tracks down by one.
+    // Must be called with transport stopped and no clips playing.
+    void removeTrackSlot(int index, int numActive) {
+        int last = numActive - 1;
+        if (index < 0 || index > last || last >= kMaxTracks) return;
+
+        // Sub-engines
+        m_clipEngine.removeTrackSlot(index, last);
+        m_midiClipEngine.removeTrackSlot(index, last);
+        m_arrPlayback.removeTrackSlot(index, last);
+        m_mixer.removeTrackSlot(index, last);
+        m_automationEngine.removeTrackSlot(index, last);
+
+        // AudioEngine's own per-track arrays
+        for (int i = index; i < last; ++i) {
+            m_instruments[i]      = std::move(m_instruments[i + 1]);
+            m_midiEffectChains[i] = std::move(m_midiEffectChains[i + 1]);
+            m_trackAutoLanes[i]   = std::move(m_trackAutoLanes[i + 1]);
+            m_trackArmed[i]       = m_trackArmed[i + 1];
+            m_trackMonitorMode[i] = m_trackMonitorMode[i + 1];
+            m_trackType[i]        = m_trackType[i + 1];
+            m_trackAudioInputCh[i]= m_trackAudioInputCh[i + 1];
+            m_trackMono[i]        = m_trackMono[i + 1];
+            m_trackMidiOutPort[i] = m_trackMidiOutPort[i + 1];
+            m_trackMidiOutCh[i]   = m_trackMidiOutCh[i + 1];
+            m_trackRecordStates[i]= std::move(m_trackRecordStates[i + 1]);
+            m_audioRecordStates[i]= std::move(m_audioRecordStates[i + 1]);
+            // RecordedMidiData/RecordedAudioData contain atomics — transfer manually
+            m_recordedMidi[i].notes       = std::move(m_recordedMidi[i + 1].notes);
+            m_recordedMidi[i].ccs         = std::move(m_recordedMidi[i + 1].ccs);
+            m_recordedMidi[i].trackIndex  = m_recordedMidi[i + 1].trackIndex;
+            m_recordedMidi[i].sceneIndex  = m_recordedMidi[i + 1].sceneIndex;
+            m_recordedMidi[i].overdub     = m_recordedMidi[i + 1].overdub;
+            m_recordedMidi[i].lengthBeats = m_recordedMidi[i + 1].lengthBeats;
+            m_recordedMidi[i].ready.store(m_recordedMidi[i + 1].ready.load());
+            m_recordedAudio[i].buffer     = std::move(m_recordedAudio[i + 1].buffer);
+            m_recordedAudio[i].channels   = m_recordedAudio[i + 1].channels;
+            m_recordedAudio[i].frameCount = m_recordedAudio[i + 1].frameCount;
+            m_recordedAudio[i].trackIndex = m_recordedAudio[i + 1].trackIndex;
+            m_recordedAudio[i].sceneIndex = m_recordedAudio[i + 1].sceneIndex;
+            m_recordedAudio[i].overdub    = m_recordedAudio[i + 1].overdub;
+            m_recordedAudio[i].ready.store(m_recordedAudio[i + 1].ready.load());
+        }
+        // Clear the freed last slot
+        m_instruments[last].reset();
+        m_midiEffectChains[last].clear();
+        m_trackAutoLanes[last].clear();
+        m_trackArmed[last] = false;
+        m_trackMonitorMode[last] = 0;
+        m_trackType[last] = 0;
+        m_trackAudioInputCh[last] = 0;
+        m_trackMono[last] = false;
+        m_trackMidiOutPort[last] = 0;
+        m_trackMidiOutCh[last] = 0;
+        m_trackRecordStates[last].reset();
+        m_audioRecordStates[last].reset();
+        m_recordedMidi[last].notes.clear();
+        m_recordedMidi[last].ccs.clear();
+        m_recordedMidi[last].trackIndex = -1;
+        m_recordedMidi[last].sceneIndex = -1;
+        m_recordedMidi[last].ready.store(false);
+        m_recordedAudio[last].buffer.clear();
+        m_recordedAudio[last].frameCount = 0;
+        m_recordedAudio[last].trackIndex = -1;
+        m_recordedAudio[last].sceneIndex = -1;
+        m_recordedAudio[last].ready.store(false);
+
+        // Vectors (heap): erase and push default to keep size = kMaxTracks
+        if (index < static_cast<int>(m_trackMidiBuffers.size())) {
+            m_trackMidiBuffers.erase(m_trackMidiBuffers.begin() + index);
+            m_trackMidiBuffers.emplace_back();
+        }
+        if (index < static_cast<int>(m_liveInputMidi.size())) {
+            m_liveInputMidi.erase(m_liveInputMidi.begin() + index);
+            m_liveInputMidi.emplace_back();
+        }
+        // m_trackBufferPtrs are scratch buffers — no shift needed
+    }
+
     double sampleRate() const { return m_config.sampleRate; }
     const AudioEngineConfig& config() const { return m_config; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }

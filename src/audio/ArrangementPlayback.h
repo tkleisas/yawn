@@ -119,6 +119,17 @@ public:
             resetTrack(t);
     }
 
+    void removeTrackSlot(int index, int last) {
+        for (int i = index; i < last; ++i) {
+            m_tracks[i] = std::move(m_tracks[i + 1]);
+            m_pendingClips[i] = std::move(m_pendingClips[i + 1]);
+            m_pendingFlags[i].store(m_pendingFlags[i + 1].load());
+        }
+        m_tracks[last] = {};
+        m_pendingClips[last].clear();
+        m_pendingFlags[last].store(false);
+    }
+
     // Render audio for one track into buffer (called from processAudio).
     // Buffer must be pre-zeroed. Only writes if track is in arrangement mode
     // and a clip is active at the current transport position.

@@ -151,6 +151,15 @@ public:
         return m_touchState[track];
     }
 
+    void removeTrackSlot(int index, int last) {
+        for (int i = index; i < last; ++i) {
+            m_trackMode[i] = m_trackMode[i + 1];
+            m_touchState[i] = m_touchState[i + 1];
+        }
+        m_trackMode[last] = AutoMode::Off;
+        m_touchState[last] = {};
+    }
+
 private:
     AutomationLane* findOrCreateLane(std::vector<AutomationLane>& lanes,
                                       const AutomationTarget& target, int track) {

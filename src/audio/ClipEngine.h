@@ -124,6 +124,17 @@ public:
     using FollowActionCallback = std::function<void(int, int, FollowActionType)>;
     void setFollowActionCallback(FollowActionCallback cb) { m_followActionCb = std::move(cb); }
 
+    void removeTrackSlot(int index, int last) {
+        for (int i = index; i < last; ++i) {
+            m_tracks[i] = std::move(m_tracks[i + 1]);
+            m_pending[i] = std::move(m_pending[i + 1]);
+            m_stretchers[i] = std::move(m_stretchers[i + 1]);
+        }
+        m_tracks[last] = {};
+        m_pending[last] = {};
+        m_stretchers[last] = {};
+    }
+
 private:
     void checkPendingLaunches();
     void checkFollowActions();

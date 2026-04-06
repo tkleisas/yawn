@@ -589,6 +589,41 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     }, false, curRQ != audio::QuantizeMode::NextBar});
     items.push_back({"Record Quantize", nullptr, false, true, std::move(rqItems)});
 
+    // Delete track (with confirmation)
+    bool canDelete = m_project.numTracks() > 1;
+    items.push_back({"Delete Track", [this, trackIndex]() {
+        m_confirmDialog->prompt(
+            "This will stop playback and delete the track. Continue?",
+            [this, trackIndex]() {
+                // Stop transport and all clips
+                m_audioEngine.sendCommand(audio::TransportStopMsg{});
+                for (int t = 0; t < m_project.numTracks(); ++t) {
+                    m_audioEngine.sendCommand(audio::StopClipMsg{t});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
+                }
+
+                int numActive = m_project.numTracks();
+
+                // Shift engine arrays
+                m_audioEngine.removeTrackSlot(trackIndex, numActive);
+
+                // Remove track from project
+                m_project.deleteTrack(trackIndex);
+
+                // Remove MIDI mappings that target this track, shift higher indices
+                m_midiLearnManager.removeTrackMappings(trackIndex);
+
+                // Fix selected track
+                if (m_selectedTrack >= m_project.numTracks())
+                    m_selectedTrack = m_project.numTracks() - 1;
+                m_virtualKeyboard.setTargetTrack(m_selectedTrack);
+                m_mixerPanel->setSelectedTrack(m_selectedTrack);
+
+                m_detailPanel->clear();
+                markDirty();
+            });
+    }, true, canDelete});
+
     m_contextMenu.open(mx, my, std::move(items));
 }
 
