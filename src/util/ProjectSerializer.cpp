@@ -1,6 +1,12 @@
 // ProjectSerializer.cpp — method implementations split from ProjectSerializer.h.
 
 #include "ProjectSerializer.h"
+#include "util/Base64.h"
+
+#ifdef YAWN_HAS_VST3
+#include "vst3/VST3Instrument.h"
+#include "vst3/VST3Effect.h"
+#endif
 
 namespace yawn {
 
@@ -18,6 +24,22 @@ json serializeEffectChain(const effects::EffectChain& chain) {
         j["bypassed"] = fx->bypassed();
         j["mix"] = fx->mix();
         j["params"] = serializeParams(*fx);
+
+#ifdef YAWN_HAS_VST3
+        if (isVST3Id(fx->id())) {
+            auto* vfx = static_cast<const vst3::VST3Effect*>(fx);
+            j["vst3modulePath"] = vfx->modulePath();
+            j["vst3classID"] = vfx->classIDString();
+            if (vfx->instance()) {
+                std::vector<uint8_t> procState, ctrlState;
+                if (vfx->instance()->getProcessorState(procState))
+                    j["vst3state"] = base64Encode(procState);
+                if (vfx->instance()->getControllerState(ctrlState))
+                    j["vst3controllerState"] = base64Encode(ctrlState);
+            }
+        }
+#endif
+
         arr.push_back(j);
     }
     return arr;
@@ -28,13 +50,42 @@ void deserializeEffectChain(effects::EffectChain& chain, const json& arr,
     chain.clear();
     for (const auto& j : arr) {
         std::string id = j.value("id", "");
-        auto fx = createAudioEffect(id);
+        std::unique_ptr<effects::AudioEffect> fx;
+
+#ifdef YAWN_HAS_VST3
+        if (isVST3Id(id)) {
+            std::string modulePath = j.value("vst3modulePath", "");
+            std::string classID = j.value("vst3classID", vst3ClassIDFromId(id));
+            fx = createVST3Effect(modulePath, classID);
+        } else
+#endif
+        {
+            fx = createAudioEffect(id);
+        }
+
         if (!fx) continue;
         fx->init(sampleRate, maxBlockSize);
         fx->setBypassed(j.value("bypassed", false));
         fx->setMix(j.value("mix", 1.0f));
+
+#ifdef YAWN_HAS_VST3
+        if (isVST3Id(id)) {
+            auto* vfx = static_cast<vst3::VST3Effect*>(fx.get());
+            if (vfx->instance()) {
+                if (j.contains("vst3state")) {
+                    auto data = base64Decode(j["vst3state"].get<std::string>());
+                    vfx->instance()->setProcessorState(data);
+                }
+                if (j.contains("vst3controllerState")) {
+                    auto data = base64Decode(j["vst3controllerState"].get<std::string>());
+                    vfx->instance()->setControllerState(data);
+                }
+            }
+        } else
+#endif
         if (j.contains("params"))
             deserializeParams(*fx, j["params"]);
+
         chain.append(std::move(fx));
     }
 }
@@ -92,6 +143,22 @@ json serializeInstrument(const instruments::Instrument& inst,
     j["id"] = inst.id();
     j["bypassed"] = inst.bypassed();
     j["params"] = serializeParams(inst);
+
+#ifdef YAWN_HAS_VST3
+    if (isVST3Id(inst.id())) {
+        auto& vinst = static_cast<const vst3::VST3Instrument&>(inst);
+        j["vst3modulePath"] = vinst.modulePath();
+        j["vst3classID"] = vinst.classIDString();
+        if (vinst.instance()) {
+            std::vector<uint8_t> procState, ctrlState;
+            if (vinst.instance()->getProcessorState(procState))
+                j["vst3state"] = base64Encode(procState);
+            if (vinst.instance()->getControllerState(ctrlState))
+                j["vst3controllerState"] = base64Encode(ctrlState);
+        }
+        return j;  // No further custom serialization for VST3
+    }
+#endif
 
     // Sampler: save sample to file
     if (std::string(inst.id()) == "sampler") {
@@ -191,7 +258,32 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
     const json& j, const fs::path& projectDir, double sampleRate, int maxBlockSize)
 {
     std::string id = j.value("id", "");
-    auto inst = createInstrument(id);
+    std::unique_ptr<instruments::Instrument> inst;
+
+#ifdef YAWN_HAS_VST3
+    if (isVST3Id(id)) {
+        std::string modulePath = j.value("vst3modulePath", "");
+        std::string classID = j.value("vst3classID", vst3ClassIDFromId(id));
+        inst = createVST3Instrument(modulePath, classID);
+        if (!inst) return nullptr;
+        inst->init(sampleRate, maxBlockSize);
+        inst->setBypassed(j.value("bypassed", false));
+        auto* vinst = static_cast<vst3::VST3Instrument*>(inst.get());
+        if (vinst->instance()) {
+            if (j.contains("vst3state")) {
+                auto data = base64Decode(j["vst3state"].get<std::string>());
+                vinst->instance()->setProcessorState(data);
+            }
+            if (j.contains("vst3controllerState")) {
+                auto data = base64Decode(j["vst3controllerState"].get<std::string>());
+                vinst->instance()->setControllerState(data);
+            }
+        }
+        return inst;
+    }
+#endif
+
+    inst = createInstrument(id);
     if (!inst) return nullptr;
 
     inst->init(sampleRate, maxBlockSize);

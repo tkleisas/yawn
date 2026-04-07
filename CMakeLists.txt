@@ -53,6 +53,15 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
 )
+# VST3 hosting sources (conditional)
+if(YAWN_VST3)
+    list(APPEND YAWN_CORE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Host.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Scanner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Instrument.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Effect.cpp
+    )
+endif()
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
 target_include_directories(yawn_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -69,6 +78,12 @@ target_link_libraries(yawn_core PUBLIC
     vorbis
     vorbisenc
 )
+
+# VST3 hosting support (conditional)
+if(YAWN_VST3)
+    target_link_libraries(yawn_core PUBLIC vst3_hosting)
+    target_compile_definitions(yawn_core PUBLIC YAWN_HAS_VST3=1)
+endif()
 
 # Remove core sources from main exe (they're in yawn_core now)
 list(REMOVE_ITEM YAWN_SOURCES ${YAWN_CORE_SOURCES})

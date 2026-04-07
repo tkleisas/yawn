@@ -42,12 +42,19 @@
 #include "midi/MidiPitch.h"
 #include "midi/LFO.h"
 
+#ifdef YAWN_HAS_VST3
+#include "vst3/VST3Instrument.h"
+#include "vst3/VST3Effect.h"
+#endif
+
 namespace yawn {
 
 // Factory functions that map id strings to make_unique calls.
 // Used by the project serializer to reconstruct objects from saved state.
 
 inline std::unique_ptr<instruments::Instrument> createInstrument(const std::string& id) {
+    // Handle VST3 instruments: id = "vst3:<classID>", modulePath needed separately
+    // For VST3, use createVST3Instrument() below instead
     static const std::unordered_map<std::string,
         std::function<std::unique_ptr<instruments::Instrument>()>> registry = {
         {"subsynth",   [] { return std::make_unique<instruments::SubtractiveSynth>(); }},
@@ -85,6 +92,26 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
 }
+
+#ifdef YAWN_HAS_VST3
+inline std::unique_ptr<instruments::Instrument> createVST3Instrument(
+    const std::string& modulePath, const std::string& classIDString) {
+    return std::make_unique<vst3::VST3Instrument>(modulePath, classIDString);
+}
+
+inline std::unique_ptr<effects::AudioEffect> createVST3Effect(
+    const std::string& modulePath, const std::string& classIDString) {
+    return std::make_unique<vst3::VST3Effect>(modulePath, classIDString);
+}
+
+inline bool isVST3Id(const std::string& id) {
+    return id.size() > 5 && id.substr(0, 5) == "vst3:";
+}
+
+inline std::string vst3ClassIDFromId(const std::string& id) {
+    return id.substr(5);
+}
+#endif
 
 inline std::unique_ptr<midi::MidiEffect> createMidiEffect(const std::string& id) {
     static const std::unordered_map<std::string,

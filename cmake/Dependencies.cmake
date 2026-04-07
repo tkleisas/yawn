@@ -166,3 +166,11 @@ FetchContent_Declare(
 )
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
+
+# ──────────────────────────────────────────────
+# VST3 SDK (plugin hosting — optional)
+# ──────────────────────────────────────────────
+option(YAWN_VST3 "Enable VST3 plugin hosting support" ON)
+if(YAWN_VST3)
+    include(${CMAKE_CURRENT_LIST_DIR}/VST3Hosting.cmake)
+endif()
