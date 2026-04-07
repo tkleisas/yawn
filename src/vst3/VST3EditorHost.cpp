@@ -2,6 +2,10 @@
 // native editor UI. Launched as a subprocess by YAWN to completely isolate
 // the plugin's Win32 message hooks from SDL's event processing.
 //
+// Communication with YAWN is via inherited stdin/stdout pipes:
+//   stdin  (from YAWN):  "PARAM <id> <value>\n", "CLOSE\n"
+//   stdout (to YAWN):    "PARAM <id> <value>\n", "READY\n"
+//
 // Usage: yawn_vst3_host.exe <vst3_path> <class_id> <window_title>
 
 #ifdef _WIN32
@@ -28,6 +32,49 @@
 using namespace Steinberg;
 
 static Vst::HostApplication g_hostApp;
+static HANDLE g_hStdout = INVALID_HANDLE_VALUE;
+
+// ── Write a line to stdout pipe (thread-safe enough for our use) ──
+
+static void writePipe(const char* data, int len) {
+    if (g_hStdout == INVALID_HANDLE_VALUE) return;
+    DWORD written;
+    WriteFile(g_hStdout, data, static_cast<DWORD>(len), &written, nullptr);
+}
+
+// ── IComponentHandler — receives parameter changes from the plugin editor ──
+
+class EditorComponentHandler : public Vst::IComponentHandler {
+public:
+    tresult PLUGIN_API beginEdit(Vst::ParamID /*id*/) override { return kResultOk; }
+
+    tresult PLUGIN_API performEdit(Vst::ParamID id, Vst::ParamValue value) override {
+        char buf[128];
+        int len = snprintf(buf, sizeof(buf), "PARAM %u %.15g\n",
+                           static_cast<unsigned>(id), value);
+        writePipe(buf, len);
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API endEdit(Vst::ParamID /*id*/) override { return kResultOk; }
+
+    tresult PLUGIN_API restartComponent(int32 /*flags*/) override { return kResultOk; }
+
+    uint32 PLUGIN_API addRef() override { return 1; }
+    uint32 PLUGIN_API release() override { return 1; }
+    tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override {
+        if (!obj) return kInvalidArgument;
+        *obj = nullptr;
+        if (FUnknownPrivate::iidEqual(iid, Vst::IComponentHandler::iid) ||
+            FUnknownPrivate::iidEqual(iid, FUnknown::iid)) {
+            *obj = static_cast<Vst::IComponentHandler*>(this);
+            return kResultOk;
+        }
+        return kNoInterface;
+    }
+};
+
+static EditorComponentHandler g_componentHandler;
 
 // ── IPlugFrame adapter ──
 
@@ -76,12 +123,68 @@ private:
 
 static const wchar_t* kClassName = L"YawnVST3EditorHost";
 
+#define WM_PIPE_PARAM (WM_APP + 1)
+
+struct ParamMsg {
+    Vst::ParamID id;
+    double value;
+};
+
+static IPtr<Vst::IEditController> g_controller;
+
 static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_CLOSE) {
-        PostQuitMessage(0);
-        return 0;
+    switch (msg) {
+        case WM_CLOSE:
+            PostQuitMessage(0);
+            return 0;
+        case WM_PIPE_PARAM: {
+            auto* pm = reinterpret_cast<ParamMsg*>(lp);
+            if (g_controller && pm) {
+                g_controller->setParamNormalized(pm->id, pm->value);
+            }
+            delete pm;
+            return 0;
+        }
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// ── Pipe reader thread — reads from stdin, posts messages to main thread ──
+
+static HWND g_mainHwnd = nullptr;
+
+static DWORD WINAPI pipeReaderThread(LPVOID param) {
+    HANDLE hStdin = static_cast<HANDLE>(param);
+    char buf[4096];
+    std::string readBuf;
+
+    while (true) {
+        DWORD bytesRead = 0;
+        if (!ReadFile(hStdin, buf, sizeof(buf) - 1, &bytesRead, nullptr) || bytesRead == 0)
+            break;
+
+        readBuf.append(buf, bytesRead);
+        size_t pos;
+        while ((pos = readBuf.find('\n')) != std::string::npos) {
+            std::string line = readBuf.substr(0, pos);
+            readBuf.erase(0, pos + 1);
+
+            if (line.size() > 6 && line[0] == 'P' && line[1] == 'A') {
+                // "PARAM <id> <value>"
+                auto* pm = new ParamMsg;
+                unsigned rawId = 0;
+                if (sscanf(line.c_str() + 6, "%u %lf", &rawId, &pm->value) == 2) {
+                    pm->id = static_cast<Vst::ParamID>(rawId);
+                    PostMessageW(g_mainHwnd, WM_PIPE_PARAM, 0, reinterpret_cast<LPARAM>(pm));
+                } else {
+                    delete pm;
+                }
+            } else if (line == "CLOSE") {
+                PostMessageW(g_mainHwnd, WM_CLOSE, 0, 0);
+            }
+        }
+    }
+    return 0;
 }
 
 // ── Main ──
@@ -95,6 +198,10 @@ int main(int argc, char* argv[]) {
     std::string vst3Path = argv[1];
     std::string classIdHex = argv[2];
     std::string windowTitle = argv[3];
+
+    // Get pipe handles (inherited from parent via stdin/stdout redirection)
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    g_hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
@@ -127,35 +234,37 @@ int main(int argc, char* argv[]) {
     component->initialize(&g_hostApp);
 
     // Get controller (may be same object or separate)
-    IPtr<Vst::IEditController> controller;
     bool controllerIsComponent = false;
 
     if (component->queryInterface(Vst::IEditController::iid,
-                                   reinterpret_cast<void**>(&controller)) == kResultOk) {
+                                   reinterpret_cast<void**>(&g_controller)) == kResultOk) {
         controllerIsComponent = true;
     } else {
         TUID controllerCID;
         if (component->getControllerClassId(controllerCID) == kResultOk) {
-            controller = factory.createInstance<Vst::IEditController>(
+            g_controller = factory.createInstance<Vst::IEditController>(
                 VST3::UID::fromTUID(controllerCID));
-            if (controller) {
-                controller->initialize(&g_hostApp);
+            if (g_controller) {
+                g_controller->initialize(&g_hostApp);
             }
         }
     }
 
-    if (!controller) {
+    if (!g_controller) {
         fprintf(stderr, "Failed to get controller\n");
         component->terminate();
         CoUninitialize();
         return 1;
     }
 
+    // Set component handler so we receive performEdit callbacks
+    g_controller->setComponentHandler(&g_componentHandler);
+
     // Create editor view
-    auto* rawView = controller->createView(Vst::ViewType::kEditor);
+    auto* rawView = g_controller->createView(Vst::ViewType::kEditor);
     if (!rawView) {
         fprintf(stderr, "Plugin has no editor view\n");
-        if (!controllerIsComponent) controller->terminate();
+        if (!controllerIsComponent) g_controller->terminate();
         component->terminate();
         CoUninitialize();
         return 1;
@@ -164,7 +273,7 @@ int main(int argc, char* argv[]) {
 
     if (plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk) {
         fprintf(stderr, "Plugin does not support HWND\n");
-        if (!controllerIsComponent) controller->terminate();
+        if (!controllerIsComponent) g_controller->terminate();
         component->terminate();
         CoUninitialize();
         return 1;
@@ -210,11 +319,13 @@ int main(int argc, char* argv[]) {
 
     if (!hwnd) {
         fprintf(stderr, "Failed to create window\n");
-        if (!controllerIsComponent) controller->terminate();
+        if (!controllerIsComponent) g_controller->terminate();
         component->terminate();
         CoUninitialize();
         return 1;
     }
+
+    g_mainHwnd = hwnd;
 
     // Attach plugin view
     auto plugFrame = owned(new PlugFrameAdapter(hwnd));
@@ -224,7 +335,7 @@ int main(int argc, char* argv[]) {
     if (result != kResultOk) {
         fprintf(stderr, "Failed to attach view (result=%d)\n", (int)result);
         DestroyWindow(hwnd);
-        if (!controllerIsComponent) controller->terminate();
+        if (!controllerIsComponent) g_controller->terminate();
         component->terminate();
         CoUninitialize();
         return 1;
@@ -233,9 +344,14 @@ int main(int argc, char* argv[]) {
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
 
+    // Start pipe reader thread
+    HANDLE hReaderThread = nullptr;
+    if (hStdin != INVALID_HANDLE_VALUE) {
+        hReaderThread = CreateThread(nullptr, 0, pipeReaderThread, hStdin, 0, nullptr);
+    }
+
     // Signal parent that we're ready
-    fprintf(stdout, "READY\n");
-    fflush(stdout);
+    writePipe("READY\n", 6);
 
     // ── Message loop ──
     MSG msg;
@@ -245,6 +361,13 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Cleanup ──
+    if (hReaderThread) {
+        // Cancel the blocking ReadFile by closing stdin
+        CloseHandle(hStdin);
+        WaitForSingleObject(hReaderThread, 1000);
+        CloseHandle(hReaderThread);
+    }
+
     plugView->removed();
     plugView->setFrame(nullptr);
     plugView = nullptr;
@@ -252,9 +375,10 @@ int main(int argc, char* argv[]) {
 
     DestroyWindow(hwnd);
 
-    if (!controllerIsComponent) controller->terminate();
+    g_controller->setComponentHandler(nullptr);
+    if (!controllerIsComponent) g_controller->terminate();
     component->terminate();
-    controller = nullptr;
+    g_controller = nullptr;
     component = nullptr;
     module = nullptr;
 

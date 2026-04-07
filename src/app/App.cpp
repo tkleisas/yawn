@@ -2794,6 +2794,10 @@ void App::update() {
     }
 
 #ifdef YAWN_HAS_VST3
+    // Poll parameter changes from VST3 editor processes
+    for (auto& ed : m_vst3Editors) {
+        if (ed && ed->isOpen()) ed->pollParamChanges();
+    }
     // Clean up closed VST3 editor windows
     m_vst3Editors.erase(
         std::remove_if(m_vst3Editors.begin(), m_vst3Editors.end(),
