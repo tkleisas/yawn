@@ -334,15 +334,29 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
     int mv = maxVisible();
     float listH = mv * itemH;
     float listX = m_bounds.x;
-    float listY = m_bounds.y + m_bounds.h;
+    float listY = popupTop();
 
-    ctx.renderer->drawRect(listX, listY, m_bounds.w, listH, Color{30, 30, 34, 255});
-    ctx.renderer->drawRectOutline(listX, listY, m_bounds.w, listH, Color{90, 140, 200, 255});
+    // Compute popup width from widest item (minimum: dropdown width)
+    float popW = m_bounds.w;
+    float padding = 16.0f; // left padding + right margin
+    for (auto& item : m_items) {
+        float tw = ctx.font->textWidth(item, scale) + padding;
+        if (tw > popW) popW = tw;
+    }
+
+    m_popupWidth = popW; // cache for hit testing
+    ctx.renderer->drawRect(listX, listY, popW, listH, Color{30, 30, 34, 255});
+    ctx.renderer->drawRectOutline(listX, listY, popW, listH, Color{90, 140, 200, 255});
+    // Separator line between dropdown button and popup
+    float sepY = m_popupAbove ? (listY + listH - 1) : listY;
+    ctx.renderer->drawRect(listX, sepY, popW, 1, Color{90, 140, 200, 255});
 
     // Clip item text to popup bounds
-    ctx.renderer->pushClip(listX, listY, m_bounds.w, listH);
-    for (int i = 0; i < static_cast<int>(m_items.size()) && i < mv; ++i) {
-        float iy = listY + i * itemH;
+    ctx.renderer->pushClip(listX, listY, popW, listH);
+    for (int vi = 0; vi < mv; ++vi) {
+        int i = vi + m_scrollOffset;
+        if (i >= static_cast<int>(m_items.size())) break;
+        float iy = listY + vi * itemH;
 
         Color itemBg;
         Color textCol;
@@ -357,11 +371,26 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
             textCol = Theme::textPrimary;
         }
 
-        ctx.renderer->drawRect(listX + 1, iy, m_bounds.w - 2, itemH, itemBg);
+        ctx.renderer->drawRect(listX + 1, iy, popW - 2, itemH, itemBg);
 
         float itemTy = iy + (itemH - lh) * 0.5f - lh * 0.15f;
         ctx.font->drawText(*ctx.renderer, m_items[i].c_str(),
                            listX + 8, itemTy, scale, textCol);
+    }
+
+    // Scroll indicators
+    if (needsScroll()) {
+        Color arrowCol{180, 180, 190, 200};
+        float aw = 5.0f;
+        float acx = listX + popW - 8.0f;
+        if (m_scrollOffset > 0) {
+            float ay = listY + 4.0f;
+            ctx.renderer->drawTriangle(acx, ay, acx - aw, ay + aw, acx + aw, ay + aw, arrowCol);
+        }
+        if (m_scrollOffset < totalItems() - mv) {
+            float ay = listY + listH - 4.0f;
+            ctx.renderer->drawTriangle(acx - aw, ay - aw, acx + aw, ay - aw, acx, ay, arrowCol);
+        }
     }
     ctx.renderer->popClip();
 }

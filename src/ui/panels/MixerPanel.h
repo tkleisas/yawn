@@ -160,6 +160,32 @@ public:
 
     bool onScroll(ScrollEvent& e) override {
         if (!m_project) return false;
+        // If any dropdown is open and needs scrolling, forward scroll to it
+        if (m_showIO) {
+            auto tryScroll = [&](FwDropDown& d) -> bool {
+                if (!d.isOpen() || !d.needsScroll()) return false;
+                // Check if cursor is in the popup Y range (use generous X check)
+                float py = d.popupTop(), pb = d.popupBottom();
+                if (e.y >= py && e.y < pb) {
+                    int delta = (e.dy > 0) ? -1 : 1;
+                    d.scrollPopup(delta);
+                    return true;
+                }
+                return false;
+            };
+            for (int t = 0; t < m_project->numTracks(); ++t) {
+                auto& s = m_strips[t];
+                if (m_project->track(t).type == Track::Type::Audio) {
+                    if (tryScroll(s.audioInputDrop)) return true;
+                } else {
+                    if (tryScroll(s.midiInDrop)) return true;
+                    if (tryScroll(s.midiInChDrop)) return true;
+                    if (tryScroll(s.midiOutDrop)) return true;
+                    if (tryScroll(s.midiOutChDrop)) return true;
+                    if (tryScroll(s.sidechainDrop)) return true;
+                }
+            }
+        }
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
         float contentW = m_project->numTracks() * Theme::kTrackWidth;
         float maxScroll = std::max(0.0f, contentW - gridW);
@@ -183,8 +209,10 @@ private:
         FwDropDown midiInChDrop;
         FwDropDown midiOutDrop;
         FwDropDown midiOutChDrop;
+        FwDropDown sidechainDrop;
         Label midiRxLabel;
         Label midiTxLabel;
+        Label sidechainLabel;
         PanWidget pan;
         FwFader fader;
         MeterWidget meter;

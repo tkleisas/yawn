@@ -30,6 +30,8 @@ struct Track {
     int midiOutputChannel = -1; // -1 = all channels
     int audioInputCh = 1;     // 1=In1, 2=In2, 3=In1+2, 4=In3, 5=In3+4, etc. (0=none)
     bool mono = false;
+    int sidechainSource = -1;  // -1=none, track index for sidechain input to instrument
+    int resampleSource = -1;   // -1=none, track index for resampling audio input
     bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
@@ -298,6 +300,13 @@ public:
         if (m_tracks.size() <= 1) return; // keep at least 1 track
         m_tracks.erase(m_tracks.begin() + index);
         m_clipSlots.erase(m_clipSlots.begin() + index);
+        // Fix sidechain/resample references
+        for (auto& t : m_tracks) {
+            if (t.sidechainSource == index) t.sidechainSource = -1;
+            else if (t.sidechainSource > index) t.sidechainSource--;
+            if (t.resampleSource == index) t.resampleSource = -1;
+            else if (t.resampleSource > index) t.resampleSource--;
+        }
     }
 
     void insertTrack(int index, const Track& track, std::vector<ClipSlot> slots) {

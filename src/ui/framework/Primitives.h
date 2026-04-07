@@ -720,13 +720,23 @@ public:
     }
     void setOnChange(IndexCallback cb) { m_onChange = std::move(cb); }
     bool isOpen() const { return m_open; }
-    void close() { m_open = false; m_hoverItem = -1; }
+    void close() { m_open = false; m_hoverItem = -1; m_scrollOffset = 0; }
 
-    int maxVisible() const { return std::min(static_cast<int>(m_items.size()), 8); }
-    float popupTop() const { return m_bounds.y + m_bounds.h; }
+    static constexpr int kMaxVisible = 8;
+
+    void setScreenHeight(float h) { m_screenH = h; }
+    int maxVisible() const { return std::min(static_cast<int>(m_items.size()), kMaxVisible); }
+    int totalItems() const { return static_cast<int>(m_items.size()); }
+    bool needsScroll() const { return totalItems() > maxVisible(); }
+
+    // Popup Y position depends on direction (below or above the button)
+    float popupTop() const {
+        if (m_popupAbove) return m_bounds.y - maxVisible() * m_bounds.h;
+        return m_bounds.y + m_bounds.h;
+    }
     float popupBottom() const { return popupTop() + maxVisible() * m_bounds.h; }
     float popupLeft() const { return m_bounds.x; }
-    float popupRight() const { return m_bounds.x + m_bounds.w; }
+    float popupRight() const { return m_bounds.x + m_popupWidth; }
 
     bool hitPopup(float mx, float my) const {
         if (!m_open) return false;
@@ -737,17 +747,24 @@ public:
         if (!m_open) return false;
         float relY = my - popupTop();
         float itemH = m_bounds.h;
-        int idx = static_cast<int>(relY / itemH);
-        if (idx >= 0 && idx < maxVisible()) {
+        int idx = static_cast<int>(relY / itemH) + m_scrollOffset;
+        if (idx >= 0 && idx < totalItems()) {
             m_selected = idx;
             m_open = false;
             m_hoverItem = -1;
+            m_scrollOffset = 0;
             if (m_onChange) m_onChange(m_selected);
             return true;
         }
         m_open = false;
         m_hoverItem = -1;
+        m_scrollOffset = 0;
         return true;
+    }
+
+    void scrollPopup(int delta) {
+        if (!m_open || !needsScroll()) return;
+        m_scrollOffset = std::clamp(m_scrollOffset + delta, 0, totalItems() - maxVisible());
     }
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -775,11 +792,22 @@ public:
             }
             m_open = false;
             m_hoverItem = -1;
+            m_scrollOffset = 0;
             return true;
         }
 
         m_open = true;
         m_hoverItem = -1;
+        m_popupWidth = m_bounds.w; // will be refined in paintOverlay
+        // Show above if popup would go below screen
+        float belowSpace = m_screenH - (m_bounds.y + m_bounds.h);
+        float neededH = maxVisible() * m_bounds.h;
+        m_popupAbove = (belowSpace < neededH && m_bounds.y > belowSpace);
+        // Auto-scroll so the selected item is visible
+        if (m_selected >= maxVisible())
+            m_scrollOffset = std::min(m_selected, totalItems() - maxVisible());
+        else
+            m_scrollOffset = 0;
         return true;
     }
 
@@ -787,8 +815,9 @@ public:
         if (!m_open) return false;
         if (hitPopup(e.x, e.y)) {
             float relY = e.y - popupTop();
-            m_hoverItem = static_cast<int>(relY / m_bounds.h);
-            if (m_hoverItem < 0 || m_hoverItem >= maxVisible()) m_hoverItem = -1;
+            int visIdx = static_cast<int>(relY / m_bounds.h);
+            m_hoverItem = visIdx + m_scrollOffset;
+            if (m_hoverItem < 0 || m_hoverItem >= totalItems()) m_hoverItem = -1;
         } else {
             m_hoverItem = -1;
         }
@@ -800,6 +829,10 @@ private:
     int m_selected = 0;
     int m_hoverItem = -1;
     bool m_open = false;
+    int m_scrollOffset = 0;
+    float m_popupWidth = 0.0f;  // computed in paintOverlay from widest item
+    float m_screenH = 1080.0f;  // screen height for popup direction
+    bool m_popupAbove = false;   // true = show popup above the button
     IndexCallback m_onChange;
 };
 
