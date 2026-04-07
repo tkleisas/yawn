@@ -37,6 +37,13 @@
 #include <mutex>
 #include <filesystem>
 
+#ifdef YAWN_HAS_VST3
+#include "vst3/VST3Scanner.h"
+#include "vst3/VST3EditorWindow.h"
+#include "vst3/VST3Instrument.h"
+#include "vst3/VST3Effect.h"
+#endif
+
 namespace yawn {
 
 class App {
@@ -178,6 +185,13 @@ private:
     // UI state from audio thread
     double m_displayBeats = 0.0;
     bool m_displayPlaying = false;
+
+#ifdef YAWN_HAS_VST3
+    std::unique_ptr<vst3::VST3Scanner> m_vst3Scanner;
+    std::vector<std::unique_ptr<vst3::VST3EditorWindow>> m_vst3Editors;
+
+    void openVST3Editor(vst3::VST3PluginInstance* instance, const std::string& title);
+#endif
 };
 
 } // namespace yawn

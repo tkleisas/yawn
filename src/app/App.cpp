@@ -494,6 +494,33 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addInstrItem("Vocoder", [](){ return std::make_unique<instruments::Vocoder>(); });
     addInstrItem("Multisampler", [](){ return std::make_unique<instruments::Multisampler>(); });
     addInstrItem("Instrument Rack", [](){ return std::make_unique<instruments::InstrumentRack>(); });
+
+#ifdef YAWN_HAS_VST3
+    // VST3 instruments submenu
+    if (m_vst3Scanner && !m_vst3Scanner->instruments().empty()) {
+        std::vector<ui::ContextMenu::Item> vst3InstrItems;
+        for (auto& info : m_vst3Scanner->instruments()) {
+            std::string label = info.name;
+            if (!info.vendor.empty()) label += " (" + info.vendor + ")";
+            std::string modulePath = info.modulePath;
+            std::string classID = info.classIDString;
+            vst3InstrItems.push_back({label, [this, trackIndex, label, modulePath, classID]() {
+                auto oldType = m_project.track(trackIndex).type;
+                std::string oldInstr;
+                auto* inst = m_audioEngine.instrument(trackIndex);
+                if (inst) oldInstr = inst->name();
+                uint8_t oldTypeVal = (oldType == Track::Type::Audio) ? 0 : 1;
+                m_project.track(trackIndex).type = Track::Type::Midi;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+                m_audioEngine.setInstrument(trackIndex,
+                    std::make_unique<vst3::VST3Instrument>(modulePath, classID));
+                markDirty();
+            }});
+        }
+        instrItems.push_back({"VST3 Instruments", nullptr, true, true, std::move(vst3InstrItems)});
+    }
+#endif
+
     items.push_back({"Add Instrument", nullptr, true, true, std::move(instrItems)});
 
     // Audio effects submenu
@@ -528,6 +555,26 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
     addFxItem("Spectrum",       [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
     addFxItem("Tuner",          [](){ return std::make_unique<effects::Tuner>(); });
+
+#ifdef YAWN_HAS_VST3
+    // VST3 effects submenu
+    if (m_vst3Scanner && !m_vst3Scanner->effects().empty()) {
+        std::vector<ui::ContextMenu::Item> vst3FxItems;
+        for (auto& info : m_vst3Scanner->effects()) {
+            std::string label = info.name;
+            if (!info.vendor.empty()) label += " (" + info.vendor + ")";
+            std::string modulePath = info.modulePath;
+            std::string classID = info.classIDString;
+            vst3FxItems.push_back({label, [this, trackIndex, label, modulePath, classID]() {
+                auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
+                chain.append(std::make_unique<vst3::VST3Effect>(modulePath, classID));
+                markDirty();
+            }});
+        }
+        fxItems.push_back({"VST3 Effects", nullptr, true, true, std::move(vst3FxItems)});
+    }
+#endif
+
     items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
 
     // MIDI effects submenu
@@ -588,6 +635,34 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         markDirty();
     }, false, curRQ != audio::QuantizeMode::NextBar});
     items.push_back({"Record Quantize", nullptr, false, true, std::move(rqItems)});
+
+#ifdef YAWN_HAS_VST3
+    // Open VST3 Editor for instrument
+    {
+        auto* inst = m_audioEngine.instrument(trackIndex);
+        auto* vsti = dynamic_cast<vst3::VST3Instrument*>(inst);
+        if (vsti && vsti->instance()) {
+            std::string edTitle = std::string(vsti->name()) + " - Track " + std::to_string(trackIndex + 1);
+            items.push_back({"Open VST3 Instrument Editor", [this, vsti, edTitle]() {
+                openVST3Editor(vsti->instance(), edTitle);
+            }});
+        }
+    }
+    // Open VST3 Editor for effects in chain
+    {
+        auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
+        for (int i = 0; i < chain.count(); ++i) {
+            auto* fx = dynamic_cast<vst3::VST3Effect*>(chain.effectAt(i));
+            if (fx && fx->instance()) {
+                std::string fxName = fx->name();
+                std::string edTitle = fxName + " - Track " + std::to_string(trackIndex + 1);
+                items.push_back({"Open Editor: " + fxName, [this, fx, edTitle]() {
+                    openVST3Editor(fx->instance(), edTitle);
+                }});
+            }
+        }
+    }
+#endif
 
     // Delete track (with confirmation)
     bool canDelete = m_project.numTracks() > 1;
@@ -1294,6 +1369,22 @@ bool App::init() {
         m_audioEngine.sendCommand(audio::AutoParamTouchMsg{track, tt, ci, pi, v, touching});
     });
 
+#ifdef YAWN_HAS_VST3
+    // Initialize VST3 plugin scanner
+    m_vst3Scanner = std::make_unique<vst3::VST3Scanner>();
+    std::string vst3CachePath = (util::AppSettings::settingsPath().parent_path()
+                                  / "vst3_cache.json").string();
+    if (!m_vst3Scanner->loadCache(vst3CachePath)) {
+        LOG_INFO("VST3", "Scanning for VST3 plugins...");
+        m_vst3Scanner->scan();
+        m_vst3Scanner->saveCache(vst3CachePath);
+    }
+    LOG_INFO("VST3", "Found %d VST3 plugins (%d instruments, %d effects)",
+             (int)m_vst3Scanner->plugins().size(),
+             (int)m_vst3Scanner->instruments().size(),
+             (int)m_vst3Scanner->effects().size());
+#endif
+
     LOG_INFO("App", "Y.A.W.N initialized successfully");
     LOG_INFO("App", "  [Space] Play/Stop        [Up/Down] BPM +/-");
     LOG_INFO("App", "  [Home] Reset position    [M] Toggle mixer");
@@ -1316,6 +1407,10 @@ void App::run() {
 }
 
 void App::shutdown() {
+#ifdef YAWN_HAS_VST3
+    m_vst3Editors.clear();
+    m_vst3Scanner.reset();
+#endif
     m_audioEngine.shutdown();
     // Destroy cached cursors
     if (m_cursorDefault)  SDL_DestroyCursor(m_cursorDefault);
@@ -2701,6 +2796,14 @@ void App::update() {
         }
     }
 
+#ifdef YAWN_HAS_VST3
+    // Clean up closed VST3 editor windows
+    m_vst3Editors.erase(
+        std::remove_if(m_vst3Editors.begin(), m_vst3Editors.end(),
+                        [](const auto& w) { return !w || !w->isOpen(); }),
+        m_vst3Editors.end());
+#endif
+
     // Check if render completed
     if (m_exportDialog->isRendering() && m_exportDialog->progress().done.load()) {
         m_exportDialog->setRendering(false);
@@ -3332,5 +3435,20 @@ void App::startExportRender(const std::string& filePath) {
         progress.done.store(true);
     }).detach();
 }
+
+#ifdef YAWN_HAS_VST3
+void App::openVST3Editor(vst3::VST3PluginInstance* instance, const std::string& title) {
+    if (!instance) return;
+    // Check if an editor is already open for this instance
+    for (auto& ed : m_vst3Editors) {
+        if (ed && ed->isOpen() && ed->instance() == instance)
+            return;
+    }
+    auto editor = std::make_unique<vst3::VST3EditorWindow>();
+    if (editor->open(instance, title)) {
+        m_vst3Editors.push_back(std::move(editor));
+    }
+}
+#endif
 
 } // namespace yawn

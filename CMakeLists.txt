@@ -60,6 +60,7 @@ if(YAWN_VST3)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Scanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Instrument.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3Effect.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3EditorWindow.cpp
     )
 endif()
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
