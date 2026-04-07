@@ -85,6 +85,9 @@ jobs:
           $dir = "YAWN-${version}-windows"
           New-Item -ItemType Directory -Path $dir -Force
           Copy-Item build/bin/Release/YAWN.exe $dir/
+          if (Test-Path build/bin/Release/yawn_vst3_host.exe) {
+            Copy-Item build/bin/Release/yawn_vst3_host.exe $dir/
+          }
           if (Test-Path build/bin/Release/assets) {
             Copy-Item -Recurse build/bin/Release/assets $dir/
           }
