@@ -129,8 +129,8 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     $<TARGET_FILE_DIR:${PROJECT_NAME}>/assets
 )
 
-# VST3 editor host — separate process to isolate plugin UI from SDL
-if(YAWN_VST3)
+# VST3 editor host — separate process to isolate plugin UI from SDL (Windows only)
+if(YAWN_VST3 AND WIN32)
     add_executable(yawn_vst3_host src/vst3/VST3EditorHost.cpp)
     target_link_libraries(yawn_vst3_host PRIVATE vst3_hosting ole32 oleaut32)
     target_compile_definitions(yawn_vst3_host PRIVATE YAWN_HAS_VST3=1)
