@@ -183,8 +183,10 @@ private:
         FwDropDown midiInChDrop;
         FwDropDown midiOutDrop;
         FwDropDown midiOutChDrop;
+        FwDropDown sidechainDrop;
         Label midiRxLabel;
         Label midiTxLabel;
+        Label sidechainLabel;
         PanWidget pan;
         FwFader fader;
         MeterWidget meter;

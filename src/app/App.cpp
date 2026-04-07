@@ -3378,6 +3378,8 @@ void App::syncTracksToEngine() {
         m_audioEngine.sendCommand(audio::SetTrackMonitorMsg{i, static_cast<uint8_t>(trk.monitorMode)});
         m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, trk.audioInputCh});
         m_audioEngine.sendCommand(audio::SetTrackMonoMsg{i, trk.mono});
+        m_audioEngine.sendCommand(audio::SetSidechainSourceMsg{i, trk.sidechainSource});
+        m_audioEngine.sendCommand(audio::SetResampleSourceMsg{i, trk.resampleSource});
         m_audioEngine.sendCommand(audio::SetTrackVolumeMsg{i, trk.volume});
         m_audioEngine.sendCommand(audio::SetTrackMuteMsg{i, trk.muted});
         m_audioEngine.sendCommand(audio::SetTrackSoloMsg{i, trk.soloed});

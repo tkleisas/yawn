@@ -1144,7 +1144,7 @@ private:
                 {"Shape",    {6, 7, 12, 13}},
                 {"Filter",   {8, 9}},
                 {"Env",      {10, 11}},
-                {"",         {15}},
+                {"",         {15, 16}},
             };
             m_displayUpdaters.push_back([grPanel, inst]() {
                 auto* gr = dynamic_cast<instruments::GranularSynth*>(inst);

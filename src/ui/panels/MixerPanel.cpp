@@ -414,15 +414,43 @@ void MixerPanel::setupStripCallbacks(int t) {
 
     s.audioInputDrop.setOnChange([this, t](int idx) {
         if (!m_project || !m_engine) return;
-        int oldVal = m_project->track(t).audioInputCh;
-        m_project->track(t).audioInputCh = idx;
-        m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, idx});
+        // Decode: indices 0..N are hardware inputs, then come resample tracks
+        // The item list is built in paintAudioIO; resample items start after hw inputs
+        int hwCount = 10; // None + 9 hardware input options
+        int oldAudioCh = m_project->track(t).audioInputCh;
+        int oldResample = m_project->track(t).resampleSource;
+        if (idx < hwCount) {
+            // Hardware input selected — clear resample
+            m_project->track(t).audioInputCh = idx;
+            m_project->track(t).resampleSource = -1;
+            m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, idx});
+            m_engine->sendCommand(audio::SetResampleSourceMsg{t, -1});
+        } else {
+            // Resample from track
+            int srcTrack = idx - hwCount;
+            // Adjust: skip self (we excluded it when building the list)
+            if (srcTrack >= t) srcTrack++;
+            m_project->track(t).audioInputCh = 0; // no hardware input
+            m_project->track(t).resampleSource = srcTrack;
+            m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, 0});
+            m_engine->sendCommand(audio::SetResampleSourceMsg{t, srcTrack});
+        }
         if (m_undoManager) {
+            int newAudioCh = m_project->track(t).audioInputCh;
+            int newResample = m_project->track(t).resampleSource;
             m_undoManager->push({"Change Audio Input",
-                [this, t, oldVal]{ m_project->track(t).audioInputCh = oldVal;
-                    m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, oldVal}); },
-                [this, t, idx]{ m_project->track(t).audioInputCh = idx;
-                    m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, idx}); },
+                [this, t, oldAudioCh, oldResample]{
+                    m_project->track(t).audioInputCh = oldAudioCh;
+                    m_project->track(t).resampleSource = oldResample;
+                    m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, oldAudioCh});
+                    m_engine->sendCommand(audio::SetResampleSourceMsg{t, oldResample});
+                },
+                [this, t, newAudioCh, newResample]{
+                    m_project->track(t).audioInputCh = newAudioCh;
+                    m_project->track(t).resampleSource = newResample;
+                    m_engine->sendCommand(audio::SetTrackAudioInputChMsg{t, newAudioCh});
+                    m_engine->sendCommand(audio::SetResampleSourceMsg{t, newResample});
+                },
                 ""});
         }
     });
@@ -440,6 +468,32 @@ void MixerPanel::setupStripCallbacks(int t) {
                     m_engine->sendCommand(audio::SetTrackMonoMsg{t, cur}); },
                 [this, t, newVal]{ m_project->track(t).mono = newVal;
                     m_engine->sendCommand(audio::SetTrackMonoMsg{t, newVal}); },
+                ""});
+        }
+    });
+
+    s.sidechainDrop.setOnChange([this, t](int idx) {
+        if (!m_project || !m_engine) return;
+        int oldVal = m_project->track(t).sidechainSource;
+        int newVal = (idx == 0) ? -1 : -1; // decode below
+        if (idx > 0) {
+            // Map dropdown index to track index (skipping self)
+            int trackIdx = idx - 1;
+            if (trackIdx >= t) trackIdx++;
+            newVal = trackIdx;
+        }
+        m_project->track(t).sidechainSource = newVal;
+        m_engine->sendCommand(audio::SetSidechainSourceMsg{t, newVal});
+        if (m_undoManager) {
+            m_undoManager->push({"Change Sidechain Source",
+                [this, t, oldVal]{
+                    m_project->track(t).sidechainSource = oldVal;
+                    m_engine->sendCommand(audio::SetSidechainSourceMsg{t, oldVal});
+                },
+                [this, t, newVal]{
+                    m_project->track(t).sidechainSource = newVal;
+                    m_engine->sendCommand(audio::SetSidechainSourceMsg{t, newVal});
+                },
                 ""});
         }
     });
@@ -752,12 +806,31 @@ void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
     float dropH = kIOHeight;
     float curY = ioY;
 
-    // Audio input dropdown
+    // Audio input dropdown: hardware inputs + resample from other tracks
     std::vector<std::string> inputItems = {"None", "In 1", "In 2", "In 1+2",
                                             "In 3", "In 3+4", "In 5", "In 5+6",
                                             "In 7", "In 7+8"};
+    int hwCount = static_cast<int>(inputItems.size());
+    // Add resample sources (all tracks except self)
+    if (m_project) {
+        for (int i = 0; i < m_project->numTracks(); ++i) {
+            if (i == idx) continue;
+            inputItems.push_back(m_project->track(i).name);
+        }
+    }
     s.audioInputDrop.setItems(inputItems);
-    int sel = std::clamp(track.audioInputCh, 0, static_cast<int>(inputItems.size()) - 1);
+    int sel = 0;
+    if (track.resampleSource >= 0 && m_project) {
+        // Find the dropdown index for this resample source
+        int dropIdx = hwCount;
+        for (int i = 0; i < m_project->numTracks(); ++i) {
+            if (i == idx) continue;
+            if (i == track.resampleSource) { sel = dropIdx; break; }
+            dropIdx++;
+        }
+    } else {
+        sel = std::clamp(track.audioInputCh, 0, hwCount - 1);
+    }
     s.audioInputDrop.setSelected(sel);
     s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.audioInputDrop.paint(ctx);
@@ -840,6 +913,42 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     s.midiOutChDrop.setSelected(std::clamp(outChSel, 0, 16));
     s.midiOutChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
     s.midiOutChDrop.paint(ctx);
+    curY += dropH + 4;
+
+    // Sidechain source dropdown (only if instrument supports it)
+    bool showSidechain = false;
+    if (m_engine) {
+        auto* inst = m_engine->instrument(idx);
+        if (inst && inst->supportsSidechain()) showSidechain = true;
+    }
+    if (showSidechain && m_project) {
+        s.sidechainLabel.setText("SC");
+        s.sidechainLabel.setColor(Theme::textDim);
+        s.sidechainLabel.setFontScale(labelScale);
+        s.sidechainLabel.setAlign(TextAlign::Left);
+        s.sidechainLabel.layout(Rect{ioX, curY, ioW, labelH}, ctx);
+        s.sidechainLabel.paint(ctx);
+        curY += labelH;
+
+        std::vector<std::string> scItems = {"None"};
+        for (int i = 0; i < m_project->numTracks(); ++i) {
+            if (i == idx) continue;
+            scItems.push_back(m_project->track(i).name);
+        }
+        s.sidechainDrop.setItems(scItems);
+        int scSel = 0;
+        if (track.sidechainSource >= 0) {
+            int dropIdx = 1;
+            for (int i = 0; i < m_project->numTracks(); ++i) {
+                if (i == idx) continue;
+                if (i == track.sidechainSource) { scSel = dropIdx; break; }
+                dropIdx++;
+            }
+        }
+        s.sidechainDrop.setSelected(scSel);
+        s.sidechainDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+        s.sidechainDrop.paint(ctx);
+    }
 }
 
 } // namespace fw

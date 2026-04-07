@@ -22,7 +22,7 @@ public:
     enum Param {
         kBands = 0,       // 4–32 bands
         kCarrierType,     // 0=Saw, 1=Square, 2=Pulse, 3=Noise
-        kModSource,       // 0=Sample, 1=FormantA, 2=FormantE, 3=FormantI, 4=FormantO, 5=FormantU
+        kModSource,       // 0=Sample, 1=FormantA, 2=FormantE, 3=FormantI, 4=FormantO, 5=FormantU, 6=Sidechain
         kBandwidth,       // 0.1–2.0 (Q multiplier)
         kAttack,          // 1–200 ms (envelope follower)
         kRelease,         // 1–500 ms (envelope follower)
@@ -38,6 +38,7 @@ public:
 
     const char* name() const override { return "Vocoder"; }
     const char* id() const override { return "vocoder"; }
+    bool supportsSidechain() const override { return true; }
 
     void init(double sampleRate, int maxBlockSize) override {
         m_sampleRate = sampleRate;
@@ -88,11 +89,11 @@ public:
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
         static constexpr const char* kCarrierLabels[] = {"Saw", "Sqr", "Pulse", "Noise"};
-        static constexpr const char* kModSourceLabels[] = {"Sample", "A", "E", "I", "O", "U"};
+        static constexpr const char* kModSourceLabels[] = {"Sample", "A", "E", "I", "O", "U", "SC"};
         static const InstrumentParameterInfo info[kParamCount] = {
             {"Bands",         4.0f,   32.0f,  16.0f, "",    false, false, WidgetHint::StepSelector},
             {"Carrier Type",  0.0f,    3.0f,   0.0f, "",    false, false, WidgetHint::StepSelector, kCarrierLabels, 4},
-            {"Mod Source",    0.0f,    5.0f,   1.0f, "",    false, false, WidgetHint::StepSelector, kModSourceLabels, 6},
+            {"Mod Source",    0.0f,    6.0f,   1.0f, "",    false, false, WidgetHint::StepSelector, kModSourceLabels, 7},
             {"Bandwidth",     0.1f,    2.0f,   1.0f, "",    false, false, WidgetHint::DentedKnob},
             {"Env Attack",    1.0f,  200.0f,   5.0f, "ms",  false},
             {"Env Release",   1.0f,  500.0f,  20.0f, "ms",  false},
@@ -171,7 +172,15 @@ public:
 
         for (int s = 0; s < numFrames; ++s) {
             // Generate modulator sample
-            float modSig = getModulatorSample(modSource);
+            float modSig;
+            if (modSource == 6 && m_sidechainBuffer) {
+                // Sidechain: mono downmix from interleaved stereo
+                float sL = m_sidechainBuffer[s * numChannels];
+                float sR = (numChannels > 1) ? m_sidechainBuffer[s * numChannels + 1] : sL;
+                modSig = (sL + sR) * 0.5f;
+            } else {
+                modSig = getModulatorSample(modSource);
+            }
 
             // Generate carrier: sum of all voices
             float carrierSig = 0.0f;

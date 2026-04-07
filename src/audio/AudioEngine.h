@@ -110,6 +110,8 @@ public:
             m_trackMono[i]        = m_trackMono[i + 1];
             m_trackMidiOutPort[i] = m_trackMidiOutPort[i + 1];
             m_trackMidiOutCh[i]   = m_trackMidiOutCh[i + 1];
+            m_trackSidechainSource[i] = m_trackSidechainSource[i + 1];
+            m_trackResampleSource[i]  = m_trackResampleSource[i + 1];
             m_trackRecordStates[i]= std::move(m_trackRecordStates[i + 1]);
             m_audioRecordStates[i]= std::move(m_audioRecordStates[i + 1]);
             // RecordedMidiData/RecordedAudioData contain atomics — transfer manually
@@ -139,6 +141,16 @@ public:
         m_trackMono[last] = false;
         m_trackMidiOutPort[last] = 0;
         m_trackMidiOutCh[last] = 0;
+        m_trackSidechainSource[last] = -1;
+        m_trackResampleSource[last] = -1;
+
+        // Fix sidechain/resample references to removed or shifted tracks
+        for (int i = 0; i <= last; ++i) {
+            if (m_trackSidechainSource[i] == index) m_trackSidechainSource[i] = -1;
+            else if (m_trackSidechainSource[i] > index) m_trackSidechainSource[i]--;
+            if (m_trackResampleSource[i] == index) m_trackResampleSource[i] = -1;
+            else if (m_trackResampleSource[i] > index) m_trackResampleSource[i]--;
+        }
         m_trackRecordStates[last].reset();
         m_audioRecordStates[last].reset();
         m_recordedMidi[last].notes.clear();
@@ -259,6 +271,8 @@ private:
     bool m_trackMono[kMaxTracks] = {};
     int m_trackMidiOutPort[kMaxTracks] = {};       // -1=none
     int m_trackMidiOutCh[kMaxTracks] = {};         // -1=all, 0-15
+    int m_trackSidechainSource[kMaxTracks] = {};   // -1=none, 0..kMaxTracks-1 = source track
+    int m_trackResampleSource[kMaxTracks] = {};    // -1=none, 0..kMaxTracks-1 = source track
     midi::MidiEngine* m_midiEngine = nullptr;
 
     // MIDI recording state per track

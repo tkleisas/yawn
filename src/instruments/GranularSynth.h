@@ -17,7 +17,8 @@ class GranularSynth : public Instrument {
 public:
     static constexpr int kMaxVoices = 8;
     static constexpr int kMaxGrains = 64;
-    static constexpr int kParamCount = 16;
+    static constexpr int kParamCount = 17;
+    static constexpr int kSidechainRingSeconds = 2;
 
     enum Param {
         kPosition = 0,   // 0–1, position in sample
@@ -36,16 +37,23 @@ public:
         kReverse,        // 0 or 1 (boolean)
         kJitter,         // 0–1, pitch randomization
         kVolume,         // 0–1
+        kSidechainInput, // 0 or 1 (boolean): use sidechain audio instead of loaded sample
     };
 
     const char* name() const override { return "Granular Synth"; }
     const char* id() const override { return "granular"; }
+    bool supportsSidechain() const override { return true; }
 
     void init(double sampleRate, int maxBlockSize) override {
         m_sampleRate = sampleRate;
         m_maxBlockSize = maxBlockSize;
         for (auto& v : m_voices) v = Voice{};
         for (auto& g : m_grains) g = Grain{};
+        // Allocate sidechain ring buffer
+        m_scRingSize = static_cast<int>(sampleRate * kSidechainRingSeconds);
+        m_scRing.resize(m_scRingSize, 0.0f);
+        m_scWritePos = 0;
+        m_scFilled = 0;
         resetParams();
     }
 
@@ -105,6 +113,7 @@ public:
             {"Reverse",       0.0f,   1.0f,   0.0f,  "",    true},
             {"Jitter",        0.0f,   1.0f,   0.0f,  "",    false},
             {"Volume",        0.0f,   1.0f,   0.8f,  "",    false, false, WidgetHint::DentedKnob},
+            {"Sidechain In",  0.0f,   1.0f,   0.0f,  "",    true},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }
@@ -122,7 +131,22 @@ public:
 
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override {
-        if (m_bypassed || m_sampleFrames == 0) return;
+        if (m_bypassed) return;
+
+        // Capture sidechain audio into ring buffer (always, so it's ready when toggled)
+        const bool useSidechain = m_params[kSidechainInput] > 0.5f && m_sidechainBuffer;
+        if (m_sidechainBuffer && m_scRingSize > 0) {
+            for (int f = 0; f < numFrames; ++f) {
+                float sL = m_sidechainBuffer[f * numChannels];
+                float sR = (numChannels > 1) ? m_sidechainBuffer[f * numChannels + 1] : sL;
+                m_scRing[m_scWritePos] = (sL + sR) * 0.5f;
+                m_scWritePos = (m_scWritePos + 1) % m_scRingSize;
+                if (m_scFilled < m_scRingSize) m_scFilled++;
+            }
+        }
+
+        // Need either a loaded sample or active sidechain to produce audio
+        if (!useSidechain && m_sampleFrames == 0) return;
 
         const float position    = m_params[kPosition];
         const float grainSizeMs = m_params[kGrainSize];
@@ -183,7 +207,8 @@ public:
                 for (auto& v : m_voices) {
                     if (!v.active || v.ampEnv.isIdle()) continue;
                     spawnGrain(v, position, spread, sprayMs, pitchSt, jitter,
-                               grainSizeSamples, shape, reverse, stereoW);
+                               grainSizeSamples, shape, reverse, stereoW,
+                               useSidechain);
                 }
             }
 
@@ -197,7 +222,7 @@ public:
                 float window = grainWindow(t, g.shape);
 
                 // Read sample with linear interpolation
-                float samp = readSample(g.readPos);
+                float samp = readSample(g.readPos, g.fromSidechain);
                 float val = samp * window * g.velocity;
 
                 mixL += val * g.panL;
@@ -205,8 +230,11 @@ public:
 
                 // Advance read position
                 g.readPos += g.speed;
-                if (g.readPos < 0) g.readPos += m_sampleFrames;
-                if (g.readPos >= m_sampleFrames) g.readPos -= m_sampleFrames;
+                int wrapLen = g.fromSidechain ? m_scFilled : m_sampleFrames;
+                if (wrapLen > 0) {
+                    if (g.readPos < 0) g.readPos += wrapLen;
+                    if (g.readPos >= wrapLen) g.readPos -= wrapLen;
+                }
                 g.pos++;
                 if (g.pos >= g.length) g.active = false;
             }
@@ -263,6 +291,7 @@ private:
         float velocity = 1.0f;
         float panL = 0.707f;
         float panR = 0.707f;
+        bool fromSidechain = false;
     };
 
     // ── Voice structure ──
@@ -301,7 +330,23 @@ private:
     }
 
     // ── Sample reading with linear interpolation ──
-    float readSample(double pos) const {
+    float readSample(double pos, bool fromSidechain) const {
+        if (fromSidechain) {
+            if (m_scFilled == 0) return 0.0f;
+            int len = m_scFilled;
+            int idx0 = static_cast<int>(pos);
+            int idx1 = idx0 + 1;
+            // Wrap within the filled portion of the ring buffer
+            idx0 = ((idx0 % len) + len) % len;
+            idx1 = ((idx1 % len) + len) % len;
+            // Map to ring buffer positions (oldest sample first)
+            int base = (m_scWritePos - m_scFilled + m_scRingSize) % m_scRingSize;
+            float s0 = m_scRing[(base + idx0) % m_scRingSize];
+            float s1 = m_scRing[(base + idx1) % m_scRingSize];
+            float frac = static_cast<float>(pos - std::floor(pos));
+            return s0 + frac * (s1 - s0);
+        }
+
         if (m_sampleFrames == 0) return 0.0f;
         int idx0 = static_cast<int>(pos);
         int idx1 = idx0 + 1;
@@ -331,7 +376,8 @@ private:
     // ── Spawn a grain ──
     void spawnGrain(Voice& v, float position, float spread, float sprayMs,
                     float pitchSt, float jitter, int grainSizeSamples,
-                    int shape, bool reverse, float stereoWidth) {
+                    int shape, bool reverse, float stereoWidth,
+                    bool fromSidechain) {
         // Find free grain slot
         Grain* slot = nullptr;
         for (auto& g : m_grains) {
@@ -347,6 +393,10 @@ private:
         }
         if (!slot) return;
 
+        // Effective sample length: sidechain ring or loaded sample
+        int effLen = fromSidechain ? m_scFilled : m_sampleFrames;
+        if (effLen <= 0) return;
+
         // Position with spread randomization
         float pos = position + static_cast<float>(m_scanPos);
         pos -= std::floor(pos);
@@ -360,9 +410,9 @@ private:
         if (sprayMs > 0.0f)
             readOffset = (randFloat() - 0.5f) * sprayMs * 0.001 * m_sampleRate;
 
-        double startPos = pos * m_sampleFrames + readOffset;
-        while (startPos < 0) startPos += m_sampleFrames;
-        while (startPos >= m_sampleFrames) startPos -= m_sampleFrames;
+        double startPos = pos * effLen + readOffset;
+        while (startPos < 0) startPos += effLen;
+        while (startPos >= effLen) startPos -= effLen;
 
         // Pitch: note-based + param + jitter
         float noteShift = static_cast<float>((int)v.note - m_rootNote);
@@ -386,6 +436,7 @@ private:
         slot->velocity = v.velocity;
         slot->panL = panL;
         slot->panR = panR;
+        slot->fromSidechain = fromSidechain;
     }
 
     // ── Note management ──
@@ -456,6 +507,12 @@ private:
     // SVF filter state (stereo)
     float m_filterIcL[2] = {};
     float m_filterIcR[2] = {};
+
+    // Sidechain ring buffer (mono, for live granulation)
+    std::vector<float> m_scRing;
+    int m_scRingSize = 0;
+    int m_scWritePos = 0;
+    int m_scFilled = 0;
 };
 
 } // namespace yawn::instruments

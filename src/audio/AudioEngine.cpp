@@ -91,6 +91,8 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_trackBufferHeap.resize(kMaxTracks * bufferStride, 0.0f);
     for (int t = 0; t < kMaxTracks; ++t) {
         m_trackBufferPtrs[t] = m_trackBufferHeap.data() + t * bufferStride;
+        m_trackSidechainSource[t] = -1;
+        m_trackResampleSource[t] = -1;
     }
 
     // Pre-reserve recording buffers to minimise audio-thread allocations
@@ -431,12 +433,33 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
     }
 
+    // Route resampling: copy source track's buffer into destination track's buffer.
+    // Source track buffers already contain clip audio rendered above.
+    // For instrument tracks that also have resampling, this adds the source audio
+    // to the buffer before the instrument processes (instrument output adds on top).
+    for (int t = 0; t < kMaxTracks; ++t) {
+        int src = m_trackResampleSource[t];
+        if (src < 0 || src >= kMaxTracks || src == t) continue;
+        const float* srcBuf = m_trackBufferPtrs[src];
+        float* dstBuf = m_trackBufferPtrs[t];
+        for (int f = 0; f < nf * nc; ++f)
+            dstBuf[f] += srcBuf[f];
+    }
+
     // Process instruments: MIDI effects → instrument
     for (int t = 0; t < kMaxTracks; ++t) {
         if (!m_instruments[t]) {
             m_trackMidiBuffers[t].clear();
             continue;
         }
+
+        // Set sidechain input from designated source track
+        int scSrc = m_trackSidechainSource[t];
+        if (scSrc >= 0 && scSrc < kMaxTracks && scSrc != t)
+            m_instruments[t]->setSidechainInput(m_trackBufferPtrs[scSrc]);
+        else
+            m_instruments[t]->setSidechainInput(nullptr);
+
         // Run MIDI effect chain on this track's MIDI buffer
         if (m_midiEffectChains[t].count() > 0) {
             midi::TransportInfo ti;
@@ -908,6 +931,16 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, SetTrackMonoMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_trackMono[msg.trackIndex] = msg.mono;
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetSidechainSourceMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackSidechainSource[msg.trackIndex] = msg.sourceTrack;
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetResampleSourceMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    m_trackResampleSource[msg.trackIndex] = msg.sourceTrack;
                 }
             }
             else if constexpr (std::is_same_v<T, SetTrackMidiOutputMsg>) {

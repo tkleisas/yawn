@@ -216,6 +216,16 @@ struct SetTrackMidiOutputMsg {
     int channel;    // -1=all, 0-15
 };
 
+struct SetSidechainSourceMsg {
+    int trackIndex;
+    int sourceTrack; // -1=none, 0..kMaxTracks-1
+};
+
+struct SetResampleSourceMsg {
+    int trackIndex;
+    int sourceTrack; // -1=none, 0..kMaxTracks-1
+};
+
 struct MoveMidiEffectMsg {
     int trackIndex;
     int fromIndex;
@@ -320,7 +330,9 @@ using AudioCommand = std::variant<
     SetEffectParamMsg,
     SetTrackArrActiveMsg,
     TransportSetLoopEnabledMsg,
-    TransportSetLoopRangeMsg
+    TransportSetLoopRangeMsg,
+    SetSidechainSourceMsg,
+    SetResampleSourceMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

@@ -54,10 +54,17 @@ public:
     bool bypassed() const { return m_bypassed; }
     void setBypassed(bool b) { m_bypassed = b; }
 
+    // Sidechain input: set by AudioEngine each buffer cycle.
+    // Points to the interleaved stereo buffer of the source track (or nullptr).
+    void setSidechainInput(const float* buffer) { m_sidechainBuffer = buffer; }
+    const float* sidechainInput() const { return m_sidechainBuffer; }
+    virtual bool supportsSidechain() const { return false; }
+
 protected:
     double m_sampleRate   = 44100.0;
     int    m_maxBlockSize = 256;
     bool   m_bypassed     = false;
+    const float* m_sidechainBuffer = nullptr;
 };
 
 } // namespace instruments
