@@ -65,14 +65,8 @@ public:
     // ---- Port management ----
 
     void refreshPorts() {
-        m_availableInputs.clear();
-        m_availableOutputs.clear();
-        int nIn = MidiPort::countInputPorts();
-        int nOut = MidiPort::countOutputPorts();
-        for (int i = 0; i < nIn; ++i)
-            m_availableInputs.push_back(MidiPort::inputPortName(i));
-        for (int i = 0; i < nOut; ++i)
-            m_availableOutputs.push_back(MidiPort::outputPortName(i));
+        m_availableInputs  = MidiPort::enumerateInputPorts();
+        m_availableOutputs = MidiPort::enumerateOutputPorts();
     }
 
     int availableInputCount() const { return static_cast<int>(m_availableInputs.size()); }

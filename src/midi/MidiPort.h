@@ -51,6 +51,32 @@ public:
         catch (...) { return ""; }
     }
 
+    // Enumerate all input port names atomically using a single RtMidiIn instance,
+    // avoiding TOCTOU crashes when devices disconnect between count and name queries.
+    static std::vector<std::string> enumerateInputPorts() {
+        std::vector<std::string> names;
+        try {
+            RtMidiIn in;
+            int n = static_cast<int>(in.getPortCount());
+            names.reserve(n);
+            for (int i = 0; i < n; ++i)
+                names.push_back(in.getPortName(i));
+        } catch (...) {}
+        return names;
+    }
+
+    static std::vector<std::string> enumerateOutputPorts() {
+        std::vector<std::string> names;
+        try {
+            RtMidiOut out;
+            int n = static_cast<int>(out.getPortCount());
+            names.reserve(n);
+            for (int i = 0; i < n; ++i)
+                names.push_back(out.getPortName(i));
+        } catch (...) {}
+        return names;
+    }
+
     // ---- Open / Close ----
 
     bool open(int portIndex) {

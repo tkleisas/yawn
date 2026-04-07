@@ -107,14 +107,8 @@ public:
 private:
     void refreshDevices() {
         m_outputDevices = audio::AudioEngine::enumerateDevices();
-        m_midiInputs.clear();
-        m_midiOutputs.clear();
-        int inCount = midi::MidiPort::countInputPorts();
-        for (int i = 0; i < inCount; ++i)
-            m_midiInputs.push_back(midi::MidiPort::inputPortName(i));
-        int outCount = midi::MidiPort::countOutputPorts();
-        for (int i = 0; i < outCount; ++i)
-            m_midiOutputs.push_back(midi::MidiPort::outputPortName(i));
+        m_midiInputs  = midi::MidiPort::enumerateInputPorts();
+        m_midiOutputs = midi::MidiPort::enumerateOutputPorts();
     }
 
     // ─── Audio Tab ──────────────────────────────────────────────────────
