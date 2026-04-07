@@ -300,16 +300,17 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
     }
 
-    // Capture audio for recording (before any effects/mixing modify the buffer)
+    // Capture audio for recording from hardware input
+    // (resample recording happens later, after track buffers are fully rendered)
     if (m_transport.isRecording() && input && m_hasInputDevice) {
         for (int t = 0; t < kMaxTracks; ++t) {
             if (m_trackType[t] != 0) continue;
+            if (m_trackResampleSource[t] >= 0) continue; // handled after rendering
             auto& ars = m_audioRecordStates[t];
             if (!ars.recording || !m_trackArmed[t]) continue;
 
             int64_t remaining = ars.maxFrames - ars.recordedFrames;
             if (remaining <= 0) {
-                // Buffer full — auto-finalize and notify UI
                 RecordBufferFullEvent bfe;
                 bfe.trackIndex = t;
                 bfe.sceneIndex = ars.targetScene;
@@ -604,6 +605,39 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                 break;
             }
             }
+        }
+    }
+
+    // Capture resample recording: record from source track's fully rendered buffer
+    if (m_transport.isRecording()) {
+        for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackType[t] != 0) continue;
+            int src = m_trackResampleSource[t];
+            if (src < 0 || src >= kMaxTracks) continue;
+            auto& ars = m_audioRecordStates[t];
+            if (!ars.recording || !m_trackArmed[t]) continue;
+
+            int64_t remaining = ars.maxFrames - ars.recordedFrames;
+            if (remaining <= 0) {
+                RecordBufferFullEvent bfe;
+                bfe.trackIndex = t;
+                bfe.sceneIndex = ars.targetScene;
+                bfe.frameCount = ars.recordedFrames;
+                m_eventQueue.push(bfe);
+                finalizeAudioRecord(t);
+                continue;
+            }
+            int64_t framesToCopy = std::min(static_cast<int64_t>(nf), remaining);
+
+            // Record from source track's interleaved stereo buffer
+            const float* srcBuf = m_trackBufferPtrs[src];
+            for (int ch = 0; ch < ars.channels && ch < nc; ++ch) {
+                float* dst = ars.buffer.data() + ch * ars.maxFrames + ars.recordedFrames;
+                for (int64_t f = 0; f < framesToCopy; ++f) {
+                    dst[f] = srcBuf[f * nc + ch];
+                }
+            }
+            ars.recordedFrames += framesToCopy;
         }
     }
 
