@@ -2775,6 +2775,7 @@ void App::processEvents() {
                     m_detailPanel->handleScroll(dx, dy, ctrl);
                 } else if (m_showMixer && m_lastMouseY >= mb.y && m_lastMouseY < mb.y + mb.h) {
                     ui::fw::ScrollEvent se;
+                    se.x = m_lastMouseX; se.y = m_lastMouseY;
                     se.dx = dx; se.dy = dy;
                     m_mixerPanel->onScroll(se);
                 } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {

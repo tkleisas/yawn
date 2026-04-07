@@ -334,7 +334,7 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
     int mv = maxVisible();
     float listH = mv * itemH;
     float listX = m_bounds.x;
-    float listY = m_bounds.y + m_bounds.h;
+    float listY = popupTop();
 
     // Compute popup width from widest item (minimum: dropdown width)
     float popW = m_bounds.w;
@@ -347,8 +347,9 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
     m_popupWidth = popW; // cache for hit testing
     ctx.renderer->drawRect(listX, listY, popW, listH, Color{30, 30, 34, 255});
     ctx.renderer->drawRectOutline(listX, listY, popW, listH, Color{90, 140, 200, 255});
-    // Top separator line between dropdown button and popup
-    ctx.renderer->drawRect(listX, listY, popW, 1, Color{90, 140, 200, 255});
+    // Separator line between dropdown button and popup
+    float sepY = m_popupAbove ? (listY + listH - 1) : listY;
+    ctx.renderer->drawRect(listX, sepY, popW, 1, Color{90, 140, 200, 255});
 
     // Clip item text to popup bounds
     ctx.renderer->pushClip(listX, listY, popW, listH);
