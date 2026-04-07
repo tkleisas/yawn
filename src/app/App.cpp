@@ -496,20 +496,15 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addInstrItem("Instrument Rack", [](){ return std::make_unique<instruments::InstrumentRack>(); });
 
 #ifdef YAWN_HAS_VST3
-    // VST3 instruments submenu
+    // VST3 instruments — flat list with separator
     if (m_vst3Scanner && !m_vst3Scanner->instruments().empty()) {
-        std::vector<ui::ContextMenu::Item> vst3InstrItems;
+        instrItems.push_back({"── VST3 ──", nullptr, true});
         for (auto& info : m_vst3Scanner->instruments()) {
             std::string label = info.name;
             if (!info.vendor.empty()) label += " (" + info.vendor + ")";
             std::string modulePath = info.modulePath;
             std::string classID = info.classIDString;
-            vst3InstrItems.push_back({label, [this, trackIndex, label, modulePath, classID]() {
-                auto oldType = m_project.track(trackIndex).type;
-                std::string oldInstr;
-                auto* inst = m_audioEngine.instrument(trackIndex);
-                if (inst) oldInstr = inst->name();
-                uint8_t oldTypeVal = (oldType == Track::Type::Audio) ? 0 : 1;
+            instrItems.push_back({label, [this, trackIndex, modulePath, classID]() {
                 m_project.track(trackIndex).type = Track::Type::Midi;
                 m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
                 m_audioEngine.setInstrument(trackIndex,
@@ -517,7 +512,6 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 markDirty();
             }});
         }
-        instrItems.push_back({"VST3 Instruments", nullptr, true, true, std::move(vst3InstrItems)});
     }
 #endif
 
@@ -557,21 +551,20 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Tuner",          [](){ return std::make_unique<effects::Tuner>(); });
 
 #ifdef YAWN_HAS_VST3
-    // VST3 effects submenu
+    // VST3 effects — flat list with separator
     if (m_vst3Scanner && !m_vst3Scanner->effects().empty()) {
-        std::vector<ui::ContextMenu::Item> vst3FxItems;
+        fxItems.push_back({"── VST3 ──", nullptr, true});
         for (auto& info : m_vst3Scanner->effects()) {
             std::string label = info.name;
             if (!info.vendor.empty()) label += " (" + info.vendor + ")";
             std::string modulePath = info.modulePath;
             std::string classID = info.classIDString;
-            vst3FxItems.push_back({label, [this, trackIndex, label, modulePath, classID]() {
+            fxItems.push_back({label, [this, trackIndex, modulePath, classID]() {
                 auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
                 chain.append(std::make_unique<vst3::VST3Effect>(modulePath, classID));
                 markDirty();
             }});
         }
-        fxItems.push_back({"VST3 Effects", nullptr, true, true, std::move(vst3FxItems)});
     }
 #endif
 
@@ -643,8 +636,10 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         auto* vsti = dynamic_cast<vst3::VST3Instrument*>(inst);
         if (vsti && vsti->instance()) {
             std::string edTitle = std::string(vsti->name()) + " - Track " + std::to_string(trackIndex + 1);
-            items.push_back({"Open VST3 Instrument Editor", [this, vsti, edTitle]() {
-                openVST3Editor(vsti->instance(), edTitle);
+            std::string modPath = vsti->modulePath();
+            std::string clsID = vsti->classIDString();
+            items.push_back({"Open VST3 Instrument Editor", [this, vsti, edTitle, modPath, clsID]() {
+                openVST3Editor(vsti->instance(), modPath, clsID, edTitle);
             }});
         }
     }
@@ -656,8 +651,10 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             if (fx && fx->instance()) {
                 std::string fxName = fx->name();
                 std::string edTitle = fxName + " - Track " + std::to_string(trackIndex + 1);
-                items.push_back({"Open Editor: " + fxName, [this, fx, edTitle]() {
-                    openVST3Editor(fx->instance(), edTitle);
+                std::string modPath = fx->modulePath();
+                std::string clsID = fx->classIDString();
+                items.push_back({"Open Editor: " + fxName, [this, fx, edTitle, modPath, clsID]() {
+                    openVST3Editor(fx->instance(), modPath, clsID, edTitle);
                 }});
             }
         }
@@ -3437,16 +3434,26 @@ void App::startExportRender(const std::string& filePath) {
 }
 
 #ifdef YAWN_HAS_VST3
-void App::openVST3Editor(vst3::VST3PluginInstance* instance, const std::string& title) {
-    if (!instance) return;
-    // Check if an editor is already open for this instance
-    for (auto& ed : m_vst3Editors) {
-        if (ed && ed->isOpen() && ed->instance() == instance)
-            return;
+void App::openVST3Editor(vst3::VST3PluginInstance* instance,
+                         const std::string& modulePath,
+                         const std::string& classID,
+                         const std::string& title) {
+    if (!instance) {
+        LOG_WARN("VST3", "openVST3Editor: null instance");
+        return;
     }
+    for (auto& ed : m_vst3Editors) {
+        if (ed && ed->isOpen() && ed->instance() == instance) {
+            LOG_INFO("VST3", "Editor already open for '%s'", title.c_str());
+            return;
+        }
+    }
+    LOG_INFO("VST3", "Opening editor for '%s'", title.c_str());
     auto editor = std::make_unique<vst3::VST3EditorWindow>();
-    if (editor->open(instance, title)) {
+    if (editor->open(instance, modulePath, classID, title)) {
         m_vst3Editors.push_back(std::move(editor));
+    } else {
+        LOG_ERROR("VST3", "Failed to open editor for '%s'", title.c_str());
     }
 }
 #endif

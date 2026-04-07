@@ -1,45 +1,16 @@
 #ifdef YAWN_HAS_VST3
 
 #include "vst3/VST3EditorWindow.h"
-#include "pluginterfaces/base/funknown.h"
-#include <iostream>
+#include "vst3/VST3Host.h"
+#include "util/Logger.h"
+
+#ifdef _WIN32
+#include <shlwapi.h>
+#pragma comment(lib, "shlwapi.lib")
+#endif
 
 namespace yawn {
 namespace vst3 {
-
-// ── PlugFrameAdapter ──
-
-Steinberg::tresult PLUGIN_API PlugFrameAdapter::resizeView(
-    Steinberg::IPlugView* view, Steinberg::ViewRect* newSize)
-{
-    if (!m_owner || !newSize) return Steinberg::kInvalidArgument;
-
-    int w = newSize->getWidth();
-    int h = newSize->getHeight();
-    m_owner->resizeToView(w, h);
-
-    if (view)
-        view->onSize(newSize);
-
-    return Steinberg::kResultOk;
-}
-
-Steinberg::tresult PLUGIN_API PlugFrameAdapter::queryInterface(
-    const Steinberg::TUID iid, void** obj)
-{
-    if (!obj) return Steinberg::kInvalidArgument;
-    *obj = nullptr;
-
-    if (Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::IPlugFrame::iid) ||
-        Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::FUnknown::iid)) {
-        addRef();
-        *obj = static_cast<Steinberg::IPlugFrame*>(this);
-        return Steinberg::kResultOk;
-    }
-    return Steinberg::kNoInterface;
-}
-
-// ── VST3EditorWindow ──
 
 VST3EditorWindow::~VST3EditorWindow() {
     close();
@@ -47,227 +18,107 @@ VST3EditorWindow::~VST3EditorWindow() {
 
 #ifdef _WIN32
 
-bool VST3EditorWindow::s_classRegistered = false;
-
-static const wchar_t* kWindowClassName = L"YawnVST3Editor";
-
-LRESULT CALLBACK VST3EditorWindow::wndProc(HWND hwnd, UINT msg,
-                                             WPARAM wp, LPARAM lp)
-{
-    auto* self = reinterpret_cast<VST3EditorWindow*>(
-        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-
-    switch (msg) {
-        case WM_CREATE: {
-            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA,
-                              reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
-            return 0;
-        }
-        case WM_CLOSE:
-            if (self) self->close();
-            return 0;
-        case WM_DESTROY:
-            return 0;
-        case WM_SIZE:
-            if (self && self->m_plugView) {
-                RECT rc;
-                GetClientRect(hwnd, &rc);
-                Steinberg::ViewRect vr;
-                vr.left = 0;
-                vr.top = 0;
-                vr.right = rc.right;
-                vr.bottom = rc.bottom;
-                self->m_plugView->onSize(&vr);
-            }
-            return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-bool VST3EditorWindow::createNativeWindow(const std::string& title,
-                                            int width, int height)
-{
-    HINSTANCE hInst = GetModuleHandleW(nullptr);
-
-    if (!s_classRegistered) {
-        WNDCLASSEXW wc = {};
-        wc.cbSize = sizeof(WNDCLASSEXW);
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc = wndProc;
-        wc.hInstance = hInst;
-        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-        wc.lpszClassName = kWindowClassName;
-        if (!RegisterClassExW(&wc)) return false;
-        s_classRegistered = true;
-    }
-
-    // Convert title to wide string
-    int wLen = MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, nullptr, 0);
-    std::wstring wTitle(wLen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, &wTitle[0], wLen);
-
-    // Calculate window size including non-client area
-    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    RECT rc = {0, 0, width, height};
-    AdjustWindowRect(&rc, style, FALSE);
-
-    m_hwnd = CreateWindowExW(
-        0, kWindowClassName, wTitle.c_str(), style,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        rc.right - rc.left, rc.bottom - rc.top,
-        nullptr, nullptr, hInst,
-        this  // Pass as lpParam for WM_CREATE
-    );
-
-    if (!m_hwnd) return false;
-
-    ShowWindow(m_hwnd, SW_SHOW);
-    UpdateWindow(m_hwnd);
-    return true;
-}
-
-void VST3EditorWindow::destroyNativeWindow() {
-    if (m_hwnd) {
-        // Clear the user data first to prevent re-entrant close()
-        SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, 0);
-        DestroyWindow(m_hwnd);
-        m_hwnd = nullptr;
-    }
-}
-
-void VST3EditorWindow::resizeToView(int width, int height) {
-    if (!m_hwnd) return;
-
-    DWORD style = static_cast<DWORD>(GetWindowLongPtrW(m_hwnd, GWL_STYLE));
-    RECT rc = {0, 0, width, height};
-    AdjustWindowRect(&rc, style, FALSE);
-    SetWindowPos(m_hwnd, nullptr, 0, 0,
-                 rc.right - rc.left, rc.bottom - rc.top,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
-void VST3EditorWindow::pollEvents() {
-    MSG msg;
-    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        if (msg.hwnd) {
-            wchar_t className[64] = {};
-            GetClassNameW(msg.hwnd, className, 64);
-            if (wcscmp(className, kWindowClassName) == 0 ||
-                GetAncestor(msg.hwnd, GA_ROOT) != msg.hwnd) {
-                // Message belongs to a VST3 editor window or its children
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-                continue;
-            }
-        }
-        // Put non-editor messages back for SDL to handle
-        PostMessageW(msg.hwnd, msg.message, msg.wParam, msg.lParam);
-        break;
-    }
-}
-
-#else
-// Stub implementations for non-Windows platforms
-
-bool VST3EditorWindow::createNativeWindow(const std::string&, int, int) {
-    std::cerr << "[VST3] Plugin editor windows not yet supported on this platform\n";
-    return false;
-}
-
-void VST3EditorWindow::destroyNativeWindow() {}
-
-void VST3EditorWindow::resizeToView(int, int) {}
-
-void VST3EditorWindow::pollEvents() {}
-
-#endif // _WIN32
-
-// ── Cross-platform lifecycle ──
-
 bool VST3EditorWindow::open(VST3PluginInstance* instance,
-                              const std::string& title)
+                             const std::string& modulePath,
+                             const std::string& classID,
+                             const std::string& title)
 {
-    if (m_isOpen) close();
-    if (!instance || !instance->controller()) return false;
+    if (isOpen()) close();
+    if (!instance) return false;
 
     m_instance = instance;
 
-    // Create the plugin view
-    m_plugView = instance->createView();
-    if (!m_plugView) {
-        std::cerr << "[VST3] Plugin '" << title << "' has no editor view\n";
+    // Find yawn_vst3_host.exe next to YAWN.exe
+    wchar_t exeDir[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exeDir, MAX_PATH);
+    PathRemoveFileSpecW(exeDir);
+
+    std::wstring hostExe(exeDir);
+    hostExe += L"\\yawn_vst3_host.exe";
+
+    // Build command line with proper quoting
+    std::string cmdLine = "\"";
+    // Convert hostExe to UTF-8 for the command line
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, hostExe.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string hostExeUtf8(utf8Len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, hostExe.c_str(), -1, &hostExeUtf8[0], utf8Len, nullptr, nullptr);
+    // Remove trailing null
+    if (!hostExeUtf8.empty() && hostExeUtf8.back() == '\0')
+        hostExeUtf8.pop_back();
+
+    cmdLine = "\"" + hostExeUtf8 + "\" ";
+    cmdLine += "\"" + modulePath + "\" ";
+    cmdLine += "\"" + classID + "\" ";
+    cmdLine += "\"" + title + "\"";
+
+    // Convert full command line to wide string
+    int wLen = MultiByteToWideChar(CP_UTF8, 0, cmdLine.c_str(), -1, nullptr, 0);
+    std::wstring wCmdLine(wLen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, cmdLine.c_str(), -1, &wCmdLine[0], wLen);
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+
+    BOOL ok = CreateProcessW(
+        hostExe.c_str(),
+        &wCmdLine[0],
+        nullptr, nullptr, FALSE,
+        0,
+        nullptr, nullptr,
+        &si, &pi);
+
+    if (!ok) {
+        LOG_ERROR("VST3", "Failed to launch editor process for '%s' (error=%lu)",
+                  title.c_str(), GetLastError());
+        m_instance = nullptr;
         return false;
     }
 
-    // Check platform support
-#ifdef _WIN32
-    if (m_plugView->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND)
-        != Steinberg::kResultOk) {
-        std::cerr << "[VST3] Plugin does not support HWND platform type\n";
-        m_plugView = nullptr;
-        return false;
-    }
-#endif
+    m_process = pi.hProcess;
+    m_thread_handle = pi.hThread;
 
-    // Create the IPlugFrame
-    m_plugFrame = Steinberg::owned(new PlugFrameAdapter(this));
-    m_plugView->setFrame(m_plugFrame.get());
-
-    // Query preferred size
-    Steinberg::ViewRect viewRect = {};
-    if (m_plugView->getSize(&viewRect) != Steinberg::kResultOk) {
-        viewRect.left = 0;
-        viewRect.top = 0;
-        viewRect.right = 800;
-        viewRect.bottom = 600;
-    }
-
-    int w = viewRect.getWidth();
-    int h = viewRect.getHeight();
-    if (w <= 0 || h <= 0) { w = 800; h = 600; }
-
-    // Create native window
-    if (!createNativeWindow(title, w, h)) {
-        m_plugView->setFrame(nullptr);
-        m_plugView = nullptr;
-        m_plugFrame = nullptr;
-        return false;
-    }
-
-    // Attach the plugin view to the native window
-#ifdef _WIN32
-    if (m_plugView->attached(m_hwnd, Steinberg::kPlatformTypeHWND)
-        != Steinberg::kResultOk) {
-        std::cerr << "[VST3] Failed to attach plugin view\n";
-        destroyNativeWindow();
-        m_plugView->setFrame(nullptr);
-        m_plugView = nullptr;
-        m_plugFrame = nullptr;
-        return false;
-    }
-#endif
-
-    m_isOpen = true;
+    LOG_INFO("VST3", "Editor process launched for '%s' (PID=%lu)",
+             title.c_str(), pi.dwProcessId);
     return true;
 }
 
 void VST3EditorWindow::close() {
-    if (!m_isOpen && !m_plugView) return;
-
-    if (m_plugView) {
-        m_plugView->removed();
-        m_plugView->setFrame(nullptr);
-        m_plugView = nullptr;
+    if (m_process) {
+        // Give the process a chance to close gracefully
+        if (WaitForSingleObject(m_process, 0) == WAIT_TIMEOUT) {
+            TerminateProcess(m_process, 0);
+            WaitForSingleObject(m_process, 2000);
+        }
+        CloseHandle(m_process);
+        m_process = nullptr;
     }
-
-    destroyNativeWindow();
-
-    m_plugFrame = nullptr;
+    if (m_thread_handle) {
+        CloseHandle(m_thread_handle);
+        m_thread_handle = nullptr;
+    }
     m_instance = nullptr;
-    m_isOpen = false;
 }
+
+bool VST3EditorWindow::isOpen() const {
+    if (!m_process) return false;
+    return WaitForSingleObject(m_process, 0) == WAIT_TIMEOUT;
+}
+
+#else
+
+bool VST3EditorWindow::open(VST3PluginInstance*, const std::string&,
+                             const std::string&, const std::string&)
+{
+    LOG_WARN("VST3", "Plugin editor not yet supported on this platform");
+    return false;
+}
+
+void VST3EditorWindow::close() {}
+
+bool VST3EditorWindow::isOpen() const { return false; }
+
+#endif // _WIN32
 
 } // namespace vst3
 } // namespace yawn

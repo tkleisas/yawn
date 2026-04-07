@@ -190,7 +190,10 @@ private:
     std::unique_ptr<vst3::VST3Scanner> m_vst3Scanner;
     std::vector<std::unique_ptr<vst3::VST3EditorWindow>> m_vst3Editors;
 
-    void openVST3Editor(vst3::VST3PluginInstance* instance, const std::string& title);
+    void openVST3Editor(vst3::VST3PluginInstance* instance,
+                        const std::string& modulePath,
+                        const std::string& classID,
+                        const std::string& title);
 #endif
 };
 

@@ -1,16 +1,13 @@
 #pragma once
 
-// VST3EditorWindow — Opens a native OS window hosting a VST3 plugin's editor UI.
-// On Windows this creates an HWND; on macOS an NSView (future); on Linux X11 (future).
-// Implements IPlugFrame so the plugin can request resize.
+// VST3EditorWindow — Launches a separate process (yawn_vst3_host.exe) to show
+// a VST3 plugin's native editor UI. This completely isolates the plugin's
+// Win32 message hooks from SDL's event processing, preventing the freeze
+// caused by JUCE-based plugins installing process-wide hooks.
 
 #ifdef YAWN_HAS_VST3
 
-#include "vst3/VST3Host.h"
-#include "pluginterfaces/gui/iplugview.h"
-
 #include <atomic>
-#include <memory>
 #include <string>
 
 #ifdef _WIN32
@@ -20,66 +17,35 @@
 #endif
 
 namespace yawn {
+
 namespace vst3 {
+class VST3PluginInstance;
+}
 
-// IPlugFrame implementation — host-side resize handler
-class PlugFrameAdapter : public Steinberg::IPlugFrame {
-public:
-    explicit PlugFrameAdapter(class VST3EditorWindow* owner) : m_owner(owner) {}
-
-    Steinberg::tresult PLUGIN_API resizeView(Steinberg::IPlugView* view,
-                                              Steinberg::ViewRect* newSize) override;
-
-    Steinberg::uint32 PLUGIN_API addRef() override { return ++m_refCount; }
-    Steinberg::uint32 PLUGIN_API release() override {
-        auto r = --m_refCount;
-        if (r == 0) delete this;
-        return r;
-    }
-    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid,
-                                                  void** obj) override;
-
-private:
-    VST3EditorWindow* m_owner = nullptr;
-    std::atomic<Steinberg::int32> m_refCount{1};
-};
+namespace vst3 {
 
 class VST3EditorWindow {
 public:
     VST3EditorWindow() = default;
     ~VST3EditorWindow();
 
-    // Open the editor for a plugin instance. Returns true on success.
-    bool open(VST3PluginInstance* instance, const std::string& title);
+    // Launch the editor subprocess. modulePath is the .vst3 file, classID the hex UID.
+    bool open(VST3PluginInstance* instance,
+              const std::string& modulePath,
+              const std::string& classID,
+              const std::string& title);
 
-    // Close the editor window and detach the view.
     void close();
+    bool isOpen() const;
 
-    // Is the editor window currently open?
-    bool isOpen() const { return m_isOpen; }
-
-    // Process pending window messages (call from main loop)
-    static void pollEvents();
-
-    // Resize the native window (called by IPlugFrame)
-    void resizeToView(int width, int height);
-
-    // Get the plugin instance this editor is for
     VST3PluginInstance* instance() const { return m_instance; }
 
 private:
-    bool createNativeWindow(const std::string& title, int width, int height);
-    void destroyNativeWindow();
-
     VST3PluginInstance* m_instance = nullptr;
-    Steinberg::IPtr<Steinberg::IPlugView> m_plugView;
-    Steinberg::IPtr<PlugFrameAdapter> m_plugFrame;
-    bool m_isOpen = false;
 
 #ifdef _WIN32
-    HWND m_hwnd = nullptr;
-    static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
-    static bool s_classRegistered;
+    HANDLE m_process = nullptr;
+    HANDLE m_thread_handle = nullptr;  // process main thread handle
 #endif
 };
 

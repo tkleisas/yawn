@@ -89,6 +89,9 @@ endif()
 # Remove core sources from main exe (they're in yawn_core now)
 list(REMOVE_ITEM YAWN_SOURCES ${YAWN_CORE_SOURCES})
 
+# Remove standalone editor host (it's its own executable)
+list(FILTER YAWN_SOURCES EXCLUDE REGEX "VST3EditorHost\\.cpp$")
+
 add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
 
 if(MSVC)
@@ -124,6 +127,19 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     ${CMAKE_CURRENT_SOURCE_DIR}/assets
     $<TARGET_FILE_DIR:${PROJECT_NAME}>/assets
 )
+
+# VST3 editor host — separate process to isolate plugin UI from SDL
+if(YAWN_VST3)
+    add_executable(yawn_vst3_host src/vst3/VST3EditorHost.cpp)
+    target_link_libraries(yawn_vst3_host PRIVATE vst3_hosting ole32 oleaut32)
+    target_compile_definitions(yawn_vst3_host PRIVATE YAWN_HAS_VST3=1)
+    set_target_properties(yawn_vst3_host PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    if(MSVC)
+        target_compile_options(yawn_vst3_host PRIVATE /bigobj)
+    endif()
+endif()
 
 # Testing
 enable_testing()
