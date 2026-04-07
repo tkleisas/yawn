@@ -70,6 +70,7 @@ void MixerPanel::paint(UIContext& ctx) {
                 s.midiInChDrop.paintOverlay(ctx);
                 s.midiOutDrop.paintOverlay(ctx);
                 s.midiOutChDrop.paintOverlay(ctx);
+                s.sidechainDrop.paintOverlay(ctx);
             }
         }
     }
@@ -128,6 +129,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                     return s.midiOutDrop.handlePopupClick(mx, my);
                 if (s.midiOutChDrop.hitPopup(mx, my))
                     return s.midiOutChDrop.handlePopupClick(mx, my);
+                if (s.sidechainDrop.hitPopup(mx, my))
+                    return s.sidechainDrop.handlePopupClick(mx, my);
             }
         }
     }
@@ -142,6 +145,7 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             if (s.midiInChDrop.isOpen()) s.midiInChDrop.close();
             if (s.midiOutDrop.isOpen()) s.midiOutDrop.close();
             if (s.midiOutChDrop.isOpen()) s.midiOutChDrop.close();
+            if (s.sidechainDrop.isOpen()) s.sidechainDrop.close();
         }
     }
 
@@ -212,6 +216,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                 return s.midiOutDrop.onMouseDown(e);
             if (!rightClick && hitWidget(s.midiOutChDrop, mx, my))
                 return s.midiOutChDrop.onMouseDown(e);
+            if (!rightClick && hitWidget(s.sidechainDrop, mx, my))
+                return s.sidechainDrop.onMouseDown(e);
         }
 
         // Pan: right-click opens MIDI Learn context menu
