@@ -52,6 +52,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/OfflineRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetManager.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)

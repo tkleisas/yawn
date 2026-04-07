@@ -248,6 +248,7 @@ void App::buildWidgetTree() {
     auto pianoP     = std::make_unique<PianoRollPanel>();
     auto aboutDlg   = std::make_unique<AboutDialog>();
     auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
+    auto textInputDlg = std::make_unique<TextInputDialogWidget>();
     auto prefsDlg   = std::make_unique<PreferencesDialog>();
     auto exportDlg  = std::make_unique<ExportDialog>();
 
@@ -267,6 +268,7 @@ void App::buildWidgetTree() {
     m_pianoRoll         = pianoP.get();
     m_aboutDialog       = aboutDlg.get();
     m_confirmDialog     = confirmDlg.get();
+    m_textInputDialog   = textInputDlg.get();
     m_preferencesDialog = prefsDlg.get();
     m_exportDialog      = exportDlg.get();
 
@@ -387,6 +389,7 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(pianoP));
     m_wrappers.push_back(std::move(aboutDlg));
     m_wrappers.push_back(std::move(confirmDlg));
+    m_wrappers.push_back(std::move(textInputDlg));
     m_wrappers.push_back(std::move(prefsDlg));
     m_wrappers.push_back(std::move(exportDlg));
 
@@ -1366,6 +1369,96 @@ bool App::init() {
         m_audioEngine.sendCommand(audio::AutoParamTouchMsg{track, tt, ci, pi, v, touching});
     });
 
+    // Wire preset click: open context menu with preset list + Save
+    m_detailPanel->setOnPresetClick([this](ui::fw::DetailPanelWidget::DeviceType type,
+                                           int chainIndex, float mx, float my) {
+        if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+        int t = m_selectedTrack;
+
+        // Resolve device pointer and device ID
+        std::string deviceId;
+        std::string deviceName;
+        if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
+            auto* inst = m_audioEngine.instrument(t);
+            if (!inst) return;
+            deviceId = inst->id();
+            deviceName = inst->name();
+        } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
+            auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+            if (!fx) return;
+            deviceId = fx->id();
+            deviceName = fx->name();
+        } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
+            auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+            if (!fx) return;
+            deviceId = fx->id();
+            deviceName = fx->name();
+        }
+
+        auto presets = PresetManager::listPresetsForDevice(deviceId);
+        std::vector<ui::ContextMenu::Item> items;
+
+        // Add "Save Preset..." item
+        items.push_back({"Save Preset...", [this, type, chainIndex, deviceId, deviceName]() {
+            SDL_StartTextInput(m_mainWindow.getHandle());
+            m_textInputDialog->prompt("Save Preset", "My Preset",
+                [this, type, chainIndex, deviceId, deviceName](const std::string& name) {
+                    int t = m_selectedTrack;
+                    if (t < 0 || t >= m_project.numTracks()) return;
+                    std::filesystem::path saved;
+                    if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
+                        auto* inst = m_audioEngine.instrument(t);
+                        if (inst) saved = saveDevicePreset(name, *inst);
+                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
+                        auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+                        if (fx) saved = saveDevicePreset(name, *fx);
+                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
+                        auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+                        if (fx) saved = saveDevicePreset(name, *fx);
+                    }
+                    if (!saved.empty()) {
+                        m_detailPanel->setDevicePresetName(type, chainIndex, name);
+                        LOG_INFO("Preset", "Saved '%s' for %s", name.c_str(), deviceName.c_str());
+                    }
+                });
+        }});
+
+        // Separator if there are presets
+        if (!presets.empty()) {
+            items.push_back({"", nullptr, true}); // separator
+        }
+
+        // Add each preset as a loadable item
+        for (const auto& preset : presets) {
+            std::filesystem::path path = preset.filePath;
+            std::string pName = preset.name;
+            items.push_back({preset.name,
+                [this, type, chainIndex, path, pName]() {
+                    int t = m_selectedTrack;
+                    if (t < 0 || t >= m_project.numTracks()) return;
+                    bool ok = false;
+                    if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
+                        auto* inst = m_audioEngine.instrument(t);
+                        if (inst) ok = loadDevicePreset(path, *inst);
+                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
+                        auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+                        if (fx) ok = loadDevicePreset(path, *fx);
+                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
+                        auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+                        if (fx) ok = loadDevicePreset(path, *fx);
+                    }
+                    if (ok) {
+                        m_detailPanel->setDevicePresetName(type, chainIndex, pName);
+                        updateDetailForSelectedTrack();
+                        LOG_INFO("Preset", "Loaded '%s'", pName.c_str());
+                    }
+                }
+            });
+        }
+
+        m_contextMenu.open(mx, my, std::move(items));
+    });
+
 #ifdef YAWN_HAS_VST3
     // Initialize VST3 plugin scanner
     m_vst3Scanner = std::make_unique<vst3::VST3Scanner>();
@@ -1782,6 +1875,12 @@ void App::processEvents() {
                         ui::fw::KeyEvent ke; ke.keyCode = 13;
                         m_confirmDialog->onKeyDown(ke);
                     }
+                    break;
+                }
+                if (m_textInputDialog->isOpen()) {
+                    ui::fw::KeyEvent ke;
+                    ke.keyCode = static_cast<int>(event.key.key);
+                    m_textInputDialog->onKeyDown(ke);
                     break;
                 }
                 if (m_aboutDialog->isVisible()) {
@@ -2256,6 +2355,13 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
+                // Text input dialog (modal)
+                if (m_textInputDialog->isOpen()) {
+                    ui::fw::TextInputEvent te;
+                    std::strncpy(te.text, event.text.text, sizeof(te.text) - 1);
+                    m_textInputDialog->onTextInput(te);
+                    break;
+                }
                 // Track rename text input
                 if (m_sessionPanel->isRenamingTrack()) {
                     m_sessionPanel->handleRenameTextInput(event.text.text);
@@ -2349,6 +2455,15 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.button = ui::fw::MouseButton::Left;
                     m_confirmDialog->onMouseDown(me);
+                    break;
+                }
+
+                // Text input dialog (modal)
+                if (m_textInputDialog->isOpen()) {
+                    ui::fw::MouseEvent me;
+                    me.x = mx; me.y = my;
+                    me.button = ui::fw::MouseButton::Left;
+                    m_textInputDialog->onMouseDown(me);
                     break;
                 }
 
@@ -3080,6 +3195,10 @@ void App::render() {
         if (m_confirmDialog->isOpen()) {
             m_confirmDialog->layout(screenBounds, m_uiContext);
             m_confirmDialog->paint(m_uiContext);
+        }
+        if (m_textInputDialog->isOpen()) {
+            m_textInputDialog->layout(screenBounds, m_uiContext);
+            m_textInputDialog->paint(m_uiContext);
         }
         if (m_aboutDialog->isVisible()) {
             m_aboutDialog->layout(screenBounds, m_uiContext);

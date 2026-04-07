@@ -5,6 +5,7 @@
 #include "DetailPanelWidget.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "../../util/Logger.h"
 
 namespace yawn {
 namespace ui {
@@ -201,9 +202,13 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     if (m_scroll.onMouseDown(e)) return true;
 
-    for (auto* dw : m_deviceWidgets) {
+    for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
+        auto* dw = m_deviceWidgets[i];
         auto& db = dw->bounds();
-        if (mx >= db.x && mx < db.x + db.w && my >= db.y && my < db.y + db.h) {
+        bool inside = mx >= db.x && mx < db.x + db.w && my >= db.y && my < db.y + db.h;
+        LOG_INFO("UI", "DetailPanel device[%zu] bounds=(%g,%g,%g,%g) click=(%g,%g) inside=%d",
+                 i, db.x, db.y, db.w, db.h, mx, my, (int)inside);
+        if (inside) {
             if (dw->onMouseDown(e)) return true;
         }
     }

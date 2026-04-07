@@ -7,7 +7,7 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Arrangement · Mixer · Instruments · Effects · MIDI · Recording · Automation<br/><br/>
+  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets<br/><br/>
   <em>Made with AI-Sloptronic™ technology</em><br/>
   <sub>Where "it compiles" is the new "it works" and every bug is a ✨feature request✨</sub>
 </p>
@@ -19,23 +19,30 @@
 > and then spending twice as long explaining why that's not what you meant.
 > Side effects may include: spontaneous filter resonance, existential questions about who actually wrote this,
 > and an unshakeable feeling that the AI is just gaslighting you into thinking the bug is fixed.
+>
+> **⚠️ VST3 Disclaimer:** We have successfully taught an AI to host third-party plugins inside a DAW
+> that was itself written by an AI. This is either the future of music production or the opening scene
+> of a techno-horror film. The VST3 editors run in a separate process because JUCE plugins install
+> Win32 hooks that freeze our event loop — a bug we diagnosed after 3 hours of "why is the window frozen"
+> followed by the AI saying "Ah, I see the issue!" for the 47th time.
 
 ## Features
 
 ### Audio Engine
-- **Real-time Audio Engine** — Lock-free audio thread with PortAudio (ASIO/WASAPI/ALSA), zero audio-thread allocations
+- **Real-time Audio Engine** — Lock-free audio thread with PortAudio (ASIO/WASAPI/ALSA), zero audio-thread allocations. The AI wrote it without being able to hear audio. We're not sure if that's a superpower or a disability.
 - **Clip Playback** — Audio files (WAV, FLAC, OGG, AIFF, MP3), looping, gain, fade-in/out
-- **Quantized Launching** — Launch clips on beat or bar boundaries with configurable quantize resolution
-- **Transport** — Play/stop, BPM control, beat-synced position tracking, loop range with markers
+- **Quantized Launching** — Launch clips on beat or bar boundaries with configurable quantize resolution (Next Bar, Next Beat, Immediate, 1/2, 1/4, 1/8, 1/16)
+- **Transport** — Play/stop/record, BPM control, beat-synced position tracking, loop range with draggable markers
 - **Metronome** — Synthesized click track with accent on downbeats, configurable volume & time signature, count-in (0/1/2/4 bars), mode selection (Always/Record Only/Play Only/Off)
 - **Follow Actions** — 8 action types (Next, Previous, First, Last, Random, Any, Play Again, Stop), dual-action with probability (A/B chance), bar-count trigger duration
-- **Time Stretching** — WSOLA (rhythmic/percussive) and Phase Vocoder (tonal/texture) algorithms, per-track speed ratio (0.25×–4×)
+- **Time Stretching** — WSOLA (rhythmic/percussive) and Phase Vocoder (tonal/texture) algorithms, per-track speed ratio (0.25×–4×), 6 warp modes (Off/Auto/Beats/Tones/Texture/Repitch)
 - **Transient Detection** — Adaptive threshold onset detection with BPM estimation, configurable sensitivity
+- **Warp Markers** — Map original audio positions to target beat positions for flexible time-stretching
 
 ### Mixer & Routing
-- **64-track Mixer** — Per-track volume, pan, mute, solo with peak metering
+- **64-track Mixer** — Per-track volume, pan, mute, solo with peak metering. The AI mixed a song once. It sounded like a spreadsheet.
 - **8 Send/Return Buses** — Pre/post-fader send routing with independent return channels
-- **Master Bus** — Master volume with metering
+- **Master Bus** — Master volume with stereo metering
 - **3-point Effect Insert** — Effect chains on tracks, return buses, and master
 - **Audio Input Routing** — Per-track audio input channel selection, monitor modes (Auto/In/Off)
 - **MIDI Routing** — Per-track MIDI input port/channel, output port/channel
@@ -46,7 +53,10 @@
 - **Record Quantize** — Configurable quantize on record (None, Next Beat, Next Bar)
 - **Count-in** — 0, 1, 2, or 4 bar count-in before recording starts
 
-### Native Audio Effects
+### Integrated Audio Effects
+
+*14 hand-crafted artisanal effects, each lovingly hallucinated by an AI that has never used a compressor but has read 47 papers about them.*
+
 - **Reverb** — Schroeder/Moorer algorithmic reverb (4 comb + 2 allpass filters)
 - **Delay** — Stereo delay with tempo sync, feedback, and ping-pong mode
 - **EQ** — 3-band parametric EQ (low shelf, mid peak, high shelf)
@@ -60,7 +70,19 @@
 - **Oscilloscope** — Real-time waveform visualizer (non-destructive analysis effect)
 - **Spectrum Analyzer** — FFT-based frequency spectrum display (non-destructive analysis effect)
 
-### Native Instruments
+### VST3 Plugin Hosting
+
+*The AI built a plugin host before learning what a plugin sounds like. It correctly implemented the entire VST3 COM interface on the first try. We're terrified.*
+
+- **Plugin Scanning** — Automatic discovery in standard system paths (Program Files/Common Files/VST3), class enumeration with vendor/category info
+- **VST3 Instruments** — Load third-party VST3 synths as track instruments with full parameter automation
+- **VST3 Audio Effects** — Load VST3 effects in any effect chain slot (track, return, master)
+- **Process-Isolated Editor** — Plugin GUIs run in a separate process (`yawn_vst3_host.exe`) via bidirectional IPC, because JUCE plugins install process-wide Win32 message hooks that would freeze our event loop
+- **Parameter Sync** — Full bidirectional parameter sync between host and editor process
+- **State Persistence** — Processor + controller state serialized with project (hex-encoded binary)
+- **Generic Knob Grid** — Automatic parameter knob UI for plugins without custom editors
+
+### Integrated Instruments
 - **Subtractive Synth** — 2-oscillator analog-style synth with SVF filter, 23 parameters, 16-voice polyphony
 - **FM Synth** — 4-operator FM synthesizer with 8 algorithm presets, 19 parameters
 - **Sampler** — Sample playback with pitch tracking, linear interpolation, ADSR envelope
@@ -520,7 +542,7 @@ yawn/
 | 6. MIDI Engine | ✅ Done | MIDI 2.0-res internals, RtMidi I/O, MPE zones, MIDI clips |
 | 7. Metronome | ✅ Done | Synthesized click track, beat-synced, configurable |
 | 8. Audio Effects | ✅ Done | 12 built-in effects (+ 2 visualizers), effect chains, drag-to-reorder, 3-point insert |
-| 9. Native Instruments | ✅ Done | 11 instruments with full UI (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, Multisampler, InstrumentRack, DrumRack, DrumSlop) |
+| 9. Integrated Instruments | ✅ Done | 11 instruments with full UI (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, Multisampler, InstrumentRack, DrumRack, DrumSlop) |
 | 10. MIDI Effects | ✅ Done | 8 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch, LFO) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
 | 12. UI Framework | ✅ Done | Widget tree, FlexBox layout, primitive widgets, dialog system, panel migration |

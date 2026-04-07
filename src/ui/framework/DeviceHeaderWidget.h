@@ -7,6 +7,7 @@
 
 #include "Widget.h"
 #include "../Theme.h"
+#include "../../util/Logger.h"
 #include <string>
 #include <functional>
 
@@ -43,6 +44,11 @@ public:
     void setOnRemove(ActionCallback cb) { m_onRemove = std::move(cb); }
     void setOnDragStart(ActionCallback cb) { m_onDragStart = std::move(cb); }
 
+    // Preset system
+    using PresetClickCallback = std::function<void(float x, float y)>;
+    void setOnPresetClick(PresetClickCallback cb) { m_onPresetClick = std::move(cb); }
+    void setPresetName(const std::string& name) { m_presetName = name; }
+
     // Device type color
     Color deviceColor() const {
         switch (m_type) {
@@ -74,6 +80,7 @@ public:
         m_bypassBtn = {x + 22, y + 4, kBtnSize, kBtnSize};
         m_removeBtn = m_removable ? Rect{x + w - 20, y + 4, kBtnSize, kBtnSize}
                                   : Rect{};
+        // m_presetBtn is computed in paint() where we have font metrics
     }
 
     // ─── Rendering ──────────────────────────────────────────────────────
@@ -118,7 +125,26 @@ public:
 
         // Device name
         Color nameC = m_bypassed ? Theme::textDim : Theme::textPrimary;
-        f.drawText(r, m_name.c_str(), x + 38, m_expandBtn.y, med, nameC);
+        float nameX = x + 38;
+        f.drawText(r, m_name.c_str(), nameX, m_expandBtn.y, med, nameC);
+
+        // Compute preset button position: right after device name
+        float nameW = f.textWidth(m_name, med);
+        float presetX = nameX + nameW + 8;
+        float presetH = kHeaderH - kStripeH - 2;
+        float presetY = y + kStripeH + 1;
+        const char* pLabel = m_presetName.empty() ? "Preset" : m_presetName.c_str();
+        std::string btnLabel = std::string(pLabel) + " \xe2\x96\xbe";
+        float labelW = f.textWidth(btnLabel, sml);
+        float presetW = labelW + 10;
+        float maxRight = m_removable ? (x + w - 24) : (x + w - 4);
+        if (presetX + presetW > maxRight)
+            presetW = maxRight - presetX;
+        if (presetW < 20) presetW = 20;
+        m_presetBtn = {presetX, presetY, presetW, presetH};
+        // Cache for layout() hit-test
+        m_lastNameW = nameW;
+        m_lastPresetW = presetW;
 
         // Remove button
         if (m_removable) {
@@ -126,6 +152,20 @@ public:
                        Color{60, 30, 30, 255});
             f.drawText(r, "X", m_removeBtn.x + 4, m_removeBtn.y + 3, sml,
                        Color{200, 100, 100, 255});
+        }
+
+        // Preset dropdown button
+        {
+            Color pbBg  = {55, 55, 68, 255};
+            Color pbBrd = {100, 100, 120, 255};
+            r.drawRect(m_presetBtn.x, m_presetBtn.y,
+                       m_presetBtn.w, m_presetBtn.h, pbBg);
+            r.drawRectOutline(m_presetBtn.x, m_presetBtn.y,
+                              m_presetBtn.w, m_presetBtn.h, pbBrd);
+            // Label with arrow — use same Y as device name for consistent baseline
+            f.drawText(r, btnLabel.c_str(),
+                       m_presetBtn.x + 4, m_expandBtn.y, sml,
+                       Color{200, 200, 210, 255});
         }
 #endif
     }
@@ -135,6 +175,10 @@ public:
     bool onMouseDown(MouseEvent& e) override {
         float px = e.x;
         float py = e.y;
+
+        LOG_INFO("UI", "DeviceHeader::onMouseDown click=(%g,%g) presetBtn=(%g,%g,%g,%g) hasCallback=%d",
+                 px, py, m_presetBtn.x, m_presetBtn.y, m_presetBtn.w, m_presetBtn.h,
+                 (int)(bool)m_onPresetClick);
 
         if (hitTest(m_expandBtn, px, py)) {
             m_expanded = !m_expanded;
@@ -150,6 +194,13 @@ public:
             if (m_onRemove) m_onRemove();
             return true;
         }
+        // Preset button — use the rect computed/updated by paint()
+        if (m_presetBtn.w > 0 && hitTest(m_presetBtn, px, py)) {
+            LOG_INFO("UI", "Preset button HIT!");
+            if (m_onPresetClick)
+                m_onPresetClick(m_presetBtn.x, m_presetBtn.y + m_presetBtn.h + 2);
+            return true;
+        }
         // Click on header name area → start drag reorder
         if (m_onDragStart) {
             m_onDragStart();
@@ -160,20 +211,25 @@ public:
 
 private:
     std::string m_name;
+    std::string m_presetName;
     DeviceType  m_type = DeviceType::AudioEffect;
     bool        m_bypassed  = false;
     bool        m_expanded  = true;
     bool        m_removable = true;
+    float       m_lastNameW   = 0;  // cached from paint() for layout() hit-test
+    float       m_lastPresetW = 0;
 
     ToggleCallback m_onExpandToggle;
     ToggleCallback m_onBypassToggle;
     ActionCallback m_onRemove;
     ActionCallback m_onDragStart;
+    PresetClickCallback m_onPresetClick;
 
     // Hit-test regions (computed in layout)
     Rect m_expandBtn{};
     Rect m_bypassBtn{};
     Rect m_removeBtn{};
+    Rect m_presetBtn{};
 
     static bool hitTest(const Rect& r, float px, float py) {
         return px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;

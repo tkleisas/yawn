@@ -243,6 +243,13 @@ public:
             if (m_onDragStart) m_onDragStart();
         });
     }
+    void setOnPresetClick(DeviceHeaderWidget::PresetClickCallback cb) {
+        m_onPresetClick = std::move(cb);
+        m_header.setOnPresetClick([this](float x, float y) {
+            if (m_onPresetClick) m_onPresetClick(x, y);
+        });
+    }
+    void setPresetName(const std::string& name) { m_header.setPresetName(name); }
 
     // ─── Knob text-edit forwarding (for GroupedKnobBody) ────────────────
 
@@ -414,7 +421,10 @@ public:
     // ─── Event handling ─────────────────────────────────────────────────
 
     bool onMouseDown(MouseEvent& e) override {
-        if (m_header.bounds().contains(e.x, e.y))
+        auto& hb = m_header.bounds();
+        LOG_INFO("UI", "DeviceWidget::onMouseDown click=(%g,%g) headerBounds=(%g,%g,%g,%g) contains=%d",
+                 e.x, e.y, hb.x, hb.y, hb.w, hb.h, (int)hb.contains(e.x, e.y));
+        if (hb.contains(e.x, e.y))
             return m_header.onMouseDown(e);
 
         if (!m_expanded) return false;
@@ -517,6 +527,7 @@ private:
     DeviceHeaderWidget::ToggleCallback m_onBypassToggle;
     DeviceHeaderWidget::ToggleCallback m_onExpandToggle;
     DeviceHeaderWidget::ActionCallback m_onDragStart;
+    DeviceHeaderWidget::PresetClickCallback m_onPresetClick;
 
     // ─── Knob management ────────────────────────────────────────────────
 

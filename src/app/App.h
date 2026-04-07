@@ -11,6 +11,7 @@
 #include "ui/ContextMenu.h"
 #include "ui/framework/AboutDialog.h"
 #include "ui/framework/ConfirmDialogWidget.h"
+#include "ui/framework/TextInputDialogWidget.h"
 #include "ui/panels/PreferencesDialog.h"
 #include "ui/framework/ExportDialog.h"
 #include "ui/framework/FlexBox.h"
@@ -36,6 +37,9 @@
 #include <string>
 #include <mutex>
 #include <filesystem>
+
+#include "presets/PresetManager.h"
+#include "presets/DevicePresetHelpers.h"
 
 #ifdef YAWN_HAS_VST3
 #include "vst3/VST3Scanner.h"
@@ -123,6 +127,7 @@ private:
     ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
     ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
     ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
+    ui::fw::TextInputDialogWidget* m_textInputDialog = nullptr;
     ui::fw::PreferencesDialog*    m_preferencesDialog = nullptr;
     ui::fw::ExportDialog*         m_exportDialog = nullptr;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;

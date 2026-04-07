@@ -102,6 +102,21 @@ public:
         m_onMoveDevice = std::move(cb);
     }
 
+    // Preset click: (DeviceType, chainIndex, screenX, screenY)
+    using PresetClickCallback = std::function<void(DeviceType, int, float, float)>;
+    void setOnPresetClick(PresetClickCallback cb) { m_onPresetClick = std::move(cb); }
+
+    // Update preset name shown on a device header
+    void setDevicePresetName(DeviceType type, int chainIndex, const std::string& name) {
+        for (size_t i = 0; i < m_deviceRefs.size(); ++i) {
+            auto& ref = m_deviceRefs[i];
+            if (ref.type == type && ref.chainIndex == chainIndex) {
+                m_deviceWidgets[i]->setPresetName(name);
+                return;
+            }
+        }
+    }
+
     // Callback fired when a knob drag begins/ends (for automation recording).
     // Args: trackIndex, targetType, chainIndex, paramIndex, value, touching
     using ParamTouchCallback = std::function<void(int, uint8_t, int, int, float, bool)>;
@@ -437,6 +452,7 @@ public:
                 dw->setBypassed(fx->bypassed());
                 if (!setupMidiEffectDisplay(dw, fx, ref))
                     configureDeviceWidget(dw, ref);
+                wireHeaderCallbacks(dw, ref);
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
@@ -461,6 +477,7 @@ public:
             dw->setBypassed(inst->bypassed());
             if (!setupInstrumentDisplay(dw, inst, ref))
                 configureDeviceWidget(dw, ref);
+            wireHeaderCallbacks(dw, ref);
 
             snapPoints.push_back(xPos);
             xPos += dw->preferredWidth() + kDeviceGap;
@@ -822,6 +839,13 @@ private:
         }
     };
 
+    // ── Wire header-only callbacks (preset) that setup*Display may skip ──
+    void wireHeaderCallbacks(DeviceWidget* dw, const DeviceRef& ref) {
+        dw->setOnPresetClick([this, type = ref.type, chainIdx = ref.chainIndex](float x, float y) {
+            if (m_onPresetClick) m_onPresetClick(type, chainIdx, x, y);
+        });
+    }
+
     // ── Build params and wire callbacks for a DeviceWidget ──
     void configureDeviceWidget(DeviceWidget* dw, const DeviceRef& ref) {
         std::vector<DeviceWidget::ParamInfo> params;
@@ -889,6 +913,11 @@ private:
 
         dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
             if (m_onRemoveDevice) m_onRemoveDevice(type, chainIdx);
+        });
+
+        // Wire preset click
+        dw->setOnPresetClick([this, type = ref.type, chainIdx = ref.chainIndex](float x, float y) {
+            if (m_onPresetClick) m_onPresetClick(type, chainIdx, x, y);
         });
 
         // Wire drag-to-reorder: find this device's index in m_deviceWidgets
@@ -1369,6 +1398,7 @@ private:
     std::function<void(DeviceType, int)> m_onRemoveDevice;
     std::function<void(DeviceType, int, int)> m_onMoveDevice;
     ParamTouchCallback m_onParamTouch;
+    PresetClickCallback m_onPresetClick;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;
