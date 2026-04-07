@@ -160,6 +160,26 @@ public:
 
     bool onScroll(ScrollEvent& e) override {
         if (!m_project) return false;
+        // If an open dropdown is under the cursor, scroll it instead
+        if (m_showIO) {
+            for (int t = 0; t < m_project->numTracks(); ++t) {
+                auto& s = m_strips[t];
+                auto tryScroll = [&](FwDropDown& d) -> bool {
+                    if (d.isOpen() && d.hitPopup(e.x, e.y)) {
+                        d.scrollPopup(e.dy > 0 ? -1 : 1);
+                        return true;
+                    }
+                    return false;
+                };
+                if (m_project->track(t).type == Track::Type::Audio) {
+                    if (tryScroll(s.audioInputDrop)) return true;
+                } else {
+                    if (tryScroll(s.midiInDrop)) return true;
+                    if (tryScroll(s.midiOutDrop)) return true;
+                    if (tryScroll(s.sidechainDrop)) return true;
+                }
+            }
+        }
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
         float contentW = m_project->numTracks() * Theme::kTrackWidth;
         float maxScroll = std::max(0.0f, contentW - gridW);
