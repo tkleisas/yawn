@@ -17,10 +17,12 @@
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/hosting/module.h"
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
+#include "public.sdk/source/vst/hosting/parameterchanges.h"
 
 #include <memory>
 #include <string>
 #include <vector>
+#include <mutex>
 
 namespace yawn {
 namespace vst3 {
@@ -96,6 +98,9 @@ public:
     double getParameterNormalized(Steinberg::Vst::ParamID id) const;
     void setParameterNormalized(Steinberg::Vst::ParamID id, double value);
 
+    // Drain queued parameter changes into target (call from audio thread before process)
+    void drainParameterChanges(Steinberg::Vst::ParameterChanges& target);
+
     // State persistence
     bool getProcessorState(std::vector<uint8_t>& outData) const;
     bool setProcessorState(const std::vector<uint8_t>& data);
@@ -126,6 +131,14 @@ private:
     int m_numInputChannels = 0;
     int m_numOutputChannels = 2;
     bool m_hasEventInput = false;
+
+    // Thread-safe parameter change queue (UI thread → audio thread)
+    struct PendingParam {
+        Steinberg::Vst::ParamID id;
+        double value;
+    };
+    std::mutex m_paramMutex;
+    std::vector<PendingParam> m_pendingParams;
 };
 
 // Singleton host context — provides IHostApplication to plugins

@@ -353,6 +353,26 @@ double VST3PluginInstance::getParameterNormalized(Steinberg::Vst::ParamID id) co
 void VST3PluginInstance::setParameterNormalized(Steinberg::Vst::ParamID id, double value) {
     if (m_controller)
         m_controller->setParamNormalized(id, value);
+    // Queue for audio processor
+    std::lock_guard<std::mutex> lock(m_paramMutex);
+    m_pendingParams.push_back({id, value});
+}
+
+void VST3PluginInstance::drainParameterChanges(Steinberg::Vst::ParameterChanges& target) {
+    std::vector<PendingParam> changes;
+    {
+        std::lock_guard<std::mutex> lock(m_paramMutex);
+        changes.swap(m_pendingParams);
+    }
+    target.clearQueue();
+    for (auto& c : changes) {
+        Steinberg::int32 index;
+        auto* queue = target.addParameterData(c.id, index);
+        if (queue) {
+            Steinberg::int32 pointIndex;
+            queue->addPoint(0, c.value, pointIndex);
+        }
+    }
 }
 
 // ── State persistence ──

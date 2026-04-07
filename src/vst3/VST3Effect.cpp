@@ -95,6 +95,10 @@ void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
     outputBus.silenceFlags = 0;
     outputBus.channelBuffers32 = outChannels;
 
+    // Drain queued parameter changes for the processor
+    Steinberg::Vst::ParameterChanges paramChanges;
+    m_instance->drainParameterChanges(paramChanges);
+
     // Setup ProcessData
     Steinberg::Vst::ProcessData processData;
     processData.processMode = Steinberg::Vst::kRealtime;
@@ -106,7 +110,7 @@ void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
     processData.outputs = &outputBus;
     processData.inputEvents = nullptr;
     processData.outputEvents = nullptr;
-    processData.inputParameterChanges = nullptr;
+    processData.inputParameterChanges = paramChanges.getParameterCount() > 0 ? &paramChanges : nullptr;
     processData.outputParameterChanges = nullptr;
     processData.processContext = nullptr;
 

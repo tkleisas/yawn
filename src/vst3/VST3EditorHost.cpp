@@ -17,6 +17,7 @@
 
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/base/ipluginbase.h"
+#include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/gui/iplugview.h"
@@ -33,18 +34,108 @@ using namespace Steinberg;
 
 static Vst::HostApplication g_hostApp;
 static HANDLE g_hStdout = INVALID_HANDLE_VALUE;
+static IPtr<Vst::IEditController> g_controller;
+static IPtr<Vst::IComponent> g_component;
+static HWND g_mainHwnd = nullptr;
+
+#define WM_PIPE_PARAM  (WM_APP + 1)
+#define WM_SYNC_PARAMS (WM_APP + 2)
+
+// ── Simple MemoryStream for IBStream serialization ──
+
+class MemoryStream : public IBStream {
+public:
+    tresult PLUGIN_API read(void* buffer, int32 numBytes, int32* numBytesRead) override {
+        int32 avail = static_cast<int32>(m_data.size()) - m_pos;
+        int32 toRead = (numBytes < avail) ? numBytes : avail;
+        if (toRead > 0) { std::memcpy(buffer, m_data.data() + m_pos, toRead); m_pos += toRead; }
+        if (numBytesRead) *numBytesRead = toRead;
+        return kResultOk;
+    }
+    tresult PLUGIN_API write(void* buffer, int32 numBytes, int32* numBytesWritten) override {
+        if (numBytes <= 0) { if (numBytesWritten) *numBytesWritten = 0; return kResultOk; }
+        auto newSize = m_pos + numBytes;
+        if (newSize > static_cast<int32>(m_data.size())) m_data.resize(newSize);
+        std::memcpy(m_data.data() + m_pos, buffer, numBytes);
+        m_pos += numBytes;
+        if (numBytesWritten) *numBytesWritten = numBytes;
+        return kResultOk;
+    }
+    tresult PLUGIN_API seek(int64 pos, int32 mode, int64* result) override {
+        int64 newPos = 0;
+        switch (mode) {
+            case kIBSeekSet: newPos = pos; break;
+            case kIBSeekCur: newPos = m_pos + pos; break;
+            case kIBSeekEnd: newPos = static_cast<int64>(m_data.size()) + pos; break;
+            default: return kInvalidArgument;
+        }
+        if (newPos < 0) return kInvalidArgument;
+        m_pos = static_cast<int32>(newPos);
+        if (result) *result = m_pos;
+        return kResultOk;
+    }
+    tresult PLUGIN_API tell(int64* pos) override {
+        if (pos) *pos = m_pos;
+        return kResultOk;
+    }
+    uint32 PLUGIN_API addRef() override { return ++m_refCount; }
+    uint32 PLUGIN_API release() override {
+        auto r = --m_refCount;
+        if (r == 0) delete this;
+        return r;
+    }
+    tresult PLUGIN_API queryInterface(const TUID, void** obj) override {
+        if (obj) *obj = nullptr;
+        return kNoInterface;
+    }
+    const std::vector<uint8_t>& data() const { return m_data; }
+private:
+    std::vector<uint8_t> m_data;
+    int32 m_pos = 0;
+    std::atomic<int32> m_refCount{1};
+};
+
+// ── Hex encoding helpers ──
+
+static std::string toHex(const std::vector<uint8_t>& data) {
+    static const char hex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(data.size() * 2);
+    for (uint8_t b : data) {
+        out.push_back(hex[b >> 4]);
+        out.push_back(hex[b & 0xF]);
+    }
+    return out;
+}
 
 // ── Write a line to stdout pipe (thread-safe enough for our use) ──
 
 static void writePipe(const char* data, int len) {
     if (g_hStdout == INVALID_HANDLE_VALUE) return;
-    DWORD written;
+    DWORD written = 0;
     WriteFile(g_hStdout, data, static_cast<DWORD>(len), &written, nullptr);
 }
 
-// ── IComponentHandler — receives parameter changes from the plugin editor ──
+// ── Send full component state as hex-encoded blob ──
 
-class EditorComponentHandler : public Vst::IComponentHandler {
+static void sendState() {
+    if (!g_component) return;
+
+    auto* stream = new MemoryStream();
+    if (g_component->getState(static_cast<IBStream*>(stream)) == kResultOk &&
+        !stream->data().empty()) {
+        std::string hex = toHex(stream->data());
+        std::string msg = "STATE " + hex + "\n";
+        writePipe(msg.c_str(), static_cast<int>(msg.size()));
+    }
+    stream->release();
+}
+
+// ── IComponentHandler — receives parameter changes from the plugin editor ──
+// Also implements IComponentHandler2 for preset/dirty notifications
+
+class EditorComponentHandler : public Vst::IComponentHandler,
+                                public Vst::IComponentHandler2 {
 public:
     tresult PLUGIN_API beginEdit(Vst::ParamID /*id*/) override { return kResultOk; }
 
@@ -58,7 +149,25 @@ public:
 
     tresult PLUGIN_API endEdit(Vst::ParamID /*id*/) override { return kResultOk; }
 
-    tresult PLUGIN_API restartComponent(int32 /*flags*/) override { return kResultOk; }
+    tresult PLUGIN_API restartComponent(int32 flags) override {
+        if ((flags & Steinberg::Vst::RestartFlags::kParamValuesChanged) && g_mainHwnd) {
+            // Defer param sync — let plugin finish updating its internal state first
+            PostMessageW(g_mainHwnd, WM_SYNC_PARAMS, 0, 0);
+        }
+        return kResultOk;
+    }
+
+    // IComponentHandler2
+    tresult PLUGIN_API setDirty(TBool state) override {
+        if (state && g_mainHwnd) {
+            PostMessageW(g_mainHwnd, WM_SYNC_PARAMS, 0, 0);
+        }
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API requestOpenEditor(FIDString /*name*/) override { return kResultOk; }
+    tresult PLUGIN_API startGroupEdit() override { return kResultOk; }
+    tresult PLUGIN_API finishGroupEdit() override { return kResultOk; }
 
     uint32 PLUGIN_API addRef() override { return 1; }
     uint32 PLUGIN_API release() override { return 1; }
@@ -68,6 +177,10 @@ public:
         if (FUnknownPrivate::iidEqual(iid, Vst::IComponentHandler::iid) ||
             FUnknownPrivate::iidEqual(iid, FUnknown::iid)) {
             *obj = static_cast<Vst::IComponentHandler*>(this);
+            return kResultOk;
+        }
+        if (FUnknownPrivate::iidEqual(iid, Vst::IComponentHandler2::iid)) {
+            *obj = static_cast<Vst::IComponentHandler2*>(this);
             return kResultOk;
         }
         return kNoInterface;
@@ -123,14 +236,10 @@ private:
 
 static const wchar_t* kClassName = L"YawnVST3EditorHost";
 
-#define WM_PIPE_PARAM (WM_APP + 1)
-
 struct ParamMsg {
     Vst::ParamID id;
     double value;
 };
-
-static IPtr<Vst::IEditController> g_controller;
 
 static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -145,13 +254,14 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             delete pm;
             return 0;
         }
+        case WM_SYNC_PARAMS:
+            sendState();
+            return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 // ── Pipe reader thread — reads from stdin, posts messages to main thread ──
-
-static HWND g_mainHwnd = nullptr;
 
 static DWORD WINAPI pipeReaderThread(LPVOID param) {
     HANDLE hStdin = static_cast<HANDLE>(param);
@@ -232,6 +342,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     component->initialize(&g_hostApp);
+    g_component = component;
 
     // Get controller (may be same object or separate)
     bool controllerIsComponent = false;
@@ -257,7 +368,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Set component handler so we receive performEdit callbacks
+    // Set component handler so we receive performEdit/restartComponent callbacks
     g_controller->setComponentHandler(&g_componentHandler);
 
     // Create editor view
@@ -361,24 +472,40 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Cleanup ──
+    // Stop reader thread first (close stdin to unblock ReadFile)
     if (hReaderThread) {
-        // Cancel the blocking ReadFile by closing stdin
+        CancelSynchronousIo(hReaderThread);
         CloseHandle(hStdin);
-        WaitForSingleObject(hReaderThread, 1000);
+        hStdin = INVALID_HANDLE_VALUE;
+        WaitForSingleObject(hReaderThread, 2000);
         CloseHandle(hReaderThread);
+        hReaderThread = nullptr;
     }
 
-    plugView->removed();
-    plugView->setFrame(nullptr);
-    plugView = nullptr;
+    // Drain any remaining messages (pending WM_PIPE_PARAM)
+    MSG cleanupMsg;
+    while (PeekMessageW(&cleanupMsg, hwnd, 0, 0, PM_REMOVE)) {
+        if (cleanupMsg.message == WM_PIPE_PARAM) {
+            delete reinterpret_cast<ParamMsg*>(cleanupMsg.lParam);
+        }
+    }
+
+    // Detach plugin view before destroying window
+    if (plugView) {
+        plugView->removed();
+        plugView->setFrame(nullptr);
+        plugView = nullptr;
+    }
     plugFrame = nullptr;
 
     DestroyWindow(hwnd);
+    g_mainHwnd = nullptr;
 
     g_controller->setComponentHandler(nullptr);
     if (!controllerIsComponent) g_controller->terminate();
     component->terminate();
     g_controller = nullptr;
+    g_component = nullptr;
     component = nullptr;
     module = nullptr;
 

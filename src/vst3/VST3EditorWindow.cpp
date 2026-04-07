@@ -183,8 +183,24 @@ void VST3EditorWindow::processLine(const std::string& line) {
                     static_cast<Steinberg::Vst::ParamID>(rawId), value);
             }
         }
+    } else if (line.size() > 6 && line[0] == 'S' && line[1] == 'T') {
+        // "STATE <hex>"
+        std::string hex = line.substr(6);
+        std::vector<uint8_t> data;
+        data.reserve(hex.size() / 2);
+        for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+            unsigned byte = 0;
+            if (sscanf(hex.c_str() + i, "%2x", &byte) == 1) {
+                data.push_back(static_cast<uint8_t>(byte));
+            }
+        }
+        if (m_instance && !data.empty()) {
+            LOG_INFO("VST3", "Applying preset state (%zu bytes)", data.size());
+            m_instance->setProcessorState(data);
+        }
+    } else if (line == "READY") {
+        LOG_INFO("VST3", "Editor process ready");
     }
-    // "READY" is informational, we just ignore it
 }
 
 void VST3EditorWindow::sendParamChange(unsigned int paramId, double value) {
