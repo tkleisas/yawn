@@ -125,6 +125,8 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
     // Metronome toggle
     float metW = 42.0f;
     m_metroBtn.layout(Rect{lx, btnY, metW, boxH}, ctx);
+    m_metroDotX = lx + metW + 6.0f;
+    m_metroDotY = btnY + boxH * 0.5f;
 
     // ── Center group: Stop | Play | Record (centered in full width) ──
     float totalBtnW = 3 * btnSize + 2 * btnGap;
@@ -231,6 +233,36 @@ void TransportPanel::paint(UIContext& ctx) {
     Color metroBg = m_metronomeOn ? Color{60, 90, 140} : Color{45, 45, 50};
     m_metroBtn.setColor(metroBg);
     m_metroBtn.paint(ctx);
+
+    // Visual metronome: beat indicator dots next to MET button
+    if (m_metronomeOn && (m_transportPlaying || m_countingIn)) {
+        int bpb = std::max(1, m_transportNumerator);
+        // Determine which beat we're on
+        double beats = m_countingIn ? m_countInBeats : m_transportBeats;
+        int currentBeat = static_cast<int>(std::fmod(beats, static_cast<double>(bpb)));
+        // Flash intensity: bright on beat onset, fades within the beat
+        double beatFrac = std::fmod(beats, 1.0);
+        float flash = std::max(0.0f, 1.0f - static_cast<float>(beatFrac) * 4.0f);
+
+        float dotR = 4.0f;
+        float dotGap = 12.0f;
+        for (int i = 0; i < bpb && i < 16; ++i) {
+            float dx = m_metroDotX + i * dotGap;
+            float dy = m_metroDotY;
+            if (i == currentBeat) {
+                // Active beat: bright flash
+                uint8_t bright = static_cast<uint8_t>(120 + flash * 135);
+                Color col = (i == 0)
+                    ? Color{bright, static_cast<uint8_t>(bright / 2), 50}   // accent (orange)
+                    : Color{80, static_cast<uint8_t>(bright), bright};       // normal (cyan)
+                r.drawFilledCircle(dx, dy, dotR + flash * 2.0f, col, 12);
+            } else {
+                // Inactive beat: dim dot
+                Color dim = (i == 0) ? Color{80, 50, 30} : Color{50, 60, 65};
+                r.drawFilledCircle(dx, dy, dotR, dim, 12);
+            }
+        }
+    }
 
     // Right group
     m_posLabel.paint(ctx);

@@ -646,11 +646,18 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     m_mixer.process(m_trackBufferPtrs, kMaxTracks, output, nf, nc);
 
     // Metronome: add click directly to master output (bypasses mixer routing)
-    m_metronome.process(output, nf, nc,
-                        m_transport.bpm(),
-                        m_transport.positionInSamples(),
-                        m_transport.isPlaying(),
-                        m_transport.isRecording());
+    // During count-in, use the count-in elapsed position so the metronome
+    // clicks on every beat of the count-in bar(s).
+    {
+        int64_t metroPos = m_transport.isCountingIn()
+            ? m_transport.countInElapsedSamples()
+            : m_transport.positionInSamples();
+        m_metronome.process(output, nf, nc,
+                            m_transport.bpm(),
+                            metroPos,
+                            m_transport.isPlaying(),
+                            m_transport.isRecording());
+    }
 
     // Add test tone on top of mixer output (bypasses mixer routing)
     if (m_testTone.enabled) {
@@ -1227,6 +1234,9 @@ void AudioEngine::emitPositionUpdate() {
         rsu.recording = m_transport.isRecording();
         rsu.countingIn = m_transport.isCountingIn();
         rsu.countInProgress = m_transport.countInProgress();
+        rsu.countInBeats = m_transport.isCountingIn()
+            ? static_cast<double>(m_transport.countInElapsedSamples()) / m_transport.samplesPerBeat()
+            : 0.0;
         m_eventQueue.push(rsu);
     }
 }
