@@ -301,7 +301,34 @@ void FwDropDown::paint(UIContext& ctx) {
     float textW = m_bounds.w - 6 - arrowZone;
     ctx.renderer->pushClip(m_bounds.x + 1, m_bounds.y, textW + 5, m_bounds.h);
     std::string txt = selectedText();
-    ctx.font->drawText(*ctx.renderer, txt.c_str(), m_bounds.x + 6, ty, scale, Theme::textPrimary);
+    float fullTextW = ctx.font->textWidth(txt, scale);
+    float textX = m_bounds.x + 6;
+
+    // Marquee scroll if text overflows
+    if (fullTextW > textW && !m_open) {
+        float overflow = fullTextW - textW;
+        if (m_marqueePause > 0.0f) {
+            m_marqueePause -= 1.0f;
+        } else {
+            m_marqueeOffset += m_marqueeDir * 0.5f;
+            if (m_marqueeOffset >= overflow) {
+                m_marqueeOffset = overflow;
+                m_marqueeDir = -1.0f;
+                m_marqueePause = 60.0f;
+            } else if (m_marqueeOffset <= 0.0f) {
+                m_marqueeOffset = 0.0f;
+                m_marqueeDir = 1.0f;
+                m_marqueePause = 60.0f;
+            }
+        }
+        textX -= m_marqueeOffset;
+    } else {
+        m_marqueeOffset = 0.0f;
+        m_marqueePause = 60.0f;
+        m_marqueeDir = 1.0f;
+    }
+
+    ctx.font->drawText(*ctx.renderer, txt.c_str(), textX, ty, scale, Theme::textPrimary);
     ctx.renderer->popClip();
 
     // Draw triangle arrow (▼ or ▲)
