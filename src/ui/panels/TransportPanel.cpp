@@ -234,32 +234,45 @@ void TransportPanel::paint(UIContext& ctx) {
     m_metroBtn.setColor(metroBg);
     m_metroBtn.paint(ctx);
 
-    // Visual metronome: beat indicator dots next to MET button
+    // Visual metronome next to MET button
     if (m_metronomeOn && (m_transportPlaying || m_countingIn)) {
         int bpb = std::max(1, m_transportNumerator);
-        // Determine which beat we're on
         double beats = m_countingIn ? m_countInBeats : m_transportBeats;
         int currentBeat = static_cast<int>(std::fmod(beats, static_cast<double>(bpb)));
-        // Flash intensity: bright on beat onset, fades within the beat
         double beatFrac = std::fmod(beats, 1.0);
         float flash = std::max(0.0f, 1.0f - static_cast<float>(beatFrac) * 4.0f);
 
-        float dotR = 4.0f;
-        float dotGap = 12.0f;
-        for (int i = 0; i < bpb && i < 16; ++i) {
-            float dx = m_metroDotX + i * dotGap;
-            float dy = m_metroDotY;
-            if (i == currentBeat) {
-                // Active beat: bright flash
-                uint8_t bright = static_cast<uint8_t>(120 + flash * 135);
-                Color col = (i == 0)
-                    ? Color{bright, static_cast<uint8_t>(bright / 2), 50}   // accent (orange)
-                    : Color{80, static_cast<uint8_t>(bright), bright};       // normal (cyan)
-                r.drawFilledCircle(dx, dy, dotR + flash * 2.0f, col, 12);
-            } else {
-                // Inactive beat: dim dot
-                Color dim = (i == 0) ? Color{80, 50, 30} : Color{50, 60, 65};
-                r.drawFilledCircle(dx, dy, dotR, dim, 12);
+        if (m_metroVisualStyle == 1) {
+            // Big beat number display
+            char numBuf[4];
+            std::snprintf(numBuf, sizeof(numBuf), "%d", currentBeat + 1);
+            float numScale = 22.0f / Theme::kFontSize;
+            float numW = ctx.font->textWidth(numBuf, numScale);
+            float numH = ctx.font->lineHeight(numScale);
+            float nx = m_metroDotX + 2;
+            float ny = m_metroDotY - numH * 0.5f;
+            uint8_t bright = static_cast<uint8_t>(140 + flash * 115);
+            Color numCol = (currentBeat == 0)
+                ? Color{bright, static_cast<uint8_t>(bright / 2), 50}
+                : Color{80, static_cast<uint8_t>(bright), bright};
+            ctx.font->drawText(r, numBuf, nx, ny, numScale, numCol);
+        } else {
+            // Dots style
+            float dotR = 4.0f;
+            float dotGap = 12.0f;
+            for (int i = 0; i < bpb && i < 16; ++i) {
+                float dx = m_metroDotX + i * dotGap;
+                float dy = m_metroDotY;
+                if (i == currentBeat) {
+                    uint8_t bright = static_cast<uint8_t>(120 + flash * 135);
+                    Color col = (i == 0)
+                        ? Color{bright, static_cast<uint8_t>(bright / 2), 50}
+                        : Color{80, static_cast<uint8_t>(bright), bright};
+                    r.drawFilledCircle(dx, dy, dotR + flash * 2.0f, col, 12);
+                } else {
+                    Color dim = (i == 0) ? Color{80, 50, 30} : Color{50, 60, 65};
+                    r.drawFilledCircle(dx, dy, dotR, dim, 12);
+                }
             }
         }
     }

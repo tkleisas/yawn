@@ -529,11 +529,14 @@ void PreferencesDialog::paintMetronomeTab(UIContext& ctx, float cx, float cy, fl
     for (int i = 0; i < 4; ++i)
         if (m_state.countInBars == barVals[i]) barSel = i;
 
-    const char* vols[] = {"10%", "20%", "30%", "40%", "50%",
+    const char* vols[] = {"0% (visual only)", "10%", "20%", "30%", "40%", "50%",
                            "60%", "70%", "80%", "90%", "100%"};
-    int volSel = std::clamp(static_cast<int>(m_state.metronomeVolume * 10.0f + 0.5f) - 1, 0, 9);
+    int volSel = std::clamp(static_cast<int>(m_state.metronomeVolume * 10.0f + 0.5f), 0, 10);
 
-    float y0 = cy, y1 = cy + rh + 6, y2 = cy + 2 * (rh + 6);
+    const char* vizStyles[] = {"Dots", "Beat Number"};
+    int vizSel = std::clamp(m_state.metronomeVisualStyle, 0, 1);
+
+    float y0 = cy, y1 = cy + rh + 6, y2 = cy + 2 * (rh + 6), y3 = cy + 3 * (rh + 6);
 
     // Pass 1: draw all buttons
     drawLabel(r, f, "Metronome Mode", cx, y0, ts);
@@ -543,12 +546,16 @@ void PreferencesDialog::paintMetronomeTab(UIContext& ctx, float cx, float cy, fl
     drawDropdown(r, f, dropX, y1, dropW, rh, th, ts, bars, 4, barSel, &m_countInOpen, false);
 
     drawLabel(r, f, "Metronome Volume", cx, y2, ts);
-    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, vols, 10, volSel, &m_metroVolumeOpen, false);
+    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, vols, 11, volSel, &m_metroVolumeOpen, false);
+
+    drawLabel(r, f, "Visual Style", cx, y3, ts);
+    drawDropdown(r, f, dropX, y3, dropW, rh, th, ts, vizStyles, 2, vizSel, &m_vizStyleOpen, false);
 
     // Pass 2: draw open popup on top
     drawDropdown(r, f, dropX, y0, dropW, rh, th, ts, modes, 4, modeSel, &m_metroModeOpen, true);
     drawDropdown(r, f, dropX, y1, dropW, rh, th, ts, bars, 4, barSel, &m_countInOpen, true);
-    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, vols, 10, volSel, &m_metroVolumeOpen, true);
+    drawDropdown(r, f, dropX, y2, dropW, rh, th, ts, vols, 11, volSel, &m_metroVolumeOpen, true);
+    drawDropdown(r, f, dropX, y3, dropW, rh, th, ts, vizStyles, 2, vizSel, &m_vizStyleOpen, true);
 }
 
 void PreferencesDialog::handleMetronomeClick(float mx, float my, float cx, float cy,
@@ -578,10 +585,19 @@ void PreferencesDialog::handleMetronomeClick(float mx, float my, float cx, float
     cy += rh + 6;
 
     {
-        int sel = std::clamp(static_cast<int>(m_state.metronomeVolume * 10.0f + 0.5f) - 1, 0, 9);
-        handleDropdownClick(mx, my, dropX, cy, dropW, dropH, 10, sel,
+        int sel = std::clamp(static_cast<int>(m_state.metronomeVolume * 10.0f + 0.5f), 0, 10);
+        if (handleDropdownClick(mx, my, dropX, cy, dropW, dropH, 11, sel,
                             &m_metroVolumeOpen, [&](int i) {
-            m_state.metronomeVolume = (i + 1) * 0.1f;
+            m_state.metronomeVolume = i * 0.1f;
+        })) return;
+    }
+    cy += rh + 6;
+
+    {
+        int sel = std::clamp(m_state.metronomeVisualStyle, 0, 1);
+        handleDropdownClick(mx, my, dropX, cy, dropW, dropH, 2, sel,
+                            &m_vizStyleOpen, [&](int i) {
+            m_state.metronomeVisualStyle = i;
         });
     }
 }

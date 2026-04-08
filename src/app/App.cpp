@@ -151,6 +151,7 @@ void App::setupMenuBar() {
             state.metronomeVolume = m_settings.metronomeVolume;
             state.metronomeMode = m_settings.metronomeMode;
             state.countInBars = m_settings.countInBars;
+            state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
             m_preferencesDialog->open(state, &m_audioEngine, &m_midiEngine);
         }},
     });
@@ -310,12 +311,14 @@ void App::buildWidgetTree() {
             m_settings.metronomeVolume = s.metronomeVolume;
             m_settings.metronomeMode = s.metronomeMode;
             m_settings.countInBars = s.countInBars;
+            m_settings.metronomeVisualStyle = s.metronomeVisualStyle;
 
             // Apply metronome settings to audio engine
             m_audioEngine.sendCommand(audio::MetronomeSetVolumeMsg{s.metronomeVolume});
             m_audioEngine.sendCommand(audio::MetronomeSetModeMsg{s.metronomeMode});
             m_audioEngine.sendCommand(audio::TransportSetCountInMsg{s.countInBars});
             m_transportPanel->setCountInBars(s.countInBars);
+            m_transportPanel->setMetronomeVisualStyle(s.metronomeVisualStyle);
 
             util::AppSettings::save(m_settings);
         }
@@ -1240,6 +1243,7 @@ bool App::init() {
     m_audioEngine.sendCommand(audio::MetronomeSetModeMsg{m_settings.metronomeMode});
     m_audioEngine.sendCommand(audio::TransportSetCountInMsg{m_settings.countInBars});
     m_transportPanel->setCountInBars(m_settings.countInBars);
+    m_transportPanel->setMetronomeVisualStyle(m_settings.metronomeVisualStyle);
 
     // Sync project track properties to the audio engine
     syncTracksToEngine();

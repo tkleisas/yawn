@@ -1331,7 +1331,11 @@ public:
     FwStepSelector() = default;
 
     void setRange(int mn, int mx)      { m_min = mn; m_max = mx; }
-    void setValue(int v)               { m_value = std::max(m_min, std::min(v, m_max)); }
+    void setValue(int v)               {
+        int clamped = std::max(m_min, std::min(v, m_max));
+        if (clamped != m_value) { m_marqueeOff = 0; m_marqueePause = 60.0f; m_marqueeDir = 1.0f; }
+        m_value = clamped;
+    }
     int  value() const                 { return m_value; }
     void setStep(int s)                { m_step = std::max(1, s); }
     void setWrap(bool w)               { m_wrap = w; }
@@ -1393,6 +1397,7 @@ private:
         }
         if (newVal != m_value) {
             m_value = newVal;
+            m_marqueeOff = 0; m_marqueePause = 60.0f; m_marqueeDir = 1.0f;
             if (m_onChange) m_onChange(m_value);
         }
     }
@@ -1406,6 +1411,9 @@ private:
     TouchCallback m_onTouch;
     FormatCallback m_formatCb;
     Color m_activeColor{0, 160, 255, 255};
+    mutable float m_marqueeOff = 0.0f;
+    mutable float m_marqueeDir = 1.0f;
+    mutable float m_marqueePause = 60.0f;
 };
 
 } // namespace fw
