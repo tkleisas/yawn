@@ -55,6 +55,15 @@ public:
         return m_countInRemaining.load(std::memory_order_acquire) > 0;
     }
 
+    // Elapsed samples since count-in began (for metronome during count-in)
+    int64_t countInElapsedSamples() const {
+        int bars = countInBars();
+        if (bars <= 0) return 0;
+        int64_t total = static_cast<int64_t>(samplesPerBar() * bars);
+        int64_t remaining = m_countInRemaining.load(std::memory_order_acquire);
+        return total - remaining;
+    }
+
     double countInProgress() const {
         int bars = countInBars();
         if (bars <= 0) return 1.0;

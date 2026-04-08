@@ -2972,7 +2972,7 @@ void App::update() {
                     m_returnMasterPanel->updateMeter(msg.trackIndex, msg.peakL, msg.peakR);
             }
             else if constexpr (std::is_same_v<T, audio::TransportRecordStateUpdate>) {
-                m_transportPanel->setRecordState(msg.recording, msg.countingIn, msg.countInProgress);
+                m_transportPanel->setRecordState(msg.recording, msg.countingIn, msg.countInProgress, msg.countInBeats);
                 m_sessionPanel->setGlobalRecordArmed(msg.recording);
             }
             else if constexpr (std::is_same_v<T, audio::MidiRecordCompleteEvent>) {

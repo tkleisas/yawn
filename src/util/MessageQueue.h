@@ -363,6 +363,7 @@ struct TransportRecordStateUpdate {
     bool recording;
     bool countingIn;
     double countInProgress;
+    double countInBeats;  // elapsed beats during count-in (for visual metronome)
 };
 
 struct MidiRecordCompleteEvent {

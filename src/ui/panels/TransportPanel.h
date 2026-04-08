@@ -131,10 +131,12 @@ public:
                            int numerator = 4, int denominator = 4);
 #endif
 
-    void setRecordState(bool recording, bool countingIn, double progress) {
+    void setRecordState(bool recording, bool countingIn, double progress,
+                        double countInBeats = 0.0) {
         m_recording = recording;
         m_countingIn = countingIn;
         m_countInProgress = progress;
+        m_countInBeats = countInBeats;
     }
 
     void setSelectedScene(int scene) { m_selectedScene = scene; }
@@ -285,9 +287,12 @@ private:
     bool   m_recording = false;
     bool   m_countingIn = false;
     double m_countInProgress = 0.0;
+    double m_countInBeats = 0.0;
     int    m_countInBars = 0;
     float  m_recPulse = 0.0f;
     bool   m_metronomeOn = false;
+    float  m_metroDotX = 0.0f;  // X position for visual metronome dots
+    float  m_metroDotY = 0.0f;
 
     // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;
