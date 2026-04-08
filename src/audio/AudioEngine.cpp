@@ -247,7 +247,18 @@ int AudioEngine::paCallback(
     auto* output = static_cast<float*>(outputBuffer);
     auto* input = static_cast<const float*>(inputBuffer);
 
-    engine->processAudio(input, output, framesPerBuffer);
+    try {
+        engine->processAudio(input, output, framesPerBuffer);
+    } catch (const std::exception& e) {
+        LOG_ERROR("Audio", "CRASH in audio callback: %s", e.what());
+        // Silence output to prevent noise
+        std::memset(output, 0, framesPerBuffer * engine->m_config.outputChannels * sizeof(float));
+        return paContinue;
+    } catch (...) {
+        LOG_ERROR("Audio", "CRASH in audio callback: unknown exception");
+        std::memset(output, 0, framesPerBuffer * engine->m_config.outputChannels * sizeof(float));
+        return paContinue;
+    }
     return paContinue;
 }
 
