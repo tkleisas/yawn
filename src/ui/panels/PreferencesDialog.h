@@ -30,6 +30,7 @@ public:
         float metronomeVolume = 0.7f;
         int metronomeMode = 0;    // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
         int countInBars = 0;      // 0, 1, 2, or 4
+        int metronomeVisualStyle = 0; // 0=Dots, 1=Beat Number
     };
 
     PreferencesDialog()
@@ -300,6 +301,7 @@ private:
     bool m_metroModeOpen = false;
     bool m_metroVolumeOpen = false;
     bool m_countInOpen = false;
+    bool m_vizStyleOpen = false;
 };
 
 } // namespace fw

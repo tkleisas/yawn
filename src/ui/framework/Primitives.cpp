@@ -763,7 +763,7 @@ void FwStepSelector::paint(UIContext& ctx) {
         raCx - triSize, raCy + triSize,
         Theme::textSecondary);
 
-    // Value display (centered between arrows)
+    // Value display (centered between arrows, with marquee if too wide)
     float valScale = 9.0f / Theme::kFontSize;
     std::string valStr;
     if (m_formatCb) {
@@ -775,9 +775,39 @@ void FwStepSelector::paint(UIContext& ctx) {
     }
     float vw = ctx.font->textWidth(valStr, valScale);
     float lh = ctx.font->lineHeight(valScale);
-    float vtx = x + (w - vw) * 0.5f;
+    float availW = w - 2 * arrowW;
+    float vtx;
+
+    if (vw > availW) {
+        // Marquee scroll
+        float overflow = vw - availW;
+        if (m_marqueePause > 0.0f) {
+            m_marqueePause -= 1.0f;
+        } else {
+            m_marqueeOff += m_marqueeDir * 0.5f;
+            if (m_marqueeOff >= overflow) {
+                m_marqueeOff = overflow;
+                m_marqueeDir = -1.0f;
+                m_marqueePause = 60.0f;
+            } else if (m_marqueeOff <= 0.0f) {
+                m_marqueeOff = 0.0f;
+                m_marqueeDir = 1.0f;
+                m_marqueePause = 60.0f;
+            }
+        }
+        vtx = x + arrowW - m_marqueeOff;
+        ctx.renderer->pushClip(x + arrowW, dispY, availW, dispH);
+    } else {
+        vtx = x + (w - vw) * 0.5f;
+        m_marqueeOff = 0.0f;
+        m_marqueePause = 60.0f;
+        m_marqueeDir = 1.0f;
+    }
+
     float vty = dispY + (dispH - lh) * 0.5f - lh * 0.15f;
     ctx.font->drawText(*ctx.renderer, valStr.c_str(), vtx, vty, valScale, Theme::textPrimary);
+
+    if (vw > availW) ctx.renderer->popClip();
 }
 
 } // namespace fw

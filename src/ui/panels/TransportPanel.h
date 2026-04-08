@@ -141,6 +141,7 @@ public:
 
     void setSelectedScene(int scene) { m_selectedScene = scene; }
     void setCountInBars(int bars) { m_countInBars = bars; }
+    void setMetronomeVisualStyle(int style) { m_metroVisualStyle = style; }
     void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
 
     bool isEditing() const {
@@ -291,6 +292,7 @@ private:
     int    m_countInBars = 0;
     float  m_recPulse = 0.0f;
     bool   m_metronomeOn = false;
+    int    m_metroVisualStyle = 0; // 0=Dots, 1=Beat Number
     float  m_metroDotX = 0.0f;  // X position for visual metronome dots
     float  m_metroDotY = 0.0f;
 

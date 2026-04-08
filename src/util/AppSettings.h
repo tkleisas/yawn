@@ -31,6 +31,7 @@ struct AppSettings {
     float metronomeVolume = 0.7f;   // 0.0–1.0
     int metronomeMode = 0;          // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
     int countInBars = 0;            // 0, 1, 2, or 4
+    int metronomeVisualStyle = 0;  // 0=Dots, 1=Beat Number
 
     static std::filesystem::path settingsPath() {
 #ifdef _WIN32
@@ -70,6 +71,7 @@ struct AppSettings {
             s.metronomeVolume = j.value("metronomeVolume", 0.7f);
             s.metronomeMode = j.value("metronomeMode", 0);
             s.countInBars = j.value("countInBars", 0);
+            s.metronomeVisualStyle = j.value("metronomeVisualStyle", 0);
         } catch (...) {
             LOG_WARN("App", "Failed to parse settings file");
         }
@@ -91,6 +93,7 @@ struct AppSettings {
             j["metronomeVolume"] = s.metronomeVolume;
             j["metronomeMode"] = s.metronomeMode;
             j["countInBars"] = s.countInBars;
+            j["metronomeVisualStyle"] = s.metronomeVisualStyle;
             std::ofstream out(path);
             if (out.is_open()) {
                 out << j.dump(2);
