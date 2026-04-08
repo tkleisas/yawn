@@ -363,6 +363,10 @@ public:
 
     // Set clip automation context for the envelope editor
     void setClipAutomation(std::vector<automation::AutomationLane>* lanes, int trackIndex) {
+        // Skip rebuild if nothing changed — prevents resetting dropdown selection
+        if (lanes == m_clipAutoLanes && trackIndex == m_autoTrackIndex)
+            return;
+
         m_clipAutoLanes = lanes;
         m_autoTrackIndex = trackIndex;
 
@@ -1476,8 +1480,16 @@ private:
                 }
             }
         }
+        // Preserve current selection if the selected text still exists in the new list
+        std::string prevText = m_autoTargetDropdown.selectedText();
         m_autoTargetDropdown.setItems(items);
-        m_autoTargetDropdown.setSelected(0);
+        int restored = 0;
+        if (!prevText.empty() && prevText != "(none)") {
+            for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+                if (items[i] == prevText) { restored = i; break; }
+            }
+        }
+        m_autoTargetDropdown.setSelected(restored);
     }
 
     automation::AutomationTarget targetFromDropdownIndex(int idx) const {
