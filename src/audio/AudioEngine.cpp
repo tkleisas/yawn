@@ -1119,6 +1119,31 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
         m_instruments[trackIndex]->process(silence, 1, 2, killBuf);
     }
 
+    // Trim leading bars equal to count-in duration
+    {
+        int countInBars = m_transport.countInBars();
+        if (countInBars > 0) {
+            int bpb = m_transport.beatsPerBar();
+            double trimBeats = static_cast<double>(countInBars) * bpb;
+            for (auto& n : rs.recordedNotes)
+                n.startBeat -= trimBeats;
+            for (auto& cc : rs.recordedCCs)
+                cc.beat -= trimBeats;
+            rs.recordStartBeat += trimBeats;
+            // Remove any events that ended up before beat 0
+            rs.recordedNotes.erase(
+                std::remove_if(rs.recordedNotes.begin(), rs.recordedNotes.end(),
+                    [](const midi::MidiNote& n) { return n.startBeat + n.duration < 0.0; }),
+                rs.recordedNotes.end());
+            for (auto& n : rs.recordedNotes)
+                if (n.startBeat < 0.0) n.startBeat = 0.0;
+            rs.recordedCCs.erase(
+                std::remove_if(rs.recordedCCs.begin(), rs.recordedCCs.end(),
+                    [](const midi::MidiCCEvent& cc) { return cc.beat < 0.0; }),
+                rs.recordedCCs.end());
+        }
+    }
+
     // Discard empty MIDI recordings (no notes and no CCs)
     if (rs.recordedNotes.empty() && rs.recordedCCs.empty()) {
         // Emit event with noteCount=0 so UI clears recording state
@@ -1192,25 +1217,36 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
         return;
     }
 
+    // Trim leading bars equal to count-in duration
+    int64_t framesPerBar = static_cast<int64_t>(m_transport.samplesPerBar());
+    int countInBars = m_transport.countInBars();
+    int64_t trimFrames = 0;
+    if (countInBars > 0 && framesPerBar > 0) {
+        trimFrames = static_cast<int64_t>(countInBars) * framesPerBar;
+        if (trimFrames >= ars.recordedFrames)
+            trimFrames = 0;  // safety: don't trim everything
+    }
+    int64_t effectiveFrames = ars.recordedFrames - trimFrames;
+
     auto& xfer = m_recordedAudio[trackIndex];
     xfer.channels = ars.channels;
-    xfer.frameCount = ars.recordedFrames;
+    xfer.frameCount = effectiveFrames;
     xfer.trackIndex = trackIndex;
     xfer.sceneIndex = ars.targetScene;
     xfer.overdub = ars.overdub;
-    xfer.buffer.resize(ars.channels * ars.recordedFrames);
+    xfer.buffer.resize(ars.channels * effectiveFrames);
     for (int ch = 0; ch < ars.channels; ++ch) {
         std::memcpy(
-            xfer.buffer.data() + ch * ars.recordedFrames,
-            ars.buffer.data() + ch * ars.maxFrames,
-            ars.recordedFrames * sizeof(float));
+            xfer.buffer.data() + ch * effectiveFrames,
+            ars.buffer.data() + ch * ars.maxFrames + trimFrames,
+            effectiveFrames * sizeof(float));
     }
     xfer.ready.store(true, std::memory_order_release);
 
     AudioRecordCompleteEvent evt;
     evt.trackIndex = trackIndex;
     evt.sceneIndex = ars.targetScene;
-    evt.frameCount = ars.recordedFrames;
+    evt.frameCount = effectiveFrames;
     evt.overdub = ars.overdub;
     m_eventQueue.push(evt);
 
