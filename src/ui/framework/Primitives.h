@@ -711,7 +711,10 @@ public:
     FwDropDown() = default;
 
     void setItems(const std::vector<std::string>& items) { m_items = items; }
-    void setSelected(int index) { m_selected = index; }
+    void setSelected(int index) {
+        if (index != m_selected) { m_marqueeOffset = 0; m_marqueePause = 60.0f; m_marqueeDir = 1.0f; }
+        m_selected = index;
+    }
     int selected() const { return m_selected; }
     std::string selectedText() const {
         if (m_selected >= 0 && m_selected < static_cast<int>(m_items.size()))
@@ -833,6 +836,9 @@ private:
     float m_popupWidth = 0.0f;  // computed in paintOverlay from widest item
     float m_screenH = 1080.0f;  // screen height for popup direction
     bool m_popupAbove = false;   // true = show popup above the button
+    float m_marqueeOffset = 0.0f;  // current horizontal scroll for selected text
+    float m_marqueeDir = 1.0f;    // 1.0 = scrolling left, -1.0 = scrolling right
+    float m_marqueePause = 0.0f;  // pause timer at ends
     IndexCallback m_onChange;
 };
 
