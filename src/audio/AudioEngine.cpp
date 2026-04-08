@@ -302,7 +302,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
 
     // Capture audio for recording from hardware input
     // (resample recording happens later, after track buffers are fully rendered)
-    if (m_transport.isRecording() && input && m_hasInputDevice) {
+    if (m_transport.isRecording() && !m_transport.isCountingIn() && input && m_hasInputDevice) {
         for (int t = 0; t < kMaxTracks; ++t) {
             if (m_trackType[t] != 0) continue;
             if (m_trackResampleSource[t] >= 0) continue; // handled after rendering
@@ -381,7 +381,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Capture pre-effect MIDI for recording (raw input: held chords, etc.)
     // Recording pre-effect means the clip stores your actual key presses.
     // On playback, MIDI effects (arpeggiator, etc.) re-process them.
-    if (m_transport.isRecording()) {
+    if (m_transport.isRecording() && !m_transport.isCountingIn()) {
         for (int t = 0; t < kMaxTracks; ++t) {
             if (m_trackType[t] != 1 || !m_trackRecordStates[t].recording
                 || !m_trackArmed[t])
@@ -609,7 +609,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     }
 
     // Capture resample recording: record from source track's fully rendered buffer
-    if (m_transport.isRecording()) {
+    if (m_transport.isRecording() && !m_transport.isCountingIn()) {
         for (int t = 0; t < kMaxTracks; ++t) {
             if (m_trackType[t] != 0) continue;
             int src = m_trackResampleSource[t];
