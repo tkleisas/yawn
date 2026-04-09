@@ -11,6 +11,7 @@
 // show automation lanes below the main clip row).
 
 #include "ui/framework/Widget.h"
+#include "ui/Font.h"
 #include "ui/Theme.h"
 #include "app/Project.h"
 #include "audio/AudioEngine.h"
@@ -95,12 +96,14 @@ public:
         if (keyCode == 0x0D || keyCode == 0x4000009C) { commitRename(); return true; }
         if (keyCode == 0x1B) { cancelTrackRename(); return true; }
         if (keyCode == 0x08 && m_renameCursor > 0) {
-            m_renameText.erase(m_renameCursor - 1, 1);
-            m_renameCursor--;
+            int len = ui::utf8PrevCharOffset(m_renameText, m_renameCursor);
+            m_renameText.erase(m_renameCursor - len, len);
+            m_renameCursor -= len;
             return true;
         }
         if (keyCode == 0x7F && m_renameCursor < static_cast<int>(m_renameText.size())) {
-            m_renameText.erase(m_renameCursor, 1);
+            int len = ui::utf8CharLen(&m_renameText[m_renameCursor]);
+            m_renameText.erase(m_renameCursor, len);
             return true;
         }
         return true;

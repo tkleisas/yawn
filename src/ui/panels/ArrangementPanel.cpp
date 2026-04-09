@@ -988,8 +988,10 @@ void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, floa
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%d", bar + 1);
             float tx = px + 4;
-            for (const char* p = buf; *p; ++p) {
-                auto g = f.getGlyph(*p, tx, textY, scale);
+            const char* bp = buf;
+            while (*bp) {
+                uint32_t cp = ui::decodeUtf8(bp);
+                auto g = f.getGlyph(cp, tx, textY, scale);
                 r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                    g.u0, g.v0, g.u1, g.v1,
                                    Theme::textSecondary, f.textureId());
@@ -1045,22 +1047,32 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
             float textY = ty + 4;
             if (m_renameCursor == 0)
                 r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
-            for (int i = 0; i < static_cast<int>(m_renameText.size()); ++i) {
-                auto g = f.getGlyph(m_renameText[i], cx, textY, scale);
-                if (cx + g.xAdvance > boxX + boxW - 4) break;
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Theme::textPrimary, f.textureId());
-                cx += g.xAdvance;
-                if (i == m_renameCursor - 1)
-                    r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+            {
+                const char* rp = m_renameText.c_str();
+                int bytePos = 0;
+                while (*rp) {
+                    const char* prev = rp;
+                    uint32_t cp = ui::decodeUtf8(rp);
+                    int charBytes = static_cast<int>(rp - prev);
+                    auto g = f.getGlyph(cp, cx, textY, scale);
+                    if (cx + g.xAdvance > boxX + boxW - 4) break;
+                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       Theme::textPrimary, f.textureId());
+                    cx += g.xAdvance;
+                    bytePos += charBytes;
+                    if (bytePos == m_renameCursor)
+                        r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+                }
             }
         } else {
             float tx = x + 10;
             float textY = ty + 4;
             float maxNameX = x + kTrackHeaderW - 6;
-            for (const char* p = tr.name.c_str(); *p && tx < maxNameX; ++p) {
-                auto g = f.getGlyph(*p, tx, textY, scale);
+            const char* np = tr.name.c_str();
+            while (*np && tx < maxNameX) {
+                uint32_t cp = ui::decodeUtf8(np);
+                auto g = f.getGlyph(cp, tx, textY, scale);
                 r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                    g.u0, g.v0, g.u1, g.v1,
                                    Theme::textPrimary, f.textureId());
@@ -1105,21 +1117,11 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
         r.drawRoundedRect(bx, btnRowY, saW, btnH, 3.0f, saBg, 4);
         {
             const char* saLabel = arrActive ? "Arr" : "Ses";
-            // Measure text width
-            float tw = 0;
-            for (const char* p = saLabel; *p; ++p) {
-                auto g = f.getGlyph(*p, 0, 0, smallScale);
-                tw += g.xAdvance;
-            }
+            float tw = f.textWidth(saLabel, smallScale);
             float saTextX = bx + (saW - tw) * 0.5f;
             float saTextY = btnRowY + (btnH - Theme::kSmallFontSize * 0.85f) * 0.5f;
-            for (const char* p = saLabel; *p; ++p) {
-                auto g = f.getGlyph(*p, saTextX, saTextY, smallScale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Color{255, 255, 255, 220}, f.textureId());
-                saTextX += g.xAdvance;
-            }
+            f.drawText(r, saLabel, saTextX, saTextY, smallScale,
+                       Color{255, 255, 255, 220});
         }
 
         // Bottom border — slightly thicker as resize handle hint
@@ -1137,8 +1139,10 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
                 std::string name = autoLaneName(tr.automationLanes[li].target);
                 float lnx = x + 10;
                 float lny = ly + (kAutoLaneH - Theme::kSmallFontSize * 0.8f) * 0.5f;
-                for (const char* p = name.c_str(); *p && lnx < x + kTrackHeaderW - 4; ++p) {
-                    auto g = f.getGlyph(*p, lnx, lny, smallScale);
+                const char* lp = name.c_str();
+                while (*lp && lnx < x + kTrackHeaderW - 4) {
+                    uint32_t cp = ui::decodeUtf8(lp);
+                    auto g = f.getGlyph(cp, lnx, lny, smallScale);
                     r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
                                        Color{160, 160, 180, 200}, f.textureId());
@@ -1301,8 +1305,10 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
                 float ntx = cx + 4;
                 float nty = cy + (ch - Theme::kSmallFontSize) * 0.5f;
                 float nMaxX = cx + cw - 4;
-                for (const char* p = clip.name.c_str(); *p && ntx < nMaxX; ++p) {
-                    auto g = f.getGlyph(*p, ntx, nty, scale);
+                const char* cnp = clip.name.c_str();
+                while (*cnp && ntx < nMaxX) {
+                    uint32_t cp = ui::decodeUtf8(cnp);
+                    auto g = f.getGlyph(cp, ntx, nty, scale);
                     r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
                                        Color{255, 255, 255, 220}, f.textureId());

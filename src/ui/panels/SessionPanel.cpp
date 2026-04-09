@@ -252,8 +252,10 @@ void SessionPanel::drawText(Renderer2D& r, Font& f, const char* text,
               float x, float y, float scale, Color color) {
     if (!f.isLoaded()) return;
     float tx = x;
-    for (const char* p = text; *p; ++p) {
-        auto g = f.getGlyph(*p, tx, y, scale);
+    const char* p = text;
+    while (*p) {
+        uint32_t cp = ui::decodeUtf8(p);
+        auto g = f.getGlyph(cp, tx, y, scale);
         r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                            g.u0, g.v0, g.u1, g.v1, color, f.textureId());
         tx += g.xAdvance;
@@ -264,8 +266,10 @@ float SessionPanel::drawTextRet(Renderer2D& r, Font& f, const char* text,
                   float x, float y, float scale, Color color) {
     if (!f.isLoaded()) return x;
     float tx = x;
-    for (const char* p = text; *p; ++p) {
-        auto g = f.getGlyph(*p, tx, y, scale);
+    const char* p = text;
+    while (*p) {
+        uint32_t cp = ui::decodeUtf8(p);
+        auto g = f.getGlyph(cp, tx, y, scale);
         r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                            g.u0, g.v0, g.u1, g.v1, color, f.textureId());
         tx += g.xAdvance;
@@ -304,20 +308,30 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
                 float cx = textX;
                 if (m_renameCursor == 0)
                     r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
-                for (int i = 0; i < static_cast<int>(m_renameText.size()); ++i) {
-                    auto g = f.getGlyph(m_renameText[i], cx, textY, scale);
-                    if (cx + g.xAdvance > boxX + boxW - 4) break;
-                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                       g.u0, g.v0, g.u1, g.v1,
-                                       Theme::textPrimary, f.textureId());
-                    cx += g.xAdvance;
-                    if (i == m_renameCursor - 1)
-                        r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+                {
+                    const char* rp = m_renameText.c_str();
+                    int bytePos = 0;
+                    while (*rp) {
+                        const char* prev = rp;
+                        uint32_t cp = ui::decodeUtf8(rp);
+                        int charBytes = static_cast<int>(rp - prev);
+                        auto g = f.getGlyph(cp, cx, textY, scale);
+                        if (cx + g.xAdvance > boxX + boxW - 4) break;
+                        r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                           g.u0, g.v0, g.u1, g.v1,
+                                           Theme::textPrimary, f.textureId());
+                        cx += g.xAdvance;
+                        bytePos += charBytes;
+                        if (bytePos == m_renameCursor)
+                            r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
+                    }
                 }
             } else {
                 float textX = tx + 18, textY = y + 8;
-                for (char c : m_project->track(t).name) {
-                    auto g = f.getGlyph(c, textX, textY, scale);
+                const char* np = m_project->track(t).name.c_str();
+                while (*np) {
+                    uint32_t cp = ui::decodeUtf8(np);
+                    auto g = f.getGlyph(cp, textX, textY, scale);
                     r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                        g.u0, g.v0, g.u1, g.v1,
                                        Theme::textPrimary, f.textureId());
@@ -379,11 +393,10 @@ void SessionPanel::paintSceneLabels(Renderer2D& r, Font& f, float x, float y, fl
         if (f.isLoaded()) {
             float textX = x + 8;
             float textY = sy + sh * 0.5f - Theme::kSmallFontSize * 0.5f;
-            char label[8];
-            std::snprintf(label, sizeof(label), "%s",
-                          m_project->scene(s).name.c_str());
-            for (const char* p = label; *p; ++p) {
-                auto g = f.getGlyph(*p, textX, textY, scale);
+            const char* lp = m_project->scene(s).name.c_str();
+            while (*lp) {
+                uint32_t cp = ui::decodeUtf8(lp);
+                auto g = f.getGlyph(cp, textX, textY, scale);
                 r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
                                    g.u0, g.v0, g.u1, g.v1,
                                    Theme::textSecondary, f.textureId());
@@ -536,9 +549,11 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
         float scale = Theme::kSmallFontSize / f.pixelHeight();
         if (f.isLoaded() && !name.empty()) {
             float tx2 = contentX + 5, ty2 = iy + 2;
-            for (char c : name) {
-                if (c == '/' || c == '\\') { tx2 = contentX + 5; continue; }
-                auto g = f.getGlyph(c, tx2, ty2, scale);
+            const char* np2 = name.c_str();
+            while (*np2) {
+                uint32_t cpt = ui::decodeUtf8(np2);
+                if (cpt == '/' || cpt == '\\') { tx2 = contentX + 5; continue; }
+                auto g = f.getGlyph(cpt, tx2, ty2, scale);
                 r.drawTexturedQuad(g.x0, g.y0, g.x1-g.x0, g.y1-g.y0,
                                    g.u0, g.v0, g.u1, g.v1,
                                    Theme::textPrimary, f.textureId());

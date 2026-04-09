@@ -13,6 +13,49 @@
 namespace yawn {
 namespace ui {
 
+// ─── UTF-8 helpers ──────────────────────────────────────────────────────────
+
+uint32_t decodeUtf8(const char*& p) {
+    const auto* s = reinterpret_cast<const unsigned char*>(p);
+    uint32_t cp;
+    if (s[0] < 0x80) {
+        cp = s[0];
+        p += 1;
+    } else if ((s[0] & 0xE0) == 0xC0) {
+        cp = (s[0] & 0x1F) << 6 | (s[1] & 0x3F);
+        p += 2;
+    } else if ((s[0] & 0xF0) == 0xE0) {
+        cp = (s[0] & 0x0F) << 12 | (s[1] & 0x3F) << 6 | (s[2] & 0x3F);
+        p += 3;
+    } else if ((s[0] & 0xF8) == 0xF0) {
+        cp = (s[0] & 0x07) << 18 | (s[1] & 0x3F) << 12 | (s[2] & 0x3F) << 6 | (s[3] & 0x3F);
+        p += 4;
+    } else {
+        cp = 0xFFFD;
+        p += 1;
+    }
+    return cp;
+}
+
+int utf8CharLen(const char* p) {
+    auto s = static_cast<unsigned char>(*p);
+    if (s < 0x80)        return 1;
+    if ((s & 0xE0) == 0xC0) return 2;
+    if ((s & 0xF0) == 0xE0) return 3;
+    if ((s & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+int utf8PrevCharOffset(const std::string& str, int pos) {
+    if (pos <= 0) return 0;
+    int i = pos - 1;
+    while (i > 0 && (static_cast<unsigned char>(str[i]) & 0xC0) == 0x80)
+        --i;
+    return pos - i;
+}
+
+// ─── Font ───────────────────────────────────────────────────────────────────
+
 Font::~Font() {
     destroy();
 }
@@ -36,18 +79,63 @@ bool Font::load(const std::string& path, float pixelHeight) {
     fclose(f);
 
     m_pixelHeight = pixelHeight;
-    m_atlasWidth = 512;
-    m_atlasHeight = 512;
+    m_atlasWidth = 1024;
+    m_atlasHeight = 1024;
 
-    // Bake ASCII 32-127 into a bitmap
+    // Define Unicode ranges to bake
+    struct Range {
+        int firstCodepoint;
+        int count;
+    };
+    Range ranges[] = {
+        { 0x0020, 95 },    // Basic Latin (space through ~)
+        { 0x00A0, 96 },    // Latin-1 Supplement
+        { 0x0100, 128 },   // Latin Extended-A
+        { 0x0250, 96 },    // IPA Extensions
+        { 0x0370, 144 },   // Greek and Coptic
+        { 0x0400, 256 },   // Cyrillic
+    };
+    constexpr int numRanges = sizeof(ranges) / sizeof(ranges[0]);
+
+    // Allocate temporary packed char arrays per range
+    std::vector<stbtt_packedchar> packedChars[numRanges];
+    stbtt_pack_range packRanges[numRanges];
+    for (int i = 0; i < numRanges; ++i) {
+        packedChars[i].resize(ranges[i].count);
+        packRanges[i].font_size = pixelHeight;
+        packRanges[i].first_unicode_codepoint_in_range = ranges[i].firstCodepoint;
+        packRanges[i].array_of_unicode_codepoints = nullptr;
+        packRanges[i].num_chars = ranges[i].count;
+        packRanges[i].chardata_for_range = packedChars[i].data();
+    }
+
     std::vector<unsigned char> bitmap(m_atlasWidth * m_atlasHeight);
-    m_charData = new stbtt_bakedchar[96];
 
-    int result = stbtt_BakeFontBitmap(fontData.data(), 0, pixelHeight,
-        bitmap.data(), m_atlasWidth, m_atlasHeight, 32, 96, m_charData);
+    stbtt_pack_context ctx;
+    if (!stbtt_PackBegin(&ctx, bitmap.data(), m_atlasWidth, m_atlasHeight, 0, 1, nullptr)) {
+        LOG_ERROR("UI", "stbtt_PackBegin failed");
+        return false;
+    }
 
-    if (result <= 0) {
-        LOG_WARN("UI", "Font atlas may be too small (result=%d)", result);
+    stbtt_PackSetOversampling(&ctx, 2, 2);
+
+    int result = stbtt_PackFontRanges(&ctx, fontData.data(), 0, packRanges, numRanges);
+    stbtt_PackEnd(&ctx);
+
+    if (!result) {
+        LOG_WARN("UI", "Font atlas may be too small for all requested ranges");
+    }
+
+    // Build glyph map from packed data
+    for (int i = 0; i < numRanges; ++i) {
+        for (int j = 0; j < ranges[i].count; ++j) {
+            uint32_t cp = ranges[i].firstCodepoint + j;
+            const auto& pc = packedChars[i][j];
+            // Skip glyphs that weren't packed (x0==x1 means no glyph)
+            if (pc.x0 == 0 && pc.x1 == 0 && pc.y0 == 0 && pc.y1 == 0)
+                continue;
+            m_glyphs[cp] = pc;
+        }
     }
 
     // Upload to OpenGL texture
@@ -62,7 +150,8 @@ bool Font::load(const std::string& path, float pixelHeight) {
     GLint swizzle[] = {GL_ONE, GL_ONE, GL_ONE, GL_RED};
     glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 
-    LOG_INFO("UI", "Font loaded: %s (%.0fpx)", path.c_str(), pixelHeight);
+    LOG_INFO("UI", "Font loaded: %s (%.0fpx, %zu glyphs, %dx%d atlas)",
+             path.c_str(), pixelHeight, m_glyphs.size(), m_atlasWidth, m_atlasHeight);
     return true;
 }
 
@@ -71,40 +160,41 @@ void Font::destroy() {
         glDeleteTextures(1, &m_textureId);
         m_textureId = 0;
     }
-    if (m_charData) {
-        delete[] m_charData;
-        m_charData = nullptr;
-    }
+    m_glyphs.clear();
 }
 
-Font::GlyphQuad Font::getGlyph(char c, float x, float y, float scale) const {
+Font::GlyphQuad Font::getGlyph(uint32_t codepoint, float x, float y, float scale) const {
     GlyphQuad result = {};
-    if (!m_charData || c < 32 || c > 127) return result;
+    auto it = m_glyphs.find(codepoint);
+    if (it == m_glyphs.end()) return result;
 
-    const stbtt_bakedchar& bc = m_charData[c - 32];
+    const stbtt_packedchar& pc = it->second;
 
     float s = scale;
-    result.x0 = x + bc.xoff * s;
-    result.y0 = y + bc.yoff * s + m_pixelHeight * s;
-    result.x1 = result.x0 + (bc.x1 - bc.x0) * s;
-    result.y1 = result.y0 + (bc.y1 - bc.y0) * s;
+    result.x0 = x + pc.xoff * s;
+    result.y0 = y + pc.yoff * s + m_pixelHeight * s;
+    result.x1 = x + pc.xoff2 * s;
+    result.y1 = y + pc.yoff2 * s + m_pixelHeight * s;
 
-    result.u0 = static_cast<float>(bc.x0) / m_atlasWidth;
-    result.v0 = static_cast<float>(bc.y0) / m_atlasHeight;
-    result.u1 = static_cast<float>(bc.x1) / m_atlasWidth;
-    result.v1 = static_cast<float>(bc.y1) / m_atlasHeight;
+    result.u0 = static_cast<float>(pc.x0) / m_atlasWidth;
+    result.v0 = static_cast<float>(pc.y0) / m_atlasHeight;
+    result.u1 = static_cast<float>(pc.x1) / m_atlasWidth;
+    result.v1 = static_cast<float>(pc.y1) / m_atlasHeight;
 
-    result.xAdvance = bc.xadvance * s;
+    result.xAdvance = pc.xadvance * s;
     return result;
 }
 
 float Font::textWidth(const std::string& text, float scale) const {
-    if (!m_charData) return 0;
+    if (m_glyphs.empty()) return 0;
 
     float w = 0;
-    for (char c : text) {
-        if (c < 32 || c > 127) continue;
-        w += m_charData[c - 32].xadvance * scale;
+    const char* p = text.c_str();
+    while (*p) {
+        uint32_t cp = decodeUtf8(p);
+        auto it = m_glyphs.find(cp);
+        if (it != m_glyphs.end())
+            w += it->second.xadvance * scale;
     }
     return w;
 }
@@ -117,11 +207,15 @@ void Font::drawText(Renderer2D& renderer, const char* text,
                     float x, float y, float scale, Color color) {
     if (!isLoaded() || !text) return;
     float tx = x;
-    for (const char* p = text; *p; ++p) {
-        auto g = getGlyph(*p, tx, y, scale);
-        renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   color, m_textureId);
+    const char* p = text;
+    while (*p) {
+        uint32_t cp = decodeUtf8(p);
+        auto g = getGlyph(cp, tx, y, scale);
+        if (g.xAdvance > 0) {
+            renderer.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                       g.u0, g.v0, g.u1, g.v1,
+                                       color, m_textureId);
+        }
         tx += g.xAdvance;
     }
 }

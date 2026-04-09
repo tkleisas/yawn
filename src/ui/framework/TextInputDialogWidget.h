@@ -3,6 +3,7 @@
 
 #include "Dialog.h"
 #include "../Theme.h"
+#include "../Font.h"
 #include <string>
 #include <functional>
 
@@ -143,23 +144,29 @@ public:
         }
         if (e.keyCode == 8) { // Backspace
             if (m_cursor > 0) {
-                m_text.erase(m_cursor - 1, 1);
-                --m_cursor;
+                int len = ui::utf8PrevCharOffset(m_text, m_cursor);
+                m_text.erase(m_cursor - len, len);
+                m_cursor -= len;
             }
             return true;
         }
         if (e.keyCode == 127) { // Delete
             if (m_cursor < (int)m_text.size()) {
-                m_text.erase(m_cursor, 1);
+                int len = ui::utf8CharLen(&m_text[m_cursor]);
+                m_text.erase(m_cursor, len);
             }
             return true;
         }
         if (e.keyCode == 1073741903) { // Right arrow (SDL)
-            if (m_cursor < (int)m_text.size()) ++m_cursor;
+            if (m_cursor < (int)m_text.size()) {
+                m_cursor += ui::utf8CharLen(&m_text[m_cursor]);
+            }
             return true;
         }
         if (e.keyCode == 1073741904) { // Left arrow (SDL)
-            if (m_cursor > 0) --m_cursor;
+            if (m_cursor > 0) {
+                m_cursor -= ui::utf8PrevCharOffset(m_text, m_cursor);
+            }
             return true;
         }
         return true; // modal — consume all keys
