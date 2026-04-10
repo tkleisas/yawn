@@ -1,6 +1,7 @@
 #pragma once
 #include "LibraryDatabase.h"
 #include <atomic>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <mutex>
