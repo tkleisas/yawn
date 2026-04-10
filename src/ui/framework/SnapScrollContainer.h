@@ -1,9 +1,9 @@
 #pragma once
-// SnapScrollContainer — Horizontal scroll container with snap points.
+// SnapScrollContainer — Horizontal scroll container with smooth scrolling.
 //
 // Lays children out side-by-side. When their total width exceeds the
-// container, scroll buttons (< >) appear on left and right edges and
-// the user can snap-scroll between device boundaries.
+// container, scroll buttons (< >) appear on left and right edges.
+// Scrolling is animated with exponential ease-out.
 
 #include "Widget.h"
 #include "../Theme.h"
@@ -29,46 +29,20 @@ public:
         m_snapPoints = std::move(points);
         std::sort(m_snapPoints.begin(), m_snapPoints.end());
         m_currentSnap = 0;
-        clampScroll();
+        clampTarget();
+        m_scrollX = m_targetX;  // no animation on rebuild
     }
 
     // ─── Navigation ─────────────────────────────────────────────────────
 
     void scrollLeft() {
-        if (m_snapPoints.empty()) return;
-        // Find the largest snap point strictly less than current scroll
-        int target = -1;
-        for (int i = static_cast<int>(m_snapPoints.size()) - 1; i >= 0; --i) {
-            if (m_snapPoints[i] < m_scrollX - 0.5f) {
-                target = i;
-                break;
-            }
-        }
-        if (target >= 0) {
-            m_currentSnap = target;
-            m_scrollX = m_snapPoints[target];
-        } else {
-            m_currentSnap = 0;
-            m_scrollX = 0;
-        }
-        clampScroll();
+        m_targetX -= kScrollStep;
+        clampTarget();
     }
 
     void scrollRight() {
-        if (m_snapPoints.empty()) return;
-        // Find the smallest snap point strictly greater than current scroll
-        int target = -1;
-        for (int i = 0; i < static_cast<int>(m_snapPoints.size()); ++i) {
-            if (m_snapPoints[i] > m_scrollX + 0.5f) {
-                target = i;
-                break;
-            }
-        }
-        if (target >= 0) {
-            m_currentSnap = target;
-            m_scrollX = m_snapPoints[target];
-        }
-        clampScroll();
+        m_targetX += kScrollStep;
+        clampTarget();
     }
 
     // ─── Scroll position ────────────────────────────────────────────────
@@ -76,8 +50,10 @@ public:
     float scrollX() const { return m_scrollX; }
 
     void setScrollX(float x) {
+        m_targetX = x;
         m_scrollX = x;
-        clampScroll();
+        clampTarget();
+        m_scrollX = m_targetX;
     }
 
     // Whether scroll buttons are needed (content wider than container)
@@ -87,7 +63,9 @@ public:
 
     void setShowScrollButtons(bool show) { m_showButtons = show; }
 
-    static constexpr float kScrollBtnW = 28.0f;
+    static constexpr float kScrollBtnW  = 28.0f;
+    static constexpr float kScrollStep  = 256.0f;
+    static constexpr float kScrollSpeed = 0.2f;   // lerp factor per frame
 
     // ─── Layout ─────────────────────────────────────────────────────────
 
@@ -119,6 +97,7 @@ public:
             vpW -= 2.0f * kScrollBtnW;
         }
 
+        clampTarget();
         clampScroll();
 
         // Lay out children horizontally within the viewport
@@ -142,6 +121,27 @@ public:
 #ifndef YAWN_TEST_BUILD
         if (!ctx.renderer || !ctx.font) return;
 
+        // Animate scroll position toward target
+        if (std::fabs(m_scrollX - m_targetX) > 0.5f) {
+            m_scrollX += (m_targetX - m_scrollX) * kScrollSpeed;
+            // Re-layout children at the new scroll position
+            float vpX = m_bounds.x;
+            float vpW = m_bounds.w;
+            if (canScroll() && m_showButtons) {
+                vpX += kScrollBtnW;
+                vpW -= 2.0f * kScrollBtnW;
+            }
+            float offset = 0;
+            for (auto* child : m_children) {
+                auto& cb = child->bounds();
+                float childX = vpX - m_scrollX + offset;
+                child->setBoundsX(childX);
+                offset += cb.w + m_gap;
+            }
+        } else {
+            m_scrollX = m_targetX;
+        }
+
         float vpX = m_bounds.x;
         float vpW = m_bounds.w;
         if (canScroll() && m_showButtons) {
@@ -158,8 +158,8 @@ public:
 
         // Draw scroll buttons when content overflows
         if (canScroll() && m_showButtons) {
-            bool atLeft  = m_scrollX <= 0.5f;
-            bool atRight = m_scrollX >= maxScroll() - 0.5f;
+            bool atLeft  = m_targetX <= 0.5f;
+            bool atRight = m_targetX >= maxScroll() - 0.5f;
 
             Color normalBg{50, 50, 60, 255};
             Color limitBg{35, 35, 40, 255};
@@ -234,6 +234,7 @@ public:
 private:
     std::vector<float> m_snapPoints;
     float m_scrollX = 0;
+    float m_targetX = 0;
     float m_contentWidth = 0;
     bool  m_showButtons = true;
     int   m_currentSnap = 0;
@@ -241,6 +242,10 @@ private:
 
     void clampScroll() {
         m_scrollX = detail::cclamp(m_scrollX, 0.0f, maxScroll());
+    }
+
+    void clampTarget() {
+        m_targetX = detail::cclamp(m_targetX, 0.0f, maxScroll());
     }
 
     float maxScroll() const {

@@ -213,6 +213,17 @@ public:
         } else {
             buildKnobs(params, m_knobs, m_knobGrid, kMaxKnobRows);
         }
+        // Estimate cell width from label lengths before font is available.
+        // ~10px per char at 9pt monospace is a reasonable approximation.
+        size_t maxLen = 0;
+        for (auto& p : params)
+            maxLen = std::max(maxLen, p.name.size());
+        float estW = maxLen * 10.0f + 8.0f;
+        float minCellW = kKnobSize + kKnobSpacing;
+        m_cachedCellW = std::max(minCellW, estW);
+        m_knobGrid.setCellSize(m_cachedCellW, kKnobSize + 22.0f);
+        if (m_vizKnobGrid)
+            m_vizKnobGrid->setCellSize(m_cachedCellW, kKnobSize + 22.0f);
     }
 
     void updateParamValue(int index, float value) {
@@ -293,17 +304,18 @@ public:
             float w = m_customBody->preferredBodyWidth() + 16.0f;
             return std::max(kMinExpandedW, w);
         }
+        float cellW = std::max(kKnobSize + kKnobSpacing, m_cachedCellW);
         int paramCount = static_cast<int>(m_knobs.size() + m_vizKnobs.size());
         if (m_isVisualizer) {
             int cols = paramCount == 0 ? 0
                        : static_cast<int>(std::ceil(static_cast<float>(paramCount) / 1.0f));
-            float knobW = cols * (kKnobSize + kKnobSpacing) + 16.0f;
+            float knobW = cols * cellW + 16.0f;
             return std::max(kVisualizerMinW, knobW);
         }
         int cols = paramCount == 0 ? 1
                    : static_cast<int>(std::ceil(static_cast<float>(paramCount)
                                                 / static_cast<float>(kMaxKnobRows)));
-        float w = cols * (kKnobSize + kKnobSpacing) + 24.0f;
+        float w = cols * cellW + 24.0f;
         if (m_customPanel && m_customMinW > 0)
             w = std::max(w, m_customMinW);
         return std::max(kMinExpandedW, w);
@@ -311,7 +323,8 @@ public:
 
     // ─── Layout lifecycle ───────────────────────────────────────────────
 
-    Size measure(const Constraints& c, const UIContext& /*ctx*/) override {
+    Size measure(const Constraints& c, const UIContext& ctx) override {
+        updateCellWidth(ctx);
         float w = std::min(preferredWidth(), c.maxW);
         w = std::max(w, c.minW);
         float h = std::min(c.maxH, std::max(c.minH, c.maxH));
@@ -518,6 +531,7 @@ private:
     float       m_customMinW   = 0;
 
     CustomDeviceBody* m_customBody = nullptr;  // owned, replaces knob grid for instruments
+    float       m_cachedCellW  = 0;        // computed from label widths during layout
 
     RemoveCallback                    m_onRemove;
     ParamChangeCallback               m_onParamChange;
@@ -528,6 +542,47 @@ private:
     DeviceHeaderWidget::ToggleCallback m_onExpandToggle;
     DeviceHeaderWidget::ActionCallback m_onDragStart;
     DeviceHeaderWidget::PresetClickCallback m_onPresetClick;
+
+    // ─── Cell width computation ────────────────────────────────────────
+
+    void updateCellWidth(const UIContext& ctx) {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.font || !ctx.font->isLoaded()) return;
+
+        float labelScale = 9.0f / Theme::kFontSize;
+        float maxLabelW = 0;
+
+        auto measureSlots = [&](const std::vector<ParamSlot>& slots) {
+            for (auto& s : slots) {
+                std::string lbl;
+                switch (s.type) {
+                case ParamSlot::TKnob:         lbl = static_cast<FwKnob*>(s.widget)->label(); break;
+                case ParamSlot::TDentedKnob:   lbl = static_cast<FwDentedKnob*>(s.widget)->label(); break;
+                case ParamSlot::TStepSelector: lbl = static_cast<FwStepSelector*>(s.widget)->label(); break;
+                case ParamSlot::TToggle:       lbl = static_cast<FwToggleSwitch*>(s.widget)->label(); break;
+                case ParamSlot::TKnob360:      lbl = static_cast<FwKnob360*>(s.widget)->label(); break;
+                }
+                if (!lbl.empty()) {
+                    float tw = ctx.font->textWidth(lbl, labelScale);
+                    if (tw > maxLabelW) maxLabelW = tw;
+                }
+            }
+        };
+
+        measureSlots(m_knobs);
+        measureSlots(m_vizKnobs);
+
+        float minCellW = kKnobSize + kKnobSpacing;
+        float needed = maxLabelW + 8.0f;  // label + small padding
+        m_cachedCellW = std::max(minCellW, needed);
+
+        m_knobGrid.setCellSize(m_cachedCellW, kKnobSize + 22.0f);
+        if (m_vizKnobGrid)
+            m_vizKnobGrid->setCellSize(m_cachedCellW, kKnobSize + 22.0f);
+#else
+        (void)ctx;
+#endif
+    }
 
     // ─── Knob management ────────────────────────────────────────────────
 

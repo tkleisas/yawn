@@ -293,6 +293,7 @@ public:
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
     void setOnTouch(TouchCallback cb) { m_onTouch = std::move(cb); }
     void setLabel(const std::string& l) { m_label = l; }
+    const std::string& label() const { return m_label; }
     void setSensitivity(float s) { m_sensitivity = s; }
     void setStep(float s) { m_step = s; }  // snap to step (0 = continuous)
 
@@ -1075,6 +1076,7 @@ public:
     void setOnTouch(TouchCallback cb)    { m_onTouch = std::move(cb); }
     void setFormat(FormatCallback cb)    { m_formatCb = std::move(cb); }
     void setLabel(const std::string& l)  { m_label = l; }
+    const std::string& label() const     { return m_label; }
     void setArcColor(Color c)            { m_arcColor = c; m_customColor = true; }
 
     void addDetent(float value, float snapRange = 0.03f) {
@@ -1184,6 +1186,7 @@ public:
     void setOnTouch(TouchCallback cb)    { m_onTouch = std::move(cb); }
     void setFormat(FormatCallback cb)    { m_formatCb = std::move(cb); }
     void setLabel(const std::string& l)  { m_label = l; }
+    const std::string& label() const     { return m_label; }
     void setArcColor(Color c)            { m_arcColor = c; m_customColor = true; }
     void setWrap(bool w)                 { m_wrap = w; }
 
@@ -1276,6 +1279,7 @@ public:
         m_rightLabel = right;
     }
     void setLabel(const std::string& l) { m_topLabel = l; }
+    const std::string& label() const { return m_topLabel; }
     void setState(bool rightActive) { m_state = rightActive; }
     bool state() const { return m_state; }
     void setOnChange(Callback cb) { m_onChange = std::move(cb); }
@@ -1343,6 +1347,7 @@ public:
     void setOnTouch(TouchCallback cb)  { m_onTouch = std::move(cb); }
     void setFormat(FormatCallback cb)  { m_formatCb = std::move(cb); }
     void setLabel(const std::string& l){ m_label = l; }
+    const std::string& label() const  { return m_label; }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({60.0f, 36.0f});

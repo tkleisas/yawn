@@ -112,6 +112,7 @@ public:
     // ─── Geometry ───────────────────────────────────────────────────────
 
     const Rect& bounds() const { return m_bounds; }
+    void setBoundsX(float x) { m_bounds.x = x; }
 
     // Bounds in screen (global) coordinates.
     Rect globalBounds() const {
