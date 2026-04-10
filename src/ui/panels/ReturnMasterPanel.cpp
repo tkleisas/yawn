@@ -24,14 +24,15 @@ void ReturnMasterPanel::paint(UIContext& ctx) {
     float stripH = h - 4;
 
     float curX = x + 4;
-    for (int b = 0; b < kMaxReturnBuses; ++b) {
-        if (curX + kRetStripW > x + w) break;
-        paintReturnStrip(ctx, b, curX, stripY, kRetStripW, stripH);
-        curX += kRetStripW + kStripPadding;
+    if (m_showReturns) {
+        for (int b = 0; b < kMaxReturnBuses; ++b) {
+            if (curX + kRetStripW > x + w) break;
+            paintReturnStrip(ctx, b, curX, stripY, kRetStripW, stripH);
+            curX += kRetStripW + kStripPadding;
+        }
+        r.drawRect(curX, y + 4, kSeparatorWidth, h - 8, Theme::clipSlotBorder);
+        curX += kSeparatorWidth + 4;
     }
-
-    r.drawRect(curX, y + 4, kSeparatorWidth, h - 8, Theme::clipSlotBorder);
-    curX += kSeparatorWidth + 4;
 
     if (curX + kRetStripW <= x + w)
         paintMasterStrip(ctx, curX, stripY, kRetStripW, stripH);
@@ -53,48 +54,58 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
     }
 
     float curX = x + 4;
-    for (int b = 0; b < kMaxReturnBuses; ++b) {
-        float rx = curX + b * (kRetStripW + kStripPadding);
-        if (mx < rx || mx >= rx + kRetStripW) continue;
+    if (m_showReturns) {
+        for (int b = 0; b < kMaxReturnBuses; ++b) {
+            float rx = curX + b * (kRetStripW + kStripPadding);
+            if (mx < rx || mx >= rx + kRetStripW) continue;
 
-        auto& rs = m_returnStrips[b];
+            auto& rs = m_returnStrips[b];
 
-        if (!rightClick && hitWidget(rs.muteBtn, mx, my)) {
-            return rs.muteBtn.onMouseDown(e);
-        }
-        if (hitWidget(rs.pan, mx, my)) {
-            if (rightClick) {
-                // Return bus index encoded as trackIndex = -(b + 2) for
-                // return buses, using Mixer target type with Pan param.
-                // We use negative track indices: -2..-9 for returns.
-                openMidiLearnMenu(mx, my,
-                    automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Pan),
-                    -1.0f, 1.0f,
-                    [this, b]() {
-                        m_returnStrips[b].pan.setValue(0.0f);
-                        m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
-                    });
+            if (!rightClick && hitWidget(rs.muteBtn, mx, my)) {
+                return rs.muteBtn.onMouseDown(e);
+            }
+            if (hitWidget(rs.pan, mx, my)) {
+                if (rightClick) {
+                    openMidiLearnMenu(mx, my,
+                        automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Pan),
+                        -1.0f, 1.0f,
+                        [this, b]() {
+                            m_returnStrips[b].pan.setValue(0.0f);
+                            m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
+                        });
+                    return true;
+                }
+                return rs.pan.onMouseDown(e);
+            }
+            if (hitWidget(rs.fader, mx, my)) {
+                if (rightClick) {
+                    openMidiLearnMenu(mx, my,
+                        automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Volume),
+                        0.0f, 2.0f,
+                        [this, b]() {
+                            m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
+                        });
+                    return true;
+                }
+                return rs.fader.onMouseDown(e);
+            }
+
+            // Right-click on strip background → show "Add Effect" context menu
+            if (rightClick && m_onReturnRightClick) {
+                m_onReturnRightClick(b, mx, my);
                 return true;
             }
-            return rs.pan.onMouseDown(e);
-        }
-        if (hitWidget(rs.fader, mx, my)) {
-            if (rightClick) {
-                openMidiLearnMenu(mx, my,
-                    automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Volume),
-                    0.0f, 2.0f,
-                    [this, b]() {
-                        m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
-                    });
+
+            // Click on strip background/name area → open detail panel for this return bus
+            if (!rightClick && m_onReturnClick) {
+                m_onReturnClick(b);
                 return true;
             }
-            return rs.fader.onMouseDown(e);
         }
+        curX += kMaxReturnBuses * (kRetStripW + kStripPadding) + kSeparatorWidth + 4;
     }
 
-    float masterX = x + 4
-        + kMaxReturnBuses * (kRetStripW + kStripPadding)
-        + kSeparatorWidth + 4;
+    float masterX = curX;
 
     if (mx >= masterX && mx < masterX + kRetStripW) {
         if (!rightClick && hitWidget(m_stopAllBtn, mx, my)) {
@@ -111,6 +122,18 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                 return true;
             }
             return m_masterStrip.fader.onMouseDown(e);
+        }
+
+        // Right-click on master strip background → show "Add Effect" context menu
+        if (rightClick && m_onMasterRightClick) {
+            m_onMasterRightClick(mx, my);
+            return true;
+        }
+
+        // Click on master strip background/name → open detail panel for master
+        if (!rightClick && m_onMasterClick) {
+            m_onMasterClick();
+            return true;
         }
     }
 

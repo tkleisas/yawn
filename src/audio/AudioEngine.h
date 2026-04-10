@@ -61,6 +61,9 @@ public:
     void sendCommand(const AudioCommand& cmd);
     bool pollEvent(AudioEvent& event);
 
+    // CPU load as reported by PortAudio (0.0 – 1.0)
+    double cpuLoad() const { return m_stream ? Pa_GetStreamCpuLoad(m_stream) : 0.0; }
+
     Transport& transport() { return m_transport; }
     const Transport& transport() const { return m_transport; }
     ClipEngine& clipEngine() { return m_clipEngine; }

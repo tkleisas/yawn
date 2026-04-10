@@ -31,8 +31,8 @@ void MixerPanel::paint(UIContext& ctx) {
     m_mixLabel.paint(ctx);
 
     // I/O and Send toggle buttons in left margin
-    float toggleW = 30.0f, toggleH = 18.0f;
-    float toggleX = x + 6;
+    float toggleW = 36.0f, toggleH = 18.0f;
+    float toggleX = x + 4;
     float toggleY = stripY + 22;
 
     m_ioToggle.setColor(m_showIO ? Color{60, 80, 110} : Theme::clipSlotEmpty);
@@ -45,6 +45,12 @@ void MixerPanel::paint(UIContext& ctx) {
     m_sendToggle.setTextColor(m_showSends ? Color{150, 200, 255} : Theme::textDim);
     m_sendToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
     m_sendToggle.paint(ctx);
+
+    toggleY += toggleH + 2;
+    m_returnToggle.setColor(m_showReturns ? Color{60, 80, 110} : Theme::clipSlotEmpty);
+    m_returnToggle.setTextColor(m_showReturns ? Color{150, 200, 255} : Theme::textDim);
+    m_returnToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
+    m_returnToggle.paint(ctx);
 
     float gridX = x + Theme::kSceneLabelWidth;
     float gridW = w - Theme::kSceneLabelWidth;
@@ -106,6 +112,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
         return m_ioToggle.onMouseDown(e);
     if (!rightClick && hitWidget(m_sendToggle, mx, my))
         return m_sendToggle.onMouseDown(e);
+    if (!rightClick && hitWidget(m_returnToggle, mx, my))
+        return m_returnToggle.onMouseDown(e);
 
     float x = m_bounds.x, y = m_bounds.y;
     float gridX = x + Theme::kSceneLabelWidth;
@@ -220,6 +228,14 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                 return s.sidechainDrop.onMouseDown(e);
         }
 
+        // Send knobs
+        if (m_showSends) {
+            for (int d = 0; d < kMaxReturnBuses; ++d) {
+                if (hitWidget(s.sendKnobs[d], mx, my))
+                    return s.sendKnobs[d].onMouseDown(e);
+            }
+        }
+
         // Pan: right-click opens MIDI Learn context menu
         if (hitWidget(s.pan, mx, my)) {
             if (rightClick) {
@@ -266,6 +282,13 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                 return true;
             }
             return s.fader.onMouseDown(e);
+        }
+
+        // Click on strip background → select this track
+        if (!rightClick) {
+            m_selectedTrack = t;
+            if (m_onTrackSelected) m_onTrackSelected(t);
+            return true;
         }
     }
     return false;
@@ -609,6 +632,45 @@ void MixerPanel::setupStripCallbacks(int t) {
                 ""});
         }
     });
+
+    // Send knobs — one per return bus
+    static const char* sendLabels[] = {"A","B","C","D","E","F","G","H"};
+    for (int d = 0; d < kMaxReturnBuses; ++d) {
+        auto& knob = s.sendKnobs[d];
+        knob.setLabel(sendLabels[d]);
+        knob.setRange(0.0f, 1.0f);
+        knob.setDefault(0.0f);
+        knob.setOnChange([this, t, d](float v) {
+            if (!m_engine) return;
+            m_engine->sendCommand(audio::SetSendLevelMsg{t, d, v});
+            // Auto-enable send when level > 0, disable when 0
+            bool shouldEnable = (v > 0.001f);
+            m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, shouldEnable});
+        });
+        knob.setOnTouch([this, t, d](bool touching) {
+            if (!m_undoManager || !m_engine) return;
+            if (touching) {
+                m_strips[t].sendDragStart[d] = m_strips[t].sendKnobs[d].value();
+            } else {
+                float oldVal = m_strips[t].sendDragStart[d];
+                float newVal = m_strips[t].sendKnobs[d].value();
+                if (oldVal != newVal) {
+                    m_undoManager->push({"Change Send Level",
+                        [this, t, d, oldVal]{
+                            m_strips[t].sendKnobs[d].setValue(oldVal);
+                            m_engine->sendCommand(audio::SetSendLevelMsg{t, d, oldVal});
+                            m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, oldVal > 0.001f});
+                        },
+                        [this, t, d, newVal]{
+                            m_strips[t].sendKnobs[d].setValue(newVal);
+                            m_engine->sendCommand(audio::SetSendLevelMsg{t, d, newVal});
+                            m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, newVal > 0.001f});
+                        },
+                        "send." + std::to_string(t) + "." + std::to_string(d)});
+                }
+            }
+        });
+    }
 }
 
 void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
@@ -622,10 +684,16 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     Color col = Theme::trackColors[track.colorIndex % Theme::kNumTrackColors];
 
     r.drawRect(ix, stripY, iw, stripH, Theme::background);
-    if (idx == m_selectedTrack)
+    if (idx == m_selectedTrack) {
         r.drawRect(ix, stripY, iw, stripH, Color{50, 55, 65, 255});
-
-    r.drawRect(ix, stripY, iw, 3, col);
+        // Selected track gets a thicker, brighter color bar at top
+        r.drawRect(ix, stripY, iw, 4, col);
+        // Subtle side borders
+        r.drawRect(ix, stripY, 1, stripH, Color{col.r, col.g, col.b, 80});
+        r.drawRect(ix + iw - 1, stripY, 1, stripH, Color{col.r, col.g, col.b, 80});
+    } else {
+        r.drawRect(ix, stripY, iw, 3, col);
+    }
 
     char nameBuf[32];
     const auto& trackName = m_project->track(idx).name;
@@ -740,19 +808,54 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
     curY += 16 + 4;
 
-    // Send dots (only when toggled on)
+    // Send knobs (only when toggled on)
     if (m_showSends) {
-        int maxDots = std::min(kMaxReturnBuses,
-                               static_cast<int>((iw - 8 + 2) / 10));
-        for (int d = 0; d < maxDots; ++d) {
+        // Layout send knobs in a 4x2 grid
+        constexpr float knobW = 28.0f, knobH = 32.0f;
+        constexpr int cols = 4;
+        for (int d = 0; d < kMaxReturnBuses; ++d) {
+            int col = d % cols;
+            int row = d / cols;
+            float kx = ix + 2 + col * knobW;
+            float ky = curY + row * knobH;
+
+            auto& knob = s.sendKnobs[d];
             const auto& send = ch.sends[d];
-            Color dotCol = (send.enabled && send.level > 0.01f)
-                ? Color{100, 180, 255}.withAlpha(
-                      static_cast<uint8_t>(100 + send.level * 155))
-                : Theme::clipSlotEmpty;
-            r.drawRect(ix + 4 + d * 10, curY, 7, 7, dotCol);
+            if (!knob.isDragging())
+                knob.setValue(send.level);
+
+            // Color feedback: black → green → yellow → red
+            float v = knob.value();
+            Color arcCol;
+            if (v < 0.01f) {
+                arcCol = Color{50, 50, 55, 255};  // off
+            } else if (v < 0.5f) {
+                // green to yellow
+                float t = v / 0.5f;
+                arcCol = Color{
+                    static_cast<uint8_t>(40 + t * 215),
+                    static_cast<uint8_t>(180 + t * 40),
+                    static_cast<uint8_t>(40 * (1.0f - t)),
+                    255};
+            } else {
+                // yellow to red
+                float t = (v - 0.5f) / 0.5f;
+                arcCol = Color{255,
+                    static_cast<uint8_t>(220 * (1.0f - t)),
+                    0, 255};
+            }
+            knob.setArcColor(arcCol);
+            knob.setArcColorActive(Color{
+                static_cast<uint8_t>(std::min(255, arcCol.r + 40)),
+                static_cast<uint8_t>(std::min(255, arcCol.g + 40)),
+                static_cast<uint8_t>(std::min(255, arcCol.b + 40)),
+                arcCol.a});
+
+            knob.layout(Rect{kx, ky, knobW, knobH}, ctx);
+            knob.paint(ctx);
         }
-        curY += 12;
+        int rows = (kMaxReturnBuses + cols - 1) / cols;
+        curY += rows * knobH + 2;
     }
 
     // Fader + Meter

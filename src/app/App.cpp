@@ -328,6 +328,7 @@ void App::buildWidgetTree() {
     m_arrangementPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_arrangementPanel->setOnTrackClick([this](int t) {
         m_selectedTrack = t;
+        m_detailTarget = DetailTarget::Track;
         m_sessionPanel->setSelectedTrack(t);
         if (m_showDetailPanel) updateDetailForSelectedTrack();
     });
@@ -414,6 +415,7 @@ void App::computeLayout() {
     // MixerPanel visibility is controlled via the content grid's bottom row
     m_mixerPanel->setVisible(m_showMixer);
     m_returnMasterPanel->setVisible(m_showMixer);
+    m_returnMasterPanel->setShowReturns(m_showReturns);
 
     Constraints c = Constraints::tight(static_cast<float>(w), static_cast<float>(h));
     m_rootLayout->measure(c, m_uiContext);
@@ -1131,6 +1133,19 @@ void App::updateDetailForSelectedTrack() {
     }
 }
 
+void App::updateDetailForReturnBus(int bus) {
+    if (bus < 0 || bus >= kMaxReturnBuses) { m_detailPanel->clear(); return; }
+    m_detailPanel->setTrackIndex(-1);  // no track association
+    auto* fxChain = &m_audioEngine.mixer().returnEffects(bus);
+    m_detailPanel->setDeviceChain(nullptr, nullptr, fxChain);
+}
+
+void App::updateDetailForMaster() {
+    m_detailPanel->setTrackIndex(-1);
+    auto* fxChain = &m_audioEngine.mixer().masterEffects();
+    m_detailPanel->setDeviceChain(nullptr, nullptr, fxChain);
+}
+
 bool App::init() {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         LOG_ERROR("App", "Failed to initialize SDL: %s", SDL_GetError());
@@ -1194,6 +1209,114 @@ bool App::init() {
     m_transportPanel->setLearnManager(&m_midiLearnManager);
     m_returnMasterPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_returnMasterPanel->setLearnManager(&m_midiLearnManager);
+    m_mixerPanel->setOnReturnToggle([this](bool show) {
+        m_showReturns = show;
+    });
+    m_mixerPanel->setOnTrackSelected([this](int t) {
+        m_selectedTrack = t;
+        m_detailTarget = DetailTarget::Track;
+        m_virtualKeyboard.setTargetTrack(t);
+        m_sessionPanel->setSelectedTrack(t);
+        m_arrangementPanel->setSelectedTrack(t);
+        if (m_showDetailPanel) updateDetailForSelectedTrack();
+    });
+
+    // Wire return/master strip clicks → open detail panel
+    m_returnMasterPanel->setOnReturnClick([this](int bus) {
+        m_detailTarget = DetailTarget::ReturnBus;
+        m_detailReturnBus = bus;
+        m_showDetailPanel = true;
+        m_detailPanel->setOpen(true);
+        updateDetailForReturnBus(bus);
+    });
+    m_returnMasterPanel->setOnMasterClick([this]() {
+        m_detailTarget = DetailTarget::Master;
+        m_detailReturnBus = -1;
+        m_showDetailPanel = true;
+        m_detailPanel->setOpen(true);
+        updateDetailForMaster();
+    });
+
+    // Right-click on return/master strip → show "Add Effect" context menu
+    // resolveChain returns the correct EffectChain* at execution time
+    auto buildFxMenu = [this](DetailTarget target, int bus, float mx, float my) {
+        auto resolveChain = [this, target, bus]() -> effects::EffectChain* {
+            if (target == DetailTarget::ReturnBus) return &m_audioEngine.mixer().returnEffects(bus);
+            if (target == DetailTarget::Master)    return &m_audioEngine.mixer().masterEffects();
+            return nullptr;
+        };
+
+        std::vector<ui::ContextMenu::Item> fxItems;
+        auto addFx = [&](const char* label, auto factory) {
+            fxItems.push_back({label, [this, label, factory, target, bus, resolveChain]() {
+                auto* chain = resolveChain();
+                if (!chain) return;
+                chain->append(factory());
+                int slot = chain->count() - 1;
+                markDirty();
+                std::string fxName = label;
+                m_undoManager.push({"Add Effect: " + fxName,
+                    [this, resolveChain, slot]{
+                        if (auto* c = resolveChain()) c->remove(slot);
+                        m_detailPanel->clear(); markDirty();
+                    },
+                    [this, resolveChain, factory]{
+                        if (auto* c = resolveChain()) c->append(factory());
+                        m_detailPanel->clear(); markDirty();
+                    }, ""});
+                // Open detail panel to show the new effect
+                m_detailTarget = target;
+                m_detailReturnBus = bus;
+                m_showDetailPanel = true;
+                m_detailPanel->setOpen(true);
+                m_detailPanel->clear(); // force rebuild
+            }});
+        };
+        addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
+        addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
+        addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
+        addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
+        addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
+        addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
+        addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
+        addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
+        addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
+        addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
+        addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
+        addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
+
+#ifdef YAWN_HAS_VST3
+        if (m_vst3Scanner && !m_vst3Scanner->effects().empty()) {
+            fxItems.push_back({"── VST3 ──", nullptr, true});
+            for (auto& info : m_vst3Scanner->effects()) {
+                std::string vlabel = info.name;
+                if (!info.vendor.empty()) vlabel += " (" + info.vendor + ")";
+                std::string modulePath = info.modulePath;
+                std::string classID = info.classIDString;
+                fxItems.push_back({vlabel, [this, modulePath, classID, target, bus, resolveChain]() {
+                    auto* chain = resolveChain();
+                    if (!chain) return;
+                    chain->append(std::make_unique<vst3::VST3Effect>(modulePath, classID));
+                    markDirty();
+                    m_detailTarget = target;
+                    m_detailReturnBus = bus;
+                    m_showDetailPanel = true;
+                    m_detailPanel->setOpen(true);
+                    m_detailPanel->clear();
+                }});
+            }
+        }
+#endif
+
+        m_contextMenu.open(mx, my, std::move(fxItems));
+    };
+
+    m_returnMasterPanel->setOnReturnRightClick([this, buildFxMenu](int bus, float mx, float my) {
+        buildFxMenu(DetailTarget::ReturnBus, bus, mx, my);
+    });
+    m_returnMasterPanel->setOnMasterRightClick([this, buildFxMenu](float mx, float my) {
+        buildFxMenu(DetailTarget::Master, -1, mx, my);
+    });
 
     m_settings = util::AppSettings::load();
 
@@ -1273,10 +1396,29 @@ bool App::init() {
 
     // Wire up detail panel remove device callback
     m_detailPanel->setOnRemoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int chainIndex) {
-        if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
-        int t = m_selectedTrack;
+        // Resolve which effect chain to operate on based on detail target
+        auto getAudioFxChain = [this]() -> effects::EffectChain* {
+            switch (m_detailTarget) {
+                case DetailTarget::Track:
+                    if (m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks())
+                        return &m_audioEngine.mixer().trackEffects(m_selectedTrack);
+                    return nullptr;
+                case DetailTarget::ReturnBus:
+                    if (m_detailReturnBus >= 0 && m_detailReturnBus < kMaxReturnBuses)
+                        return &m_audioEngine.mixer().returnEffects(m_detailReturnBus);
+                    return nullptr;
+                case DetailTarget::Master:
+                    return &m_audioEngine.mixer().masterEffects();
+            }
+            return nullptr;
+        };
+
         switch (type) {
             case ui::fw::DetailPanelWidget::DeviceType::MidiFx: {
+                // MIDI effects only apply to tracks
+                if (m_detailTarget != DetailTarget::Track) break;
+                int t = m_selectedTrack;
+                if (t < 0 || t >= m_project.numTracks()) break;
                 auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
                 std::string fxName = fx ? fx->name() : "";
                 m_audioEngine.midiEffectChain(t).removeEffect(chainIndex);
@@ -1289,7 +1431,6 @@ bool App::init() {
                         if (inst) {
                             auto& chain = m_audioEngine.midiEffectChain(t);
                             chain.addEffect(std::move(inst));
-                            // Move to original position
                             for (int i = chain.count() - 1; i > chainIndex; --i)
                                 chain.moveEffect(i, i - 1);
                         }
@@ -1302,21 +1443,40 @@ bool App::init() {
                 break;
             }
             case ui::fw::DetailPanelWidget::DeviceType::AudioFx: {
-                auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+                auto* chain = getAudioFxChain();
+                if (!chain) break;
+                auto* fx = chain->effectAt(chainIndex);
                 std::string fxName = fx ? fx->name() : "";
-                m_audioEngine.mixer().trackEffects(t).remove(chainIndex);
-                LOG_INFO("Audio", "Removed audio effect %d from track %d", chainIndex, t + 1);
-                m_undoManager.push({"Remove Audio Effect",
-                    [this, t, chainIndex, fxName]{
+                chain->remove(chainIndex);
+
+                // Capture target state for undo
+                auto target = m_detailTarget;
+                int bus = m_detailReturnBus;
+                int t = m_selectedTrack;
+
+                auto resolveChain = [this, target, bus, t]() -> effects::EffectChain* {
+                    switch (target) {
+                        case DetailTarget::Track:     return &m_audioEngine.mixer().trackEffects(t);
+                        case DetailTarget::ReturnBus: return &m_audioEngine.mixer().returnEffects(bus);
+                        case DetailTarget::Master:    return &m_audioEngine.mixer().masterEffects();
+                    }
+                    return nullptr;
+                };
+
+                std::string label = (target == DetailTarget::Track)
+                    ? "Remove Audio Effect" : (target == DetailTarget::ReturnBus)
+                    ? "Remove Return Effect" : "Remove Master Effect";
+
+                m_undoManager.push({label,
+                    [this, resolveChain, chainIndex, fxName]{
                         auto inst = makeAudioEffectByName(fxName);
                         if (inst) {
-                            auto& chain = m_audioEngine.mixer().trackEffects(t);
-                            chain.insert(chainIndex, std::move(inst));
+                            if (auto* c = resolveChain()) c->insert(chainIndex, std::move(inst));
                         }
                         m_detailPanel->clear(); markDirty();
                     },
-                    [this, t, chainIndex]{
-                        m_audioEngine.mixer().trackEffects(t).remove(chainIndex);
+                    [this, resolveChain, chainIndex]{
+                        if (auto* c = resolveChain()) c->remove(chainIndex);
                         m_detailPanel->clear(); markDirty();
                     }, ""});
                 break;
@@ -1329,10 +1489,11 @@ bool App::init() {
     });
 
     m_detailPanel->setOnMoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int fromIdx, int toIdx) {
-        if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
-        int t = m_selectedTrack;
         switch (type) {
-            case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
+            case ui::fw::DetailPanelWidget::DeviceType::MidiFx: {
+                if (m_detailTarget != DetailTarget::Track) break;
+                int t = m_selectedTrack;
+                if (t < 0 || t >= m_project.numTracks()) break;
                 m_audioEngine.midiEffectChain(t).moveEffect(fromIdx, toIdx);
                 m_audioEngine.sendCommand(audio::ResetMidiEffectChainMsg{t});
                 LOG_INFO("MIDI", "Moved MIDI effect %d to %d on track %d", fromIdx, toIdx, t + 1);
@@ -1348,19 +1509,53 @@ bool App::init() {
                         m_detailPanel->clear(); markDirty();
                     }, ""});
                 break;
-            case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
-                m_audioEngine.mixer().trackEffects(t).moveEffect(fromIdx, toIdx);
-                LOG_INFO("Audio", "Moved audio effect %d to %d on track %d", fromIdx, toIdx, t + 1);
-                m_undoManager.push({"Move Audio Effect",
-                    [this, t, fromIdx, toIdx]{
-                        m_audioEngine.mixer().trackEffects(t).moveEffect(toIdx, fromIdx);
+            }
+            case ui::fw::DetailPanelWidget::DeviceType::AudioFx: {
+                // Resolve the target chain
+                effects::EffectChain* chain = nullptr;
+                auto target = m_detailTarget;
+                int bus = m_detailReturnBus;
+                int t = m_selectedTrack;
+                switch (target) {
+                    case DetailTarget::Track:
+                        if (t >= 0 && t < m_project.numTracks())
+                            chain = &m_audioEngine.mixer().trackEffects(t);
+                        break;
+                    case DetailTarget::ReturnBus:
+                        if (bus >= 0 && bus < kMaxReturnBuses)
+                            chain = &m_audioEngine.mixer().returnEffects(bus);
+                        break;
+                    case DetailTarget::Master:
+                        chain = &m_audioEngine.mixer().masterEffects();
+                        break;
+                }
+                if (!chain) break;
+                chain->moveEffect(fromIdx, toIdx);
+
+                auto resolveChain = [this, target, bus, t]() -> effects::EffectChain* {
+                    switch (target) {
+                        case DetailTarget::Track:     return &m_audioEngine.mixer().trackEffects(t);
+                        case DetailTarget::ReturnBus: return &m_audioEngine.mixer().returnEffects(bus);
+                        case DetailTarget::Master:    return &m_audioEngine.mixer().masterEffects();
+                    }
+                    return nullptr;
+                };
+
+                std::string label = (target == DetailTarget::Track)
+                    ? "Move Audio Effect" : (target == DetailTarget::ReturnBus)
+                    ? "Move Return Effect" : "Move Master Effect";
+
+                m_undoManager.push({label,
+                    [this, resolveChain, fromIdx, toIdx]{
+                        if (auto* c = resolveChain()) c->moveEffect(toIdx, fromIdx);
                         m_detailPanel->clear(); markDirty();
                     },
-                    [this, t, fromIdx, toIdx]{
-                        m_audioEngine.mixer().trackEffects(t).moveEffect(fromIdx, toIdx);
+                    [this, resolveChain, fromIdx, toIdx]{
+                        if (auto* c = resolveChain()) c->moveEffect(fromIdx, toIdx);
                         m_detailPanel->clear(); markDirty();
                     }, ""});
                 break;
+            }
             default:
                 break;
         }
@@ -1376,48 +1571,69 @@ bool App::init() {
     // Wire preset click: open context menu with preset list + Save
     m_detailPanel->setOnPresetClick([this](ui::fw::DetailPanelWidget::DeviceType type,
                                            int chainIndex, float mx, float my) {
-        if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
-        int t = m_selectedTrack;
-
         // Resolve device pointer and device ID
         std::string deviceId;
         std::string deviceName;
+
+        // Helper to get audio effect from the right chain
+        auto getAudioEffect = [this](int chainIndex) -> effects::AudioEffect* {
+            switch (m_detailTarget) {
+                case DetailTarget::Track:
+                    return m_audioEngine.mixer().trackEffects(m_selectedTrack).effectAt(chainIndex);
+                case DetailTarget::ReturnBus:
+                    return m_audioEngine.mixer().returnEffects(m_detailReturnBus).effectAt(chainIndex);
+                case DetailTarget::Master:
+                    return m_audioEngine.mixer().masterEffects().effectAt(chainIndex);
+            }
+            return nullptr;
+        };
+
         if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
-            auto* inst = m_audioEngine.instrument(t);
+            if (m_detailTarget != DetailTarget::Track) return;
+            if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+            auto* inst = m_audioEngine.instrument(m_selectedTrack);
             if (!inst) return;
             deviceId = inst->id();
             deviceName = inst->name();
         } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
-            auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+            auto* fx = getAudioEffect(chainIndex);
             if (!fx) return;
             deviceId = fx->id();
             deviceName = fx->name();
         } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
-            auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+            if (m_detailTarget != DetailTarget::Track) return;
+            if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+            auto* fx = m_audioEngine.midiEffectChain(m_selectedTrack).effect(chainIndex);
             if (!fx) return;
             deviceId = fx->id();
             deviceName = fx->name();
         }
+        int t = m_selectedTrack;
 
         auto presets = PresetManager::listPresetsForDevice(deviceId);
         std::vector<ui::ContextMenu::Item> items;
 
         // Add "Save Preset..." item
-        items.push_back({"Save Preset...", [this, type, chainIndex, deviceId, deviceName]() {
+        auto target = m_detailTarget;
+        int bus = m_detailReturnBus;
+        items.push_back({"Save Preset...", [this, type, chainIndex, deviceId, deviceName, target, bus]() {
             SDL_StartTextInput(m_mainWindow.getHandle());
             m_textInputDialog->prompt("Save Preset", "My Preset",
-                [this, type, chainIndex, deviceId, deviceName](const std::string& name) {
-                    int t = m_selectedTrack;
-                    if (t < 0 || t >= m_project.numTracks()) return;
+                [this, type, chainIndex, deviceId, deviceName, target, bus](const std::string& name) {
                     std::filesystem::path saved;
                     if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
-                        auto* inst = m_audioEngine.instrument(t);
+                        auto* inst = m_audioEngine.instrument(m_selectedTrack);
                         if (inst) saved = saveDevicePreset(name, *inst);
                     } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
-                        auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+                        effects::AudioEffect* fx = nullptr;
+                        switch (target) {
+                            case DetailTarget::Track:     fx = m_audioEngine.mixer().trackEffects(m_selectedTrack).effectAt(chainIndex); break;
+                            case DetailTarget::ReturnBus: fx = m_audioEngine.mixer().returnEffects(bus).effectAt(chainIndex); break;
+                            case DetailTarget::Master:    fx = m_audioEngine.mixer().masterEffects().effectAt(chainIndex); break;
+                        }
                         if (fx) saved = saveDevicePreset(name, *fx);
                     } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
-                        auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+                        auto* fx = m_audioEngine.midiEffectChain(m_selectedTrack).effect(chainIndex);
                         if (fx) saved = saveDevicePreset(name, *fx);
                     }
                     if (!saved.empty()) {
@@ -1437,23 +1653,26 @@ bool App::init() {
             std::filesystem::path path = preset.filePath;
             std::string pName = preset.name;
             items.push_back({preset.name,
-                [this, type, chainIndex, path, pName]() {
-                    int t = m_selectedTrack;
-                    if (t < 0 || t >= m_project.numTracks()) return;
+                [this, type, chainIndex, path, pName, target, bus]() {
                     bool ok = false;
                     if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
-                        auto* inst = m_audioEngine.instrument(t);
+                        auto* inst = m_audioEngine.instrument(m_selectedTrack);
                         if (inst) ok = loadDevicePreset(path, *inst);
                     } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
-                        auto* fx = m_audioEngine.mixer().trackEffects(t).effectAt(chainIndex);
+                        effects::AudioEffect* fx = nullptr;
+                        switch (target) {
+                            case DetailTarget::Track:     fx = m_audioEngine.mixer().trackEffects(m_selectedTrack).effectAt(chainIndex); break;
+                            case DetailTarget::ReturnBus: fx = m_audioEngine.mixer().returnEffects(bus).effectAt(chainIndex); break;
+                            case DetailTarget::Master:    fx = m_audioEngine.mixer().masterEffects().effectAt(chainIndex); break;
+                        }
                         if (fx) ok = loadDevicePreset(path, *fx);
                     } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
-                        auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
+                        auto* fx = m_audioEngine.midiEffectChain(m_selectedTrack).effect(chainIndex);
                         if (fx) ok = loadDevicePreset(path, *fx);
                     }
                     if (ok) {
                         m_detailPanel->setDevicePresetName(type, chainIndex, pName);
-                        updateDetailForSelectedTrack();
+                        m_detailPanel->clear(); // force rebuild
                         LOG_INFO("Preset", "Loaded '%s'", pName.c_str());
                     }
                 }
@@ -2247,7 +2466,11 @@ void App::processEvents() {
                             m_showDetailPanel = !m_showDetailPanel;
                             if (m_showDetailPanel) {
                                 m_detailPanel->setOpen(true);
-                                updateDetailForSelectedTrack();
+                                switch (m_detailTarget) {
+                                    case DetailTarget::Track:     updateDetailForSelectedTrack(); break;
+                                    case DetailTarget::ReturnBus: updateDetailForReturnBus(m_detailReturnBus); break;
+                                    case DetailTarget::Master:    updateDetailForMaster(); break;
+                                }
                             }
                         }
                         break;
@@ -2684,6 +2907,7 @@ void App::processEvents() {
                     int selTrack = m_sessionPanel->lastClickTrack();
                     if (selTrack >= 0) {
                         m_selectedTrack = selTrack;
+                        m_detailTarget = DetailTarget::Track;
                         m_virtualKeyboard.setTargetTrack(selTrack);
                         m_mixerPanel->setSelectedTrack(selTrack);
                     }
@@ -2742,6 +2966,7 @@ void App::processEvents() {
                     performClipDragDrop(srcT, srcS, dstT, dstS, isCopy);
                     m_selectedTrack = dstT;
                     m_selectedScene = dstS;
+                    m_detailTarget = DetailTarget::Track;
                     updateDetailForSelectedTrack();
                 }
                 break;
@@ -3163,9 +3388,19 @@ void App::update() {
                                      m_audioEngine.transport().denominator());
     m_transportPanel->setSelectedScene(m_selectedScene);
 
-    // Keep detail panel synced with selected track
+    // Keep detail panel synced with current target
     if (m_showDetailPanel) {
-        updateDetailForSelectedTrack();
+        switch (m_detailTarget) {
+            case DetailTarget::Track:
+                updateDetailForSelectedTrack();
+                break;
+            case DetailTarget::ReturnBus:
+                updateDetailForReturnBus(m_detailReturnBus);
+                break;
+            case DetailTarget::Master:
+                updateDetailForMaster();
+                break;
+        }
     }
 }
 
@@ -3263,6 +3498,8 @@ void App::newProject() {
         m_undoManager.clear();
         m_midiLearnManager.clearAll();
         m_selectedTrack = 0;
+        m_detailTarget = DetailTarget::Track;
+        m_detailReturnBus = -1;
         m_showDetailPanel = false;
         m_pianoRoll->close();
         updateWindowTitle();
@@ -3364,6 +3601,8 @@ void App::doOpenProject(const std::filesystem::path& path) {
         m_projectDirty = false;
         m_undoManager.clear();
         m_selectedTrack = 0;
+        m_detailTarget = DetailTarget::Track;
+        m_detailReturnBus = -1;
         m_showDetailPanel = false;
         m_pianoRoll->close();
         updateWindowTitle();

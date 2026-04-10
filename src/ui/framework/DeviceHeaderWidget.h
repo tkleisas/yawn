@@ -62,6 +62,7 @@ public:
 
     static constexpr float kHeaderH  = 24.0f;
     static constexpr float kBtnSize  = 16.0f;
+    static constexpr float kBypassW  = 24.0f;
     static constexpr float kStripeH  = 3.0f;
 
     // ─── Layout ─────────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ public:
         float w = bounds.w;
 
         m_expandBtn = {x + 4, y + 4, kBtnSize, kBtnSize};
-        m_bypassBtn = {x + 22, y + 4, kBtnSize, kBtnSize};
+        m_bypassBtn = {x + 22, y + 4, kBypassW, kBtnSize};
         m_removeBtn = m_removable ? Rect{x + w - 20, y + 4, kBtnSize, kBtnSize}
                                   : Rect{};
         // m_presetBtn is computed in paint() where we have font metrics
@@ -119,13 +120,18 @@ public:
         // Bypass button
         Color bpBg  = m_bypassed ? Color{100, 40, 40, 255} : Color{40, 100, 40, 255};
         Color bpTxt = m_bypassed ? Color{220, 120, 120, 255} : Color{120, 220, 120, 255};
-        r.drawRect(m_bypassBtn.x, m_bypassBtn.y, kBtnSize, kBtnSize, bpBg);
-        f.drawText(r, m_bypassed ? "Off" : "On",
-                   m_bypassBtn.x + 1, m_bypassBtn.y + 3, tiny, bpTxt);
+        r.drawRect(m_bypassBtn.x, m_bypassBtn.y, kBypassW, kBtnSize, bpBg);
+        {
+            const char* bpLabel = m_bypassed ? "Off" : "On";
+            float bpLabelW = f.textWidth(bpLabel, tiny);
+            f.drawText(r, bpLabel,
+                       m_bypassBtn.x + (kBypassW - bpLabelW) * 0.5f,
+                       m_bypassBtn.y + 3, tiny, bpTxt);
+        }
 
         // Device name
         Color nameC = m_bypassed ? Theme::textDim : Theme::textPrimary;
-        float nameX = x + 38;
+        float nameX = x + 22 + kBypassW + 6;
         f.drawText(r, m_name.c_str(), nameX, m_expandBtn.y, med, nameC);
 
         // Compute preset button position: right after device name

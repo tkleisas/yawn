@@ -674,7 +674,7 @@ void FwToggleSwitch::paint(UIContext& ctx) {
     float x = m_bounds.x, y = m_bounds.y;
     float w = m_bounds.w, h = m_bounds.h;
 
-    // Top label (parameter name)
+    // Top label (parameter name) — drawn higher up in the cell
     float labelScale = 9.0f / Theme::kFontSize;
     float labelH = 0;
     if (!m_topLabel.empty()) {
@@ -682,11 +682,14 @@ void FwToggleSwitch::paint(UIContext& ctx) {
         float tx = x + (w - tw) * 0.5f;
         ctx.font->drawText(*ctx.renderer, m_topLabel.c_str(), tx, y + 1,
                            labelScale, Color{170, 175, 185, 255});
-        labelH = 12.0f;
+        labelH = ctx.font->lineHeight(labelScale) + 4.0f;
     }
 
-    float switchY = y + labelH;
-    float switchH = h - labelH;
+    // Cap switch height and center vertically in remaining space
+    constexpr float kMaxSwitchH = 22.0f;
+    float remaining = h - labelH;
+    float switchH = detail::cmin(remaining, kMaxSwitchH);
+    float switchY = y + labelH + (remaining - switchH) * 0.3f;
     float halfW = w * 0.5f;
 
     // Background track
@@ -734,11 +737,13 @@ void FwStepSelector::paint(UIContext& ctx) {
         float tx = x + (w - tw) * 0.5f;
         ctx.font->drawText(*ctx.renderer, m_label.c_str(), tx, y + 1,
                            labelScale, Color{170, 175, 185, 255});
-        labelH = 12.0f;
+        labelH = ctx.font->lineHeight(labelScale) + 4.0f;
     }
 
-    float dispY = y + labelH;
-    float dispH = h - labelH;
+    constexpr float kMaxSelectorH = 24.0f;
+    float remaining = h - labelH;
+    float dispH = std::min(remaining, kMaxSelectorH);
+    float dispY = y + labelH + (remaining - dispH) * 0.3f;
 
     // Background
     ctx.renderer->drawRect(x, dispY, w, dispH, Color{38, 38, 42, 255});

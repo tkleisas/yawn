@@ -296,6 +296,11 @@ private:
     float  m_metroDotX = 0.0f;  // X position for visual metronome dots
     float  m_metroDotY = 0.0f;
 
+    // Performance meters
+    float  m_cpuLoad = 0.0f;       // smoothed CPU load (0-1)
+    float  m_memoryMB = 0.0f;      // smoothed memory in MB
+    int    m_meterUpdateCounter = 0;
+
     // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;
     ui::ContextMenu m_contextMenu;

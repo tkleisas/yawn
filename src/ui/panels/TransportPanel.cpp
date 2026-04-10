@@ -5,6 +5,7 @@
 #include "app/Project.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "util/SystemInfo.h"
 #include <SDL3/SDL.h>
 
 namespace yawn {
@@ -122,8 +123,8 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
     m_tapBtn.layout(Rect{lx, btnY, tapW, boxH}, ctx);
     lx += tapW + 8.0f;
 
-    // Metronome toggle
-    float metW = 42.0f;
+    // Metronome toggle (wider when count-in is set)
+    float metW = (m_countInBars > 0) ? 62.0f : 42.0f;
     m_metroBtn.layout(Rect{lx, btnY, metW, boxH}, ctx);
     m_metroDotX = lx + metW + 6.0f;
     m_metroDotY = btnY + boxH * 0.5f;
@@ -229,7 +230,14 @@ void TransportPanel::paint(UIContext& ctx) {
     m_tapBtn.setColor(Color{fR, fG, 50});
     m_tapBtn.paint(ctx);
 
-    // Metronome button
+    // Metronome button — include count-in in label
+    if (m_countInBars > 0) {
+        char metLabel[16];
+        std::snprintf(metLabel, sizeof(metLabel), "MET %d", m_countInBars);
+        m_metroBtn.setLabel(metLabel);
+    } else {
+        m_metroBtn.setLabel("MET");
+    }
     Color metroBg = m_metronomeOn ? Color{60, 90, 140} : Color{45, 45, 50};
     m_metroBtn.setColor(metroBg);
     m_metroBtn.paint(ctx);
@@ -280,12 +288,44 @@ void TransportPanel::paint(UIContext& ctx) {
     // Right group
     m_posLabel.paint(ctx);
 
-    // Count-in indicator
-    if (m_countInBars > 0) {
-        char ciBuf[16];
-        std::snprintf(ciBuf, sizeof(ciBuf), "CI:%d", m_countInBars);
-        m_countInLabel.setText(ciBuf);
-        m_countInLabel.paint(ctx);
+    // ── Performance meters (CPU / MEM) ──
+    {
+        // Update readings every ~30 frames to avoid per-frame system calls
+        if (++m_meterUpdateCounter >= 30) {
+            m_meterUpdateCounter = 0;
+            float rawCpu = static_cast<float>(m_engine->cpuLoad());
+            float rawMem = util::processMemoryMB();
+            // Smooth with exponential moving average
+            m_cpuLoad  = m_cpuLoad  * 0.7f + rawCpu * 0.3f;
+            m_memoryMB = m_memoryMB * 0.7f + rawMem * 0.3f;
+        }
+
+        float meterScale = 9.0f / Theme::kFontSize;
+        float lineH = ctx.font->lineHeight(meterScale);
+        float rightEdge = m_bounds.x + m_bounds.w - 160.0f - 12.0f;  // posLabel X
+
+        // CPU meter
+        char cpuBuf[16];
+        int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
+        std::snprintf(cpuBuf, sizeof(cpuBuf), "CPU %d%%", cpuPct);
+        Color cpuCol = (cpuPct > 80) ? Color{255, 80, 60, 255}
+                     : (cpuPct > 50) ? Color{255, 200, 60, 255}
+                     :                 Color{120, 130, 140, 255};
+        float cpuW = ctx.font->textWidth(cpuBuf, meterScale);
+        float meterX = rightEdge - cpuW - 16.0f;
+        float meterY = y + (h - lineH * 2 - 2) * 0.5f;
+        ctx.font->drawText(r, cpuBuf, meterX, meterY, meterScale, cpuCol);
+
+        // Memory meter
+        char memBuf[24];
+        if (m_memoryMB >= 1024.0f)
+            std::snprintf(memBuf, sizeof(memBuf), "MEM %.1fG", m_memoryMB / 1024.0f);
+        else
+            std::snprintf(memBuf, sizeof(memBuf), "MEM %.0fM", m_memoryMB);
+        float memW = ctx.font->textWidth(memBuf, meterScale);
+        float memX = meterX + (cpuW - memW) * 0.5f;
+        ctx.font->drawText(r, memBuf, memX, meterY + lineH + 2, meterScale,
+                           Color{120, 130, 140, 255});
     }
 
     // Context menu overlay

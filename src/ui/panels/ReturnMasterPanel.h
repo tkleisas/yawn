@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <functional>
 
 namespace yawn {
 namespace ui {
@@ -150,6 +151,16 @@ public:
 
     void setLearnManager(midi::MidiLearnManager* mgr) { m_learnManager = mgr; }
 
+    // Callbacks for opening detail panel on strip click
+    void setOnReturnClick(std::function<void(int)> cb) { m_onReturnClick = std::move(cb); }
+    void setOnMasterClick(std::function<void()> cb)    { m_onMasterClick = std::move(cb); }
+
+    // Right-click callbacks for showing "Add Effect" context menu
+    void setOnReturnRightClick(std::function<void(int, float, float)> cb) { m_onReturnRightClick = std::move(cb); }
+    void setOnMasterRightClick(std::function<void(float, float)> cb)     { m_onMasterRightClick = std::move(cb); }
+
+    void setShowReturns(bool show) { m_showReturns = show; }
+
     // ─── Measure / Layout ───────────────────────────────────────────────
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -251,8 +262,13 @@ private:
     StripWidgets m_masterStrip;
     FwButton     m_stopAllBtn;
 
+    bool m_showReturns = true;
     midi::MidiLearnManager* m_learnManager = nullptr;
     ui::ContextMenu m_contextMenu;
+    std::function<void(int)> m_onReturnClick;
+    std::function<void()>    m_onMasterClick;
+    std::function<void(int, float, float)> m_onReturnRightClick;
+    std::function<void(float, float)>      m_onMasterRightClick;
 
 #ifndef YAWN_TEST_BUILD
     void openMidiLearnMenu(float mx, float my,

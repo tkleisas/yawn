@@ -56,6 +56,14 @@ public:
             m_showSends = !m_showSends;
         });
 
+        m_returnToggle.setLabel("R");
+        m_returnToggle.setTextColor(Theme::textDim);
+        m_returnToggle.setColor(Theme::clipSlotEmpty);
+        m_returnToggle.setOnClick([this]() {
+            m_showReturns = !m_showReturns;
+            if (m_onReturnToggle) m_onReturnToggle(m_showReturns);
+        });
+
         m_scrollbar.setOnScroll([this](float pos) {
             m_scrollX = pos;
             if (m_onScrollChanged) m_onScrollChanged(pos);
@@ -92,6 +100,9 @@ public:
     void setScrollX(float sx) { m_scrollX = sx; }
     void setOnScrollChanged(std::function<void(float)> cb) { m_onScrollChanged = std::move(cb); }
     void setOnTrackArmedChanged(std::function<void(int, bool)> cb) { m_onTrackArmed = std::move(cb); }
+    void setOnReturnToggle(std::function<void(bool)> cb) { m_onReturnToggle = std::move(cb); }
+    void setOnTrackSelected(std::function<void(int)> cb) { m_onTrackSelected = std::move(cb); }
+    bool showReturns() const { return m_showReturns; }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({c.maxW, kMixerHeight});
@@ -219,6 +230,8 @@ private:
         Label nameLabel;
         Label dbLabel;
         float panDragStart = 0.0f;  // captured on touch start for undo
+        FwKnob sendKnobs[kMaxReturnBuses];
+        float sendDragStart[kMaxReturnBuses] = {};
     };
 
     bool hitWidget(Widget& w, float mx, float my) {
@@ -273,11 +286,13 @@ private:
     Label      m_mixLabel;
     FwButton   m_ioToggle;
     FwButton   m_sendToggle;
+    FwButton   m_returnToggle;
 
     int   m_selectedTrack = 0;
     float m_scrollX       = 0.0f;
     bool  m_showIO        = false;
     bool  m_showSends     = false;
+    bool  m_showReturns   = true;
 
     static constexpr float kMixerHeight  = 420.0f;
     static constexpr float kMeterWidth   = 6.0f;
@@ -289,6 +304,8 @@ private:
 
     std::function<void(float)>        m_onScrollChanged;
     std::function<void(int, bool)>    m_onTrackArmed;
+    std::function<void(bool)>         m_onReturnToggle;
+    std::function<void(int)>          m_onTrackSelected;
 };
 
 } // namespace fw

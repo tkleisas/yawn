@@ -85,6 +85,8 @@ private:
     void showSceneContextMenu(int sceneIndex, float mx, float my);
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
     void updateDetailForSelectedTrack();
+    void updateDetailForReturnBus(int bus);
+    void updateDetailForMaster();
     void switchToView(ViewMode mode);
     void syncArrangementClipsToEngine(int trackIdx);
 
@@ -143,9 +145,15 @@ private:
     bool m_running = false;
     GLuint m_iconTexture = 0;
     bool m_showMixer = true;
+    bool m_showReturns = true;
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
     int m_selectedScene = 0;
+
+    // Detail panel target: what the detail panel is currently showing
+    enum class DetailTarget { Track, ReturnBus, Master };
+    DetailTarget m_detailTarget = DetailTarget::Track;
+    int m_detailReturnBus = -1;  // which return bus (0..kMaxReturnBuses-1) when target==ReturnBus
 
     // Clip clipboard
     struct ClipboardData {
