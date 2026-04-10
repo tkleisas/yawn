@@ -21,6 +21,9 @@ local PAD_COLS = 8
 -- Active ripple animations: {note, tick_count}
 local ripples = {}
 
+-- Currently held pads (note → true)
+local held_pads = {}
+
 -- Push 1 SysEx display header
 -- Format: F0 47 7F 15 <line> 00 <len+1> <col_offset> <text> F7
 -- Lines: 0x18-0x1B (write), 0x1C-0x1F (clear)
@@ -143,7 +146,10 @@ local function draw_ripple(row, col, radius, color)
             -- Only draw the ring at this radius, not filled
             if math.max(math.abs(dr), math.abs(dc)) == radius then
                 local pad = grid_to_pad(row + dr, col + dc)
-                if pad then set_pad_led(pad, color) end
+                -- Don't clear held pads (keep them lit)
+                if pad and not (color == 0 and held_pads[pad]) then
+                    set_pad_led(pad, color)
+                end
             end
         end
     end
@@ -237,12 +243,14 @@ function on_midi(data)
 
         -- Visual feedback: light pad on press, start ripple
         if velocity > 0 then
+            held_pads[d1] = true
             set_pad_led(d1, PAD_COLORS[1])
             local row, col = pad_to_grid(d1)
             if row then
                 ripples[#ripples + 1] = {row = row, col = col, tick = 0}
             end
         else
+            held_pads[d1] = nil
             set_pad_led(d1, 0)
         end
         return
