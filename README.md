@@ -7,7 +7,7 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets<br/><br/>
+  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · Controller Scripting<br/><br/>
   <em>Made with AI-Sloptronic™ technology</em><br/>
   <sub>Where "it compiles" is the new "it works" and every bug is a ✨feature request✨</sub>
 </p>
@@ -163,6 +163,27 @@
 - **Crash Handler** — Signal handlers (SIGSEGV, SIGABRT, SIGFPE, SIGILL) with stack traces (Windows: SymFromAddr, Unix: backtrace), crash log to `yawn.log`
 - **Multi-window Ready** — Built on SDL3 for future detachable panels
 
+### Controller Scripting
+
+*The AI embedded a scripting engine inside a DAW it wrote, so you can control the DAW it wrote with scripts it wrote. We're three layers deep and the Push display actually works.*
+
+- **Lua 5.4 Engine** — Embedded Lua scripting for MIDI controller integration, vendored amalgamation with yawn.* API
+- **Auto-Detection** — Manifest-based controller matching: scripts declare port name patterns, YAWN auto-connects on startup
+- **Multi-Port Support** — Controllers with multiple MIDI ports (e.g. Push 1's Live + User ports) are handled seamlessly via a shared ring buffer
+- **yawn.* Lua API** — Full read/write access to device parameters, track/instrument info, MIDI output, SysEx, transport state, and logging
+- **Device Parameter Control** — Read param count/name/value/min/max/display, set values via lock-free audio command queue
+- **Hot Reload** — Menu → Reload Controller Scripts to disconnect, rescan, and reconnect without restarting
+- **Port Exclusivity** — Controller-claimed MIDI ports are automatically excluded from the general MIDI engine (Windows exclusive access)
+
+#### Ableton Push 1
+
+- **8 Encoders** — Relative-encoded CC 71–78 mapped to first 8 parameters of the selected track's instrument
+- **SysEx Display** — 4-line text display showing parameter names, values, track name, and instrument name
+- **Pad Note Forwarding** — 64 velocity-sensitive pads forwarded to the selected track's instrument
+- **LED Ripple Animation** — Expanding ring animation on pad press using Push's velocity-to-color palette
+- **Encoder Touch Filtering** — Touch-sense notes (0–7) filtered to prevent false instrument triggers
+- **Aftertouch Filtering** — Polyphonic aftertouch flood from pads suppressed
+
 ### Quality
 - **Test-Driven Development** — 844 unit & integration tests across 39 test suites via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
@@ -171,7 +192,7 @@
 
 ### Planned
 
-- 🔌 VST3 plugin hosting
+- 🎛️ More controller scripts (Ableton Move, Novation Launchpad, etc.)
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
@@ -196,13 +217,14 @@
 | UI / Windowing | SDL3 + OpenGL 3.3 |
 | Audio I/O | PortAudio |
 | MIDI I/O | RtMidi 6.0 |
+| Controller Scripting | Lua 5.4 (vendored) |
 | Audio Files | libsndfile |
 | Font Rendering | stb_truetype |
 | Build System | CMake 3.20+ |
 | Testing | Google Test 1.14 |
 | Platforms | Windows, Linux |
 
-All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
+All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. Lua 5.4 and SQLite3 are vendored as source amalgamations. The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
 
 ## Building
 
@@ -322,6 +344,12 @@ cd build && ctest --output-on-failure -C Release
 │  │ Serial.  │ │  Mapping  │ │ Monitor  │ │  Handler       │ │
 │  └──────────┘ └───────────┘ └──────────┘ └────────────────┘ │
 ├──────────────────────────────────────────────────────────────┤
+│                 Controller Scripting (Lua 5.4)               │
+│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌────────────────┐ │
+│  │Controller│ │   Lua     │ │Controller│ │   yawn.* API   │ │
+│  │ Manager  │ │  Engine   │ │ MidiPort │ │ (param/MIDI/…) │ │
+│  └──────────┘ └───────────┘ └──────────┘ └────────────────┘ │
+├──────────────────────────────────────────────────────────────┤
 │                   Audio Engine (real-time thread)            │
 │  ┌──────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐ │
 │  │PortAudio │ │   Clip    │ │Arrangement│ │  Metronome   │ │
@@ -346,7 +374,8 @@ cd build && ctest --output-on-failure -C Release
  Audio Input ──────→│  Recording  │──→ Recorded Audio/MIDI Data
                     └─────────────┘
                           │
- MIDI Input → MIDI Effect Chain → Instrument → Track Buffer
+ MIDI Input ──────────────────→ MIDI Effect Chain → Instrument → Track Buffer
+ Controller (Lua) ─── notes ──→↑         params ──→ Device Parameters
                                                     ↓
  Clip Engine (session) ──────────────────→ Track Buffer (summed)
           or                                        ↓
@@ -392,6 +421,10 @@ yawn/
 │   │   ├── AutomationEnvelope.h # Breakpoint envelope (addPoint/movePoint/valueAt)
 │   │   ├── AutomationLane.h    # Lane (target + envelope + armed flag)
 │   │   └── AutomationEngine.h  # Real-time automation parameter application
+│   ├── controllers/
+│   │   ├── ControllerManager.h/cpp  # Script discovery, port matching, lifecycle
+│   │   ├── ControllerMidiPort.h     # Multi-port MIDI I/O with byte ring buffer
+│   │   └── LuaEngine.h/cpp         # Lua state, yawn.* API registration
 │   ├── core/
 │   │   └── Constants.h         # Global limits (tracks, buses, buffer sizes)
 │   ├── effects/
@@ -483,6 +516,11 @@ yawn/
 │   │   ├── UndoManager.h       # Undo/redo with action merging
 │   │   └── RingBuffer.h        # Lock-free SPSC ring buffer
 │   └── WidgetHint.h            # Widget type hints
+├── scripts/
+│   └── controllers/
+│       └── ableton_push1/      # Ableton Push 1 controller script
+│           ├── manifest.lua    # Port matching metadata
+│           └── init.lua        # Encoder/display/pad logic
 ├── tests/                      # 844 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_Arrangement.cpp    # Arrangement clips, playback, transport loop
@@ -525,6 +563,9 @@ yawn/
 │   ├── test_Warping.cpp        # Time stretching (WSOLA, Phase Vocoder)
 │   ├── test_Widget.cpp         # Widget tree & event dispatch
 │   └── test_Widgets.cpp        # Widget tests
+├── third_party/
+│   ├── lua54/                  # Lua 5.4 vendored source
+│   └── sqlite3/                # SQLite3 vendored source
 └── assets/                     # Runtime assets (copied to build dir)
 ```
 
@@ -552,7 +593,8 @@ yawn/
 | 16. Arrangement View | ✅ Done | Timeline, clip placement, automation lanes, loop range, waveform display |
 | 17. Recording & I/O | ✅ Done | Audio/MIDI recording, MIDI Learn, audio export (WAV/FLAC/OGG), project save/load |
 | 18. Session Management | ✅ Done | Scene insert/duplicate/delete, track deletion, follow actions, undo/redo, time stretching |
-| 19. VST3 Hosting | 🔲 Planned | VST3 SDK, plugin scanning, editor windows |
+| 19. VST3 Hosting | ✅ Done | VST3 SDK, plugin scanning, process-isolated editors, parameter sync, state persistence |
+| 20. Controller Scripting | ✅ Done | Lua 5.4, controller auto-detection, yawn.* API, Ableton Push 1 (encoders, display, pads, LEDs) |
 
 ### Phase 16: Arrangement View (Done)
 
@@ -601,6 +643,18 @@ Full VST3 plugin support for third-party effects and instruments:
 - **Parameter mapping** — Generic knob grid for plugins without custom GUIs
 - **Preset management** — Save/load plugin state with project
 
+### Phase 20: Controller Scripting (Done)
+
+Lua-based MIDI controller integration with auto-detection and hot reload:
+
+- **Lua 5.4 engine** — Vendored amalgamation, embedded with yawn.* API for device parameters, MIDI I/O, SysEx, and transport
+- **Controller Manager** — Scans `scripts/controllers/*/manifest.lua`, substring-matches MIDI port names, opens all matching I/O ports
+- **Multi-port architecture** — Controllers with multiple MIDI ports (Push 1 Live + User) feed a single byte-oriented SPSC ring buffer
+- **Lua callbacks** — `on_connect()`, `on_disconnect()`, `on_midi(data)` (per-message), `on_tick()` (30Hz)
+- **Ableton Push 1 script** — 8 relative encoders mapped to device params, 4-line SysEx display (param names/values/track/instrument), 64-pad note forwarding with LED ripple animation
+- **Port exclusivity** — Claimed ports skipped by MidiEngine to avoid Windows exclusive-access conflicts
+- **Hot reload** — View → Reload Controller Scripts disconnects, rescans, and reconnects without restart
+
 ## The Team
 
 | Role | Entity | Responsibilities |
@@ -635,6 +689,8 @@ while (true) {
 6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
 7. **Track deletion requires stopping the world** — Ableton does it too, so it's a feature not a limitation
 8. **MIDI Learn is just "wiggle something, click something"** — The AI understood this perfectly on the 4th attempt
+9. **SysEx is where bytes go to hide** — The Push 1 display didn't work for hours because of one missing column offset byte. The PM dug up his own 10-year-old code to prove the AI wrong
+10. **Controllers have multiple MIDI ports** — Push 1 sends pads on the "User" port, not the main one. The AI opened the wrong port and wondered why pads were silent
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
 
