@@ -165,6 +165,9 @@ void App::setupMenuBar() {
             m_showDetailPanel = !m_showDetailPanel;
             if (m_showDetailPanel) m_detailPanel->setOpen(true);
         }},
+        {"Reload Controller Scripts", "", [this]() {
+            m_controllerManager.reloadScripts("");
+        }},
     });
 
     // Track menu
@@ -1333,14 +1336,57 @@ bool App::init() {
         LOG_WARN("Audio", "Audio engine failed to start");
     }
 
+    // ── Controller scripting (must init BEFORE MidiEngine to claim ports) ──
+    m_controllerManager.init(&m_audioEngine, &m_project);
+    m_controllerManager.setSelectedTrackGetter([this]() { return m_selectedTrack; });
+    m_controllerManager.setCommandSender([this](const audio::AudioCommand& cmd) {
+        m_audioEngine.sendCommand(cmd);
+    });
+    m_controllerManager.scanScripts("scripts/controllers");
+    m_controllerManager.autoConnect();
+
     // Wire MidiEngine: scan ports, open inputs, connect to AudioEngine
+    // Skip ports claimed by controller scripts (exclusive access on Windows)
+    auto claimedInputs = m_controllerManager.claimedInputPortNames();
     m_midiEngine.refreshPorts();
+    LOG_INFO("MIDI", "Available inputs: %d, claimed by controller: %d",
+             m_midiEngine.availableInputCount(), static_cast<int>(claimedInputs.size()));
+    for (int i = 0; i < m_midiEngine.availableInputCount(); ++i)
+        LOG_INFO("MIDI", "  Input %d: '%s'", i, m_midiEngine.availableInputName(i).c_str());
+    for (auto& cn : claimedInputs)
+        LOG_INFO("MIDI", "  Claimed: '%s'", cn.c_str());
+
     if (!m_settings.enabledMidiInputs.empty()) {
-        for (int i : m_settings.enabledMidiInputs)
-            m_midiEngine.openInputPort(i);
+        LOG_INFO("MIDI", "Opening user-configured inputs (%d)", static_cast<int>(m_settings.enabledMidiInputs.size()));
+        for (int i : m_settings.enabledMidiInputs) {
+            bool claimed = false;
+            if (i < m_midiEngine.availableInputCount()) {
+                for (auto& cn : claimedInputs)
+                    if (m_midiEngine.availableInputName(i) == cn)
+                    { claimed = true; break; }
+            }
+            if (!claimed) {
+                LOG_INFO("MIDI", "  Opening input %d: '%s'", i,
+                         i < m_midiEngine.availableInputCount() ? m_midiEngine.availableInputName(i).c_str() : "?");
+                m_midiEngine.openInputPort(i);
+            } else {
+                LOG_INFO("MIDI", "  Skipping input %d: '%s' (claimed)", i, m_midiEngine.availableInputName(i).c_str());
+            }
+        }
     } else {
-        for (int i = 0; i < m_midiEngine.availableInputCount(); ++i)
-            m_midiEngine.openInputPort(i);
+        LOG_INFO("MIDI", "Opening all available inputs");
+        for (int i = 0; i < m_midiEngine.availableInputCount(); ++i) {
+            bool claimed = false;
+            for (auto& cn : claimedInputs)
+                if (m_midiEngine.availableInputName(i) == cn)
+                { claimed = true; break; }
+            if (!claimed) {
+                LOG_INFO("MIDI", "  Opening input %d: '%s'", i, m_midiEngine.availableInputName(i).c_str());
+                m_midiEngine.openInputPort(i);
+            } else {
+                LOG_INFO("MIDI", "  Skipping input %d: '%s' (claimed)", i, m_midiEngine.availableInputName(i).c_str());
+            }
+        }
     }
     for (int i : m_settings.enabledMidiOutputs)
         m_midiEngine.openOutputPort(i);
@@ -1791,6 +1837,9 @@ void App::run() {
 }
 
 void App::shutdown() {
+    // Stop controller scripts
+    m_controllerManager.shutdown();
+
     // Stop library scanner before anything else
     if (m_libraryScanner) m_libraryScanner->stop();
     m_libraryScanner.reset();
@@ -3194,6 +3243,9 @@ void App::processEvents() {
 }
 
 void App::update() {
+    // Poll controller scripts (MIDI input → Lua callbacks)
+    m_controllerManager.update();
+
     // Process pending file dialog results (from SDL async callbacks)
     {
         std::lock_guard<std::mutex> lock(m_dialogMutex);

@@ -42,6 +42,15 @@ if(MSVC)
     target_compile_definitions(sqlite3 PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+# Lua 5.4 (vendored)
+file(GLOB LUA54_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua54/*.c)
+list(FILTER LUA54_SOURCES EXCLUDE REGEX "(lua|luac)\\.c$")
+add_library(lua54 STATIC ${LUA54_SOURCES})
+target_include_directories(lua54 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua54)
+if(MSVC)
+    target_compile_definitions(lua54 PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 # Collect sources
 file(GLOB_RECURSE YAWN_SOURCES
     src/*.cpp
@@ -122,6 +131,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     yawn_core
     SDL3::SDL3
     glad
+    lua54
 )
 
 # Platform-specific
@@ -137,6 +147,13 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_CURRENT_SOURCE_DIR}/assets
     $<TARGET_FILE_DIR:${PROJECT_NAME}>/assets
+)
+
+# Copy controller scripts to build directory
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts
+    $<TARGET_FILE_DIR:${PROJECT_NAME}>/scripts
 )
 
 # VST3 editor host — separate process to isolate plugin UI from SDL (Windows only)

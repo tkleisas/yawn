@@ -24,6 +24,7 @@
 #include "ui/panels/BrowserPanel.h"
 #include "library/LibraryDatabase.h"
 #include "library/LibraryScanner.h"
+#include "controllers/ControllerManager.h"
 #include "ui/panels/ReturnMasterPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
@@ -146,6 +147,7 @@ private:
     util::AppSettings m_settings;
     library::LibraryDatabase m_libraryDb;
     std::unique_ptr<library::LibraryScanner> m_libraryScanner;
+    controllers::ControllerManager m_controllerManager;
     bool m_running = false;
     GLuint m_iconTexture = 0;
     bool m_showMixer = true;
