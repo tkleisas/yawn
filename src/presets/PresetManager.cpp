@@ -117,6 +117,10 @@ fs::path PresetManager::savePreset(const std::string& name,
     if (!vst3ControllerState.empty())
         j["vst3ControllerState"] = toHex(vst3ControllerState);
 
+    // Metadata tags (written even if empty for future editing)
+    j["genre"]      = "";
+    j["instrument"] = "";
+
     std::ofstream file(path);
     if (!file.is_open()) {
         LOG_ERROR("Preset", "failed to write %s", path.string().c_str());
@@ -160,6 +164,9 @@ bool PresetManager::loadPreset(const fs::path& filePath, PresetData& outData)
         outData.vst3ControllerState = fromHex(j["vst3ControllerState"].get<std::string>());
     else
         outData.vst3ControllerState.clear();
+
+    outData.genre      = j.value("genre", "");
+    outData.instrument = j.value("instrument", "");
 
     return true;
 }

@@ -35,6 +35,13 @@ add_custom_target(generate_version ALL
     COMMENT "Generating Version.h"
 )
 
+# SQLite3 amalgamation (vendored)
+add_library(sqlite3 STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3/sqlite3.c)
+target_include_directories(sqlite3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3)
+if(MSVC)
+    target_compile_definitions(sqlite3 PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 # Collect sources
 file(GLOB_RECURSE YAWN_SOURCES
     src/*.cpp
@@ -53,6 +60,8 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryDatabase.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryScanner.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)
@@ -75,6 +84,7 @@ target_link_libraries(yawn_core PUBLIC
     sndfile
     rtmidi
     nlohmann_json::nlohmann_json
+    sqlite3
     FLAC
     ogg
     vorbis

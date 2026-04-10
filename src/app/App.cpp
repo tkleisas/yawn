@@ -1361,6 +1361,77 @@ bool App::init() {
         return std::to_string(idx);
     });
 
+    // ── Library database & scanner ──
+    if (m_libraryDb.open()) {
+        m_libraryScanner = std::make_unique<library::LibraryScanner>(m_libraryDb);
+        m_browserPanel->setLibraryDatabase(&m_libraryDb);
+        m_browserPanel->setLibraryScanner(m_libraryScanner.get());
+
+        // Files tab: "Add Folder" button → open folder dialog
+        m_browserPanel->filesTab().setOnAddFolder([this]() {
+            SDL_ShowOpenFolderDialog([](void* ud, const char* const* filelist, int) {
+                auto* self = static_cast<App*>(ud);
+                if (filelist && filelist[0]) {
+                    self->m_libraryDb.addLibraryPath(filelist[0]);
+                    auto paths = self->m_libraryDb.getLibraryPaths();
+                    if (!paths.empty()) {
+                        auto& lp = paths.back();
+                        self->m_libraryScanner->scanLibraryPath(lp.id, lp.path);
+                    }
+                    self->m_browserPanel->filesTab().refreshTree();
+                }
+            }, this, m_mainWindow.getHandle(), nullptr, false);
+        });
+
+        // Files tab: double-click → load into selected clip slot
+        m_browserPanel->filesTab().setOnFileDoubleClick([this](const std::string& path) {
+            loadClipToSlot(path, m_selectedTrack, m_selectedScene);
+        });
+
+        // Files tab: remove folder
+        m_browserPanel->filesTab().setOnRemoveFolder([this](int64_t pathId) {
+            m_libraryDb.removeLibraryPath(pathId);
+            m_browserPanel->filesTab().refreshTree();
+        });
+
+        // Files tab: rescan folder
+        m_browserPanel->filesTab().setOnRescanFolder([this](int64_t pathId, const std::string& path) {
+            m_libraryScanner->scanLibraryPath(pathId, path);
+        });
+
+        // Presets tab: double-click → load preset on selected track
+        m_browserPanel->presetsTab().setOnPresetDoubleClick(
+            [this](const std::string& path, const std::string& deviceId) {
+                if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+                PresetData data;
+                if (!PresetManager::loadPreset(path, data)) return;
+
+                // Try to match against instrument first, then effects
+                auto* inst = m_audioEngine.instrument(m_selectedTrack);
+                if (inst && inst->id() == deviceId) {
+                    loadDevicePreset(path, *inst);
+                    updateDetailForSelectedTrack();
+                    return;
+                }
+                auto& fxChain = m_audioEngine.mixer().trackEffects(m_selectedTrack);
+                for (int i = 0; i < fxChain.count(); ++i) {
+                    auto* fx = fxChain.effectAt(i);
+                    if (fx && fx->id() == deviceId) {
+                        loadDevicePreset(path, *fx);
+                        updateDetailForSelectedTrack();
+                        return;
+                    }
+                }
+            });
+
+        // Initial data load
+        m_browserPanel->filesTab().refreshTree();
+        m_browserPanel->presetsTab().refreshList();
+
+        // Start background scan
+        m_libraryScanner->startFullScan();
+    }
+
     // Apply metronome settings from saved preferences
     m_audioEngine.sendCommand(audio::MetronomeSetVolumeMsg{m_settings.metronomeVolume});
     m_audioEngine.sendCommand(audio::MetronomeSetModeMsg{m_settings.metronomeMode});
@@ -1720,6 +1791,11 @@ void App::run() {
 }
 
 void App::shutdown() {
+    // Stop library scanner before anything else
+    if (m_libraryScanner) m_libraryScanner->stop();
+    m_libraryScanner.reset();
+    m_libraryDb.close();
+
 #ifdef YAWN_HAS_VST3
     m_vst3Editors.clear();
     m_vst3Scanner.reset();

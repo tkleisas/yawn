@@ -38,6 +38,8 @@ struct PresetData {
     json        params;                    // name → float
     std::vector<uint8_t> vst3State;        // optional binary processor state
     std::vector<uint8_t> vst3ControllerState; // optional binary controller state
+    std::string genre;                     // comma-separated tags (e.g. "ambient,pad")
+    std::string instrument;                // comma-separated tags (e.g. "synth,pad")
 };
 
 class PresetManager {

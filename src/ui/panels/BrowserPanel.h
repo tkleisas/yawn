@@ -1,6 +1,8 @@
 #pragma once
-// BrowserPanel — Tabbed panel (top-right) for Files, Presets, Clip, MIDI, Config.
+// BrowserPanel — Tabbed panel (top-right) for Files, Presets, Clip, MIDI.
 //
+// The "Files" tab provides an in-app file browser for audio samples.
+// The "Presets" tab browses device presets with search and metadata.
 // The "Clip" tab shows follow action controls for the currently selected
 // clip slot, giving them dedicated screen real-estate.
 // The "MIDI" tab shows a real-time MIDI monitor for debugging.
@@ -12,6 +14,8 @@
 #include "ui/Theme.h"
 #include "audio/FollowAction.h"
 #include "midi/MidiMonitorBuffer.h"
+#include "BrowserFilesTab.h"
+#include "BrowserPresetsTab.h"
 #include <vector>
 #include <string>
 #include <cstdio>
@@ -23,7 +27,7 @@ namespace fw {
 
 class BrowserPanel : public Widget {
 public:
-    enum class Tab { Files = 0, Presets, Clip, Midi, Config, COUNT };
+    enum class Tab { Files = 0, Presets, Clip, Midi, COUNT };
 
     BrowserPanel() { initFollowActionWidgets(); }
 
@@ -49,6 +53,17 @@ public:
 
     FollowAction* followActionPtr() const { return m_followActionPtr; }
 
+    // ── Files & Presets tabs ──
+    BrowserFilesTab& filesTab() { return m_filesTab; }
+    BrowserPresetsTab& presetsTab() { return m_presetsTab; }
+    void setLibraryDatabase(library::LibraryDatabase* db) {
+        m_filesTab.setDatabase(db);
+        m_presetsTab.setDatabase(db);
+    }
+    void setLibraryScanner(library::LibraryScanner* sc) {
+        m_filesTab.setScanner(sc);
+    }
+
     // ── MIDI monitor ──
     void setMidiMonitor(midi::MidiMonitorBuffer* buf) { m_midiMonitor = buf; }
 
@@ -65,11 +80,12 @@ public:
         if (my >= y && my < y + kTabH) {
             float tx = x + 2.0f;
             for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i) {
-                if (mx >= tx && mx < tx + kTabW) {
+                float tw = m_tabWidths[i];
+                if (mx >= tx && mx < tx + tw) {
                     m_activeTab = static_cast<Tab>(i);
                     return true;
                 }
-                tx += kTabW;
+                tx += tw;
             }
             return true;
         }
@@ -108,6 +124,20 @@ public:
             }
         }
 
+        // Files tab
+        if (m_activeTab == Tab::Files) {
+            float bodyY = y + kTabH;
+            float bodyH = m_bounds.h - kTabH;
+            return m_filesTab.onMouseDown(e, x, bodyY, w, bodyH, m_lastCtx);
+        }
+
+        // Presets tab
+        if (m_activeTab == Tab::Presets) {
+            float bodyY = y + kTabH;
+            float bodyH = m_bounds.h - kTabH;
+            return m_presetsTab.onMouseDown(e, x, bodyY, w, bodyH, m_lastCtx);
+        }
+
         // Clip tab: follow action widgets
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             if (m_faActionADropdown.isOpen())
@@ -129,6 +159,10 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_activeTab == Tab::Files)
+            return m_filesTab.onMouseMove(e);
+        if (m_activeTab == Tab::Presets)
+            return m_presetsTab.onMouseMove(e);
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             MouseMoveEvent me = e;
             if (m_faActionADropdown.isOpen()) {
@@ -146,6 +180,10 @@ public:
     }
 
     bool onMouseUp(MouseEvent& e) override {
+        if (m_activeTab == Tab::Files)
+            return m_filesTab.onMouseUp(e);
+        if (m_activeTab == Tab::Presets)
+            return m_presetsTab.onMouseUp(e);
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             if (m_faActionADropdown.isOpen())
                 return m_faActionADropdown.onMouseUp(e);
@@ -164,6 +202,10 @@ public:
     }
 
     bool onScroll(ScrollEvent& e) override {
+        if (m_activeTab == Tab::Files)
+            return m_filesTab.onScroll(e);
+        if (m_activeTab == Tab::Presets)
+            return m_presetsTab.onScroll(e);
         if (m_activeTab == Tab::Midi && m_midiMonitor) {
             m_midiScrollOffset += static_cast<int>(e.dy * 3);
             if (m_midiScrollOffset < 0) m_midiScrollOffset = 0;
@@ -173,11 +215,16 @@ public:
         return false;
     }
 
-    // Knob text editing support
-    bool hasEditingKnob() const {
-        return m_faBarCountKnob.isEditing() || m_faChanceAKnob.isEditing();
+    // Text editing support (knobs + search inputs)
+    bool hasEditingWidget() const {
+        return m_faBarCountKnob.isEditing() || m_faChanceAKnob.isEditing()
+            || m_filesTab.isSearchEditing() || m_presetsTab.isSearchEditing();
     }
+    // Keep old name for backward compat with App.cpp
+    bool hasEditingKnob() const { return hasEditingWidget(); }
     bool forwardKeyDown(int key) {
+        if (m_filesTab.isSearchEditing()) return m_filesTab.forwardKeyDown(key);
+        if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardKeyDown(key);
         KeyEvent ke;
         ke.keyCode = key;
         if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onKeyDown(ke);
@@ -185,6 +232,8 @@ public:
         return false;
     }
     bool forwardTextInput(const char* text) {
+        if (m_filesTab.isSearchEditing()) return m_filesTab.forwardTextInput(text);
+        if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardTextInput(text);
         TextInputEvent te;
         std::strncpy(te.text, text, sizeof(te.text) - 1);
         te.text[sizeof(te.text) - 1] = '\0';
@@ -193,6 +242,8 @@ public:
         return false;
     }
     void cancelEditingKnobs() {
+        m_filesTab.cancelEditing();
+        m_presetsTab.cancelEditing();
         KeyEvent ke;
         ke.keyCode = 27; // Escape
         if (m_faBarCountKnob.isEditing()) m_faBarCountKnob.onKeyDown(ke);
@@ -200,6 +251,7 @@ public:
     }
 
     void paint(UIContext& ctx) override {
+        m_lastCtx = ctx;
         auto& r = *ctx.renderer;
         auto& f = *ctx.font;
 
@@ -214,15 +266,19 @@ public:
 
         if (f.isLoaded()) {
             float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.85f;
-            static const char* tabNames[] = {"Files", "Presets", "Clip", "MIDI", "Config"};
+            static const char* tabNames[] = {"Files", "Presets", "Clip", "MIDI"};
+            // Compute tab widths from text
+            for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i)
+                m_tabWidths[i] = f.textWidth(tabNames[i], scale) + kTabPad;
             float tx = x + 2.0f;
             for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i) {
+                float tw = m_tabWidths[i];
                 bool active = (static_cast<Tab>(i) == m_activeTab);
                 if (active)
-                    r.drawRect(tx, y + 2, kTabW, kTabH - 3, Color{50, 50, 56});
-                f.drawText(r, tabNames[i], tx + 8, y + 5, scale,
+                    r.drawRect(tx, y + 2, tw, kTabH - 3, Color{50, 50, 56});
+                f.drawText(r, tabNames[i], tx + kTabPad * 0.5f, y + 5, scale,
                            active ? Theme::textPrimary : Theme::textDim);
-                tx += kTabW;
+                tx += tw;
             }
         }
 
@@ -232,6 +288,12 @@ public:
         r.pushClip(x, bodyY, w, bodyH);
 
         switch (m_activeTab) {
+        case Tab::Files:
+            m_filesTab.paint(r, f, x, bodyY, w, bodyH, ctx);
+            break;
+        case Tab::Presets:
+            m_presetsTab.paint(r, f, x, bodyY, w, bodyH, ctx);
+            break;
         case Tab::Clip:
             paintClipTab(r, f, x, bodyY, w, bodyH, ctx);
             break;
@@ -239,7 +301,6 @@ public:
             paintMidiTab(r, f, x, bodyY, w, bodyH);
             break;
         default:
-            paintPlaceholder(r, f, x, bodyY, w, bodyH);
             break;
         }
 
@@ -256,9 +317,15 @@ public:
 
 private:
     static constexpr float kTabH = 24.0f;
-    static constexpr float kTabW = 55.0f;
+    static constexpr float kTabPad = 16.0f; // horizontal padding per tab
 
     Tab m_activeTab = Tab::Files;
+    UIContext m_lastCtx{};
+    float m_tabWidths[4] = {55, 55, 55, 55}; // computed in paint
+
+    // Files and Presets tabs
+    BrowserFilesTab   m_filesTab;
+    BrowserPresetsTab m_presetsTab;
 
     // MIDI monitor state
     midi::MidiMonitorBuffer* m_midiMonitor = nullptr;
@@ -674,18 +741,6 @@ private:
         return static_cast<int>(note / 12) - 1;
     }
 
-    void paintPlaceholder(Renderer2D& r, Font& f, float x, float y,
-                          float w, float h) {
-        if (f.isLoaded() && h > 40 && w > 80) {
-            float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.7f;
-            const char* label = "BROWSER";
-            if (m_activeTab == Tab::Presets) label = "PRESETS";
-            else if (m_activeTab == Tab::Config) label = "CONFIG";
-            float tw = f.textWidth(label, scale);
-            f.drawText(r, label, x + (w - tw) * 0.5f, y + h * 0.5f - 8,
-                       scale, Theme::textDim);
-        }
-    }
 };
 
 } // namespace fw

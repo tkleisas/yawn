@@ -22,6 +22,8 @@
 #include "ui/panels/ArrangementPanel.h"
 #include "ui/panels/TransportPanel.h"
 #include "ui/panels/BrowserPanel.h"
+#include "library/LibraryDatabase.h"
+#include "library/LibraryScanner.h"
 #include "ui/panels/ReturnMasterPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
@@ -142,6 +144,8 @@ private:
     Project m_project;
     undo::UndoManager m_undoManager;
     util::AppSettings m_settings;
+    library::LibraryDatabase m_libraryDb;
+    std::unique_ptr<library::LibraryScanner> m_libraryScanner;
     bool m_running = false;
     GLuint m_iconTexture = 0;
     bool m_showMixer = true;
