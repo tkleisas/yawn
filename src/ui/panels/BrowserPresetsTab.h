@@ -10,6 +10,7 @@
 #include "library/LibraryDatabase.h"
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <vector>

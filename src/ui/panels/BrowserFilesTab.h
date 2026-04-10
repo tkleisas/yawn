@@ -11,6 +11,8 @@
 #include "library/LibraryScanner.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <set>

@@ -3,6 +3,7 @@
 #include "util/Logger.h"
 #include <sndfile.h>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 
 namespace yawn {
