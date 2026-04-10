@@ -1,6 +1,7 @@
 #include "LibraryDatabase.h"
 #include "util/Logger.h"
 #include <sqlite3.h>
+#include <cstdlib>
 #include <unordered_set>
 
 #ifdef _WIN32

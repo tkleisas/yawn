@@ -3,6 +3,7 @@
 #include "audio/ClipEngine.h"
 #include "util/Logger.h"
 #include <nlohmann/json.hpp>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 
