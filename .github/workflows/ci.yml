@@ -81,6 +81,9 @@ jobs:
           if (Test-Path build/bin/Release/assets) {
             Copy-Item -Recurse build/bin/Release/assets package/
           }
+          if (Test-Path build/bin/Release/scripts) {
+            Copy-Item -Recurse build/bin/Release/scripts package/
+          }
           # Bundle any runtime DLLs
           Get-ChildItem build/bin/Release/*.dll -ErrorAction SilentlyContinue |
             Copy-Item -Destination package/
@@ -92,6 +95,9 @@ jobs:
           cp build/bin/YAWN package/
           if [ -d build/bin/assets ]; then
             cp -r build/bin/assets package/
+          fi
+          if [ -d build/bin/scripts ]; then
+            cp -r build/bin/scripts package/
           fi
 
       - name: Upload artifact
