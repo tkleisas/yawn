@@ -177,6 +177,7 @@ struct StartMidiRecordMsg {
     int trackIndex;
     int sceneIndex;
     bool overdub; // true = overdub into existing clip, false = replace
+    int recordLengthBars = 0;  // 0 = unlimited
 };
 
 struct StopMidiRecordMsg {
@@ -188,6 +189,7 @@ struct StartAudioRecordMsg {
     int trackIndex;
     int sceneIndex;
     bool overdub = false; // true = mix into existing clip buffer
+    int recordLengthBars = 0;  // 0 = unlimited
 };
 
 struct StopAudioRecordMsg {

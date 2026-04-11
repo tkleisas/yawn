@@ -1421,6 +1421,97 @@ private:
     mutable float m_marqueePause = 60.0f;
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Crossfader — Horizontal slider between two labeled endpoints (A/B)
+// ═══════════════════════════════════════════════════════════════════════════
+
+class FwCrossfader : public Widget {
+public:
+    using ValueCallback = std::function<void(float)>;
+    using TouchCallback = std::function<void(bool)>;
+
+    FwCrossfader() = default;
+
+    // Value is 0..100 (A% — B is 100-value)
+    void setValue(float v) { m_value = detail::cclamp(v, 0.0f, 100.0f); }
+    float value() const { return m_value; }
+    float valueB() const { return 100.0f - m_value; }
+    void setDefault(float d) { m_default = d; }
+    void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
+    void setOnTouch(TouchCallback cb) { m_onTouch = std::move(cb); }
+    void setLabels(const std::string& a, const std::string& b) {
+        m_labelA = a; m_labelB = b;
+    }
+    void setColors(Color a, Color b) { m_colorA = a; m_colorB = b; }
+
+    bool isDragging() const { return m_dragging; }
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        return c.constrain({120.0f, 24.0f});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void paint(UIContext&) override {}
+#else
+    void paint(UIContext& ctx) override;
+#endif
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button == MouseButton::Left) {
+            m_dragging = true;
+            captureMouse();
+            if (m_onTouch) m_onTouch(true);
+            updateFromMouse(e.x);
+            return true;
+        }
+        if (e.button == MouseButton::Right) {
+            m_value = m_default;
+            if (m_onChange) m_onChange(m_value);
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_dragging) {
+            m_dragging = false;
+            releaseMouse();
+            if (m_onTouch) m_onTouch(false);
+        }
+        return true;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (!m_dragging) return false;
+        updateFromMouse(e.x);
+        return true;
+    }
+
+private:
+    void updateFromMouse(float mx) {
+        float trackX = m_bounds.x + m_trackPad;
+        float trackW = m_bounds.w - m_trackPad * 2.0f;
+        if (trackW < 1.0f) trackW = 1.0f;
+        float frac = (mx - trackX) / trackW;
+        float newVal = detail::cclamp((1.0f - frac) * 100.0f, 0.0f, 100.0f);
+        if (newVal != m_value) {
+            m_value = newVal;
+            if (m_onChange) m_onChange(m_value);
+        }
+    }
+
+    float m_value = 100.0f;   // A% (100 = full A, 0 = full B)
+    float m_default = 100.0f;
+    bool m_dragging = false;
+    ValueCallback m_onChange;
+    TouchCallback m_onTouch;
+    std::string m_labelA = "A";
+    std::string m_labelB = "B";
+    Color m_colorA{90, 180, 255, 255};   // blue for A
+    Color m_colorB{255, 160, 40, 255};   // orange for B
+    static constexpr float m_trackPad = 20.0f; // padding for labels
+};
+
 } // namespace fw
 } // namespace ui
 } // namespace yawn

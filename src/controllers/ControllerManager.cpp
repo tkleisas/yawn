@@ -164,12 +164,12 @@ void ControllerManager::autoConnect() {
 
 void ControllerManager::disconnect() {
     if (m_lua) {
-        m_lua->callOnDisconnect();
+        try { m_lua->callOnDisconnect(); } catch (...) {}
         m_lua->shutdown();
         m_lua.reset();
     }
     if (m_port) {
-        m_port->close();
+        try { m_port->close(); } catch (...) {}
         m_port.reset();
     }
     if (m_activeScriptIndex >= 0 && m_activeScriptIndex < static_cast<int>(m_scripts.size())) {

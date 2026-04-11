@@ -411,6 +411,7 @@ void App::computeLayout() {
     int h = m_mainWindow.getHeight();
 
     // Update panel visibility
+    m_detailPanel->setWindowHeight(static_cast<float>(h));
     m_detailPanel->setVisible(m_showDetailPanel);
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
@@ -921,6 +922,51 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         // TODO: open rename dialog
         (void)trackIndex; (void)sceneIndex;
     }, false, hasClip});
+
+    items.push_back({"", nullptr, true}); // separator
+
+    // Record length setting for this track
+    {
+        int curRL = m_project.track(trackIndex).recordLengthBars;
+        std::string rlLabel = "Record Length: ";
+        rlLabel += (curRL == 0) ? "Unlimited" : (std::to_string(curRL) + (curRL == 1 ? " Bar" : " Bars"));
+        std::vector<ui::ContextMenu::Item> rlItems;
+        auto addRLItem = [&](const char* label, int bars) {
+            rlItems.push_back({label, [this, trackIndex, curRL, bars]() {
+                m_project.track(trackIndex).recordLengthBars = bars;
+                m_undoManager.push({"Change Record Length",
+                    [this, trackIndex, curRL]{ m_project.track(trackIndex).recordLengthBars = curRL; },
+                    [this, trackIndex, bars]{ m_project.track(trackIndex).recordLengthBars = bars; },
+                    ""});
+                markDirty();
+            }, false, curRL != bars});
+        };
+        addRLItem("Unlimited", 0);
+        addRLItem("1 Bar", 1);
+        addRLItem("2 Bars", 2);
+        addRLItem("4 Bars", 4);
+        addRLItem("8 Bars", 8);
+        addRLItem("16 Bars", 16);
+        rlItems.push_back({"", nullptr, true}); // separator
+        rlItems.push_back({"Custom...", [this, trackIndex, curRL]() {
+            std::string def = (curRL > 0) ? std::to_string(curRL) : "4";
+            SDL_StartTextInput(m_mainWindow.getHandle());
+            m_textInputDialog->prompt("Record Length (bars)", def,
+                [this, trackIndex, curRL](const std::string& text) {
+                    SDL_StopTextInput(m_mainWindow.getHandle());
+                    int bars = 0;
+                    try { bars = std::stoi(text); } catch (...) { return; }
+                    if (bars < 0) bars = 0;
+                    m_project.track(trackIndex).recordLengthBars = bars;
+                    m_undoManager.push({"Change Record Length",
+                        [this, trackIndex, curRL]{ m_project.track(trackIndex).recordLengthBars = curRL; },
+                        [this, trackIndex, bars]{ m_project.track(trackIndex).recordLengthBars = bars; },
+                        ""});
+                    markDirty();
+                });
+        }});
+        items.push_back({rlLabel.c_str(), nullptr, false, true, std::move(rlItems)});
+    }
 
     m_contextMenu.open(mx, my, std::move(items));
 }
@@ -3246,6 +3292,12 @@ void App::processEvents() {
 }
 
 void App::update() {
+    // Update animation timer for session panel (recording pulse, playback pulse)
+    uint64_t now = SDL_GetTicks();
+    float dt = (m_lastFrameTicks > 0) ? (now - m_lastFrameTicks) / 1000.0f : 0.0f;
+    m_lastFrameTicks = now;
+    m_sessionPanel->updateAnimTimer(dt);
+
     // Poll controller scripts (MIDI input → Lua callbacks)
     m_controllerManager.update();
 
@@ -3317,6 +3369,7 @@ void App::update() {
                     !msg.isMidi) {
                     m_detailPanel->setClipPlayPosition(msg.playPosition);
                     m_detailPanel->setClipPlaying(msg.playing);
+                    m_detailPanel->setTransportBPM(m_audioEngine.transport().bpm());
                 }
                 // Forward MIDI playhead to piano roll
                 if (msg.isMidi && msg.trackIndex == m_pianoRoll->trackIndex() &&
@@ -3363,7 +3416,10 @@ void App::update() {
                         auto* clipPtr = m_project.getMidiClip(ti, si);
                         if (clipPtr) {
                             auto* slot = m_project.getSlot(ti, si);
-                            auto lq = slot ? slot->launchQuantize : audio::QuantizeMode::NextBar;
+                            // Launch immediately when auto-stopped (fixed-duration) to avoid
+                            // an empty bar caused by the UI round-trip delay
+                            auto lq = data.autoStopped ? audio::QuantizeMode::None
+                                : (slot ? slot->launchQuantize : audio::QuantizeMode::NextBar);
                             m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq,
                                 slot ? &slot->clipAutomation : nullptr,
                                 slot ? slot->followAction : FollowAction{}});
@@ -3414,6 +3470,7 @@ void App::update() {
                             clip->buffer = audioBuffer;
                             clip->looping = true;
                             clip->gain = 1.0f;
+                            clip->originalBPM = m_audioEngine.transport().bpm();
                             m_project.setClip(ti, si, std::move(clip));
                             LOG_INFO("Audio", "Audio recorded: Track %d, Scene %d, %" PRId64 " frames",
                                         ti + 1, si + 1, data.frameCount);
@@ -3423,7 +3480,8 @@ void App::update() {
                         auto* clipPtr = m_project.getClip(ti, si);
                         if (clipPtr) {
                             auto* recSlot = m_project.getSlot(ti, si);
-                            auto lq = recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar;
+                            auto lq = data.autoStopped ? audio::QuantizeMode::None
+                                : (recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar);
                             m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr, lq,
                                 recSlot ? &recSlot->clipAutomation : nullptr,
                                 recSlot ? recSlot->followAction : FollowAction{}});

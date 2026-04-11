@@ -35,6 +35,7 @@ struct Track {
     bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
+    int recordLengthBars = 0;  // 0 = unlimited (free recording)
 
     // Default clip: last-launched scene index per track (-1 = none)
     // When transport plays, clips at defaultScene are re-launched.

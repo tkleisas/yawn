@@ -1727,6 +1727,9 @@ public:
     void setOnPointAdd(AddCallback cb)    { m_onPointAdd = std::move(cb); }
     void setOnPointRemove(RemoveCallback cb) { m_onPointRemove = std::move(cb); }
 
+    // When true, draws with transparent background for overlaying on waveform
+    void setOverlayMode(bool overlay) { m_overlayMode = overlay; }
+
     int dragIndex() const { return m_dragIdx; }
 
     Size measure(const Constraints& c, const UIContext&) override {
@@ -1742,29 +1745,36 @@ public:
         float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w, h = m_bounds.h;
 
         // Background
-        r.drawRect(x, y, w, h, Color{20, 20, 25, 255});
-        r.drawRectOutline(x, y, w, h, Color{50, 50, 55, 255});
+        if (m_overlayMode) {
+            // Semi-transparent tint for overlay on waveform
+            r.drawRect(x, y, w, h, Color{10, 10, 15, 40});
+        } else {
+            r.drawRect(x, y, w, h, Color{20, 20, 25, 255});
+            r.drawRectOutline(x, y, w, h, Color{50, 50, 55, 255});
+        }
 
-        // Grid lines (time divisions)
-        double timeSpan = m_timeEnd - m_timeStart;
-        if (timeSpan > 0) {
-            double step = 1.0;
-            if (timeSpan > 16) step = 4.0;
-            else if (timeSpan > 8) step = 2.0;
-            else if (timeSpan > 4) step = 1.0;
-            else step = 0.5;
+        // Grid lines (time divisions) — skip in overlay mode (waveform has its own grid)
+        if (!m_overlayMode) {
+            double timeSpan = m_timeEnd - m_timeStart;
+            if (timeSpan > 0) {
+                double step = 1.0;
+                if (timeSpan > 16) step = 4.0;
+                else if (timeSpan > 8) step = 2.0;
+                else if (timeSpan > 4) step = 1.0;
+                else step = 0.5;
 
-            double t = std::ceil(m_timeStart / step) * step;
-            while (t < m_timeEnd) {
-                float gx = timeToX(t);
-                r.drawRect(gx, y + 1, 1.0f, h - 2, Color{35, 35, 40, 255});
-                t += step;
+                double t = std::ceil(m_timeStart / step) * step;
+                while (t < m_timeEnd) {
+                    float gx = timeToX(t);
+                    r.drawRect(gx, y + 1, 1.0f, h - 2, Color{35, 35, 40, 255});
+                    t += step;
+                }
             }
         }
 
         // Horizontal center line (value = 0.5 for normalized params)
         float midY = valueToY((m_valueMin + m_valueMax) * 0.5f);
-        r.drawRect(x + 1, midY, w - 2, 1.0f, Color{40, 40, 48, 255});
+        r.drawRect(x + 1, midY, w - 2, 1.0f, Color{40, 40, 48, m_overlayMode ? (uint8_t)60 : (uint8_t)255});
 
         if (m_points.empty()) {
             float ts = 10.0f / f.pixelHeight();
@@ -1858,6 +1868,7 @@ private:
     float  m_valueMin = 0.0f, m_valueMax = 1.0f;
     std::vector<std::pair<double,float>> m_points;
     int m_dragIdx = -1;
+    bool m_overlayMode = false;
 
     PointCallback  m_onPointMove;
     AddCallback    m_onPointAdd;

@@ -149,6 +149,7 @@ private:
     std::unique_ptr<library::LibraryScanner> m_libraryScanner;
     controllers::ControllerManager m_controllerManager;
     bool m_running = false;
+    uint64_t m_lastFrameTicks = 0;
     GLuint m_iconTexture = 0;
     bool m_showMixer = true;
     bool m_showReturns = true;

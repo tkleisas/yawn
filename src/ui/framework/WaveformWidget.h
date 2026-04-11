@@ -161,6 +161,7 @@ public:
         if (hitRect(m_zoomInBtn, mx, my))  { zoomIn();  return true; }
         if (hitRect(m_zoomOutBtn, mx, my)) { zoomOut(); return true; }
         if (hitRect(m_zoomFitBtn, mx, my)) { fitToWidth(); return true; }
+        if (hitRect(m_snapBtn, mx, my))    { toggleSnapToGrid(); return true; }
 
         // Loop marker hit-test (draggable start/end)
         {
@@ -205,6 +206,7 @@ public:
             double samplePos = m_scrollOffset + static_cast<double>(e.lx) * m_samplesPerPixel;
             int64_t sp = static_cast<int64_t>(std::clamp(samplePos, 0.0,
                 static_cast<double>(m_clip->buffer->numFrames() - 1)));
+            sp = snapSampleToBeat(sp); // snap if enabled
 
             // Calculate beat position from sample position
             double beatPos = 0.0;
@@ -254,6 +256,7 @@ public:
                 double samplePos = m_scrollOffset + static_cast<double>(e.lx) * m_samplesPerPixel;
                 int64_t sp = static_cast<int64_t>(std::clamp(samplePos, 0.0,
                     static_cast<double>(m_clip->buffer->numFrames() - 1)));
+                sp = snapSampleToBeat(sp); // snap if enabled
 
                 // Constrain between neighbors
                 if (m_draggingMarker > 0)
@@ -269,6 +272,7 @@ public:
             double samplePos = m_scrollOffset + static_cast<double>(e.lx) * m_samplesPerPixel;
             int64_t sp = static_cast<int64_t>(std::clamp(samplePos, 0.0,
                 static_cast<double>(m_clip->buffer->numFrames())));
+            sp = snapSampleToBeat(sp); // snap if enabled
             auto* mclip = const_cast<audio::Clip*>(m_clip);
             if (m_draggingLoopMarker == 1) {
                 // Drag loop start: constrain to [0, loopEnd - 1]
@@ -287,6 +291,10 @@ public:
     }
 
     void setSampleRate(int sr) { m_sampleRate = sr; }
+    void setTransportBPM(double bpm) { m_transportBPM = bpm; }
+    bool snapToGrid() const { return m_snapToGrid; }
+    void setSnapToGrid(bool snap) { m_snapToGrid = snap; }
+    void toggleSnapToGrid() { m_snapToGrid = !m_snapToGrid; }
 
     void layout(const Rect& r, const UIContext& ctx) override {
         Widget::layout(r, ctx);
@@ -331,15 +339,17 @@ public:
     bool m_followPlayhead = true;
     bool m_draggingOverview = false;
     bool m_needsFitToWidth = false;
+    bool m_snapToGrid = false;           // snap loop markers to beat grid
     int m_draggingMarker = -1;           // index of warp marker being dragged
     int m_draggingLoopMarker = 0;        // 0=none, 1=loop start, 2=loop end
     int m_sampleRate = 44100;
+    double m_transportBPM = 120.0;
     std::chrono::steady_clock::time_point m_lastClickTime{};
 
     // Zoom button layout (computed in paint, used for hit testing)
     static constexpr float kZoomBtnSize = 18.0f;
     static constexpr float kZoomBtnGap  = 2.0f;
-    Rect m_zoomInBtn{}, m_zoomOutBtn{}, m_zoomFitBtn{};
+    Rect m_zoomInBtn{}, m_zoomOutBtn{}, m_zoomFitBtn{}, m_snapBtn{};
 
     // ─── Paint helpers ──────────────────────────────────────────────────
 
@@ -355,6 +365,25 @@ public:
     float sampleToPixel(int64_t sample) const {
         return static_cast<float>((static_cast<double>(sample) - m_scrollOffset)
                                    / m_samplesPerPixel);
+    }
+
+    // Snap a sample position to the nearest beat grid boundary
+    int64_t snapSampleToBeat(int64_t sp) const {
+        if (!m_snapToGrid || !m_clip) return sp;
+        double bpm = m_clip->originalBPM;
+        if (bpm <= 0.0) bpm = m_transportBPM;
+        if (bpm <= 0.0 || m_sampleRate <= 0) return sp;
+
+        double samplesPerBeat = (60.0 / bpm) * m_sampleRate;
+        // Determine subdivision (same logic as paintBeatGrid)
+        double pixelsPerBeat = samplesPerBeat / m_samplesPerPixel;
+        int subdivPerBeat = 1;
+        if (pixelsPerBeat > 120.0) subdivPerBeat = 4;
+        else if (pixelsPerBeat > 50.0) subdivPerBeat = 2;
+
+        double samplesPerSubdiv = samplesPerBeat / subdivPerBeat;
+        double sub = std::round(static_cast<double>(sp) / samplesPerSubdiv);
+        return static_cast<int64_t>(sub * samplesPerSubdiv);
     }
 
     int hitTestWarpMarker(float localX, float tolerance) const {
@@ -398,6 +427,7 @@ public:
 
     void paintBeatGrid(Renderer2D& r, Font& font, float x, float y, float w, float h) {
         double bpm = m_clip->originalBPM;
+        if (bpm <= 0.0) bpm = m_transportBPM; // fall back to transport BPM
         if (bpm <= 0.0 || m_sampleRate <= 0) return;
 
         double samplesPerBeat = (60.0 / bpm) * m_sampleRate;
@@ -407,32 +437,47 @@ public:
         double startSample = m_scrollOffset;
         double endSample = m_scrollOffset + w * m_samplesPerPixel;
 
-        // Find first beat in visible range
-        int firstBeat = static_cast<int>(std::floor(startSample / samplesPerBeat));
-        if (firstBeat < 0) firstBeat = 0;
-        int lastBeat = static_cast<int>(std::ceil(endSample / samplesPerBeat));
+        // Determine sub-beat subdivision based on zoom level
+        // pixelsPerBeat tells us how much space each beat occupies
+        double pixelsPerBeat = samplesPerBeat / m_samplesPerPixel;
+        int subdivPerBeat = 1; // no sub-beats by default
+        if (pixelsPerBeat > 120.0) subdivPerBeat = 4;      // 16th notes
+        else if (pixelsPerBeat > 50.0) subdivPerBeat = 2;   // 8th notes
+
+        double samplesPerSubdiv = samplesPerBeat / subdivPerBeat;
+        int totalSubdivsPerBar = beatsPerBar * subdivPerBeat;
+
+        // Find first subdivision in visible range
+        int firstSubdiv = static_cast<int>(std::floor(startSample / samplesPerSubdiv));
+        if (firstSubdiv < 0) firstSubdiv = 0;
+        int lastSubdiv = static_cast<int>(std::ceil(endSample / samplesPerSubdiv));
 
         // Skip if too many lines (zoomed too far out)
-        if (lastBeat - firstBeat > 2000) return;
+        if (lastSubdiv - firstSubdiv > 4000) return;
 
-        float labelScale = 8.0f / Theme::kFontSize;
+        float labelScale = 9.0f / Theme::kFontSize;
 
-        for (int beat = firstBeat; beat <= lastBeat; ++beat) {
-            double samplePos = beat * samplesPerBeat;
+        for (int sub = firstSubdiv; sub <= lastSubdiv; ++sub) {
+            double samplePos = sub * samplesPerSubdiv;
             float px = x + static_cast<float>((samplePos - m_scrollOffset) / m_samplesPerPixel);
             if (px < x || px > x + w) continue;
 
-            bool isBar = (beat % beatsPerBar == 0);
+            bool isBar = (sub % totalSubdivsPerBar == 0);
+            bool isBeat = (!isBar && sub % subdivPerBeat == 0);
+
             if (isBar) {
-                // Bar line: brighter, with label
-                r.drawRect(px, y, 1.0f, h, Color{60, 60, 70, 120});
-                int barNum = beat / beatsPerBar + 1;
+                // Bar line: bright orange, with bar number label
+                r.drawRect(px, y, 1.5f, h, Color{255, 160, 40, 200});
+                int barNum = sub / totalSubdivsPerBar + 1;
                 char buf[8];
                 std::snprintf(buf, sizeof(buf), "%d", barNum);
-                font.drawText(r, buf, px + 3, y + 1, labelScale, Color{90, 90, 100, 200});
+                font.drawText(r, buf, px + 3, y + 1, labelScale, Color{255, 190, 80, 230});
+            } else if (isBeat) {
+                // Beat line: orange, medium brightness
+                r.drawRect(px, y, 1.0f, h, Color{255, 130, 30, 150});
             } else {
-                // Beat subdivision: dimmer
-                r.drawRect(px, y, 0.5f, h, Color{45, 45, 52, 90});
+                // Sub-beat subdivision (8th/16th): dim orange
+                r.drawRect(px, y, 0.5f, h, Color{255, 110, 20, 70});
             }
         }
     }
@@ -550,30 +595,35 @@ public:
     void paintZoomButtons(Renderer2D& r, Font& font, float x, float waveY, float w) {
         float btnS = kZoomBtnSize;
         float gap = kZoomBtnGap;
-        float bx = x + w - (btnS * 3 + gap * 2) - 4.0f;
+        float bx = x + w - (btnS * 4 + gap * 3) - 4.0f;
         float by = waveY + 4.0f;
 
         m_zoomInBtn  = {bx, by, btnS, btnS};
         m_zoomOutBtn = {bx + btnS + gap, by, btnS, btnS};
         m_zoomFitBtn = {bx + (btnS + gap) * 2, by, btnS, btnS};
+        m_snapBtn    = {bx + (btnS + gap) * 3, by, btnS, btnS};
 
         Color btnBg{30, 30, 34, 200};
         Color btnBorder{70, 70, 75, 200};
         Color btnText = Theme::textSecondary;
         float scale = 11.0f / Theme::kFontSize;
 
-        auto drawBtn = [&](const Rect& b, const char* label) {
-            r.drawRect(b.x, b.y, b.w, b.h, btnBg);
-            r.drawRectOutline(b.x, b.y, b.w, b.h, btnBorder);
+        auto drawBtn = [&](const Rect& b, const char* label, bool active = false) {
+            Color bg = active ? Color{255, 160, 40, 180} : btnBg;
+            Color border = active ? Color{255, 190, 80, 230} : btnBorder;
+            Color text = active ? Color{20, 20, 24, 255} : btnText;
+            r.drawRect(b.x, b.y, b.w, b.h, bg);
+            r.drawRectOutline(b.x, b.y, b.w, b.h, border);
             float tw = font.textWidth(label, scale);
             float lh = font.lineHeight(scale);
             font.drawText(r, label, b.x + (b.w - tw) * 0.5f,
-                          b.y + (b.h - lh) * 0.5f - lh * 0.15f, scale, btnText);
+                          b.y + (b.h - lh) * 0.5f - lh * 0.15f, scale, text);
         };
 
         drawBtn(m_zoomInBtn,  "+");
         drawBtn(m_zoomOutBtn, "-");
         drawBtn(m_zoomFitBtn, "F");
+        drawBtn(m_snapBtn,    "S", m_snapToGrid);
     }
 #endif
 };

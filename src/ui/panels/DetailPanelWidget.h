@@ -57,7 +57,8 @@ public:
     static constexpr float kCollapsedHeight  = 8.0f;    // just the handle
     static constexpr float kHandleHeight     = 8.0f;    // drag-resize handle
     static constexpr float kMinPanelH        = 80.0f;
-    static constexpr float kMaxPanelH        = 400.0f;
+    static constexpr float kMaxPanelFraction = 0.75f;   // max 75% of window height
+    static constexpr float kMinMaxPanelH     = 400.0f;  // absolute minimum for max height
     static constexpr float kDeviceHeaderH    = 24.0f;   // per-device header
     static constexpr float kKnobSize         = 48.0f;
     static constexpr float kKnobSpacing      = 16.0f;
@@ -91,6 +92,13 @@ public:
     void  toggle() { setOpen(!m_open); }
     float height() const { return m_animatedHeight; }
     float panelHeight() const { return m_userPanelHeight; }
+
+    // Call when window resizes so max panel height scales with screen
+    void setWindowHeight(float h) { m_windowHeight = h; }
+    float maxPanelHeight() const {
+        float dynamic = m_windowHeight * kMaxPanelFraction;
+        return std::max(dynamic, kMinMaxPanelH);
+    }
 
     bool isFocused() const { return m_panelFocused; }
     void setFocused(bool f) { m_panelFocused = f; }
@@ -292,6 +300,7 @@ public:
             m_autoEnvelopeWidget.setTimeRange(0.0, 4.0);
         }
         m_autoEnvelopeWidget.setValueRange(0.0f, 1.0f);
+        m_autoEnvelopeWidget.setOverlayMode(true);
 
         m_lastMidiChain = nullptr;
         m_lastInst      = nullptr;
@@ -353,13 +362,14 @@ public:
             m_faBarCountKnob.setValue(static_cast<float>(fa->barCount));
             m_faActionADropdown.setSelected(static_cast<int>(fa->actionA));
             m_faActionBDropdown.setSelected(static_cast<int>(fa->actionB));
-            m_faChanceAKnob.setValue(static_cast<float>(fa->chanceA));
+            m_faCrossfader.setValue(static_cast<float>(fa->chanceA));
         }
     }
 
     // Forward playback state to the waveform widget
     void setClipPlayPosition(int64_t pos) { m_waveformWidget.setPlayPosition(pos); }
     void setClipPlaying(bool playing)     { m_waveformWidget.setPlaying(playing); }
+    void setTransportBPM(double bpm)      { m_waveformWidget.setTransportBPM(bpm); }
 
     // Set clip automation context for the envelope editor
     void setClipAutomation(std::vector<automation::AutomationLane>* lanes, int trackIndex) {
@@ -639,7 +649,7 @@ public:
         if (m_handleDragActive) {
             float delta = m_handleDragStartY - e.y; // drag up = taller
             m_userPanelHeight = std::clamp(
-                m_handleDragStartH + delta, kMinPanelH, kMaxPanelH);
+                m_handleDragStartH + delta, kMinPanelH, maxPanelHeight());
             if (m_open)
                 m_targetHeight = m_userPanelHeight;
             return true;
@@ -1381,6 +1391,7 @@ private:
 
     // Resizable panel height (user-adjustable via handle drag)
     float m_userPanelHeight = kDefaultPanelHeight;
+    float m_windowHeight = 800.0f;  // updated via setWindowHeight()
 
     // Handle drag state
     bool  m_handleDragActive = false;
@@ -1437,7 +1448,7 @@ private:
     FwKnob m_faBarCountKnob;
     FwDropDown m_faActionADropdown;
     FwDropDown m_faActionBDropdown;
-    FwKnob m_faChanceAKnob;
+    FwCrossfader m_faCrossfader;
 
     // Automation lane editor
     FwDropDown m_autoTargetDropdown;

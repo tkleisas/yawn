@@ -728,6 +728,7 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["defaultScene"] = tr.defaultScene;
         tj["sidechainSource"] = tr.sidechainSource;
         tj["resampleSource"] = tr.resampleSource;
+        tj["recordLengthBars"] = tr.recordLengthBars;
 
         // Automation mode and lanes
         tj["autoMode"] = static_cast<int>(tr.autoMode);
@@ -876,6 +877,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.defaultScene = tj.value("defaultScene", -1);
             tr.sidechainSource = tj.value("sidechainSource", -1);
             tr.resampleSource = tj.value("resampleSource", -1);
+            tr.recordLengthBars = tj.value("recordLengthBars", 0);
 
             // Automation mode and lanes
             tr.autoMode = static_cast<automation::AutoMode>(tj.value("autoMode", 0));

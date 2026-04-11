@@ -160,11 +160,13 @@ public:
         m_recordedMidi[last].ccs.clear();
         m_recordedMidi[last].trackIndex = -1;
         m_recordedMidi[last].sceneIndex = -1;
+        m_recordedMidi[last].autoStopped = false;
         m_recordedMidi[last].ready.store(false);
         m_recordedAudio[last].buffer.clear();
         m_recordedAudio[last].frameCount = 0;
         m_recordedAudio[last].trackIndex = -1;
         m_recordedAudio[last].sceneIndex = -1;
+        m_recordedAudio[last].autoStopped = false;
         m_recordedAudio[last].ready.store(false);
 
         // Vectors (heap): erase and push default to keep size = kMaxTracks
@@ -199,6 +201,7 @@ public:
         int sceneIndex = -1;
         bool overdub = true;
         double lengthBeats = 4.0;
+        bool autoStopped = false;   // true when fixed-duration auto-stop triggered
         std::atomic<bool> ready{false};
     };
     RecordedMidiData& recordedMidiData(int track) { return m_recordedMidi[track]; }
@@ -211,6 +214,7 @@ public:
         int trackIndex = -1;
         int sceneIndex = -1;
         bool overdub = false;
+        bool autoStopped = false;   // true when fixed-duration auto-stop triggered
         std::atomic<bool> ready{false};
     };
     RecordedAudioData& recordedAudioData(int track) { return m_recordedAudio[track]; }
@@ -281,10 +285,13 @@ private:
     // MIDI recording state per track
     struct TrackRecordState {
         bool recording = false;
+        bool pendingStart = false;  // waiting for count-in to finish
+        bool usedCountIn = false;   // true if count-in was applied
         int targetScene = -1;
         bool overdub = true;
         double recordStartBeat = 0.0;
         QuantizeMode pendingStopQuantize = QuantizeMode::None;
+        int targetLengthBars = 0;  // 0 = unlimited
 
         struct PendingNote {
             uint8_t pitch = 0;
@@ -298,10 +305,13 @@ private:
 
         void reset() {
             recording = false;
+            pendingStart = false;
+            usedCountIn = false;
             targetScene = -1;
             overdub = true;
             recordStartBeat = 0.0;
             pendingStopQuantize = QuantizeMode::None;
+            targetLengthBars = 0;
             pendingNotes.clear();
             recordedNotes.clear();
             recordedCCs.clear();
@@ -315,6 +325,8 @@ private:
     // Audio recording state per track
     struct AudioRecordState {
         bool recording = false;
+        bool pendingStart = false;  // waiting for count-in to finish
+        bool usedCountIn = false;   // true if count-in was applied
         int targetScene = -1;
         int64_t recordedFrames = 0;
         int64_t maxFrames = 0;
@@ -322,13 +334,19 @@ private:
         int channels = 2;
         bool overdub = false;
         QuantizeMode pendingStopQuantize = QuantizeMode::None;
+        int targetLengthBars = 0;  // 0 = unlimited
+        double recordStartBeat = 0.0;
 
         void reset() {
             recording = false;
+            pendingStart = false;
+            usedCountIn = false;
             targetScene = -1;
             recordedFrames = 0;
             overdub = false;
             pendingStopQuantize = QuantizeMode::None;
+            targetLengthBars = 0;
+            recordStartBeat = 0.0;
         }
     };
     AudioRecordState m_audioRecordStates[kMaxTracks];

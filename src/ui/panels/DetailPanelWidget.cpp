@@ -42,15 +42,23 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
     if (bodyH < 0) bodyH = 0;
 
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
-        float overviewH = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
-        float autoH = (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0) ? kAutoSectionH : 24.0f;
-        float clipHeaderH = kClipTitleRowH + kClipWaveformH + overviewH
-                          + kClipPropsH + kClipSectionGap * 2 + autoH + kClipSectionGap;
-        float scrollY = bodyY + clipHeaderH;
-        float scrollH = std::max(0.0f, bodyH - clipHeaderH);
+        // Match paint's dynamic layout: title + waveform(fills space) + control strip + effects
+        float overviewExtra = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+        static constexpr float kControlStripH = 76.0f;
+        static constexpr float kFxLabelH      = 18.0f;
+        float fxReserve = m_deviceWidgets.empty() ? kFxLabelH
+            : std::max(220.0f, bodyH * 0.35f);
+        float fixedBelow = kControlStripH + kClipSectionGap + overviewExtra + fxReserve;
+        float availableForWave = bodyH - kClipTitleRowH - fixedBelow;
+        static constexpr float kMinWaveH = 60.0f;
+        float waveH = std::max(kMinWaveH, availableForWave) + overviewExtra;
+        float stripY = bodyY + kClipTitleRowH + waveH + kClipSectionGap;
+        float fxSepY = stripY + 5.0f + 13.0f + 6.0f + 50.0f + 6.0f; // sep+pad + labelH + gap + knobH + margin
+        float scrollY = fxSepY + kFxLabelH;
+        float scrollH = std::max(0.0f, bodyY + bodyH - scrollY);
         m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
         m_scroll.layout(Rect{bounds.x, scrollY, bounds.w, scrollH}, ctx);
-    }else {
+    } else {
         m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
         m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
     }
@@ -318,10 +326,31 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     }
 
     // ── WaveformWidget: overview bar + scrollable/zoomable waveform ──
+    // Waveform fills available space minus control strip and effects area
     float waveY = headerY + kClipTitleRowH - 4.0f;
-    float waveH = kClipWaveformH + WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+    float overviewExtra = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+    static constexpr float kControlStripH = 88.0f;   // sep(1) + pad(4) + labelH(13) + gap(6) + knobH(50) + margin
+    static constexpr float kFxLabelH      = 18.0f;   // separator + "Audio Effects" label
+    // Reserve space for effects: at least 220px when effects exist, 35% of panel
+    float fxReserve = m_deviceWidgets.empty() ? kFxLabelH
+        : std::max(220.0f, bodyH * 0.35f);
+    float fixedBelow = kControlStripH + kClipSectionGap + overviewExtra + fxReserve;
+    float availableForWave = bodyH - (waveY - bodyY) - fixedBelow;
+    static constexpr float kMinWaveH = 60.0f;
+    float waveH = std::max(kMinWaveH, availableForWave) + overviewExtra;
     m_waveformWidget.layout(Rect{sectionX, waveY, sectionW, waveH}, ctx);
     m_waveformWidget.paint(ctx);
+
+    // Overlay automation envelope on waveform area (semi-transparent)
+    if (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0 &&
+        m_autoSelectedLaneIdx < static_cast<int>(m_clipAutoLanes->size())) {
+        syncEnvelopeFromLane();
+        // Position envelope over the main waveform area (below overview bar)
+        float envY = waveY + overviewExtra;
+        float envH = waveH - overviewExtra;
+        m_autoEnvelopeWidget.layout(Rect{sectionX, envY, sectionW, envH}, ctx);
+        m_autoEnvelopeWidget.paint(ctx);
+    }
 
     // Sync widget values from clip each frame (skip if user is editing)
     m_gainKnob.setValue(clip.gain);
@@ -335,9 +364,12 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
 
     // ── Horizontal control strip ──
     float stripY = waveY + waveH + kClipSectionGap;
+    // Separator line above controls
+    renderer.drawRect(sectionX, stripY, sectionW, 1.0f, Color{50, 50, 55, 255});
+    stripY += 4.0f;
     float labelScale = 10.0f / Theme::kFontSize;
     float labelH = 13.0f;
-    float widgetY = stripY + labelH + 2.0f;
+    float widgetY = stripY + labelH + 6.0f;
     float knobH = 50.0f;
     float knobW = 48.0f;
     float gap = 14.0f;
@@ -390,37 +422,17 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     font.drawText(renderer, "Loop", cx, stripY, labelScale, Theme::textDim);
     m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
     m_loopToggleBtn.paint(ctx);
+    cx += 50.0f + sectionGap;
 
-    // ── Automation section ──
-    float autoY = stripY + labelH + 2.0f + knobH + 6.0f;
-    renderer.drawRect(sectionX, autoY, sectionW, 1.0f, Color{50, 50, 55, 255});
-    float autoLabelY = autoY + 3.0f;
-    font.drawText(renderer, "Automation", sectionX, autoLabelY, labelScale, Theme::textDim);
-
-    // Target picker dropdown
-    float dropW = 160.0f;
-    float dropX = sectionX + 80.0f;
-    float dropY = autoLabelY - 1.0f;
-    m_autoTargetDropdown.layout(Rect{dropX, dropY, dropW, 16.0f}, ctx);
+    // Automation target dropdown (inline in control strip)
+    float autoDropW = 160.0f;
+    font.drawText(renderer, "Auto", cx, stripY, labelScale, Theme::textDim);
+    m_autoTargetDropdown.setScreenHeight(m_windowHeight);
+    m_autoTargetDropdown.layout(Rect{cx, inputCenterY, autoDropW, inputH}, ctx);
     m_autoTargetDropdown.paint(ctx);
 
-    float envelopeY = autoLabelY + 18.0f;
-
-    float fxSepY;
-    if (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0 &&
-        m_autoSelectedLaneIdx < static_cast<int>(m_clipAutoLanes->size())) {
-        // Sync envelope display from clip data
-        syncEnvelopeFromLane();
-        float envH = 60.0f;
-        float envW = sectionW;
-        m_autoEnvelopeWidget.layout(Rect{sectionX, envelopeY, envW, envH}, ctx);
-        m_autoEnvelopeWidget.paint(ctx);
-        fxSepY = envelopeY + envH + kClipSectionGap;
-    } else {
-        fxSepY = envelopeY + kClipSectionGap;
-    }
-
     // ── Effects section ──
+    float fxSepY = stripY + labelH + 2.0f + knobH + 6.0f;
     renderer.drawRect(sectionX, fxSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
     float fxLabelY = fxSepY + 3.0f;
     font.drawText(renderer, "Audio Effects", sectionX, fxLabelY, labelScale, Theme::textDim);

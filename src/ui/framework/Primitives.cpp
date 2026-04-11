@@ -373,10 +373,6 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
 
     m_popupWidth = popW; // cache for hit testing
     ctx.renderer->drawRect(listX, listY, popW, listH, Color{30, 30, 34, 255});
-    ctx.renderer->drawRectOutline(listX, listY, popW, listH, Color{90, 140, 200, 255});
-    // Separator line between dropdown button and popup
-    float sepY = m_popupAbove ? (listY + listH - 1) : listY;
-    ctx.renderer->drawRect(listX, sepY, popW, 1, Color{90, 140, 200, 255});
 
     // Clip item text to popup bounds
     ctx.renderer->pushClip(listX, listY, popW, listH);
@@ -420,6 +416,11 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
         }
     }
     ctx.renderer->popClip();
+
+    // Draw outline and separator AFTER items so they aren't overdrawn
+    ctx.renderer->drawRectOutline(listX, listY, popW, listH, Color{90, 140, 200, 255});
+    float sepY = m_popupAbove ? (listY + listH - 1) : listY;
+    ctx.renderer->drawRect(listX, sepY, popW, 1, Color{90, 140, 200, 255});
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -813,6 +814,77 @@ void FwStepSelector::paint(UIContext& ctx) {
     ctx.font->drawText(*ctx.renderer, valStr.c_str(), vtx, vty, valScale, Theme::textPrimary);
 
     if (vw > availW) ctx.renderer->popClip();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FwCrossfader
+// ═══════════════════════════════════════════════════════════════════════════
+
+void FwCrossfader::paint(UIContext& ctx) {
+    if (!ctx.renderer || !ctx.font) return;
+    auto& r = *ctx.renderer;
+    auto& f = *ctx.font;
+
+    float x = m_bounds.x, y = m_bounds.y;
+    float w = m_bounds.w, h = m_bounds.h;
+    float labelScale = 9.0f / Theme::kFontSize;
+    float lh = f.lineHeight(labelScale);
+
+    // A/B labels on left/right
+    float labelW = m_trackPad;
+    float trackX = x + labelW;
+    float trackW = w - labelW * 2.0f;
+    float trackH = 10.0f;
+    float trackY = y + (h - trackH) * 0.5f;
+
+    // Label A (left)
+    f.drawText(r, m_labelA.c_str(), x, trackY + (trackH - lh) * 0.5f - lh * 0.15f,
+               labelScale, m_colorA);
+    // Label B (right)
+    float bw = f.textWidth(m_labelB, labelScale);
+    f.drawText(r, m_labelB.c_str(), x + w - bw,
+               trackY + (trackH - lh) * 0.5f - lh * 0.15f,
+               labelScale, m_colorB);
+
+    // Track background
+    r.drawRect(trackX, trackY, trackW, trackH, Color{35, 35, 40, 255});
+    r.drawRectOutline(trackX, trackY, trackW, trackH, Color{55, 55, 60, 255});
+
+    // Fill: A side (left) and B side (right)
+    float norm = m_value / 100.0f;  // 1.0 = full A, 0.0 = full B
+    float splitPx = trackW * (1.0f - norm); // pixel from left where split is
+
+    // A fill (from split to right)
+    if (splitPx < trackW) {
+        float aX = trackX + splitPx;
+        float aW = trackW - splitPx;
+        r.drawRect(aX, trackY + 1, aW, trackH - 2,
+                   Color{m_colorA.r, m_colorA.g, m_colorA.b, 80});
+    }
+    // B fill (from left to split)
+    if (splitPx > 0) {
+        r.drawRect(trackX, trackY + 1, splitPx, trackH - 2,
+                   Color{m_colorB.r, m_colorB.g, m_colorB.b, 80});
+    }
+
+    // Thumb handle
+    float thumbW = 6.0f;
+    float thumbH = trackH + 4.0f;
+    float thumbX = trackX + splitPx - thumbW * 0.5f;
+    float thumbY = trackY - 2.0f;
+    Color thumbCol = m_dragging ? Color{255, 255, 255, 255} : Color{200, 200, 210, 255};
+    r.drawRect(thumbX, thumbY, thumbW, thumbH, thumbCol);
+    r.drawRectOutline(thumbX, thumbY, thumbW, thumbH, Color{100, 100, 110, 255});
+
+    // Percentage text below track
+    char buf[32];
+    int aI = static_cast<int>(m_value + 0.5f);
+    int bI = 100 - aI;
+    std::snprintf(buf, sizeof(buf), "%d%% / %d%%", aI, bI);
+    float tw = f.textWidth(buf, labelScale);
+    float tx = trackX + (trackW - tw) * 0.5f;
+    float ty = trackY + trackH + 2.0f;
+    f.drawText(r, buf, tx, ty, labelScale, Theme::textDim);
 }
 
 } // namespace fw

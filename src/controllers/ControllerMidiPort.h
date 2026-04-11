@@ -208,16 +208,17 @@ public:
 private:
     void closeInput() {
         for (auto& in : m_ins) {
-            in->cancelCallback();
-            in->closePort();
+            try { in->cancelCallback(); } catch (...) {}
+            try { in->closePort(); } catch (...) {}
         }
         m_ins.clear();
         m_inNames.clear();
     }
 
     void closeOutput() {
-        for (auto& out : m_outs)
-            out->closePort();
+        for (auto& out : m_outs) {
+            try { out->closePort(); } catch (...) {}
+        }
         m_outs.clear();
         m_outNames.clear();
     }

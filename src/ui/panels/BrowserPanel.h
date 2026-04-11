@@ -47,7 +47,7 @@ public:
             m_faBarCountKnob.setValue(static_cast<float>(fa->barCount));
             m_faActionADropdown.setSelected(static_cast<int>(fa->actionA));
             m_faActionBDropdown.setSelected(static_cast<int>(fa->actionB));
-            m_faChanceAKnob.setValue(static_cast<float>(fa->chanceA));
+            m_faCrossfader.setValue(static_cast<float>(fa->chanceA));
         }
     }
 
@@ -152,8 +152,8 @@ public:
                 return m_faActionADropdown.onMouseDown(e);
             if (hitWidget(m_faActionBDropdown, mx, my))
                 return m_faActionBDropdown.onMouseDown(e);
-            if (hitWidget(m_faChanceAKnob, mx, my))
-                return m_faChanceAKnob.onMouseDown(e);
+            if (hitWidget(m_faCrossfader, mx, my))
+                return m_faCrossfader.onMouseDown(e);
         }
         return false;
     }
@@ -174,7 +174,7 @@ public:
                 return true;
             }
             if (m_faBarCountKnob.onMouseMove(me)) return true;
-            if (m_faChanceAKnob.onMouseMove(me)) return true;
+            if (m_faCrossfader.onMouseMove(me)) return true;
         }
         return false;
     }
@@ -196,7 +196,7 @@ public:
                 return m_faActionADropdown.onMouseUp(e);
             if (hitWidget(m_faActionBDropdown, e.x, e.y))
                 return m_faActionBDropdown.onMouseUp(e);
-            if (m_faChanceAKnob.onMouseUp(e)) return true;
+            if (m_faCrossfader.onMouseUp(e)) return true;
         }
         return false;
     }
@@ -217,7 +217,7 @@ public:
 
     // Text editing support (knobs + search inputs)
     bool hasEditingWidget() const {
-        return m_faBarCountKnob.isEditing() || m_faChanceAKnob.isEditing()
+        return m_faBarCountKnob.isEditing()
             || m_filesTab.isSearchEditing() || m_presetsTab.isSearchEditing();
     }
     // Keep old name for backward compat with App.cpp
@@ -228,7 +228,6 @@ public:
         KeyEvent ke;
         ke.keyCode = key;
         if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onKeyDown(ke);
-        if (m_faChanceAKnob.isEditing()) return m_faChanceAKnob.onKeyDown(ke);
         return false;
     }
     bool forwardTextInput(const char* text) {
@@ -238,7 +237,6 @@ public:
         std::strncpy(te.text, text, sizeof(te.text) - 1);
         te.text[sizeof(te.text) - 1] = '\0';
         if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onTextInput(te);
-        if (m_faChanceAKnob.isEditing()) return m_faChanceAKnob.onTextInput(te);
         return false;
     }
     void cancelEditingKnobs() {
@@ -247,7 +245,6 @@ public:
         KeyEvent ke;
         ke.keyCode = 27; // Escape
         if (m_faBarCountKnob.isEditing()) m_faBarCountKnob.onKeyDown(ke);
-        if (m_faChanceAKnob.isEditing()) m_faChanceAKnob.onKeyDown(ke);
     }
 
     void paint(UIContext& ctx) override {
@@ -342,7 +339,7 @@ private:
     FwKnob     m_faBarCountKnob;
     FwDropDown m_faActionADropdown;
     FwDropDown m_faActionBDropdown;
-    FwKnob     m_faChanceAKnob;
+    FwCrossfader m_faCrossfader;
 
     static bool hitWidget(Widget& w, float mx, float my) {
         auto& b = w.bounds();
@@ -392,18 +389,10 @@ private:
                 m_followActionPtr->actionB = static_cast<FollowActionType>(idx);
         });
 
-        m_faChanceAKnob.setRange(0.0f, 100.0f);
-        m_faChanceAKnob.setDefault(100.0f);
-        m_faChanceAKnob.setValue(100.0f);
-        m_faChanceAKnob.setStep(1.0f);
-        m_faChanceAKnob.setSensitivity(0.3f);
-        m_faChanceAKnob.setLabel("");
-        m_faChanceAKnob.setFormatCallback([](float v) -> std::string {
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(v));
-            return buf;
-        });
-        m_faChanceAKnob.setOnChange([this](float v) {
+        m_faCrossfader.setLabels("A", "B");
+        m_faCrossfader.setDefault(100.0f);
+        m_faCrossfader.setValue(100.0f);
+        m_faCrossfader.setOnChange([this](float v) {
             if (m_followActionPtr)
                 m_followActionPtr->chanceA = static_cast<int>(v);
         });
@@ -433,47 +422,46 @@ private:
             m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
         m_faActionADropdown.setSelected(static_cast<int>(m_followActionPtr->actionA));
         m_faActionBDropdown.setSelected(static_cast<int>(m_followActionPtr->actionB));
-        if (!m_faChanceAKnob.isEditing())
-            m_faChanceAKnob.setValue(static_cast<float>(m_followActionPtr->chanceA));
+        if (!m_faCrossfader.isDragging())
+            m_faCrossfader.setValue(static_cast<float>(m_followActionPtr->chanceA));
 
-        // Layout widgets vertically (panel is narrow)
+        // Layout widgets — vertical stack for narrow panel
         float rowY = headerY + 18.0f;
-        float labelH = 14.0f;
         float inputH = 20.0f;
-        float knobW = 48.0f, knobH = 50.0f;
-        float dropW = sw - 60.0f;
-        if (dropW < 80.0f) dropW = 80.0f;
-        float rowGap = 6.0f;
+        float rowGap = 4.0f;
+        float labelCol = 60.0f;
+        float inputX = sx + labelCol;
 
         // Enable
-        f.drawText(r, "Enable", sx, rowY, labelScale, Theme::textDim);
-        float inputX = sx + 60.0f;
-        m_faEnableBtn.layout(Rect{inputX, rowY - 1, 50.0f, inputH}, ctx);
+        f.drawText(r, "Enable", sx, rowY + 3.0f, labelScale, Theme::textDim);
+        m_faEnableBtn.layout(Rect{inputX, rowY, 40.0f, inputH}, ctx);
         m_faEnableBtn.paint(ctx);
-        rowY += labelH + rowGap;
+        rowY += inputH + 12.0f;
 
-        // Bar count
-        f.drawText(r, "Bars", sx, rowY + 12.0f, labelScale, Theme::textDim);
-        m_faBarCountKnob.layout(Rect{inputX, rowY, knobW, knobH}, ctx);
+        // Bars
+        f.drawText(r, "Bars", sx, rowY + 16.0f, labelScale, Theme::textDim);
+        m_faBarCountKnob.setLabel("");
+        m_faBarCountKnob.layout(Rect{inputX, rowY, 44.0f, 44.0f}, ctx);
         m_faBarCountKnob.paint(ctx);
-        rowY += knobH + rowGap;
+        rowY += 50.0f;
 
-        // Action A
-        f.drawText(r, "Action A", sx, rowY + 2.0f, labelScale, Theme::textDim);
-        m_faActionADropdown.layout(Rect{inputX, rowY, dropW, inputH}, ctx);
+        // Action A / Action B — labels then dropdowns side by side
+        float gap = 8.0f;
+        float halfW = (sw - gap) * 0.5f;
+        float rightX = sx + halfW + gap;
+
+        f.drawText(r, "Action A", sx, rowY, labelScale, Theme::textSecondary);
+        f.drawText(r, "Action B", rightX, rowY, labelScale, Theme::textSecondary);
+        rowY += 20.0f;
+        m_faActionADropdown.layout(Rect{sx, rowY, halfW, inputH}, ctx);
         m_faActionADropdown.paint(ctx);
-        rowY += inputH + rowGap;
-
-        // Action B
-        f.drawText(r, "Action B", sx, rowY + 2.0f, labelScale, Theme::textDim);
-        m_faActionBDropdown.layout(Rect{inputX, rowY, dropW, inputH}, ctx);
+        m_faActionBDropdown.layout(Rect{rightX, rowY, halfW, inputH}, ctx);
         m_faActionBDropdown.paint(ctx);
-        rowY += inputH + rowGap;
+        rowY += inputH + 10.0f;
 
-        // Chance A
-        f.drawText(r, "Chance A", sx, rowY + 12.0f, labelScale, Theme::textDim);
-        m_faChanceAKnob.layout(Rect{inputX, rowY, knobW, knobH}, ctx);
-        m_faChanceAKnob.paint(ctx);
+        // Crossfader (A/B chance)
+        m_faCrossfader.layout(Rect{sx, rowY, sw, 28.0f}, ctx);
+        m_faCrossfader.paint(ctx);
     }
 
     void paintMidiTab(Renderer2D& r, Font& f, float x, float y,

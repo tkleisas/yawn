@@ -132,17 +132,18 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
             bool isSlotRecording = m_trackStates[ti].recording
                                && m_trackStates[ti].recordingScene == si;
 
-            if (rightClick) {
-                m_lastRightClickTrack = ti;
-                m_lastRightClickScene = si;
-                m_selectedTrack  = ti;
-                m_lastClickTrack = ti;
-            } else if (isSlotRecording) {
+            if (isSlotRecording) {
+                // Any click on a recording slot stops recording (takes priority over context menu)
                 auto recQ = m_project->track(ti).recordQuantize;
                 if (m_project->track(ti).type == Track::Type::Midi)
                     m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
                 else
                     m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
+            } else if (rightClick) {
+                m_lastRightClickTrack = ti;
+                m_lastRightClickScene = si;
+                m_selectedTrack  = ti;
+                m_lastClickTrack = ti;
             } else if (slotLocalX < kIconZoneW + Theme::kSlotPadding) {
                 if (isPlaying) {
                     if (slot->audioClip)
@@ -158,10 +159,11 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation, slot->followAction});
                     m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
+                    int rlb = m_project->track(ti).recordLengthBars;
                     if (m_project->track(ti).type == Track::Type::Midi)
-                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
+                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true, rlb});
                     else
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, true});
+                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, true, rlb});
                 }
             } else {
                 m_selectedTrack  = ti;
@@ -179,10 +181,11 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                     m_clipDragCompleted = false;
                     captureMouse();  // ensure we receive mouse move events
                 } else if (trackArmed) {
+                    int rlb = m_project->track(ti).recordLengthBars;
                     if (m_project->track(ti).type == Track::Type::Midi)
-                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift});
+                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift, rlb});
                     else
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !e.mods.shift});
+                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !e.mods.shift, rlb});
                 }
             }
             return true;

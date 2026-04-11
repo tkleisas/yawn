@@ -907,13 +907,29 @@ void AudioEngine::processCommands() {
                     rs.recording = true;
                     rs.targetScene = msg.sceneIndex;
                     rs.overdub = msg.overdub;
-                    rs.recordStartBeat = m_transport.positionInBeats();
+                    rs.targetLengthBars = msg.recordLengthBars;
+
+                    // Session recording always sets recordStartBeat explicitly,
+                    // so mark usedCountIn to skip the legacy trim in finalize.
+                    rs.usedCountIn = true;
 
                     // Auto-arm transport recording and start playback
                     if (!m_transport.isRecording()) {
                         m_transport.startRecording();
-                        if (!m_transport.isPlaying())
+                        if (m_transport.countInBars() > 0 && !m_transport.isPlaying()) {
+                            m_transport.beginCountIn();
+                            rs.pendingStart = true;
                             m_transport.play();
+                        } else if (!m_transport.isPlaying()) {
+                            rs.recordStartBeat = m_transport.positionInBeats();
+                            m_transport.play();
+                        } else {
+                            rs.recordStartBeat = m_transport.positionInBeats();
+                        }
+                    } else if (m_transport.isCountingIn()) {
+                        rs.pendingStart = true;
+                    } else {
+                        rs.recordStartBeat = m_transport.positionInBeats();
                     }
                 }
             }
@@ -937,6 +953,7 @@ void AudioEngine::processCommands() {
                     ars.recording = true;
                     ars.targetScene = msg.sceneIndex;
                     ars.overdub = msg.overdub;
+                    ars.targetLengthBars = msg.recordLengthBars;
                     ars.channels = m_config.inputChannels;
                     // Pre-allocate for 5 minutes of recording
                     static constexpr int64_t kMaxRecordSec = 300;
@@ -944,11 +961,27 @@ void AudioEngine::processCommands() {
                     ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
                     ars.recordedFrames = 0;
 
+                    // Session recording always sets recordStartBeat explicitly,
+                    // so mark usedCountIn to skip the legacy trim in finalize.
+                    ars.usedCountIn = true;
+
                     // Auto-arm transport recording and start playback
                     if (!m_transport.isRecording()) {
                         m_transport.startRecording();
-                        if (!m_transport.isPlaying())
+                        if (m_transport.countInBars() > 0 && !m_transport.isPlaying()) {
+                            m_transport.beginCountIn();
+                            ars.pendingStart = true;
                             m_transport.play();
+                        } else if (!m_transport.isPlaying()) {
+                            ars.recordStartBeat = m_transport.positionInBeats();
+                            m_transport.play();
+                        } else {
+                            ars.recordStartBeat = m_transport.positionInBeats();
+                        }
+                    } else if (m_transport.isCountingIn()) {
+                        ars.pendingStart = true;
+                    } else {
+                        ars.recordStartBeat = m_transport.positionInBeats();
                     }
                 }
             }
@@ -1067,13 +1100,43 @@ void AudioEngine::processCommands() {
 void AudioEngine::checkPendingRecordStops(int bufferSize) {
     if (!m_transport.isPlaying()) return;
 
+    // Resolve pending record starts after count-in finishes
+    bool countingIn = m_transport.isCountingIn();
+    if (!countingIn) {
+        for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackRecordStates[t].recording && m_trackRecordStates[t].pendingStart) {
+                m_trackRecordStates[t].recordStartBeat = m_transport.positionInBeats();
+                m_trackRecordStates[t].pendingStart = false;
+                LOG_INFO("Audio", "MIDI record start resolved: track=%d recordStartBeat=%.3f", t, m_trackRecordStates[t].recordStartBeat);
+            }
+            if (m_audioRecordStates[t].recording && m_audioRecordStates[t].pendingStart) {
+                m_audioRecordStates[t].recordStartBeat = m_transport.positionInBeats();
+                m_audioRecordStates[t].pendingStart = false;
+            }
+        }
+    }
+
     int64_t pos = m_transport.positionInSamples();
     int64_t prevPos = pos - bufferSize;
     double spb = m_transport.samplesPerBar();
     double spBeat = m_transport.samplesPerBeat();
 
+    double currentBeat = m_transport.positionInBeats();
+    int bpb = m_transport.beatsPerBar();
+
     for (int t = 0; t < kMaxTracks; ++t) {
         auto& rs = m_trackRecordStates[t];
+        // Skip auto-stop checks if still waiting for count-in
+        if (rs.pendingStart) continue;
+        // Fixed-duration auto-stop (MIDI)
+        if (rs.recording && rs.targetLengthBars > 0 && rs.pendingStopQuantize == QuantizeMode::None) {
+            double targetBeats = rs.targetLengthBars * bpb;
+            double elapsed = currentBeat - rs.recordStartBeat;
+            if (elapsed >= targetBeats) {
+                finalizeMidiRecord(t);
+                continue;
+            }
+        }
         if (rs.recording && rs.pendingStopQuantize != QuantizeMode::None) {
             double interval = (rs.pendingStopQuantize == QuantizeMode::NextBar) ? spb : spBeat;
             if (interval <= 0.0) continue;
@@ -1085,6 +1148,17 @@ void AudioEngine::checkPendingRecordStops(int bufferSize) {
         }
 
         auto& ars = m_audioRecordStates[t];
+        // Skip auto-stop checks if still waiting for count-in
+        if (ars.pendingStart) continue;
+        // Fixed-duration auto-stop (audio)
+        if (ars.recording && ars.targetLengthBars > 0 && ars.pendingStopQuantize == QuantizeMode::None) {
+            double targetBeats = ars.targetLengthBars * bpb;
+            double elapsed = currentBeat - ars.recordStartBeat;
+            if (elapsed >= targetBeats) {
+                finalizeAudioRecord(t);
+                continue;
+            }
+        }
         if (ars.recording && ars.pendingStopQuantize != QuantizeMode::None) {
             double interval = (ars.pendingStopQuantize == QuantizeMode::NextBar) ? spb : spBeat;
             if (interval <= 0.0) continue;
@@ -1130,8 +1204,10 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
         m_instruments[trackIndex]->process(silence, 1, 2, killBuf);
     }
 
-    // Trim leading bars equal to count-in duration
-    {
+    // Trim leading bars equal to count-in duration (only for arrangement recording
+    // where count-in was handled externally; session recording with pendingStart
+    // already sets recordStartBeat after count-in, so notes are already correct)
+    if (!rs.usedCountIn) {
         int countInBars = m_transport.countInBars();
         if (countInBars > 0) {
             int bpb = m_transport.beatsPerBar();
@@ -1164,6 +1240,7 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
         xfer.notes.clear();
         xfer.ccs.clear();
         xfer.lengthBeats = 0.0;
+        xfer.autoStopped = false;
         xfer.ready.store(true, std::memory_order_release);
 
         MidiRecordCompleteEvent evt;
@@ -1184,10 +1261,15 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
     xfer.trackIndex = trackIndex;
     xfer.sceneIndex = rs.targetScene;
     xfer.overdub = rs.overdub;
+    xfer.autoStopped = (rs.targetLengthBars > 0);
     double rawLen = m_transport.positionInBeats() - rs.recordStartBeat;
     int bpb = m_transport.beatsPerBar();
-    double bars = std::ceil(rawLen / bpb);
+    double bars = (rs.targetLengthBars > 0)
+        ? static_cast<double>(rs.targetLengthBars)
+        : std::ceil(rawLen / bpb);
     xfer.lengthBeats = bars * bpb;
+    LOG_INFO("Audio", "finalizeMidiRecord: track=%d targetLengthBars=%d rawLen=%.3f bars=%.1f lengthBeats=%.1f recordStartBeat=%.3f usedCountIn=%d",
+        trackIndex, rs.targetLengthBars, rawLen, bars, xfer.lengthBeats, rs.recordStartBeat, rs.usedCountIn ? 1 : 0);
     xfer.ready.store(true, std::memory_order_release);
 
     MidiRecordCompleteEvent evt;
@@ -1228,16 +1310,26 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
         return;
     }
 
-    // Trim leading bars equal to count-in duration
+    // Trim leading bars equal to count-in duration (only for arrangement recording;
+    // session recording with usedCountIn sets recordStartBeat after count-in)
     int64_t framesPerBar = static_cast<int64_t>(m_transport.samplesPerBar());
-    int countInBars = m_transport.countInBars();
     int64_t trimFrames = 0;
-    if (countInBars > 0 && framesPerBar > 0) {
-        trimFrames = static_cast<int64_t>(countInBars) * framesPerBar;
-        if (trimFrames >= ars.recordedFrames)
-            trimFrames = 0;  // safety: don't trim everything
+    if (!ars.usedCountIn) {
+        int countInBars = m_transport.countInBars();
+        if (countInBars > 0 && framesPerBar > 0) {
+            trimFrames = static_cast<int64_t>(countInBars) * framesPerBar;
+            if (trimFrames >= ars.recordedFrames)
+                trimFrames = 0;  // safety: don't trim everything
+        }
     }
     int64_t effectiveFrames = ars.recordedFrames - trimFrames;
+
+    // Clamp to exact target length when fixed-duration recording
+    if (ars.targetLengthBars > 0 && framesPerBar > 0) {
+        int64_t targetFrames = static_cast<int64_t>(ars.targetLengthBars) * framesPerBar;
+        if (effectiveFrames > targetFrames)
+            effectiveFrames = targetFrames;
+    }
 
     auto& xfer = m_recordedAudio[trackIndex];
     xfer.channels = ars.channels;
@@ -1245,6 +1337,7 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     xfer.trackIndex = trackIndex;
     xfer.sceneIndex = ars.targetScene;
     xfer.overdub = ars.overdub;
+    xfer.autoStopped = (ars.targetLengthBars > 0);
     xfer.buffer.resize(ars.channels * effectiveFrames);
     for (int ch = 0; ch < ars.channels; ++ch) {
         std::memcpy(

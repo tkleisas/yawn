@@ -108,6 +108,21 @@ public:
             }
 
             // Clip lanes use local beat position (already wrapped by clip engine)
+            // Clip automation always plays back regardless of track AutoMode
+            const auto& ci = ctx.clips[t];
+            if (ci.playing && ci.clipLanes && !ci.clipLanes->empty()) {
+                for (const auto& lane : *ci.clipLanes) {
+                    if (lane.envelope.empty()) continue;
+                    float val = lane.envelope.valueAt(ci.clipLocalBeat);
+                    applyValue(ctx, lane.target, val);
+                }
+            }
+        }
+
+        // Also process clip automation for tracks with AutoMode::Off
+        // (the loop above skips those tracks entirely)
+        for (int t = 0; t < kMaxTracks; ++t) {
+            if (m_trackMode[t] != AutoMode::Off) continue; // already handled above
             const auto& ci = ctx.clips[t];
             if (ci.playing && ci.clipLanes && !ci.clipLanes->empty()) {
                 for (const auto& lane : *ci.clipLanes) {
