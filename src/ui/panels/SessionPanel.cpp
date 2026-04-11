@@ -251,6 +251,28 @@ void SessionPanel::launchSlotAt(int ti, int si) {
     }
 }
 
+void SessionPanel::launchScene(int scene) {
+    if (!m_project || !m_engine) return;
+    if (scene < 0 || scene >= m_project->numScenes()) return;
+    for (int t = 0; t < m_project->numTracks(); ++t) {
+        auto* slot = m_project->getSlot(t, scene);
+        if (slot && slot->audioClip) {
+            m_engine->sendCommand(audio::LaunchClipMsg{t, scene, slot->audioClip.get(),
+                slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+            m_project->track(t).defaultScene = scene;
+        } else if (slot && slot->midiClip) {
+            m_engine->sendCommand(audio::LaunchMidiClipMsg{t, scene, slot->midiClip.get(),
+                slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+            m_project->track(t).defaultScene = scene;
+        } else {
+            m_engine->sendCommand(audio::StopClipMsg{t});
+            m_engine->sendCommand(audio::StopMidiClipMsg{t});
+            m_project->track(t).defaultScene = -1;
+        }
+    }
+    m_activeScene = scene;
+}
+
 void SessionPanel::drawText(Renderer2D& r, Font& f, const char* text,
               float x, float y, float scale, Color color) {
     if (!f.isLoaded()) return;

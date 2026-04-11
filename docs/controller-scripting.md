@@ -85,10 +85,18 @@ local pads   = require("pads")    -- loads pads.lua from same directory
 | Function | Description |
 |----------|-------------|
 | `yawn.get_selected_track()` | Returns 0-based index of selected track |
+| `yawn.set_selected_track(track)` | Set the selected track (0-based) |
 | `yawn.get_track_count()` | Returns number of tracks |
 | `yawn.get_track_name(track)` | Returns track name string (or nil) |
+| `yawn.get_track_type(track)` | Returns `"audio"` or `"midi"` |
+| `yawn.get_track_color(track)` | Returns track color index |
 | `yawn.get_instrument_name(track)` | Returns instrument display name (or nil) |
 | `yawn.get_instrument_id(track)` | Returns instrument type ID (e.g. `"drumrack"`, `"fmsynth"`) |
+| `yawn.is_track_armed(track)` | Returns `true` if track is record-armed |
+| `yawn.set_track_armed(track, armed)` | Arm/disarm a track for recording |
+| `yawn.is_recording()` | Returns `true` if transport is in record mode |
+| `yawn.set_recording(bool, flags)` | Enable/disable transport recording |
+| `yawn.get_record_length_bars(track)` | Returns fixed record length in bars (0 = unlimited) |
 
 #### Instrument Type IDs
 
@@ -134,6 +142,19 @@ All device parameter functions take `(device_type, chain_index, param_index)`:
 | `yawn.send_pitchbend_to_track(track, value14, channel)` | Send 14-bit pitch bend (0-16383, center=8192) |
 | `yawn.send_cc_to_track(track, cc, value, channel)` | Send CC message (0-127) to track |
 
+### Session / Clip Launching
+
+| Function | Description |
+|----------|-------------|
+| `yawn.get_num_scenes()` | Returns number of scenes |
+| `yawn.get_clip_slot_state(track, scene)` | Returns table `{type, playing, recording, armed}` — `type` is `"empty"`, `"audio"`, or `"midi"` |
+| `yawn.launch_clip(track, scene)` | Launch or stop the clip at the given slot |
+| `yawn.stop_clip(track)` | Stop the playing clip on a track |
+| `yawn.launch_scene(scene)` | Launch all clips in a scene row |
+| `yawn.start_record(track, scene)` | Start recording into a clip slot (auto-detects audio/MIDI track type) |
+| `yawn.stop_record(track)` | Stop recording on a track |
+| `yawn.set_session_focus(trackOff, sceneOff, active)` | Set the controller's visible grid region (draws outline in UI) |
+
 ### Utility
 
 | Function | Description |
@@ -151,10 +172,12 @@ All device parameter functions take `(device_type, chain_index, param_index)`:
 | 3 | Tap Tempo | Tap tempo with LED flash |
 | 9 | Metronome | Toggle metronome (LED synced) |
 | 14 | Tempo Encoder | BPM adjust (Shift = fine: 0.1 BPM) |
-| 44 | Left Arrow | Previous parameter page |
-| 45 | Right Arrow | Next parameter page |
-| 46 | Up Arrow | Drum bank up (drum mode only) |
-| 47 | Down Arrow | Drum bank down (drum mode only) |
+| 20-27 | Track Select (top row) | Select track (session mode); LED on for selected track |
+| 36-43 | Scene Launch (right column) | Launch scene row (session mode); LED color reflects scene state |
+| 44 | Left Arrow | Param page prev / session grid navigate left |
+| 45 | Right Arrow | Param page next / session grid navigate right |
+| 46 | Up Arrow | Drum bank up / session grid navigate up |
+| 47 | Down Arrow | Drum bank down / session grid navigate down |
 | 49 | Shift | Held modifier for fine control |
 | 50 | Note | Switch to Note mode |
 | 51 | Session | Switch to Session mode |
@@ -164,6 +187,8 @@ All device parameter functions take `(device_type, chain_index, param_index)`:
 | 71-78 | Encoders 1-8 | Device parameters (paged) / Scale edit params |
 | 79 | Master Encoder | Master volume (Shift = fine) |
 | 85 | Play | Play/Stop (LED synced) |
+| 86 | Record | Toggle transport record; Shift+Record = arm selected track |
+| 102-109 | Track State (bottom row) | Toggle track arm (session mode); LED on when armed |
 | PB (0xE0) | Touch Strip | Pitch bend (default) / Mod wheel (Shift held) |
 
 ### Pad Modes
@@ -194,9 +219,30 @@ Auto-activates when the selected track has a DrumRack or DrumSlop instrument. Th
 - **Up/Down arrows** page through drum banks (+/- 16 notes)
 - Switching to a melodic instrument auto-switches back to Note mode
 
-#### Session Mode (Stub)
+#### Session Mode
 
-Pressing the Session button enters Session mode. Clip launching is planned for a future update.
+Pressing the Session button enters Session mode. The 8x8 pad grid maps to clip slots in the session view:
+
+- **Columns** (left to right) = tracks
+- **Rows** (top to bottom) = scenes (top row = first visible scene)
+- **Pressing a pad** launches or stops the clip in that slot; armed empty slots start recording
+
+**Pad LED colors**:
+| Color | Meaning |
+|-------|---------|
+| Off | Empty slot |
+| Dim red | Armed empty slot (ready to record) |
+| Amber | Clip present (stopped) |
+| Bright green | Clip playing |
+| Red | Clip recording |
+
+**Navigation**: Use the cursor keys (Left/Right/Up/Down) to scroll the 8x8 grid window across the session. The YAWN UI shows a red outline indicating which region the Push pads currently control.
+
+**Top row buttons (CC 20-27)**: Select the corresponding track. The selected track's button LED is lit.
+
+**Bottom row buttons (CC 102-109)**: Toggle record arm on the corresponding track. Armed tracks show a lit LED.
+
+**Scene launch buttons (CC 36-43, right column)**: Launch all clips in a scene row. LED colors reflect scene state (green = playing, amber = has clips, red = recording, dim = empty).
 
 ### Touch Strip
 
@@ -209,12 +255,12 @@ The touch strip sends pitch bend messages and is mapped to two functions:
 
 The Push 1's 4-line, 68-character LCD is driven via SysEx:
 
-| Line | Content |
-|------|---------|
-| 1 | Parameter names (8 columns) |
-| 2 | Parameter values (8 columns) |
-| 3 | Track name + page indicator |
-| 4 | Instrument name + pad mode info (or tap tempo flash) |
+| Line | Content (Note/Drum mode) | Content (Session mode) |
+|------|--------------------------|------------------------|
+| 1 | Parameter names (8 columns) | Track names (8 columns) |
+| 2 | Parameter values (8 columns) | Track armed/type status |
+| 3 | Track name + page indicator | Scene & track range |
+| 4 | Instrument name + pad mode | Transport & recording status |
 
 In scale edit mode, all 4 lines show the scale editor UI.
 

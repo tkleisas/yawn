@@ -33,6 +33,10 @@ pads.row_interval = 5     -- semitones between rows (5 = perfect 4th)
 -- Drum state
 pads.drum_bank    = 0     -- 0-based bank (each bank = 16 notes)
 
+-- Session mode state: 8x8 grid window into the clip matrix
+pads.session_track_offset = 0   -- first visible track column
+pads.session_scene_offset = 0   -- first visible scene row
+
 -- Computed note mapping: pad_index (0-63) → MIDI note (or nil if inactive)
 pads.pad_notes = {}
 
@@ -173,9 +177,14 @@ function pads.handle_pad_note(hw_note, velocity, channel)
     if pad_idx < 0 or pad_idx > 63 then return false end
 
     if pads.mode == pads.MODE_SESSION then
-        -- Stub: future clip launching
-        -- local row = math.floor(pad_idx / 8)
-        -- local col = pad_idx % 8
+        if velocity > 0 then
+            -- Pad grid: row 7 (top) = first scene, row 0 (bottom) = last scene
+            local row = math.floor(pad_idx / 8)
+            local col = pad_idx % 8
+            local track = pads.session_track_offset + col
+            local scene = pads.session_scene_offset + (7 - row)  -- invert: top row = first scene
+            yawn.launch_clip(track, scene)
+        end
         return true
     end
 
@@ -211,6 +220,9 @@ end
 -- ── Auto-switching ──────────────────────────────────────────────────────────
 
 function pads.auto_switch_mode(track)
+    -- Don't auto-switch when in session mode — user explicitly chose it
+    if pads.mode == pads.MODE_SESSION then return false end
+
     local inst_id = yawn.get_instrument_id(track)
     if not inst_id then return false end
 
@@ -267,7 +279,7 @@ function pads.get_pad_led_color(pad_idx)
             return LED_CHROMATIC
         end
     elseif pads.mode == pads.MODE_SESSION then
-        return LED_OFF  -- stub
+        return pads.get_session_pad_color(pad_idx)
     end
     return LED_OFF
 end
@@ -290,6 +302,124 @@ function pads.restore_pad_led(hw_note)
     if pad_idx < 0 or pad_idx > 63 then return end
     local color = pads.get_pad_led_color(pad_idx)
     yawn.midi_send(0x90, hw_note, color)
+end
+
+-- ── Session mode helpers ────────────────────────────────────────────────────
+
+-- Push 1 pad colors for session mode
+local LED_SESSION_EMPTY     = 0     -- off
+local LED_SESSION_CLIP      = 122   -- has clip, stopped (dim)
+local LED_SESSION_PLAYING   = 127   -- playing (bright green)
+local LED_SESSION_RECORDING = 4     -- recording (red — Push 1 color index 4)
+local LED_SESSION_ARMED     = 1     -- armed empty slot (dim red)
+
+function pads.get_session_pad_color(pad_idx)
+    local row = math.floor(pad_idx / 8)
+    local col = pad_idx % 8
+    local track = pads.session_track_offset + col
+    local scene = pads.session_scene_offset + (7 - row)
+
+    local state = yawn.get_clip_slot_state(track, scene)
+    if not state then return LED_SESSION_EMPTY end
+
+    if state.recording then
+        return LED_SESSION_RECORDING
+    elseif state.playing then
+        return LED_SESSION_PLAYING
+    elseif state.type ~= "empty" then
+        return LED_SESSION_CLIP
+    elseif state.armed then
+        return LED_SESSION_ARMED
+    end
+    return LED_SESSION_EMPTY
+end
+
+-- Navigate session grid (called from cursor key handlers)
+function pads.session_navigate(dx, dy)
+    local num_tracks = yawn.get_track_count()
+    local num_scenes = yawn.get_num_scenes()
+
+    pads.session_track_offset = math.max(0,
+        math.min(pads.session_track_offset + dx, math.max(0, num_tracks - 8)))
+    pads.session_scene_offset = math.max(0,
+        math.min(pads.session_scene_offset + dy, math.max(0, num_scenes - 8)))
+
+    pads.sync_session_focus()
+    pads.needs_recompute = true
+end
+
+-- Sync the session focus rectangle to the UI
+function pads.sync_session_focus()
+    yawn.set_session_focus(pads.session_track_offset,
+                           pads.session_scene_offset,
+                           pads.mode == pads.MODE_SESSION)
+end
+
+-- Get session display info
+function pads.get_session_display()
+    local num_tracks = yawn.get_track_count()
+    local num_scenes = yawn.get_num_scenes()
+
+    -- Line 1: track names (8 columns)
+    local line1 = ""
+    for c = 0, 7 do
+        local t = pads.session_track_offset + c
+        local name = ""
+        if t < num_tracks then
+            name = yawn.get_track_name(t) or ""
+        end
+        if #name > 8 then name = name:sub(1, 8) end
+        name = name .. string.rep(" ", 8 - #name)
+        if c < 7 then
+            line1 = line1 .. name .. " "
+        else
+            line1 = line1 .. name
+        end
+    end
+
+    -- Line 2: track armed/type status
+    local line2 = ""
+    for c = 0, 7 do
+        local t = pads.session_track_offset + c
+        local status = "        "
+        if t < num_tracks then
+            local armed = yawn.is_track_armed(t)
+            local ttype = yawn.get_track_type(t) or "?"
+            if armed then
+                status = string.format("%-4s ARM", ttype:sub(1,4):upper())
+            else
+                status = string.format("%-8s", ttype:sub(1,8):upper())
+            end
+        end
+        if c < 7 then
+            line2 = line2 .. status .. " "
+        else
+            line2 = line2 .. status
+        end
+    end
+
+    -- Line 3: scene range
+    local line3 = string.format("Scenes %d-%d of %d   Tracks %d-%d of %d",
+        pads.session_scene_offset + 1,
+        math.min(pads.session_scene_offset + 8, num_scenes),
+        num_scenes,
+        pads.session_track_offset + 1,
+        math.min(pads.session_track_offset + 8, num_tracks),
+        num_tracks)
+
+    -- Line 4: transport + recording status
+    local line4 = ""
+    local playing = yawn.is_playing()
+    local recording = yawn.is_recording()
+    if recording then
+        line4 = string.format("REC  %.1f BPM", yawn.get_bpm())
+    elseif playing then
+        line4 = string.format("PLAY  %.1f BPM", yawn.get_bpm())
+    else
+        line4 = string.format("STOP  %.1f BPM", yawn.get_bpm())
+    end
+
+    return line1, line2, line3, line4
 end
 
 -- ── Scale edit display ──────────────────────────────────────────────────────

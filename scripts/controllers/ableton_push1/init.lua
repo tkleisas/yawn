@@ -41,6 +41,16 @@ local CC_SESSION    = 51   -- Session button
 local CC_SCALE      = 58   -- Scale button
 local CC_OCTAVE_UP  = 55   -- Octave Up
 local CC_OCTAVE_DN  = 54   -- Octave Down
+local CC_RECORD     = 86   -- Record button
+
+-- Scene launch buttons (right side column, top to bottom: 43..36)
+local CC_SCENE_LAUNCH_BASE = 36  -- CC 36 (bottom) to CC 43 (top)
+
+-- Track select buttons (top row above pads, left to right: 20..27)
+local CC_TRACK_SELECT_BASE = 20  -- CC 20 (track 1) to CC 27 (track 8)
+
+-- Track arm buttons (bottom row below pads, left to right: 102..109)
+local CC_TRACK_STATE_BASE = 102  -- CC 102 (track 1) to CC 109 (track 8)
 
 -- Pad LED colors for ripple effect
 local PAD_COLORS = {127, 125, 123, 121}
@@ -78,6 +88,10 @@ local held_pads = {}
 
 local function set_button_led(cc, on)
     yawn.midi_send(0xB0, cc, on and 127 or 0)
+end
+
+local function set_button_led_color(cc, color)
+    yawn.midi_send(0xB0, cc, color)
 end
 
 local function set_pad_led(note, color)
@@ -121,6 +135,16 @@ local function update_display()
     -- Scale edit mode: show scale selection UI
     if scale_edit_active then
         local l1, l2, l3, l4 = pads.get_scale_edit_display(scales)
+        send_display_line(DISPLAY_LINES[1], l1)
+        send_display_line(DISPLAY_LINES[2], l2)
+        send_display_line(DISPLAY_LINES[3], l3)
+        send_display_line(DISPLAY_LINES[4], l4)
+        return
+    end
+
+    -- Session mode: show track/clip grid info
+    if pads.mode == pads.MODE_SESSION then
+        local l1, l2, l3, l4 = pads.get_session_display()
         send_display_line(DISPLAY_LINES[1], l1)
         send_display_line(DISPLAY_LINES[2], l2)
         send_display_line(DISPLAY_LINES[3], l3)
@@ -361,6 +385,7 @@ local function switch_to_note_mode()
         pads.cleanup_active_notes()
         pads.mode = pads.MODE_NOTE
         scale_edit_active = false
+        pads.sync_session_focus()
         recompute_pads()
     end
 end
@@ -370,6 +395,7 @@ local function switch_to_session_mode()
         pads.cleanup_active_notes()
         pads.mode = pads.MODE_SESSION
         scale_edit_active = false
+        pads.sync_session_focus()
         recompute_pads()
     end
 end
@@ -413,27 +439,41 @@ function on_midi(data)
             return
         end
 
-        -- Left/Right: param page (or drum bank in drum mode with shift)
+        -- Left/Right: session navigate or param page
         if d1 == CC_LEFT and d2 > 0 then
-            if param_page > 0 then
+            if pads.mode == pads.MODE_SESSION then
+                pads.session_navigate(-1, 0)
+                pads.update_leds()
+                display_dirty = true
+            elseif param_page > 0 then
                 param_page = param_page - 1
                 display_dirty = true
             end
             return
         end
         if d1 == CC_RIGHT and d2 > 0 then
-            local param_count = yawn.get_device_param_count("instrument", 0)
-            local max_page = math.max(0, math.ceil(param_count / 8) - 1)
-            if param_page < max_page then
-                param_page = param_page + 1
+            if pads.mode == pads.MODE_SESSION then
+                pads.session_navigate(1, 0)
+                pads.update_leds()
                 display_dirty = true
+            else
+                local param_count = yawn.get_device_param_count("instrument", 0)
+                local max_page = math.max(0, math.ceil(param_count / 8) - 1)
+                if param_page < max_page then
+                    param_page = param_page + 1
+                    display_dirty = true
+                end
             end
             return
         end
 
-        -- Up/Down: drum bank navigation (only in drum mode)
+        -- Up/Down: session navigate or drum bank
         if d1 == CC_UP and d2 > 0 then
-            if pads.mode == pads.MODE_DRUM then
+            if pads.mode == pads.MODE_SESSION then
+                pads.session_navigate(0, -1)  -- scroll scenes up (lower scene numbers)
+                pads.update_leds()
+                display_dirty = true
+            elseif pads.mode == pads.MODE_DRUM then
                 pads.cleanup_active_notes()
                 pads.drum_bank = math.min(pads.drum_bank + 1, 5)
                 recompute_pads()
@@ -441,7 +481,11 @@ function on_midi(data)
             return
         end
         if d1 == CC_DOWN and d2 > 0 then
-            if pads.mode == pads.MODE_DRUM then
+            if pads.mode == pads.MODE_SESSION then
+                pads.session_navigate(0, 1)  -- scroll scenes down (higher scene numbers)
+                pads.update_leds()
+                display_dirty = true
+            elseif pads.mode == pads.MODE_DRUM then
                 pads.cleanup_active_notes()
                 pads.drum_bank = math.max(pads.drum_bank - 1, 0)
                 recompute_pads()
@@ -468,6 +512,62 @@ function on_midi(data)
         -- Tap tempo
         if d1 == CC_TAP_TEMPO and d2 > 0 then
             handle_tap_tempo()
+            return
+        end
+
+        -- Record
+        if d1 == CC_RECORD and d2 > 0 then
+            if shift_held then
+                -- Shift+Record: toggle arm on selected track
+                local track = yawn.get_selected_track()
+                local armed = yawn.is_track_armed(track)
+                yawn.set_track_armed(track, not armed)
+            else
+                -- Record: toggle transport recording
+                local recording = yawn.is_recording()
+                yawn.set_recording(not recording, 0)
+            end
+            display_dirty = true
+            return
+        end
+
+        -- Scene launch buttons (CC 36-43, right side column)
+        if d1 >= CC_SCENE_LAUNCH_BASE and d1 <= CC_SCENE_LAUNCH_BASE + 7 and d2 > 0 then
+            if pads.mode == pads.MODE_SESSION then
+                -- Top button (CC 43) = first visible scene, bottom (CC 36) = last
+                local btn_row = d1 - CC_SCENE_LAUNCH_BASE  -- 0 (bottom) .. 7 (top)
+                local scene = pads.session_scene_offset + (7 - btn_row)
+                yawn.launch_scene(scene)
+            end
+            return
+        end
+
+        -- Track select buttons (CC 20-27, top row above pads)
+        if d1 >= CC_TRACK_SELECT_BASE and d1 <= CC_TRACK_SELECT_BASE + 7 and d2 > 0 then
+            if pads.mode == pads.MODE_SESSION then
+                local col = d1 - CC_TRACK_SELECT_BASE
+                local track = pads.session_track_offset + col
+                local num_tracks = yawn.get_track_count()
+                if track < num_tracks then
+                    yawn.set_selected_track(track)
+                    display_dirty = true
+                end
+            end
+            return
+        end
+
+        -- Track arm buttons (CC 102-109, bottom row below pads)
+        if d1 >= CC_TRACK_STATE_BASE and d1 <= CC_TRACK_STATE_BASE + 7 and d2 > 0 then
+            if pads.mode == pads.MODE_SESSION then
+                local col = d1 - CC_TRACK_STATE_BASE
+                local track = pads.session_track_offset + col
+                local num_tracks = yawn.get_track_count()
+                if track < num_tracks then
+                    local armed = yawn.is_track_armed(track)
+                    yawn.set_track_armed(track, not armed)
+                    display_dirty = true
+                end
+            end
             return
         end
 
@@ -535,6 +635,7 @@ function on_midi(data)
             end
             return
         end
+
     end
 
     -- Note On / Note Off
@@ -639,6 +740,75 @@ function on_tick()
     set_button_led(CC_NOTE_MODE, pads.mode == pads.MODE_NOTE)
     set_button_led(CC_SESSION, pads.mode == pads.MODE_SESSION)
     set_button_led(CC_SCALE, pads.mode == pads.MODE_NOTE and pads.note_submode == pads.SUBMODE_SCALE)
+    set_button_led(CC_RECORD, yawn.is_recording())
+
+    -- Session mode: refresh pad LEDs and scene launch buttons every tick
+    if pads.mode == pads.MODE_SESSION then
+        pads.update_leds()
+
+        -- Scene launch button LEDs (CC 36-43)
+        local num_scenes = yawn.get_num_scenes()
+        local num_tracks = yawn.get_track_count()
+        for btn = 0, 7 do
+            local scene = pads.session_scene_offset + (7 - btn)
+            local color = 0  -- off
+            if scene < num_scenes then
+                -- Check if any clip in this scene is playing or recording
+                local has_clip = false
+                local scene_playing = false
+                local scene_recording = false
+                for t = 0, num_tracks - 1 do
+                    local st = yawn.get_clip_slot_state(t, scene)
+                    if st then
+                        if st.type ~= "empty" then has_clip = true end
+                        if st.playing then scene_playing = true end
+                        if st.recording then scene_recording = true end
+                    end
+                end
+                if scene_recording then
+                    color = 4    -- red (recording)
+                elseif scene_playing then
+                    color = 127  -- green (playing)
+                elseif has_clip then
+                    color = 122  -- amber (has clips)
+                else
+                    color = 3    -- dim (empty but valid scene)
+                end
+            end
+            set_button_led_color(CC_SCENE_LAUNCH_BASE + btn, color)
+        end
+
+        -- Track select button LEDs (CC 20-27): on for selected track
+        local selected = yawn.get_selected_track()
+        for col = 0, 7 do
+            local track = pads.session_track_offset + col
+            if track < num_tracks then
+                set_button_led(CC_TRACK_SELECT_BASE + col, track == selected)
+            else
+                set_button_led(CC_TRACK_SELECT_BASE + col, false)
+            end
+        end
+
+        -- Track arm button LEDs (CC 102-109): on when armed
+        for col = 0, 7 do
+            local track = pads.session_track_offset + col
+            if track < num_tracks then
+                local armed = yawn.is_track_armed(track)
+                set_button_led(CC_TRACK_STATE_BASE + col, armed)
+            else
+                set_button_led(CC_TRACK_STATE_BASE + col, false)
+            end
+        end
+
+        display_dirty = true  -- update transport status on display
+    else
+        -- Turn off scene launch, track select, and arm LEDs when not in session mode
+        for btn = 0, 7 do
+            set_button_led_color(CC_SCENE_LAUNCH_BASE + btn, 0)
+            set_button_led(CC_TRACK_SELECT_BASE + btn, false)
+            set_button_led(CC_TRACK_STATE_BASE + btn, false)
+        end
+    end
 
     if display_dirty then
         update_display()

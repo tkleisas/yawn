@@ -122,6 +122,12 @@ public:
     void toggleGridRegion()        { m_showGridRegion = !m_showGridRegion; }
     bool gridRegionVisible() const { return m_showGridRegion; }
 
+    void setControllerGridRegion(int trackOff, int sceneOff, bool active) {
+        m_gridOriginTrack = trackOff;
+        m_gridOriginScene = sceneOff;
+        m_showGridRegion  = active;
+    }
+
     void moveGridRegion(int dTrack, int dScene) {
         if (!m_project) return;
         m_gridOriginTrack = std::clamp(m_gridOriginTrack + dTrack,
@@ -207,6 +213,21 @@ public:
     // Launch or stop the clip at (track, scene). Returns true if action was taken.
     bool launchOrStopSlot(int ti, int si);
     void launchSlotAt(int ti, int si);
+
+    // Public accessors for controller integration
+    const ClipSlotUIState& trackState(int track) const {
+        static const ClipSlotUIState kEmpty{};
+        if (track < 0 || track >= kMaxTracks) return kEmpty;
+        return m_trackStates[track];
+    }
+
+    // Launch clip slot (handles armed tracks → record, playing → stop, etc.)
+    void launchClipSlot(int track, int scene) {
+        launchOrStopSlot(track, scene);
+    }
+
+    // Launch all clips in a scene row
+    void launchScene(int scene);
 
     // ─── Scroll (forwarded from App) ────────────────────────────────────
 

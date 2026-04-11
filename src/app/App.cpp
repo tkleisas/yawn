@@ -1385,11 +1385,46 @@ bool App::init() {
     // ── Controller scripting (must init BEFORE MidiEngine to claim ports) ──
     m_controllerManager.init(&m_audioEngine, &m_project);
     m_controllerManager.setSelectedTrackGetter([this]() { return m_selectedTrack; });
+    m_controllerManager.setSelectedTrackSetter([this](int t) {
+        if (t >= 0 && t < m_project.numTracks()) {
+            m_selectedTrack = t;
+            if (m_sessionPanel) m_sessionPanel->setSelectedTrack(t);
+        }
+    });
     m_controllerManager.setCommandSender([this](const audio::AudioCommand& cmd) {
         m_audioEngine.sendCommand(cmd);
     });
     m_controllerManager.setTapTempoHandler([this]() {
         if (m_transportPanel) m_transportPanel->tapTempo();
+    });
+    m_controllerManager.setClipStateGetter([this](int track, int scene)
+        -> controllers::ControllerManager::ClipSlotState {
+        controllers::ControllerManager::ClipSlotState st;
+        if (track < 0 || track >= m_project.numTracks()) return st;
+        if (scene < 0 || scene >= m_project.numScenes()) return st;
+        auto* slot = m_project.getSlot(track, scene);
+        if (slot) {
+            if (slot->audioClip) st.type = 1;
+            else if (slot->midiClip) st.type = 2;
+        }
+        st.armed = m_project.track(track).armed;
+        if (m_sessionPanel) {
+            auto& ts = m_sessionPanel->trackState(track);
+            st.playing = ts.playing && ts.playingScene == scene;
+            st.recording = ts.recording && ts.recordingScene == scene;
+        }
+        return st;
+    });
+    m_controllerManager.setClipLauncher([this](int track, int scene) {
+        if (track < 0 || track >= m_project.numTracks()) return;
+        if (scene < 0 || scene >= m_project.numScenes()) return;
+        if (m_sessionPanel)
+            m_sessionPanel->launchClipSlot(track, scene);
+    });
+    m_controllerManager.setSceneLauncher([this](int scene) {
+        if (scene < 0 || scene >= m_project.numScenes()) return;
+        if (m_sessionPanel)
+            m_sessionPanel->launchScene(scene);
     });
     m_controllerManager.scanScripts("scripts/controllers");
     m_controllerManager.autoConnect();
@@ -3300,6 +3335,13 @@ void App::update() {
 
     // Poll controller scripts (MIDI input → Lua callbacks)
     m_controllerManager.update();
+
+    // Sync controller session focus rectangle to SessionPanel
+    {
+        const auto& focus = m_controllerManager.sessionFocus();
+        m_sessionPanel->setControllerGridRegion(
+            focus.trackOffset, focus.sceneOffset, focus.active);
+    }
 
     // Process pending file dialog results (from SDL async callbacks)
     {

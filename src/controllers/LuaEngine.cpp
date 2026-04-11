@@ -84,6 +84,16 @@ static int l_get_selected_track(lua_State* L) {
     return 1;
 }
 
+// ── Lua API: yawn.set_selected_track(track) ─────────────────────────────────
+
+static int l_set_selected_track(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    mgr->setSelectedTrack(t);
+    return 0;
+}
+
 // ── Lua API: yawn.get_track_count() ─────────────────────────────────────────
 
 static int l_get_track_count(lua_State* L) {
@@ -509,6 +519,218 @@ static int l_set_metronome_enabled(lua_State* L) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Session workflow API
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Lua API: yawn.get_track_type(track) → "audio" | "midi" ────────────────
+
+static int l_get_track_type(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->project() || t < 0 || t >= mgr->project()->numTracks()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    auto type = mgr->project()->track(t).type;
+    lua_pushstring(L, type == Track::Type::Audio ? "audio" : "midi");
+    return 1;
+}
+
+// ── Lua API: yawn.get_num_scenes() ─────────────────────────────────────────
+
+static int l_get_num_scenes(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->project()) { lua_pushinteger(L, 0); return 1; }
+    lua_pushinteger(L, mgr->project()->numScenes());
+    return 1;
+}
+
+// ── Lua API: yawn.is_track_armed(track) ────────────────────────────────────
+
+static int l_is_track_armed(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->project() || t < 0 || t >= mgr->project()->numTracks()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushboolean(L, mgr->project()->track(t).armed ? 1 : 0);
+    return 1;
+}
+
+// ── Lua API: yawn.set_track_armed(track, armed) ───────────────────────────
+
+static int l_set_track_armed(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    bool armed = lua_toboolean(L, 2);
+    mgr->sendCommand(audio::SetTrackArmedMsg{t, armed});
+    // Also update project state immediately for UI feedback
+    if (mgr->project() && t >= 0 && t < mgr->project()->numTracks())
+        mgr->project()->track(t).armed = armed;
+    return 0;
+}
+
+// ── Lua API: yawn.is_recording() → transport-level recording ──────────────
+
+static int l_is_recording(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) { lua_pushboolean(L, 0); return 1; }
+    lua_pushboolean(L, mgr->audioEngine()->transport().isRecording() ? 1 : 0);
+    return 1;
+}
+
+// ── Lua API: yawn.set_recording(armed, scene) ─────────────────────────────
+
+static int l_set_recording(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    bool arm = lua_toboolean(L, 1);
+    int scene = static_cast<int>(luaL_optinteger(L, 2, 0));
+    mgr->sendCommand(audio::TransportRecordMsg{arm, scene});
+    return 0;
+}
+
+// ── Lua API: yawn.get_clip_slot_state(track, scene) → table ──────────────
+// Returns { type="empty"|"audio"|"midi", playing=bool, recording=bool, armed=bool }
+
+static int l_get_clip_slot_state(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    int s = static_cast<int>(luaL_checkinteger(L, 2));
+    if (!mgr) { lua_pushnil(L); return 1; }
+
+    auto state = mgr->getClipSlotState(t, s);
+
+    lua_newtable(L);
+    const char* typeStr = "empty";
+    if (state.type == 1) typeStr = "audio";
+    else if (state.type == 2) typeStr = "midi";
+    lua_pushstring(L, typeStr);
+    lua_setfield(L, -2, "type");
+    lua_pushboolean(L, state.playing ? 1 : 0);
+    lua_setfield(L, -2, "playing");
+    lua_pushboolean(L, state.recording ? 1 : 0);
+    lua_setfield(L, -2, "recording");
+    lua_pushboolean(L, state.armed ? 1 : 0);
+    lua_setfield(L, -2, "armed");
+    return 1;
+}
+
+// ── Lua API: yawn.launch_clip(track, scene) ───────────────────────────────
+
+static int l_launch_clip(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    int s = static_cast<int>(luaL_checkinteger(L, 2));
+    mgr->launchClip(t, s);
+    return 0;
+}
+
+// ── Lua API: yawn.stop_clip(track) ────────────────────────────────────────
+
+static int l_stop_clip(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    // Stop both audio and MIDI clips on this track
+    mgr->sendCommand(audio::StopClipMsg{t});
+    mgr->sendCommand(audio::StopMidiClipMsg{t});
+    // Clear default scene
+    if (mgr->project() && t >= 0 && t < mgr->project()->numTracks())
+        mgr->project()->track(t).defaultScene = -1;
+    return 0;
+}
+
+// ── Lua API: yawn.launch_scene(scene) ─────────────────────────────────────
+
+static int l_launch_scene(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int s = static_cast<int>(luaL_checkinteger(L, 1));
+    mgr->launchScene(s);
+    return 0;
+}
+
+// ── Lua API: yawn.start_record(track, scene, overdub) ─────────────────────
+
+static int l_start_record(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->project()) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    int s = static_cast<int>(luaL_checkinteger(L, 2));
+    bool overdub = lua_toboolean(L, 3);
+    if (t < 0 || t >= mgr->project()->numTracks()) return 0;
+
+    int rlb = mgr->project()->track(t).recordLengthBars;
+    auto trackType = mgr->project()->track(t).type;
+
+    if (trackType == Track::Type::Midi)
+        mgr->sendCommand(audio::StartMidiRecordMsg{t, s, overdub, rlb});
+    else
+        mgr->sendCommand(audio::StartAudioRecordMsg{t, s, overdub, rlb});
+    return 0;
+}
+
+// ── Lua API: yawn.stop_record(track) ──────────────────────────────────────
+
+static int l_stop_record(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->project()) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (t < 0 || t >= mgr->project()->numTracks()) return 0;
+
+    auto recQ = mgr->project()->track(t).recordQuantize;
+    auto trackType = mgr->project()->track(t).type;
+
+    if (trackType == Track::Type::Midi)
+        mgr->sendCommand(audio::StopMidiRecordMsg{t, recQ});
+    else
+        mgr->sendCommand(audio::StopAudioRecordMsg{t, recQ});
+    return 0;
+}
+
+// ── Lua API: yawn.get_track_color(track) → int (color index) ──────────────
+
+static int l_get_track_color(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->project() || t < 0 || t >= mgr->project()->numTracks()) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+    lua_pushinteger(L, mgr->project()->track(t).colorIndex);
+    return 1;
+}
+
+// ── Lua API: yawn.set_session_focus(track_offset, scene_offset, active) ───
+
+static int l_set_session_focus(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int tOff = static_cast<int>(luaL_checkinteger(L, 1));
+    int sOff = static_cast<int>(luaL_checkinteger(L, 2));
+    bool active = lua_toboolean(L, 3);
+    mgr->setSessionFocus(tOff, sOff, active);
+    return 0;
+}
+
+// ── Lua API: yawn.get_record_length_bars(track) → int (0=unlimited) ──────
+
+static int l_get_record_length_bars(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->project() || t < 0 || t >= mgr->project()->numTracks()) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+    lua_pushinteger(L, mgr->project()->track(t).recordLengthBars);
+    return 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // LuaEngine implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -630,6 +852,7 @@ void LuaEngine::registerAPI() {
         {"midi_send",               l_midi_send},
         {"midi_send_sysex",         l_midi_send_sysex},
         {"get_selected_track",      l_get_selected_track},
+        {"set_selected_track",      l_set_selected_track},
         {"get_track_count",         l_get_track_count},
         {"get_track_name",          l_get_track_name},
         {"get_instrument_name",     l_get_instrument_name},
@@ -654,6 +877,22 @@ void LuaEngine::registerAPI() {
         {"get_metronome_enabled",   l_get_metronome_enabled},
         {"set_metronome_enabled",   l_set_metronome_enabled},
         {"tap_tempo",               l_tap_tempo},
+        // Session workflow
+        {"get_track_type",          l_get_track_type},
+        {"get_num_scenes",          l_get_num_scenes},
+        {"is_track_armed",          l_is_track_armed},
+        {"set_track_armed",         l_set_track_armed},
+        {"is_recording",            l_is_recording},
+        {"set_recording",           l_set_recording},
+        {"get_clip_slot_state",     l_get_clip_slot_state},
+        {"launch_clip",             l_launch_clip},
+        {"stop_clip",               l_stop_clip},
+        {"launch_scene",            l_launch_scene},
+        {"start_record",            l_start_record},
+        {"stop_record",             l_stop_record},
+        {"get_track_color",         l_get_track_color},
+        {"get_record_length_bars",  l_get_record_length_bars},
+        {"set_session_focus",       l_set_session_focus},
         {nullptr, nullptr}
     };
 
