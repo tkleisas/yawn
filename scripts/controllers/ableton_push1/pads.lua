@@ -87,8 +87,15 @@ end
 
 function pads.compute_chromatic_grid()
     pads.pad_notes = {}
-    for i = 0, 63 do
-        pads.pad_notes[i] = pads.PAD_GRID_START + i
+    local base_midi = (pads.octave + 1) * 12 + pads.root_note
+    for row = 0, 7 do
+        for col = 0, 7 do
+            local pad_idx = row * 8 + col
+            local midi_note = base_midi + row * pads.row_interval + col
+            if midi_note >= 0 and midi_note <= 127 then
+                pads.pad_notes[pad_idx] = midi_note
+            end
+        end
     end
 end
 
@@ -151,6 +158,8 @@ function pads.compute_note_grid(scales_data)
     if pads.mode == pads.MODE_DRUM then
         pads.compute_drum_grid()
     elseif pads.mode == pads.MODE_NOTE then
+        -- Always update scale lookup (used for chromatic LED coloring too)
+        pads.update_scale_lookup(scales_data)
         if pads.note_submode == pads.SUBMODE_SCALE then
             pads.compute_scale_grid(scales_data)
         else
@@ -251,10 +260,29 @@ end
 -- Push 1 velocity-to-color values
 local LED_ROOT       = 127   -- bright: root note pads
 local LED_IN_SCALE   = 122   -- medium: other in-scale pads
-local LED_CHROMATIC  = 118   -- dim: chromatic mode (all pads)
+local LED_OUT_SCALE  = 114   -- dim: out-of-scale chromatic pads
 local LED_DRUM_ON    = 125   -- active drum pad
 local LED_DRUM_OFF   = 0     -- inactive area
 local LED_OFF        = 0
+
+-- Cached set of in-scale semitone offsets (0-11) for quick lookup
+pads.scale_semitones = {}  -- { [semitone] = true }
+
+-- Rebuild the scale semitone lookup from current scale settings
+function pads.update_scale_lookup(scales_data)
+    pads.scale_semitones = {}
+    local scale = scales_data.catalog[pads.scale_index]
+    if not scale then return end
+    for _, interval in ipairs(scale.intervals) do
+        pads.scale_semitones[interval % 12] = true
+    end
+end
+
+-- Check if a MIDI note is in the current scale
+local function is_in_scale(midi_note)
+    local semitone = (midi_note - pads.root_note) % 12
+    return pads.scale_semitones[semitone] == true
+end
 
 function pads.get_pad_led_color(pad_idx)
     if pads.mode == pads.MODE_DRUM then
@@ -264,19 +292,25 @@ function pads.get_pad_led_color(pad_idx)
             return LED_DRUM_OFF
         end
     elseif pads.mode == pads.MODE_NOTE then
+        local midi = pads.pad_notes[pad_idx]
+        if not midi then return LED_OFF end
+
         if pads.note_submode == pads.SUBMODE_SCALE then
-            local midi = pads.pad_notes[pad_idx]
-            if midi then
-                if midi % 12 == pads.root_note then
-                    return LED_ROOT
-                else
-                    return LED_IN_SCALE
-                end
+            -- Scale-only mode: all mapped pads are in scale
+            if midi % 12 == pads.root_note then
+                return LED_ROOT
             else
-                return LED_OFF
+                return LED_IN_SCALE
             end
         else
-            return LED_CHROMATIC
+            -- Chromatic mode: three-tier coloring
+            if midi % 12 == pads.root_note then
+                return LED_ROOT
+            elseif is_in_scale(midi) then
+                return LED_IN_SCALE
+            else
+                return LED_OUT_SCALE
+            end
         end
     elseif pads.mode == pads.MODE_SESSION then
         return pads.get_session_pad_color(pad_idx)
@@ -455,13 +489,13 @@ end
 
 function pads.get_mode_name()
     if pads.mode == pads.MODE_NOTE then
+        local scales_data = require("scales")
+        local scale = scales_data.catalog[pads.scale_index]
+        local root = scales_data.note_names[(pads.root_note % 12) + 1] or "?"
         if pads.note_submode == pads.SUBMODE_SCALE then
-            local scales_data = require("scales")
-            local scale = scales_data.catalog[pads.scale_index]
-            local root = scales_data.note_names[(pads.root_note % 12) + 1] or "?"
             return string.format("%s %s", root, scale and scale.name or "?")
         else
-            return "Chromatic"
+            return string.format("Chrom %s %s", root, scale and scale.name or "?")
         end
     elseif pads.mode == pads.MODE_DRUM then
         return string.format("Drum Bank %d", pads.drum_bank + 1)

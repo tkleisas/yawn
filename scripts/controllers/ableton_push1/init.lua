@@ -64,6 +64,10 @@ local CLEAR_LINES = {0x1C, 0x1D, 0x1E, 0x1F}
 local step_debounce = {}
 local STEP_DEBOUNCE_TIME = 0.12
 
+-- Scale edit encoder debounce
+local scale_edit_debounce = {0, 0, 0, 0}
+local SCALE_EDIT_DEBOUNCE_TIME = 0.15
+
 -- ── State ───────────────────────────────────────────────────────────────────
 
 local display_dirty = true
@@ -278,6 +282,13 @@ end
 local function handle_encoder_scale_edit(encoder_index, raw_value)
     local delta = decode_relative(raw_value)
     if delta == 0 then return end
+
+    -- Debounce: ignore rapid ticks
+    local now = os.clock()
+    local last = scale_edit_debounce[encoder_index] or 0
+    if now - last < SCALE_EDIT_DEBOUNCE_TIME then return end
+    scale_edit_debounce[encoder_index] = now
+
     local dir = (delta > 0) and 1 or -1
 
     if encoder_index == 1 then
@@ -604,10 +615,7 @@ function on_midi(data)
                     scale_edit_active = false
                     display_dirty = true
                 else
-                    -- Enter scale edit (switch to scale mode if chromatic)
-                    if pads.note_submode == pads.SUBMODE_CHROMATIC then
-                        pads.note_submode = pads.SUBMODE_SCALE
-                    end
+                    -- Enter scale edit (works in both chromatic and scale modes)
                     scale_edit_active = true
                     pads.cleanup_active_notes()
                     recompute_pads()
