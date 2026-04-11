@@ -225,6 +225,13 @@ public:
         return false;
     }
 
+    // Tap tempo — callable from controller scripts
+#ifdef YAWN_TEST_BUILD
+    void tapTempo() {}
+#else
+    void tapTempo();
+#endif
+
 private:
     bool hitTestChild(Widget& child, float mx, float my) {
         auto& b = child.bounds();
@@ -237,10 +244,8 @@ private:
 
 #ifdef YAWN_TEST_BUILD
     void paintTransportButtons(Renderer2D&) {}
-    void tapTempo() {}
 #else
     void paintTransportButtons(Renderer2D& r);
-    void tapTempo();
 #endif
 
     // ─── Data ───────────────────────────────────────────────────────────

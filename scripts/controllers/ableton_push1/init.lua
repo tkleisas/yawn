@@ -1,72 +1,114 @@
 -- Ableton Push 1 controller script for YAWN
--- Supports: 8 encoders mapped to device parameters, SysEx text display
+-- Supports: pad modes (note/drum/session), scale selection, encoders, SysEx display
 
--- Push 1 encoder CCs (channel 0): CC 71-78
+local scales = require("scales")
+local pads   = require("pads")
+
+-- ── Push 1 CC constants ─────────────────────────────────────────────────────
+
+-- Encoders (channel 0): CC 71-78
 local ENCODER_CCS = {71, 72, 73, 74, 75, 76, 77, 78}
 
--- Encoder touch notes: notes 0-7 (filter these, don't forward to instrument)
+-- Encoder touch notes: notes 0-7 (param encoders) + 10 (master encoder)
 local ENCODER_TOUCH_NOTES = {}
-for i = 0, 7 do ENCODER_TOUCH_NOTES[i] = true end
+for i = 0, 10 do ENCODER_TOUCH_NOTES[i] = true end
 
--- Encoder sensitivity: fraction of parameter range per tick
-local ENCODER_SENSITIVITY = 0.01
+-- Encoder sensitivity
+local ENCODER_SENSITIVITY_COARSE = 0.05
+local ENCODER_SENSITIVITY_FINE   = 0.005
 
--- Pad LED colors (Push 1 velocity-to-color palette)
--- Ripple effect: bright center, fading rings
-local PAD_COLORS = {127, 125, 123, 121}  -- center → outer rings (bright → dim)
-local PAD_GRID_START = 36
-local PAD_GRID_END = 99
-local PAD_COLS = 8
+-- Master encoder sensitivity
+local MASTER_VOL_COARSE = 0.05
+local MASTER_VOL_FINE   = 0.005
 
--- Active ripple animations: {note, tick_count}
-local ripples = {}
+-- Navigation
+local CC_LEFT       = 44   -- Left arrow
+local CC_RIGHT      = 45   -- Right arrow
+local CC_UP         = 46   -- Up arrow
+local CC_DOWN       = 47   -- Down arrow
 
--- Currently held pads (note → true)
-local held_pads = {}
+-- Transport & utility
+local CC_PLAY       = 85
+local CC_METRONOME  = 9
+local CC_TAP_TEMPO  = 3
+local CC_MASTER     = 79   -- Master encoder (relative)
+local CC_TEMPO      = 14   -- Tempo encoder (dented, relative)
+local CC_SHIFT      = 49   -- Shift (held modifier)
 
--- Push 1 SysEx display header
--- Format: F0 47 7F 15 <line> 00 <len+1> <col_offset> <text> F7
--- Lines: 0x18-0x1B (write), 0x1C-0x1F (clear)
+-- Mode & scale buttons
+local CC_NOTE_MODE  = 50   -- Note button
+local CC_SESSION    = 51   -- Session button
+local CC_SCALE      = 58   -- Scale button
+local CC_OCTAVE_UP  = 55   -- Octave Up
+local CC_OCTAVE_DN  = 54   -- Octave Down
+
+-- Pad LED colors for ripple effect
+local PAD_COLORS = {127, 125, 123, 121}
+
+-- Push 1 SysEx display
 local SYSEX_HEADER = {0xF0, 0x47, 0x7F, 0x15}
 local DISPLAY_LINES = {0x18, 0x19, 0x1A, 0x1B}
 local CLEAR_LINES = {0x1C, 0x1D, 0x1E, 0x1F}
 
--- State
+-- Stepped param debounce
+local step_debounce = {}
+local STEP_DEBOUNCE_TIME = 0.12
+
+-- ── State ───────────────────────────────────────────────────────────────────
+
 local display_dirty = true
 local last_selected_track = -1
+local param_page = 0
+local tap_flash = 0
+local shift_held = false
+local scale_edit_active = false
+
+-- Touch strip state
+local touch_strip_active = false  -- true while finger is on strip
+local touch_strip_ticks = 0       -- ticks since last pitch bend received
+local TOUCH_STRIP_TIMEOUT = 3     -- ticks (~100ms) before snap-back
+local PB_CENTER = 8192            -- 14-bit pitch bend center
+
+-- Ripple animations: {row, col, tick}
+local ripples = {}
+-- Currently held pads (hw_note → true)
+local held_pads = {}
+
+-- ── Helpers ─────────────────────────────────────────────────────────────────
+
+local function set_button_led(cc, on)
+    yawn.midi_send(0xB0, cc, on and 127 or 0)
+end
+
+local function set_pad_led(note, color)
+    if note and note >= pads.PAD_GRID_START and note <= pads.PAD_GRID_END then
+        yawn.midi_send(0x90, note, color)
+    end
+end
 
 -- ── Display ─────────────────────────────────────────────────────────────────
 
 local function send_display_line(line_id, text)
-    -- Pad or trim to exactly 68 characters
     if #text < 68 then
         text = text .. string.rep(" ", 68 - #text)
     else
         text = text:sub(1, 68)
     end
-
     local sysex = {}
-    for _, b in ipairs(SYSEX_HEADER) do
-        sysex[#sysex + 1] = b
-    end
+    for _, b in ipairs(SYSEX_HEADER) do sysex[#sysex + 1] = b end
     sysex[#sysex + 1] = line_id
-    sysex[#sysex + 1] = 0x00        -- padding
-    sysex[#sysex + 1] = 68 + 1      -- payload length (offset byte + 68 chars)
-    sysex[#sysex + 1] = 0x00        -- column offset (start at 0)
-    for i = 1, 68 do
-        sysex[#sysex + 1] = string.byte(text, i)
-    end
+    sysex[#sysex + 1] = 0x00
+    sysex[#sysex + 1] = 68 + 1
+    sysex[#sysex + 1] = 0x00
+    for i = 1, 68 do sysex[#sysex + 1] = string.byte(text, i) end
     sysex[#sysex + 1] = 0xF7
-
     yawn.midi_send_sysex(sysex)
 end
 
 local function clear_display()
     for _, clear_id in ipairs(CLEAR_LINES) do
         local sysex = {}
-        for _, b in ipairs(SYSEX_HEADER) do
-            sysex[#sysex + 1] = b
-        end
+        for _, b in ipairs(SYSEX_HEADER) do sysex[#sysex + 1] = b end
         sysex[#sysex + 1] = clear_id
         sysex[#sysex + 1] = 0x00
         sysex[#sysex + 1] = 0x00
@@ -76,30 +118,40 @@ local function clear_display()
 end
 
 local function update_display()
+    -- Scale edit mode: show scale selection UI
+    if scale_edit_active then
+        local l1, l2, l3, l4 = pads.get_scale_edit_display(scales)
+        send_display_line(DISPLAY_LINES[1], l1)
+        send_display_line(DISPLAY_LINES[2], l2)
+        send_display_line(DISPLAY_LINES[3], l3)
+        send_display_line(DISPLAY_LINES[4], l4)
+        return
+    end
+
     local track = yawn.get_selected_track()
     local param_count = yawn.get_device_param_count("instrument", 0)
 
-    -- Line 1: parameter names (8 columns of 8 chars + separator)
+    -- Clamp page
+    local max_page = math.max(0, math.ceil(param_count / 8) - 1)
+    if param_page > max_page then param_page = max_page end
+    local page_offset = param_page * 8
+
+    -- Lines 1-2: parameter names and values
     local names_line = ""
     local values_line = ""
-
     for i = 0, 7 do
         local col_width = 8
         local name = ""
         local val_str = ""
-
-        if i < param_count then
-            name = yawn.get_device_param_name("instrument", 0, i) or ""
-            val_str = yawn.get_device_param_display("instrument", 0, i) or ""
+        local pi = page_offset + i
+        if pi < param_count then
+            name = yawn.get_device_param_name("instrument", 0, pi) or ""
+            val_str = yawn.get_device_param_display("instrument", 0, pi) or ""
         end
-
-        -- Truncate and pad each column to col_width
         if #name > col_width then name = name:sub(1, col_width) end
         if #val_str > col_width then val_str = val_str:sub(1, col_width) end
         name = name .. string.rep(" ", col_width - #name)
         val_str = val_str .. string.rep(" ", col_width - #val_str)
-
-        -- Add separator between columns (except after last)
         if i < 7 then
             names_line = names_line .. name .. " "
             values_line = values_line .. val_str .. " "
@@ -109,46 +161,63 @@ local function update_display()
         end
     end
 
-    -- Line 3: track name
+    -- Line 3: track name + page indicator + pad mode
     local track_name = yawn.get_track_name(track) or ("Track " .. (track + 1))
+    local total_pages = max_page + 1
+    if total_pages > 1 then
+        local page_str = string.format(" [%d/%d]", param_page + 1, total_pages)
+        local arrows = ""
+        if param_page > 0 then arrows = arrows .. "<" end
+        if param_page < max_page then arrows = arrows .. ">" end
+        page_str = page_str .. " " .. arrows
+        track_name = track_name .. page_str
+    end
 
-    -- Line 4: instrument name
-    local inst_name = yawn.get_instrument_name(track) or ""
+    -- Line 4: tap tempo flash, or instrument + pad mode info
+    local line4
+    if tap_flash > 0 then
+        line4 = string.format("TAP TEMPO: %.1f BPM", yawn.get_bpm())
+    else
+        local inst_name = yawn.get_instrument_name(track) or ""
+        local mode_name = pads.get_mode_name()
+        if mode_name ~= "" then
+            line4 = inst_name .. "  |  " .. mode_name
+        else
+            line4 = inst_name
+        end
+    end
 
     send_display_line(DISPLAY_LINES[1], names_line)
     send_display_line(DISPLAY_LINES[2], values_line)
     send_display_line(DISPLAY_LINES[3], track_name)
-    send_display_line(DISPLAY_LINES[4], inst_name)
+    send_display_line(DISPLAY_LINES[4], line4)
 end
 
--- ── Pad Ripple Effect ───────────────────────────────────────────────────────
+-- ── Ripple Effect ───────────────────────────────────────────────────────────
 
 local function pad_to_grid(note)
-    if note < PAD_GRID_START or note > PAD_GRID_END then return nil, nil end
-    local idx = note - PAD_GRID_START
-    return math.floor(idx / PAD_COLS), idx % PAD_COLS
+    if note < pads.PAD_GRID_START or note > pads.PAD_GRID_END then return nil, nil end
+    local idx = note - pads.PAD_GRID_START
+    return math.floor(idx / pads.PAD_COLS), idx % pads.PAD_COLS
 end
 
 local function grid_to_pad(row, col)
     if row < 0 or row > 7 or col < 0 or col > 7 then return nil end
-    return PAD_GRID_START + row * PAD_COLS + col
-end
-
-local function set_pad_led(note, color)
-    if note and note >= PAD_GRID_START and note <= PAD_GRID_END then
-        yawn.midi_send(0x90, note, color)
-    end
+    return pads.PAD_GRID_START + row * pads.PAD_COLS + col
 end
 
 local function draw_ripple(row, col, radius, color)
     for dr = -radius, radius do
         for dc = -radius, radius do
-            -- Only draw the ring at this radius, not filled
             if math.max(math.abs(dr), math.abs(dc)) == radius then
                 local pad = grid_to_pad(row + dr, col + dc)
-                -- Don't clear held pads (keep them lit)
                 if pad and not (color == 0 and held_pads[pad]) then
-                    set_pad_led(pad, color)
+                    if color == 0 then
+                        -- Restore mode-appropriate LED color instead of off
+                        pads.restore_pad_led(pad)
+                    else
+                        set_pad_led(pad, color)
+                    end
                 end
             end
         end
@@ -160,13 +229,9 @@ local function update_ripples()
     for _, r in ipairs(ripples) do
         r.tick = r.tick + 1
         local row, col = r.row, r.col
-
-        -- Clear previous ring
         if r.tick > 1 then
             draw_ripple(row, col, r.tick - 1, 0)
         end
-
-        -- Draw current ring
         if r.tick <= #PAD_COLORS then
             draw_ripple(row, col, r.tick, PAD_COLORS[r.tick])
             still_active[#still_active + 1] = r
@@ -177,20 +242,53 @@ end
 
 -- ── Encoders ────────────────────────────────────────────────────────────────
 
-local function handle_encoder(encoder_index, raw_value)
-    -- Decode relative encoding: 1-63 = clockwise, 65-127 = counter-clockwise
-    local delta = 0
+local function decode_relative(raw_value)
     if raw_value >= 1 and raw_value <= 63 then
-        delta = raw_value
+        return raw_value
     elseif raw_value >= 65 and raw_value <= 127 then
-        delta = raw_value - 128  -- negative
-    else
+        return raw_value - 128
+    end
+    return 0
+end
+
+local function handle_encoder_scale_edit(encoder_index, raw_value)
+    local delta = decode_relative(raw_value)
+    if delta == 0 then return end
+    local dir = (delta > 0) and 1 or -1
+
+    if encoder_index == 1 then
+        -- Root note (0-11, wrapping)
+        pads.root_note = (pads.root_note + dir) % 12
+    elseif encoder_index == 2 then
+        -- Scale type (cycle through catalog)
+        local count = #scales.catalog
+        pads.scale_index = ((pads.scale_index - 1 + dir) % count) + 1
+    elseif encoder_index == 3 then
+        -- Row interval (1-7 semitones)
+        pads.row_interval = math.max(1, math.min(7, pads.row_interval + dir))
+    elseif encoder_index == 4 then
+        -- Octave (0-8)
+        pads.octave = math.max(0, math.min(8, pads.octave + dir))
+    end
+
+    pads.cleanup_active_notes()
+    pads.compute_note_grid(scales)
+    pads.update_leds()
+    display_dirty = true
+end
+
+local function handle_encoder(encoder_index, raw_value)
+    -- In scale edit mode, encoders control scale parameters
+    if scale_edit_active then
+        handle_encoder_scale_edit(encoder_index, raw_value)
         return
     end
 
-    local param_count = yawn.get_device_param_count("instrument", 0)
-    local param_idx = encoder_index - 1  -- 0-based
+    local delta = decode_relative(raw_value)
+    if delta == 0 then return end
 
+    local param_count = yawn.get_device_param_count("instrument", 0)
+    local param_idx = param_page * 8 + (encoder_index - 1)
     if param_idx >= param_count then return end
 
     local cur = yawn.get_device_param_value("instrument", 0, param_idx)
@@ -199,13 +297,81 @@ local function handle_encoder(encoder_index, raw_value)
     local range = hi - lo
     if range <= 0 then return end
 
-    local new_val = cur + delta * ENCODER_SENSITIVITY * range
-    -- Clamp
+    local label_count = yawn.get_device_param_label_count("instrument", 0, param_idx)
+    local new_val
+    if label_count > 0 then
+        local now = os.clock()
+        local last = step_debounce[param_idx] or 0
+        if now - last < STEP_DEBOUNCE_TIME then return end
+        step_debounce[param_idx] = now
+        local step = (delta > 0) and 1 or -1
+        new_val = math.floor(cur + 0.5) + step
+    else
+        local sensitivity = shift_held and ENCODER_SENSITIVITY_FINE or ENCODER_SENSITIVITY_COARSE
+        new_val = cur + delta * sensitivity * range
+    end
+
     if new_val < lo then new_val = lo end
     if new_val > hi then new_val = hi end
-
     yawn.set_device_param("instrument", 0, param_idx, new_val)
     display_dirty = true
+end
+
+local function handle_tempo_encoder(raw_value)
+    local delta = decode_relative(raw_value)
+    if delta == 0 then return end
+    local bpm = yawn.get_bpm()
+    local bpm_step = shift_held and 0.1 or 1.0
+    bpm = bpm + delta * bpm_step
+    if bpm < 20 then bpm = 20 end
+    if bpm > 999 then bpm = 999 end
+    yawn.set_bpm(bpm)
+    display_dirty = true
+end
+
+local function handle_master_encoder(raw_value)
+    local delta = decode_relative(raw_value)
+    if delta == 0 then return end
+    local cur = yawn.get_master_volume()
+    local sens = shift_held and MASTER_VOL_FINE or MASTER_VOL_COARSE
+    local new_val = cur + delta * sens
+    if new_val < 0.0 then new_val = 0.0 end
+    if new_val > 2.0 then new_val = 2.0 end
+    yawn.set_master_volume(new_val)
+    display_dirty = true
+end
+
+local function handle_tap_tempo()
+    yawn.tap_tempo()
+    tap_flash = 30
+    display_dirty = true
+    set_button_led(CC_TAP_TEMPO, true)
+end
+
+-- ── Mode switching helpers ──────────────────────────────────────────────────
+
+local function recompute_pads()
+    pads.compute_note_grid(scales)
+    pads.update_leds()
+    display_dirty = true
+end
+
+local function switch_to_note_mode()
+    if pads.mode ~= pads.MODE_NOTE then
+        pads.cleanup_active_notes()
+        pads.mode = pads.MODE_NOTE
+        scale_edit_active = false
+        recompute_pads()
+    end
+end
+
+local function switch_to_session_mode()
+    if pads.mode ~= pads.MODE_SESSION then
+        pads.cleanup_active_notes()
+        pads.mode = pads.MODE_SESSION
+        scale_edit_active = false
+        recompute_pads()
+    end
 end
 
 -- ── MIDI Callbacks ──────────────────────────────────────────────────────────
@@ -219,59 +385,260 @@ function on_midi(data)
     local msg_type = status & 0xF0
     local channel = status & 0x0F
 
-    -- CC on channel 0: check for encoder turns
+    -- CC on channel 0
     if msg_type == 0xB0 and channel == 0 then
+        -- Shift
+        if d1 == CC_SHIFT then
+            shift_held = (d2 > 0)
+            return
+        end
+
+        -- Encoders 1-8
         for i, enc_cc in ipairs(ENCODER_CCS) do
             if d1 == enc_cc then
                 handle_encoder(i, d2)
                 return
             end
         end
-    end
 
-    -- Note On / Note Off: forward pads to selected track, filter encoder touch
-    if msg_type == 0x90 or msg_type == 0x80 then
-        -- Filter encoder touch notes (0-7 on channel 0)
-        if channel == 0 and ENCODER_TOUCH_NOTES[d1] then
-            return  -- ignore encoder touch
+        -- Master encoder
+        if d1 == CC_MASTER then
+            handle_master_encoder(d2)
+            return
         end
 
-        -- Forward pad notes to the selected track
+        -- Tempo encoder
+        if d1 == CC_TEMPO then
+            handle_tempo_encoder(d2)
+            return
+        end
+
+        -- Left/Right: param page (or drum bank in drum mode with shift)
+        if d1 == CC_LEFT and d2 > 0 then
+            if param_page > 0 then
+                param_page = param_page - 1
+                display_dirty = true
+            end
+            return
+        end
+        if d1 == CC_RIGHT and d2 > 0 then
+            local param_count = yawn.get_device_param_count("instrument", 0)
+            local max_page = math.max(0, math.ceil(param_count / 8) - 1)
+            if param_page < max_page then
+                param_page = param_page + 1
+                display_dirty = true
+            end
+            return
+        end
+
+        -- Up/Down: drum bank navigation (only in drum mode)
+        if d1 == CC_UP and d2 > 0 then
+            if pads.mode == pads.MODE_DRUM then
+                pads.cleanup_active_notes()
+                pads.drum_bank = math.min(pads.drum_bank + 1, 5)
+                recompute_pads()
+            end
+            return
+        end
+        if d1 == CC_DOWN and d2 > 0 then
+            if pads.mode == pads.MODE_DRUM then
+                pads.cleanup_active_notes()
+                pads.drum_bank = math.max(pads.drum_bank - 1, 0)
+                recompute_pads()
+            end
+            return
+        end
+
+        -- Play
+        if d1 == CC_PLAY and d2 > 0 then
+            local playing = yawn.is_playing()
+            yawn.set_playing(not playing)
+            set_button_led(CC_PLAY, not playing)
+            return
+        end
+
+        -- Metronome
+        if d1 == CC_METRONOME and d2 > 0 then
+            local enabled = yawn.get_metronome_enabled()
+            yawn.set_metronome_enabled(not enabled)
+            set_button_led(CC_METRONOME, not enabled)
+            return
+        end
+
+        -- Tap tempo
+        if d1 == CC_TAP_TEMPO and d2 > 0 then
+            handle_tap_tempo()
+            return
+        end
+
+        -- ── Mode buttons ────────────────────────────────────────────────
+
+        -- Note mode
+        if d1 == CC_NOTE_MODE and d2 > 0 then
+            switch_to_note_mode()
+            return
+        end
+
+        -- Session mode
+        if d1 == CC_SESSION and d2 > 0 then
+            switch_to_session_mode()
+            return
+        end
+
+        -- Scale button: toggle scale mode / enter/exit scale edit
+        -- Shift+Scale: toggle back to chromatic
+        if d1 == CC_SCALE and d2 > 0 then
+            if pads.mode == pads.MODE_NOTE then
+                if shift_held then
+                    -- Shift+Scale: toggle between chromatic and scale
+                    pads.cleanup_active_notes()
+                    if pads.note_submode == pads.SUBMODE_SCALE then
+                        pads.note_submode = pads.SUBMODE_CHROMATIC
+                    else
+                        pads.note_submode = pads.SUBMODE_SCALE
+                    end
+                    scale_edit_active = false
+                    recompute_pads()
+                elseif scale_edit_active then
+                    -- Exit scale edit
+                    scale_edit_active = false
+                    display_dirty = true
+                else
+                    -- Enter scale edit (switch to scale mode if chromatic)
+                    if pads.note_submode == pads.SUBMODE_CHROMATIC then
+                        pads.note_submode = pads.SUBMODE_SCALE
+                    end
+                    scale_edit_active = true
+                    pads.cleanup_active_notes()
+                    recompute_pads()
+                end
+            end
+            return
+        end
+
+        -- Octave Up
+        if d1 == CC_OCTAVE_UP and d2 > 0 then
+            if pads.mode == pads.MODE_NOTE then
+                pads.cleanup_active_notes()
+                pads.octave = math.min(pads.octave + 1, 8)
+                recompute_pads()
+            end
+            return
+        end
+
+        -- Octave Down
+        if d1 == CC_OCTAVE_DN and d2 > 0 then
+            if pads.mode == pads.MODE_NOTE then
+                pads.cleanup_active_notes()
+                pads.octave = math.max(pads.octave - 1, 0)
+                recompute_pads()
+            end
+            return
+        end
+    end
+
+    -- Note On / Note Off
+    if msg_type == 0x90 or msg_type == 0x80 then
+        -- Filter encoder touch notes
+        if channel == 0 and ENCODER_TOUCH_NOTES[d1] then
+            return
+        end
+
+        -- Pad range: handle via pad mode
+        if d1 >= pads.PAD_GRID_START and d1 <= pads.PAD_GRID_END then
+            local velocity = (msg_type == 0x90) and d2 or 0
+            pads.handle_pad_note(d1, velocity, channel)
+
+            -- Visual feedback: ripple on press, restore mode color on release
+            if velocity > 0 then
+                held_pads[d1] = true
+                set_pad_led(d1, PAD_COLORS[1])
+                local row, col = pad_to_grid(d1)
+                if row then
+                    ripples[#ripples + 1] = {row = row, col = col, tick = 0}
+                end
+            else
+                held_pads[d1] = nil
+                pads.restore_pad_led(d1)
+            end
+            return
+        end
+
+        -- Non-pad notes: forward directly
         local track = yawn.get_selected_track()
         local velocity = (msg_type == 0x90) and d2 or 0
         yawn.send_note_to_track(track, d1, velocity, channel)
+        return
+    end
 
-        -- Visual feedback: light pad on press, start ripple
-        if velocity > 0 then
-            held_pads[d1] = true
-            set_pad_led(d1, PAD_COLORS[1])
-            local row, col = pad_to_grid(d1)
-            if row then
-                ripples[#ripples + 1] = {row = row, col = col, tick = 0}
-            end
-        else
-            held_pads[d1] = nil
-            set_pad_led(d1, 0)
+    -- Polyphonic aftertouch: remap through pad mode
+    if msg_type == 0xA0 then
+        if d1 >= pads.PAD_GRID_START and d1 <= pads.PAD_GRID_END then
+            pads.handle_aftertouch(d1, d2)
         end
         return
     end
 
-    -- Filter polyphonic aftertouch (0xA0) - pads send this continuously
-    if msg_type == 0xA0 then return end
+    -- Pitch bend (0xE0): touch strip
+    if msg_type == 0xE0 then
+        local val14 = d1 + (d2 * 128)  -- 14-bit pitch bend value
+        local track = yawn.get_selected_track()
 
-    -- Log unhandled messages for debugging
-    if #data >= 3 then
-        yawn.log(string.format("MIDI: %02X %02X %02X", status, d1, d2))
+        if shift_held then
+            -- Shift + touch strip = mod wheel (CC 1), stays where you leave it
+            local cc_val = d2  -- use MSB (7-bit) as mod wheel value
+            yawn.send_cc_to_track(track, 1, cc_val, channel)
+        else
+            -- Default = pitch bend, snap back on release
+            touch_strip_active = true
+            touch_strip_ticks = 0
+            yawn.send_pitchbend_to_track(track, val14, channel)
+        end
+        return
     end
 end
 
 function on_tick()
-    -- Check if track selection changed
+    -- Track selection changed → auto-switch pad mode
     local track = yawn.get_selected_track()
     if track ~= last_selected_track then
         last_selected_track = track
+        param_page = 0
+        local changed = pads.auto_switch_mode(track)
+        if changed then
+            scale_edit_active = false
+        end
+        pads.compute_note_grid(scales)
+        pads.update_leds()
         display_dirty = true
     end
+
+    -- Touch strip pitch bend snap-back
+    if touch_strip_active then
+        touch_strip_ticks = touch_strip_ticks + 1
+        if touch_strip_ticks >= TOUCH_STRIP_TIMEOUT then
+            -- No pitch bend received recently: finger lifted, snap to center
+            local track = yawn.get_selected_track()
+            yawn.send_pitchbend_to_track(track, PB_CENTER, 0)
+            touch_strip_active = false
+        end
+    end
+
+    -- Tap tempo flash countdown
+    if tap_flash > 0 then
+        tap_flash = tap_flash - 1
+        display_dirty = true
+        if tap_flash == 0 then
+            set_button_led(CC_TAP_TEMPO, false)
+        end
+    end
+
+    -- Sync button LEDs with engine/mode state
+    set_button_led(CC_PLAY, yawn.is_playing())
+    set_button_led(CC_METRONOME, yawn.get_metronome_enabled())
+    set_button_led(CC_NOTE_MODE, pads.mode == pads.MODE_NOTE)
+    set_button_led(CC_SESSION, pads.mode == pads.MODE_SESSION)
+    set_button_led(CC_SCALE, pads.mode == pads.MODE_NOTE and pads.note_submode == pads.SUBMODE_SCALE)
 
     if display_dirty then
         update_display()
@@ -287,18 +654,22 @@ end
 function on_connect()
     yawn.log("Ableton Push 1 connected")
 
-    -- Clear display first, then show welcome
     clear_display()
     send_display_line(DISPLAY_LINES[1], "                Y . A . W . N                   ")
     send_display_line(DISPLAY_LINES[2], "      Yet Another Audio Workstation New          ")
     send_display_line(DISPLAY_LINES[3], "")
     send_display_line(DISPLAY_LINES[4], "            Fasten your seatbelts!               ")
 
-    display_dirty = true
+    -- Initialize pad mode
     last_selected_track = yawn.get_selected_track()
+    pads.auto_switch_mode(last_selected_track)
+    pads.compute_note_grid(scales)
+    pads.update_leds()
+    display_dirty = true
 end
 
 function on_disconnect()
     yawn.log("Ableton Push 1 disconnected")
+    pads.cleanup_active_notes()
     clear_display()
 end

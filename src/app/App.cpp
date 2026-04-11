@@ -1342,6 +1342,9 @@ bool App::init() {
     m_controllerManager.setCommandSender([this](const audio::AudioCommand& cmd) {
         m_audioEngine.sendCommand(cmd);
     });
+    m_controllerManager.setTapTempoHandler([this]() {
+        if (m_transportPanel) m_transportPanel->tapTempo();
+    });
     m_controllerManager.scanScripts("scripts/controllers");
     m_controllerManager.autoConnect();
 

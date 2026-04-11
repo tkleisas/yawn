@@ -177,12 +177,16 @@
 
 #### Ableton Push 1
 
-- **8 Encoders** — Relative-encoded CC 71–78 mapped to first 8 parameters of the selected track's instrument
-- **SysEx Display** — 4-line text display showing parameter names, values, track name, and instrument name
-- **Pad Note Forwarding** — 64 velocity-sensitive pads forwarded to the selected track's instrument
-- **LED Ripple Animation** — Expanding ring animation on pad press using Push's velocity-to-color palette
-- **Encoder Touch Filtering** — Touch-sense notes (0–7) filtered to prevent false instrument triggers
-- **Aftertouch Filtering** — Polyphonic aftertouch flood from pads suppressed
+- **Pad Modes** — Note mode (chromatic & scale), Drum mode (4×4 auto-switch for DrumRack), Session mode (stub)
+- **30+ Scales** — Western modes, pentatonic, blues, and Maqam/Eastern scales (Hijaz, Bayati, Rast, Nahawand, Saba, and more)
+- **Scale Editor** — Select root note, scale type, row interval, and octave directly from Push encoders
+- **8 Encoders** — Relative-encoded CC 71–78 mapped to device parameters with paging, coarse/fine (Shift), and stepped param support
+- **Transport Controls** — Play, Metronome, Tap Tempo, BPM encoder, Master Volume — all with button LED feedback
+- **SysEx Display** — 4-line text display: param names/values, track name, instrument, scale/mode info
+- **LED Ripple Animation** — Expanding ring animation on pad press with held-pad persistence
+- **Auto-Detection** — Drum instruments auto-switch to 4×4 pad layout; melodic instruments restore note mode
+
+> See [docs/controller-scripting.md](docs/controller-scripting.md) for the full Lua API reference, Push 1 button map, and guide to writing controller scripts.
 
 ### Quality
 - **Test-Driven Development** — 844 unit & integration tests across 39 test suites via Google Test (because the AI doesn't trust itself either)

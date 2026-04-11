@@ -118,6 +118,18 @@ static int l_get_instrument_name(lua_State* L) {
     return 1;
 }
 
+// ── Lua API: yawn.get_instrument_id(track) ──────────────────────────────────
+
+static int l_get_instrument_id(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->audioEngine()) { lua_pushnil(L); return 1; }
+    auto* inst = mgr->audioEngine()->instrument(t);
+    if (!inst) { lua_pushnil(L); return 1; }
+    lua_pushstring(L, inst->id());
+    return 1;
+}
+
 // ── Device parameter helpers ────────────────────────────────────────────────
 
 // Resolve device_type string + chain_index + track to a param-accessible device.
@@ -337,6 +349,73 @@ static int l_send_note_to_track(lua_State* L) {
     return 0;
 }
 
+// ── Lua API: yawn.send_pitchbend_to_track(track, value14, channel) ──────────
+
+static int l_send_pitchbend_to_track(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+
+    int track = static_cast<int>(luaL_checkinteger(L, 1));
+    int val14 = static_cast<int>(luaL_checkinteger(L, 2));  // 0-16383, center=8192
+    int channel = static_cast<int>(luaL_optinteger(L, 3, 0));
+
+    mgr->sendCommand(audio::SendMidiToTrackMsg{
+        track,
+        static_cast<uint8_t>(midi::MidiMessage::Type::PitchBend),
+        static_cast<uint8_t>(channel),
+        0,  // note unused
+        0,  // velocity unused
+        midi::Convert::pb14to32(static_cast<uint16_t>(val14)),
+        0
+    });
+
+    return 0;
+}
+
+// ── Lua API: yawn.send_cc_to_track(track, cc, value, channel) ───────────────
+
+static int l_send_cc_to_track(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+
+    int track = static_cast<int>(luaL_checkinteger(L, 1));
+    int cc = static_cast<int>(luaL_checkinteger(L, 2));
+    int val = static_cast<int>(luaL_checkinteger(L, 3));
+    int channel = static_cast<int>(luaL_optinteger(L, 4, 0));
+
+    mgr->sendCommand(audio::SendMidiToTrackMsg{
+        track,
+        static_cast<uint8_t>(midi::MidiMessage::Type::ControlChange),
+        static_cast<uint8_t>(channel),
+        0,  // note unused
+        0,  // velocity unused
+        midi::Convert::cc7to32(static_cast<uint8_t>(val)),
+        static_cast<uint16_t>(cc)
+    });
+
+    return 0;
+}
+
+// ── Lua API: yawn.get_device_param_label_count(type, chain_index, param_index)
+// Returns number of value labels (>0 means discrete/stepped param)
+
+static int l_get_device_param_label_count(lua_State* L) {
+    auto* mgr = getManager(L);
+    auto d = resolveDevice(mgr, L);
+    int pi = static_cast<int>(luaL_checkinteger(L, 3));
+    int count = deviceParamCount(d);
+
+    if (pi < 0 || pi >= count) { lua_pushinteger(L, 0); return 1; }
+
+    int lc = 0;
+    if (d.inst) lc = d.inst->parameterInfo(pi).valueLabelCount;
+    else if (d.fx) lc = d.fx->parameterInfo(pi).valueLabelCount;
+    else if (d.mfx) lc = d.mfx->parameterInfo(pi).valueLabelCount;
+
+    lua_pushinteger(L, lc);
+    return 1;
+}
+
 // ── Lua API: yawn.get_bpm() ─────────────────────────────────────────────────
 
 static int l_get_bpm(lua_State* L) {
@@ -346,6 +425,18 @@ static int l_get_bpm(lua_State* L) {
     return 1;
 }
 
+// ── Lua API: yawn.set_bpm(bpm) ──────────────────────────────────────────────
+
+static int l_set_bpm(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    double bpm = luaL_checknumber(L, 1);
+    if (bpm < 20.0) bpm = 20.0;
+    if (bpm > 999.0) bpm = 999.0;
+    mgr->sendCommand(audio::TransportSetBPMMsg{bpm});
+    return 0;
+}
+
 // ── Lua API: yawn.is_playing() ──────────────────────────────────────────────
 
 static int l_is_playing(lua_State* L) {
@@ -353,6 +444,68 @@ static int l_is_playing(lua_State* L) {
     if (!mgr || !mgr->audioEngine()) { lua_pushboolean(L, 0); return 1; }
     lua_pushboolean(L, mgr->audioEngine()->transport().isPlaying() ? 1 : 0);
     return 1;
+}
+
+// ── Lua API: yawn.set_playing(bool) ─────────────────────────────────────────
+
+static int l_set_playing(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    bool play = lua_toboolean(L, 1);
+    if (play)
+        mgr->sendCommand(audio::TransportPlayMsg{});
+    else
+        mgr->sendCommand(audio::TransportStopMsg{});
+    return 0;
+}
+
+// ── Lua API: yawn.get_master_volume() ───────────────────────────────────────
+
+static int l_get_master_volume(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) { lua_pushnumber(L, 0.8); return 1; }
+    lua_pushnumber(L, static_cast<double>(mgr->audioEngine()->mixer().master().volume));
+    return 1;
+}
+
+// ── Lua API: yawn.set_master_volume(vol) ────────────────────────────────────
+
+static int l_set_master_volume(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) return 0;
+    float vol = static_cast<float>(luaL_checknumber(L, 1));
+    if (vol < 0.0f) vol = 0.0f;
+    if (vol > 2.0f) vol = 2.0f;
+    mgr->sendCommand(audio::SetMasterVolumeMsg{vol});
+    return 0;
+}
+
+// ── Lua API: yawn.get_metronome_enabled() ───────────────────────────────────
+
+static int l_get_metronome_enabled(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) { lua_pushboolean(L, 0); return 1; }
+    lua_pushboolean(L, mgr->audioEngine()->metronome().enabled() ? 1 : 0);
+    return 1;
+}
+
+// ── Lua API: yawn.tap_tempo() ────────────────────────────────────────────────
+
+static int l_tap_tempo(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    mgr->tapTempo();
+    return 0;
+}
+
+// ── Lua API: yawn.set_metronome_enabled(bool) ──────────────────────────────
+
+static int l_set_metronome_enabled(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    bool enabled = lua_toboolean(L, 1);
+    mgr->sendCommand(audio::MetronomeToggleMsg{enabled});
+    return 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -385,6 +538,18 @@ void LuaEngine::shutdown() {
 
 bool LuaEngine::loadFile(const std::string& path) {
     if (!m_L) return false;
+
+    // Set package.path so require() finds sibling Lua modules
+    auto lastSlash = path.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        std::string dir = path.substr(0, lastSlash);
+        // Convert backslashes to forward slashes (backslashes are Lua escape chars)
+        for (auto& c : dir) {
+            if (c == '\\') c = '/';
+        }
+        std::string code = "package.path = '" + dir + "/?.lua;' .. package.path";
+        luaL_dostring(m_L, code.c_str());
+    }
 
     if (luaL_loadfile(m_L, path.c_str()) != LUA_OK) {
         LOG_ERROR("Lua", "Failed to load %s: %s", path.c_str(), lua_tostring(m_L, -1));
@@ -468,6 +633,7 @@ void LuaEngine::registerAPI() {
         {"get_track_count",         l_get_track_count},
         {"get_track_name",          l_get_track_name},
         {"get_instrument_name",     l_get_instrument_name},
+        {"get_instrument_id",       l_get_instrument_id},
         {"get_device_param_count",  l_get_device_param_count},
         {"get_device_param_name",   l_get_device_param_name},
         {"get_device_param_value",  l_get_device_param_value},
@@ -475,9 +641,19 @@ void LuaEngine::registerAPI() {
         {"get_device_param_max",    l_get_device_param_max},
         {"get_device_param_display",l_get_device_param_display},
         {"set_device_param",        l_set_device_param},
+        {"get_device_param_label_count", l_get_device_param_label_count},
         {"send_note_to_track",      l_send_note_to_track},
+        {"send_pitchbend_to_track", l_send_pitchbend_to_track},
+        {"send_cc_to_track",        l_send_cc_to_track},
         {"get_bpm",                 l_get_bpm},
+        {"set_bpm",                 l_set_bpm},
         {"is_playing",              l_is_playing},
+        {"set_playing",             l_set_playing},
+        {"get_master_volume",       l_get_master_volume},
+        {"set_master_volume",       l_set_master_volume},
+        {"get_metronome_enabled",   l_get_metronome_enabled},
+        {"set_metronome_enabled",   l_set_metronome_enabled},
+        {"tap_tempo",               l_tap_tempo},
         {nullptr, nullptr}
     };
 

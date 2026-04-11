@@ -24,6 +24,10 @@ void TransportPanel::setTransportState(bool playing, double beats, double bpm,
     m_tsNumInput.setValue(static_cast<float>(numerator));
     m_tsDenInput.setValue(static_cast<float>(denominator));
 
+    // Sync metronome state from engine (may be toggled externally by controller)
+    if (m_engine)
+        m_metronomeOn = m_engine->metronome().enabled();
+
     int bpb  = std::max(1, numerator);
     int bar  = static_cast<int>(beats / bpb) + 1;
     double beatInBar = std::fmod(beats, static_cast<double>(bpb));

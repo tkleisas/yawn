@@ -70,6 +70,10 @@ public:
     // Setters for App-provided callbacks
     void setSelectedTrackGetter(std::function<int()> fn) { m_getSelectedTrack = std::move(fn); }
     void setCommandSender(std::function<void(const audio::AudioCommand&)> fn) { m_sendCommand = std::move(fn); }
+    void setTapTempoHandler(std::function<void()> fn) { m_tapTempo = std::move(fn); }
+
+    // Called from Lua — triggers the UI tap tempo
+    void tapTempo() { if (m_tapTempo) m_tapTempo(); }
 
     // Check if a controller is connected
     bool isConnected() const;
@@ -87,6 +91,7 @@ private:
     Project* m_project = nullptr;
     std::function<int()> m_getSelectedTrack;
     std::function<void(const audio::AudioCommand&)> m_sendCommand;
+    std::function<void()> m_tapTempo;
 
     // Discovered scripts
     std::vector<ControllerScript> m_scripts;
