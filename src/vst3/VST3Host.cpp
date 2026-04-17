@@ -331,32 +331,43 @@ std::unique_ptr<VST3PluginInstance> VST3PluginInstance::create(
 bool VST3PluginInstance::initBusInfo() {
     if (!m_component) return false;
 
-    // Audio output buses
+    // Enumerate every audio output bus and activate it. Plugins like DPF
+    // assert if the host passes ProcessData with fewer buses than declared,
+    // so we must provide buffers for every bus (even aux/sidechain).
     Steinberg::int32 numOutBuses = m_component->getBusCount(
         Steinberg::Vst::kAudio, Steinberg::Vst::kOutput);
-    if (numOutBuses > 0) {
-        Steinberg::Vst::BusInfo busInfo;
+    m_outputBusChannels.clear();
+    m_outputBusChannels.reserve(numOutBuses);
+    for (Steinberg::int32 i = 0; i < numOutBuses; ++i) {
+        Steinberg::Vst::BusInfo busInfo{};
         if (m_component->getBusInfo(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput,
-                                     0, busInfo) == Steinberg::kResultOk) {
-            m_numOutputChannels = busInfo.channelCount;
+                                     i, busInfo) == Steinberg::kResultOk) {
+            m_outputBusChannels.push_back(busInfo.channelCount);
+        } else {
+            m_outputBusChannels.push_back(0);
         }
+        m_component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, i, true);
     }
+    if (!m_outputBusChannels.empty())
+        m_numOutputChannels = m_outputBusChannels[0];
 
-    // Audio input buses
+    // Audio input buses — same treatment.
     Steinberg::int32 numInBuses = m_component->getBusCount(
         Steinberg::Vst::kAudio, Steinberg::Vst::kInput);
-    if (numInBuses > 0) {
-        Steinberg::Vst::BusInfo busInfo;
+    m_inputBusChannels.clear();
+    m_inputBusChannels.reserve(numInBuses);
+    for (Steinberg::int32 i = 0; i < numInBuses; ++i) {
+        Steinberg::Vst::BusInfo busInfo{};
         if (m_component->getBusInfo(Steinberg::Vst::kAudio, Steinberg::Vst::kInput,
-                                     0, busInfo) == Steinberg::kResultOk) {
-            m_numInputChannels = busInfo.channelCount;
+                                     i, busInfo) == Steinberg::kResultOk) {
+            m_inputBusChannels.push_back(busInfo.channelCount);
+        } else {
+            m_inputBusChannels.push_back(0);
         }
-        m_component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, 0, true);
+        m_component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, i, true);
     }
-
-    // Activate main output bus
-    if (numOutBuses > 0)
-        m_component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, 0, true);
+    if (!m_inputBusChannels.empty())
+        m_numInputChannels = m_inputBusChannels[0];
 
     // Event input bus (MIDI)
     Steinberg::int32 numEventInBuses = m_component->getBusCount(
@@ -385,12 +396,105 @@ bool VST3PluginInstance::setupProcessing(double sampleRate, int maxBlockSize) {
     setup.maxSamplesPerBlock = maxBlockSize;
     setup.sampleRate = sampleRate;
 
-    return m_processor->setupProcessing(setup) == Steinberg::kResultOk;
+    if (m_processor->setupProcessing(setup) != Steinberg::kResultOk)
+        return false;
+
+    // Allocate scratch channel buffers for every declared audio bus. Buffers
+    // are owned by the instance so buildOutputBuses/buildInputBuses can hand
+    // out stable float** pointers from the audio thread with zero allocation.
+    auto allocateScratch = [maxBlockSize](
+        const std::vector<int>& busChannels,
+        std::vector<std::vector<float>>& storage,
+        std::vector<std::vector<float*>>& scratchPtrs,
+        std::vector<std::vector<float*>>& livePtrs)
+    {
+        int totalChannels = 0;
+        for (int c : busChannels) totalChannels += c;
+        storage.assign(totalChannels, std::vector<float>(maxBlockSize, 0.0f));
+        scratchPtrs.clear();
+        scratchPtrs.reserve(busChannels.size());
+        livePtrs.clear();
+        livePtrs.reserve(busChannels.size());
+        int nextChannel = 0;
+        for (int c : busChannels) {
+            std::vector<float*> scratch;
+            scratch.reserve(c);
+            for (int k = 0; k < c; ++k) {
+                scratch.push_back(storage[nextChannel++].data());
+            }
+            livePtrs.emplace_back(scratch);  // seed live == scratch
+            scratchPtrs.push_back(std::move(scratch));
+        }
+    };
+
+    allocateScratch(m_outputBusChannels, m_outputScratchStorage,
+                    m_outputScratchPtrs, m_outputBusPtrs);
+    allocateScratch(m_inputBusChannels,  m_inputScratchStorage,
+                    m_inputScratchPtrs,  m_inputBusPtrs);
+    m_maxBlockSize = maxBlockSize;
+
+    return true;
+}
+
+namespace {
+void buildBuses(const std::vector<int>& busChannels,
+                std::vector<std::vector<float*>>& scratchPtrs,
+                std::vector<std::vector<float*>>& livePtrs,
+                Steinberg::Vst::AudioBusBuffers* outBuses,
+                float** mainChannels, int mainChannelCount, int numSamples)
+{
+    const int numBuses = static_cast<int>(busChannels.size());
+    for (int i = 0; i < numBuses; ++i) {
+        const int channels = busChannels[i];
+        auto& live = livePtrs[i];
+        const auto& scratch = scratchPtrs[i];
+
+        // Reset live pointers to scratch; silence the scratch for this block.
+        for (int k = 0; k < channels; ++k) {
+            live[k] = scratch[k];
+            std::memset(scratch[k], 0,
+                        static_cast<size_t>(numSamples) * sizeof(float));
+        }
+
+        // Main bus (index 0) gets caller buffers. Extra bus channels stay on
+        // scratch silence.
+        if (i == 0 && mainChannels && mainChannelCount > 0) {
+            const int n = std::min(channels, mainChannelCount);
+            for (int k = 0; k < n; ++k) live[k] = mainChannels[k];
+        }
+
+        outBuses[i].numChannels = channels;
+        outBuses[i].silenceFlags = 0;
+        outBuses[i].channelBuffers32 = channels > 0 ? live.data() : nullptr;
+    }
+}
+} // namespace
+
+void VST3PluginInstance::buildOutputBuses(Steinberg::Vst::AudioBusBuffers* outBuses,
+                                           float** mainChannels,
+                                           int mainChannelCount,
+                                           int numSamples)
+{
+    buildBuses(m_outputBusChannels, m_outputScratchPtrs, m_outputBusPtrs,
+               outBuses, mainChannels, mainChannelCount, numSamples);
+}
+
+void VST3PluginInstance::buildInputBuses(Steinberg::Vst::AudioBusBuffers* inBuses,
+                                          float** mainChannels,
+                                          int mainChannelCount,
+                                          int numSamples)
+{
+    buildBuses(m_inputBusChannels, m_inputScratchPtrs, m_inputBusPtrs,
+               inBuses, mainChannels, mainChannelCount, numSamples);
 }
 
 bool VST3PluginInstance::setActive(bool active) {
     if (!m_component) return false;
-    auto result = m_component->setActive(active ? Steinberg::kResultTrue : Steinberg::kResultFalse);
+    // Caveat: setActive/setProcessing take a TBool (0 or 1) — NOT a tresult.
+    // kResultTrue is 0 in the SDK and kResultFalse is 1, so passing those
+    // inverts the meaning and leaves the plugin uninitialized (JUCE plugins
+    // never run prepareToPlay, crashing later when MIDI arrives).
+    auto result = m_component->setActive(active ? 1 : 0);
     if (result == Steinberg::kResultOk || result == Steinberg::kResultTrue)
         m_isActive = active;
     return m_isActive == active;
@@ -398,7 +502,7 @@ bool VST3PluginInstance::setActive(bool active) {
 
 bool VST3PluginInstance::setProcessing(bool processing) {
     if (!m_processor) return false;
-    auto result = m_processor->setProcessing(processing ? Steinberg::kResultTrue : Steinberg::kResultFalse);
+    auto result = m_processor->setProcessing(processing ? 1 : 0);
     if (result == Steinberg::kResultOk || result == Steinberg::kResultTrue)
         m_isProcessing = processing;
     return m_isProcessing == processing;

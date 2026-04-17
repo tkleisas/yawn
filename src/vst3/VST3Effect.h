@@ -9,6 +9,7 @@
 #include "effects/AudioEffect.h"
 #include "vst3/VST3Host.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 
 #include <memory>
@@ -61,6 +62,10 @@ private:
     // Pre-allocated processing buffers (non-interleaved)
     std::vector<float> m_inLeft, m_inRight;
     std::vector<float> m_outLeft, m_outRight;
+
+    // Pre-sized AudioBusBuffers arrays — resized in init() to match plugin layout.
+    std::vector<Steinberg::Vst::AudioBusBuffers> m_outputBuses;
+    std::vector<Steinberg::Vst::AudioBusBuffers> m_inputBuses;
 
     static const effects::ParameterInfo s_emptyParam;
 };

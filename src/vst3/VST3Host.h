@@ -92,6 +92,25 @@ public:
     int numAudioOutputChannels() const { return m_numOutputChannels; }
     bool hasEventInput() const { return m_hasEventInput; }
 
+    // Full bus layout (channel count per bus).
+    const std::vector<int>& outputBusChannelCounts() const { return m_outputBusChannels; }
+    const std::vector<int>& inputBusChannelCounts() const { return m_inputBusChannels; }
+
+    // Build AudioBusBuffers[] for every output bus the plugin declared. Bus 0 uses
+    // mainChannels (clamped/padded to the bus's actual channel count with scratch);
+    // every other bus uses scratch. outBuses must point to an array sized to
+    // outputBusChannelCounts().size(). Safe to call from the audio thread — all
+    // buffers are pre-allocated in setupProcessing().
+    void buildOutputBuses(Steinberg::Vst::AudioBusBuffers* outBuses,
+                          float** mainChannels, int mainChannelCount,
+                          int numSamples);
+
+    // Same for inputs. Pass nullptr mainChannels if there's no caller-provided
+    // input (e.g., instruments) — all input buses get silence scratch.
+    void buildInputBuses(Steinberg::Vst::AudioBusBuffers* inBuses,
+                         float** mainChannels, int mainChannelCount,
+                         int numSamples);
+
     // Parameter access via IEditController
     int parameterCount() const;
     Steinberg::Vst::ParameterInfo parameterInfo(int index) const;
@@ -131,6 +150,24 @@ private:
     int m_numInputChannels = 0;
     int m_numOutputChannels = 2;
     bool m_hasEventInput = false;
+
+    // Per-bus channel count, populated in initBusInfo().
+    std::vector<int> m_outputBusChannels;
+    std::vector<int> m_inputBusChannels;
+
+    // Scratch silence buffers, allocated in setupProcessing().
+    // Flat [channel][sample]; per-bus channel pointer arrays live in m_output*ScratchPtrs.
+    std::vector<std::vector<float>> m_outputScratchStorage;
+    std::vector<std::vector<float>> m_inputScratchStorage;
+    // Stable scratch pointers, one vector per bus.
+    std::vector<std::vector<float*>> m_outputScratchPtrs;
+    std::vector<std::vector<float*>> m_inputScratchPtrs;
+    // Live channel pointer arrays handed to the plugin each process call.
+    // Reset from scratch at the top of every call and optionally overlaid
+    // with caller-provided main-bus channels.
+    std::vector<std::vector<float*>> m_outputBusPtrs;
+    std::vector<std::vector<float*>> m_inputBusPtrs;
+    int m_maxBlockSize = 0;
 
     // Thread-safe parameter change queue (UI thread → audio thread)
     struct PendingParam {

@@ -44,6 +44,12 @@ void VST3Instrument::init(double sampleRate, int maxBlockSize) {
     m_displayName = m_instance->name();
     m_instance->setProcessing(true);
 
+    // Pre-size bus buffer arrays so the audio thread never allocates.
+    m_outputBuses.assign(
+        std::max<size_t>(1, m_instance->outputBusChannelCounts().size()), {});
+    m_inputBuses.assign(
+        std::max<size_t>(1, m_instance->inputBusChannelCounts().size()), {});
+
     buildParameterInfoCache();
 }
 
@@ -69,32 +75,49 @@ void VST3Instrument::process(float* buffer, int numFrames, int numChannels,
     std::memset(m_outLeft.data(), 0, numFrames * sizeof(float));
     std::memset(m_outRight.data(), 0, numFrames * sizeof(float));
 
-    // Setup VST3 AudioBusBuffers
-    float* outChannels[2] = { m_outLeft.data(), m_outRight.data() };
-
-    Steinberg::Vst::AudioBusBuffers outputBus;
-    outputBus.numChannels = 2;
-    outputBus.silenceFlags = 0;
-    outputBus.channelBuffers32 = outChannels;
+    // Build ProcessData.outputs covering every bus the plugin declared.
+    // Main bus (index 0) is wired to our L/R buffers; aux buses get
+    // internally-managed silence scratch. Same for inputs — instruments
+    // have no caller audio input, so every input bus is silent.
+    float* mainOut[2] = { m_outLeft.data(), m_outRight.data() };
+    const int numOutputBuses =
+        static_cast<int>(m_instance->outputBusChannelCounts().size());
+    const int numInputBuses =
+        static_cast<int>(m_instance->inputBusChannelCounts().size());
+    m_instance->buildOutputBuses(m_outputBuses.data(), mainOut, 2, numFrames);
+    m_instance->buildInputBuses(m_inputBuses.data(), nullptr, 0, numFrames);
 
     // Drain queued parameter changes for the processor
     Steinberg::Vst::ParameterChanges paramChanges;
+    Steinberg::Vst::ParameterChanges outParamChanges;
     m_instance->drainParameterChanges(paramChanges);
 
-    // Setup ProcessData
+    // Minimal process context — many JUCE plugins (e.g. Dexed) dereference
+    // processContext without checking null. Provide a stable default so they
+    // don't segfault in processBlock.
+    Steinberg::Vst::ProcessContext processContext{};
+    processContext.sampleRate = m_sampleRate;
+    processContext.tempo = 120.0;
+    processContext.timeSigNumerator = 4;
+    processContext.timeSigDenominator = 4;
+    processContext.state = Steinberg::Vst::ProcessContext::kTempoValid
+                         | Steinberg::Vst::ProcessContext::kTimeSigValid;
+
+    // Setup ProcessData. outputParameterChanges must be non-null — DPF-based
+    // plugins assert and segfault if it isn't.
     Steinberg::Vst::ProcessData processData;
     processData.processMode = Steinberg::Vst::kRealtime;
     processData.symbolicSampleSize = Steinberg::Vst::kSample32;
     processData.numSamples = numFrames;
-    processData.numInputs = 0;
-    processData.inputs = nullptr;
-    processData.numOutputs = 1;
-    processData.outputs = &outputBus;
+    processData.numInputs = numInputBuses;
+    processData.inputs = numInputBuses > 0 ? m_inputBuses.data() : nullptr;
+    processData.numOutputs = numOutputBuses;
+    processData.outputs = numOutputBuses > 0 ? m_outputBuses.data() : nullptr;
     processData.inputEvents = &inputEvents;
     processData.outputEvents = nullptr;
     processData.inputParameterChanges = paramChanges.getParameterCount() > 0 ? &paramChanges : nullptr;
-    processData.outputParameterChanges = nullptr;
-    processData.processContext = nullptr;
+    processData.outputParameterChanges = &outParamChanges;
+    processData.processContext = &processContext;
 
     // Process
     m_instance->processor()->process(processData);

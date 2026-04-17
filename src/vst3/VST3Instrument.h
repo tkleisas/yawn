@@ -67,6 +67,10 @@ private:
     std::vector<float> m_outLeft;
     std::vector<float> m_outRight;
 
+    // Pre-sized AudioBusBuffers arrays — resized in init() to match plugin layout.
+    std::vector<Steinberg::Vst::AudioBusBuffers> m_outputBuses;
+    std::vector<Steinberg::Vst::AudioBusBuffers> m_inputBuses;
+
     static const instruments::InstrumentParameterInfo s_emptyParam;
 };
 
