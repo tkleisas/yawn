@@ -74,10 +74,10 @@
 
 *The AI built a plugin host before learning what a plugin sounds like. It correctly implemented the entire VST3 COM interface on the first try. We're terrified.*
 
-- **Plugin Scanning** — Automatic discovery in standard system paths (Program Files/Common Files/VST3), class enumeration with vendor/category info
+- **Plugin Scanning** — Automatic discovery in standard system paths: Windows (Program Files/Common Files/VST3, user LocalAppData/Programs/Common/VST3) and Linux (`/usr/lib/vst3`, `/usr/local/lib/vst3`, `~/.vst3`) — class enumeration with vendor/category info
 - **VST3 Instruments** — Load third-party VST3 synths as track instruments with full parameter automation
 - **VST3 Audio Effects** — Load VST3 effects in any effect chain slot (track, return, master)
-- **Process-Isolated Editor** — Plugin GUIs run in a separate process (`yawn_vst3_host.exe`) via bidirectional IPC, because JUCE plugins install process-wide Win32 message hooks that would freeze our event loop
+- **Process-Isolated Editor** — Plugin GUIs run in a separate process (`yawn_vst3_host`) via bidirectional IPC. On Windows this dodges JUCE plugins' process-wide Win32 message hooks that would freeze our event loop; on Linux the child embeds the plugin via X11 (`kPlatformTypeX11EmbedWindowID`) and runs a full `Steinberg::Linux::IRunLoop` with FD + timer dispatch so plugins like Surge XT render and animate correctly
 - **Parameter Sync** — Full bidirectional parameter sync between host and editor process
 - **State Persistence** — Processor + controller state serialized with project (hex-encoded binary)
 - **Generic Knob Grid** — Automatic parameter knob UI for plugins without custom editors
@@ -246,6 +246,20 @@ All dependencies are fetched automatically via CMake FetchContent — no manual 
 ```bash
 # Install jinja2 if not already present
 pip install jinja2
+```
+
+#### Linux system dev packages
+
+SDL3, the VST3 editor host (X11 embedding), and the audio backends need:
+
+```bash
+sudo apt install \
+  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+  libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libxinerama-dev \
+  libwayland-dev libdecor-0-dev \
+  libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdrm-dev libgbm-dev \
+  libdbus-1-dev libibus-1.0-dev libudev-dev \
+  libasound2-dev libpulse-dev libjack-dev libsndio-dev
 ```
 
 ### Build
@@ -597,7 +611,7 @@ yawn/
 | 16. Arrangement View | ✅ Done | Timeline, clip placement, automation lanes, loop range, waveform display |
 | 17. Recording & I/O | ✅ Done | Audio/MIDI recording, MIDI Learn, audio export (WAV/FLAC/OGG), project save/load |
 | 18. Session Management | ✅ Done | Scene insert/duplicate/delete, track deletion, follow actions, undo/redo, time stretching |
-| 19. VST3 Hosting | ✅ Done | VST3 SDK, plugin scanning, process-isolated editors, parameter sync, state persistence |
+| 19. VST3 Hosting | ✅ Done | VST3 SDK, plugin scanning, process-isolated editors (Windows HWND + Linux X11 embed with IRunLoop), parameter sync, state persistence |
 | 20. Controller Scripting | ✅ Done | Lua 5.4, controller auto-detection, yawn.* API, Ableton Push 1 (encoders, display, pads, LEDs) |
 
 ### Phase 16: Arrangement View (Done)

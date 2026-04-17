@@ -156,14 +156,20 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     $<TARGET_FILE_DIR:${PROJECT_NAME}>/scripts
 )
 
-# VST3 editor host — separate process to isolate plugin UI from SDL (Windows only)
-if(YAWN_VST3 AND WIN32)
+# VST3 editor host — separate process to isolate plugin UI from SDL
+if(YAWN_VST3 AND (WIN32 OR (UNIX AND NOT APPLE)))
     add_executable(yawn_vst3_host src/vst3/VST3EditorHost.cpp)
-    target_link_libraries(yawn_vst3_host PRIVATE vst3_hosting ole32 oleaut32)
+    target_link_libraries(yawn_vst3_host PRIVATE vst3_hosting)
     target_compile_definitions(yawn_vst3_host PRIVATE YAWN_HAS_VST3=1)
     set_target_properties(yawn_vst3_host PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
+    if(WIN32)
+        target_link_libraries(yawn_vst3_host PRIVATE ole32 oleaut32)
+    elseif(UNIX AND NOT APPLE)
+        find_package(X11 REQUIRED)
+        target_link_libraries(yawn_vst3_host PRIVATE X11::X11)
+    endif()
     if(MSVC)
         target_compile_options(yawn_vst3_host PRIVATE /bigobj)
     endif()

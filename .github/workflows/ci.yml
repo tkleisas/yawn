@@ -78,6 +78,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path package -Force
           Copy-Item build/bin/Release/YAWN.exe package/
+          if (Test-Path build/bin/Release/yawn_vst3_host.exe) {
+            Copy-Item build/bin/Release/yawn_vst3_host.exe package/
+          }
           if (Test-Path build/bin/Release/assets) {
             Copy-Item -Recurse build/bin/Release/assets package/
           }
@@ -93,6 +96,9 @@ jobs:
         run: |
           mkdir -p package
           cp build/bin/YAWN package/
+          if [ -f build/bin/yawn_vst3_host ]; then
+            cp build/bin/yawn_vst3_host package/
+          fi
           if [ -d build/bin/assets ]; then
             cp -r build/bin/assets package/
           fi

@@ -15,6 +15,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#elif defined(__linux__)
+#include <sys/types.h>
 #endif
 
 namespace yawn {
@@ -53,6 +55,11 @@ private:
     HANDLE m_processThread = nullptr;
     HANDLE m_pipeRead = INVALID_HANDLE_VALUE;   // read FROM child (child's stdout)
     HANDLE m_pipeWrite = INVALID_HANDLE_VALUE;  // write TO child (child's stdin)
+    std::string m_readBuffer;
+#elif defined(__linux__)
+    mutable pid_t m_pid = 0;
+    int m_pipeRead = -1;   // read FROM child (child's stdout)
+    int m_pipeWrite = -1;  // write TO child (child's stdin)
     std::string m_readBuffer;
 #endif
 };

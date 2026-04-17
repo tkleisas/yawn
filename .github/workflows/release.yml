@@ -105,6 +105,9 @@ jobs:
           dir="YAWN-${version}-linux"
           mkdir -p "$dir"
           cp build/bin/YAWN "$dir/"
+          if [ -f build/bin/yawn_vst3_host ]; then
+            cp build/bin/yawn_vst3_host "$dir/"
+          fi
           if [ -d build/bin/assets ]; then
             cp -r build/bin/assets "$dir/"
           fi

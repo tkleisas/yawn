@@ -7,6 +7,15 @@
 #ifdef _WIN32
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
+#elif defined(__linux__)
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <cerrno>
+#include <cstring>
+#include <climits>
+#include <vector>
 #endif
 
 namespace yawn {
@@ -172,6 +181,207 @@ void VST3EditorWindow::pollParamChanges() {
     }
 }
 
+void VST3EditorWindow::sendParamChange(unsigned int paramId, double value) {
+    if (m_pipeWrite == INVALID_HANDLE_VALUE) return;
+    char buf[128];
+    int len = snprintf(buf, sizeof(buf), "PARAM %u %.15g\n", paramId, value);
+    DWORD written;
+    WriteFile(m_pipeWrite, buf, static_cast<DWORD>(len), &written, nullptr);
+}
+
+#elif defined(__linux__)
+
+namespace {
+bool waitChildExit(pid_t pid, int timeoutMs) {
+    int waited = 0;
+    while (waited < timeoutMs) {
+        int status = 0;
+        pid_t r = ::waitpid(pid, &status, WNOHANG);
+        if (r == pid || r < 0) return true;
+        ::usleep(50 * 1000);
+        waited += 50;
+    }
+    return false;
+}
+} // namespace
+
+bool VST3EditorWindow::open(VST3PluginInstance* instance,
+                             const std::string& modulePath,
+                             const std::string& classID,
+                             const std::string& title)
+{
+    if (isOpen()) close();
+    if (!instance) return false;
+
+    // Ignore SIGPIPE process-wide — otherwise writes to a pipe whose child
+    // already exited (editor window closed by user) would terminate YAWN.
+    static const bool _ignore_sigpipe = []() {
+        struct sigaction sa = {};
+        sa.sa_handler = SIG_IGN;
+        sigaction(SIGPIPE, &sa, nullptr);
+        return true;
+    }();
+    (void)_ignore_sigpipe;
+
+    m_instance = instance;
+
+    int childIn[2]  = {-1, -1};  // parent writes childIn[1] -> child stdin childIn[0]
+    int childOut[2] = {-1, -1};  // child writes childOut[1] -> parent reads childOut[0]
+    if (::pipe(childIn) < 0) {
+        LOG_ERROR("VST3", "pipe() failed: %s", std::strerror(errno));
+        m_instance = nullptr;
+        return false;
+    }
+    if (::pipe(childOut) < 0) {
+        LOG_ERROR("VST3", "pipe() failed: %s", std::strerror(errno));
+        ::close(childIn[0]); ::close(childIn[1]);
+        m_instance = nullptr;
+        return false;
+    }
+
+    // Locate yawn_vst3_host next to the running YAWN executable
+    char buf[PATH_MAX] = {};
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    std::string hostExe;
+    if (n > 0) {
+        std::string exePath(buf, n);
+        auto slash = exePath.find_last_of('/');
+        hostExe = (slash == std::string::npos)
+            ? std::string("./yawn_vst3_host")
+            : exePath.substr(0, slash + 1) + "yawn_vst3_host";
+    } else {
+        hostExe = "yawn_vst3_host";
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        LOG_ERROR("VST3", "fork() failed: %s", std::strerror(errno));
+        ::close(childIn[0]);  ::close(childIn[1]);
+        ::close(childOut[0]); ::close(childOut[1]);
+        m_instance = nullptr;
+        return false;
+    }
+
+    if (pid == 0) {
+        // Child: rewire stdio to pipes, exec the host
+        ::dup2(childIn[0],  STDIN_FILENO);
+        ::dup2(childOut[1], STDOUT_FILENO);
+        ::close(childIn[0]);  ::close(childIn[1]);
+        ::close(childOut[0]); ::close(childOut[1]);
+
+        std::vector<char*> argv = {
+            const_cast<char*>(hostExe.c_str()),
+            const_cast<char*>(modulePath.c_str()),
+            const_cast<char*>(classID.c_str()),
+            const_cast<char*>(title.c_str()),
+            nullptr
+        };
+        ::execvp(argv[0], argv.data());
+        std::fprintf(stderr, "execvp '%s' failed: %s\n",
+                     hostExe.c_str(), std::strerror(errno));
+        _exit(127);
+    }
+
+    // Parent
+    ::close(childIn[0]);
+    ::close(childOut[1]);
+    m_pid       = pid;
+    m_pipeWrite = childIn[1];
+    m_pipeRead  = childOut[0];
+
+    int flags = ::fcntl(m_pipeRead, F_GETFL, 0);
+    if (flags >= 0) ::fcntl(m_pipeRead, F_SETFL, flags | O_NONBLOCK);
+
+    LOG_INFO("VST3", "Editor process launched for '%s' (PID=%d)",
+             title.c_str(), (int)pid);
+    return true;
+}
+
+void VST3EditorWindow::close() {
+    // Only send CLOSE if the child is still alive; otherwise the write EPIPEs.
+    if (m_pipeWrite >= 0 && isOpen()) {
+        const char cmd[] = "CLOSE\n";
+        ssize_t r = ::write(m_pipeWrite, cmd, sizeof(cmd) - 1);
+        (void)r;
+    }
+    if (m_pid > 0) {
+        if (!waitChildExit(m_pid, 3000)) {
+            ::kill(m_pid, SIGTERM);
+            if (!waitChildExit(m_pid, 1000)) {
+                ::kill(m_pid, SIGKILL);
+                int status = 0;
+                ::waitpid(m_pid, &status, 0);
+            }
+        }
+        m_pid = 0;
+    }
+    if (m_pipeRead  >= 0) { ::close(m_pipeRead);  m_pipeRead  = -1; }
+    if (m_pipeWrite >= 0) { ::close(m_pipeWrite); m_pipeWrite = -1; }
+    m_readBuffer.clear();
+    m_instance = nullptr;
+}
+
+bool VST3EditorWindow::isOpen() const {
+    if (m_pid <= 0) return false;
+    int status = 0;
+    pid_t r = ::waitpid(m_pid, &status, WNOHANG);
+    if (r == m_pid || r < 0) {
+        m_pid = 0;
+        return false;
+    }
+    return true;
+}
+
+void VST3EditorWindow::pollParamChanges() {
+    if (m_pipeRead < 0) return;
+
+    char buf[4096];
+    while (true) {
+        ssize_t n = ::read(m_pipeRead, buf, sizeof(buf));
+        if (n > 0) {
+            m_readBuffer.append(buf, n);
+            continue;
+        }
+        if (n == 0) break;  // EOF (child closed stdout)
+        if (errno == EINTR) continue;
+        break;  // EAGAIN/EWOULDBLOCK
+    }
+
+    size_t pos;
+    while ((pos = m_readBuffer.find('\n')) != std::string::npos) {
+        std::string line = m_readBuffer.substr(0, pos);
+        m_readBuffer.erase(0, pos + 1);
+        processLine(line);
+    }
+}
+
+void VST3EditorWindow::sendParamChange(unsigned int paramId, double value) {
+    if (m_pipeWrite < 0) return;
+    char buf[128];
+    int len = std::snprintf(buf, sizeof(buf), "PARAM %u %.15g\n", paramId, value);
+    if (len > 0) {
+        ssize_t r = ::write(m_pipeWrite, buf, len);
+        (void)r;
+    }
+}
+
+#else
+
+bool VST3EditorWindow::open(VST3PluginInstance*, const std::string&,
+                             const std::string&, const std::string&)
+{
+    LOG_WARN("VST3", "Plugin editor not yet supported on this platform");
+    return false;
+}
+
+void VST3EditorWindow::close() {}
+bool VST3EditorWindow::isOpen() const { return false; }
+void VST3EditorWindow::pollParamChanges() {}
+void VST3EditorWindow::sendParamChange(unsigned int, double) {}
+
+#endif // _WIN32 / __linux__
+
+// ── Platform-agnostic line parser ──
 void VST3EditorWindow::processLine(const std::string& line) {
     if (line.size() > 6 && line[0] == 'P' && line[1] == 'A') {
         // "PARAM <id> <value>"
@@ -202,30 +412,6 @@ void VST3EditorWindow::processLine(const std::string& line) {
         LOG_INFO("VST3", "Editor process ready");
     }
 }
-
-void VST3EditorWindow::sendParamChange(unsigned int paramId, double value) {
-    if (m_pipeWrite == INVALID_HANDLE_VALUE) return;
-    char buf[128];
-    int len = snprintf(buf, sizeof(buf), "PARAM %u %.15g\n", paramId, value);
-    DWORD written;
-    WriteFile(m_pipeWrite, buf, static_cast<DWORD>(len), &written, nullptr);
-}
-
-#else
-
-bool VST3EditorWindow::open(VST3PluginInstance*, const std::string&,
-                             const std::string&, const std::string&)
-{
-    LOG_WARN("VST3", "Plugin editor not yet supported on this platform");
-    return false;
-}
-
-void VST3EditorWindow::close() {}
-bool VST3EditorWindow::isOpen() const { return false; }
-void VST3EditorWindow::pollParamChanges() {}
-void VST3EditorWindow::sendParamChange(unsigned int, double) {}
-
-#endif // _WIN32
 
 } // namespace vst3
 } // namespace yawn

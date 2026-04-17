@@ -4,12 +4,18 @@
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
+#include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/processdata.h"
 #include "public.sdk/source/vst/utility/uid.h"
+
+#if defined(__linux__)
+#include "pluginterfaces/gui/iplugview.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <vector>
 
 namespace yawn {
 namespace vst3 {
@@ -27,10 +33,73 @@ bool stringToUID(const std::string& str, Steinberg::TUID uid) {
     return true;
 }
 
+#if defined(__linux__)
+// Minimal IRunLoop stub for YAWN's main host context.
+//
+// On Linux many plugins (Surge XT, JUCE-based) require the host to expose a
+// Steinberg::Linux::IRunLoop via the host context during controller
+// initialization — otherwise parameter setup or the editor can silently
+// degrade. YAWN's main process doesn't yet drive plugin-registered FDs or
+// timers (plugins that need a live run loop should open their editor, which
+// runs in yawn_vst3_host with a real loop). This stub just accepts
+// registrations so initialize() calls that query IRunLoop succeed.
+class StubRunLoop : public Steinberg::Linux::IRunLoop {
+public:
+    Steinberg::tresult PLUGIN_API registerEventHandler(
+        Steinberg::Linux::IEventHandler*, Steinberg::Linux::FileDescriptor) override {
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API unregisterEventHandler(
+        Steinberg::Linux::IEventHandler*) override {
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API registerTimer(
+        Steinberg::Linux::ITimerHandler*, Steinberg::Linux::TimerInterval) override {
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API unregisterTimer(
+        Steinberg::Linux::ITimerHandler*) override {
+        return Steinberg::kResultOk;
+    }
+    Steinberg::uint32 PLUGIN_API addRef() override { return 1000; }
+    Steinberg::uint32 PLUGIN_API release() override { return 1000; }
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override {
+        if (!obj) return Steinberg::kInvalidArgument;
+        *obj = nullptr;
+        if (Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::Linux::IRunLoop::iid) ||
+            Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::FUnknown::iid)) {
+            *obj = static_cast<Steinberg::Linux::IRunLoop*>(this);
+            return Steinberg::kResultOk;
+        }
+        return Steinberg::kNoInterface;
+    }
+};
+
+class LinuxHostApp : public Steinberg::Vst::HostApplication {
+public:
+    LinuxHostApp() {
+        if (auto* pis = getPlugInterfaceSupport())
+            pis->addPlugInterfaceSupported(Steinberg::Linux::IRunLoop::iid);
+    }
+    Steinberg::tresult PLUGIN_API queryInterface(const char* iid, void** obj) override {
+        if (Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::Linux::IRunLoop::iid)) {
+            static StubRunLoop stub;
+            *obj = static_cast<Steinberg::Linux::IRunLoop*>(&stub);
+            return Steinberg::kResultOk;
+        }
+        return Steinberg::Vst::HostApplication::queryInterface(iid, obj);
+    }
+};
+#endif
+
 // ── Host context singleton ──
 
 Steinberg::Vst::HostApplication& getHostContext() {
+#if defined(__linux__)
+    static LinuxHostApp instance;
+#else
     static Steinberg::Vst::HostApplication instance;
+#endif
     return instance;
 }
 
