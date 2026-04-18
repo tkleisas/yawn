@@ -1,4 +1,5 @@
 #include "app/App.h"
+#include "Version.h"
 #include "ui/framework/PanelWrappers.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
@@ -1196,6 +1197,11 @@ void App::updateDetailForMaster() {
 }
 
 bool App::init() {
+    // App metadata must be set before SDL_Init so Wayland uses the right
+    // app_id (must match the .desktop file basename to get the dock icon)
+    // and X11 gets a proper WM_CLASS.
+    SDL_SetAppMetadata("Y.A.W.N", YAWN_VERSION_STRING, "com.yawn.daw");
+
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         LOG_ERROR("App", "Failed to initialize SDL: %s", SDL_GetError());
         return false;

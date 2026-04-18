@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Y.A.W.N
+GenericName=Digital Audio Workstation
+Comment=Yet Another Audio Workstation New — session/arrangement DAW with VST3 hosting
+Exec=YAWN
+Icon=com.yawn.daw
+Terminal=false
+Categories=AudioVideo;Audio;AudioVideoEditing;Music;
+Keywords=DAW;audio;music;synth;sequencer;VST3;MIDI;
+StartupNotify=true
+StartupWMClass=Y.A.W.N
