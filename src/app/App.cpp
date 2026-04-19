@@ -1,5 +1,6 @@
 #include "app/App.h"
 #include "Version.h"
+#include "visual/LiveInputEnum.h"
 #include "ui/framework/PanelWrappers.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
@@ -513,53 +514,43 @@ void App::buildWidgetTree() {
     m_sessionPanel->setOnTrackRenamed(renameHandler);
     m_arrangementPanel->setOnTrackRenamed(renameHandler);
 
+    // Status-pip feed for live clips. Returns the engine's live-source
+    // state (0..3) for the currently-launched scene on a track, or -1
+    // for any other slot so the grid paints a neutral pip.
+    m_sessionPanel->setOnQueryLiveState(
+        [this](int track, int scene) -> int {
+            if (m_project.track(track).defaultScene != scene) return -1;
+            return static_cast<int>(m_visualEngine.getLayerLiveState(track));
+        });
+
     // Launching a Visual clip loads its shader into that track's layer and
     // sets the layer's audio source for iAudioLevel / bands / kick. Each
     // visual track owns one compositor layer; track volume acts as opacity.
+    m_sessionPanel->setOnStopVisualClip(
+        [this](int track) {
+            if (track < 0 || track >= kMaxTracks) return;
+            m_visualEngine.clearLayer(track);
+            m_activeArrVisualClip[track]  = -1;
+            m_visualLaunchBeat[track]     = kNoVisualLaunch;
+            m_visualLaunchScene[track]    = -1;
+        });
+
     m_sessionPanel->setOnLaunchVisualClip(
         [this](int track, int scene, const std::string& shaderPath) {
             auto* slot = m_project.getSlot(track, scene);
-            int audioSource = -1;
-            if (slot && slot->visualClip)
-                audioSource = slot->visualClip->audioSource;
-
-            // Video clip without a custom shader → fall back to the
-            // bundled passthrough so the video simply plays full-frame.
-            std::string effectiveShader = shaderPath;
-            const bool hasVideo = slot && slot->visualClip &&
-                                   !slot->visualClip->videoPath.empty();
-            if (effectiveShader.empty() && hasVideo) {
-                effectiveShader = "assets/shaders/video_passthrough.frag";
-            }
-            if (effectiveShader.empty()) return;
-            m_visualEngine.loadLayer(track, effectiveShader, audioSource);
-            // Track persists the blend mode — apply it to the fresh layer.
-            m_visualEngine.setLayerBlendMode(track,
-                static_cast<visual::VisualEngine::BlendMode>(
-                    m_project.track(track).visualBlendMode));
-            // Apply any saved shader-param values.
-            if (slot && slot->visualClip) {
-                m_visualEngine.applyLayerParamValues(track,
-                    slot->visualClip->paramValues);
-                // Restore saved LFOs.
-                for (int i = 0; i < 8; ++i) {
-                    const auto& s = slot->visualClip->knobLFOs[i];
-                    visual::VisualLFO lfo;
-                    lfo.enabled = s.enabled;
-                    lfo.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
-                    lfo.rate    = s.rate;
-                    lfo.depth   = s.depth;
-                    lfo.sync    = s.sync;
-                    m_visualEngine.setLayerKnobLFO(track, i, lfo);
-                }
-                m_visualEngine.setLayerText(track, slot->visualClip->text);
-                m_visualEngine.setLayerVideo(track, slot->visualClip->videoPath);
-                m_visualEngine.setLayerVideoTiming(track,
-                    slot->visualClip->videoLoopBars,
-                    slot->visualClip->videoRate);
-                m_visualEngine.setLayerVideoTrim(track,
-                    slot->visualClip->videoIn,
-                    slot->visualClip->videoOut);
+            if (!slot || !slot->visualClip) return;
+            launchVisualClipData(track, *slot->visualClip, shaderPath);
+            // Session launches use wall-clock time — iTime starts at
+            // 0 on launch and advances with real time, regardless of
+            // where the transport sits. Explicitly set to override any
+            // previous arrangement mode on the same track.
+            m_visualEngine.setLayerWallClock(track);
+            // Stamp the launch beat so the follow-action poller knows
+            // when barCount bars have elapsed on this clip.
+            if (track >= 0 && track < kMaxTracks) {
+                m_visualLaunchBeat[track]  =
+                    m_audioEngine.transport().positionInBeats();
+                m_visualLaunchScene[track] = scene;
             }
         });
 
@@ -689,6 +680,41 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         addMode("Screen",   Track::VisualBlendMode::Screen,
                 visual::VisualEngine::BlendMode::Screen);
         items.push_back({"Blend Mode", nullptr, false, true, std::move(bmItems)});
+
+        // "Add Knob Lane" submenu — creates a track-level automation
+        // lane targeting A..H. Lanes show up in the expanded track
+        // row and can be edited in the arrangement view.
+        std::vector<ui::ContextMenu::Item> laneItems;
+        auto& trackLanes = m_project.track(trackIndex).automationLanes;
+        for (int k = 0; k < 8; ++k) {
+            char label[16];
+            std::snprintf(label, sizeof(label), "Knob %c",
+                           static_cast<char>('A' + k));
+            // Grey out if a lane already exists for this knob.
+            bool exists = false;
+            for (const auto& lane : trackLanes) {
+                if (lane.target.type == automation::TargetType::VisualKnob &&
+                    lane.target.trackIndex == trackIndex &&
+                    lane.target.paramIndex == k) {
+                    exists = true; break;
+                }
+            }
+            laneItems.push_back({label,
+                [this, trackIndex, k]{
+                    auto& tr = m_project.track(trackIndex);
+                    automation::AutomationLane lane;
+                    lane.target = automation::AutomationTarget::visualKnob(trackIndex, k);
+                    tr.automationLanes.push_back(std::move(lane));
+                    // Playback needs the track in Read mode — Off
+                    // would silently suppress the new lane.
+                    if (tr.autoMode == automation::AutoMode::Off)
+                        tr.autoMode = automation::AutoMode::Read;
+                    markDirty();
+                },
+                false, !exists});
+        }
+        items.push_back({"Add Knob Lane", nullptr, false, true,
+                           std::move(laneItems)});
     }
 
     // Separator + Instruments submenu
@@ -906,7 +932,8 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         m_confirmDialog->prompt(
             "This will stop playback and delete the track. Continue?",
             [this, trackIndex]() {
-                // Stop transport and all clips
+                // Stop transport and all clips (visual layers clear
+                // via the stop-counter poll in update()).
                 m_audioEngine.sendCommand(audio::TransportStopMsg{});
                 for (int t = 0; t < m_project.numTracks(); ++t) {
                     m_audioEngine.sendCommand(audio::StopClipMsg{t});
@@ -938,6 +965,321 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     m_contextMenu.open(mx, my, std::move(items));
 }
 
+void App::launchVisualClipData(int track,
+                                const visual::VisualClip& vc,
+                                const std::string& shaderPath) {
+    const int audioSource = vc.audioSource;
+
+    // Clip without a custom shader → fall back to the bundled
+    // passthrough so whatever's feeding iChannel2 (file video, live
+    // input, or 3D model render) shows up full-frame.
+    std::string effectiveShader = shaderPath;
+    const bool hasFileVideo = !vc.videoPath.empty();
+    const bool hasLiveVideo = vc.liveInput && !vc.liveUrl.empty();
+    const bool hasModel     = !vc.modelPath.empty();
+    if (effectiveShader.empty() && hasModel) {
+        effectiveShader = "assets/shaders/model_passthrough.frag";
+    } else if (effectiveShader.empty() &&
+                (hasFileVideo || hasLiveVideo)) {
+        effectiveShader = "assets/shaders/video_passthrough.frag";
+    }
+    if (effectiveShader.empty()) return;
+
+    std::string resolved = resolveShaderPath(effectiveShader);
+    m_visualEngine.loadLayer(track, resolved, audioSource);
+    m_visualEngine.setLayerBlendMode(track,
+        static_cast<visual::VisualEngine::BlendMode>(
+            m_project.track(track).visualBlendMode));
+
+    m_visualEngine.applyLayerParamValues(track, vc.paramValues);
+    for (int i = 0; i < 8; ++i) {
+        const auto& s = vc.knobLFOs[i];
+        visual::VisualLFO lfo;
+        lfo.enabled = s.enabled;
+        lfo.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
+        lfo.rate    = s.rate;
+        lfo.depth   = s.depth;
+        lfo.sync    = s.sync;
+        m_visualEngine.setLayerKnobLFO(track, i, lfo);
+    }
+    m_visualEngine.setLayerText(track, vc.text);
+
+    // iChannel2 source selection — mutually exclusive per layer.
+    // Priority: model > live > file. Engine enforces the teardown
+    // either way; we skip the non-winning setters so we don't churn
+    // decoder threads / uploads unnecessarily.
+    if (!vc.modelPath.empty()) {
+        m_visualEngine.setLayerModel(track,
+            resolveModelPath(vc.modelPath));
+        m_visualEngine.setLayerSceneScript(track,
+            resolveScenePath(vc.scenePath));
+    } else if (vc.liveInput && !vc.liveUrl.empty()) {
+        m_visualEngine.setLayerLiveInput(track, vc.liveUrl);
+    } else {
+        m_visualEngine.setLayerVideo(track, vc.videoPath);
+        m_visualEngine.setLayerVideoTiming(track,
+            vc.videoLoopBars, vc.videoRate);
+        m_visualEngine.setLayerVideoTrim(track,
+            vc.videoIn, vc.videoOut);
+    }
+}
+
+void App::pollArrangementVisualPlayback() {
+    // Initialize the per-track "last active" state on first call so
+    // we don't mis-detect a transition on startup.
+    if (!m_activeArrInit) {
+        for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
+        m_activeArrInit = true;
+    }
+
+    // Poll regardless of play state so that dragging the playhead
+    // while paused previews whatever clip sits under it — that's
+    // what makes scrubbing feel right. The underlying launch/clear
+    // are idempotent on the same activeIdx.
+    const double beat = m_audioEngine.transport().positionInBeats();
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        auto& track = m_project.track(t);
+        if (track.type != Track::Type::Visual) continue;
+        if (!track.arrangementActive) continue;
+
+        int activeIdx = -1;
+        for (int ci = 0; ci < static_cast<int>(track.arrangementClips.size()); ++ci) {
+            const auto& c = track.arrangementClips[ci];
+            if (c.type != ArrangementClip::Type::Visual) continue;
+            if (beat >= c.startBeat && beat < c.endBeat()) {
+                activeIdx = ci;   // last-match-wins for overlapping clips
+            }
+        }
+
+        if (activeIdx == m_activeArrVisualClip[t]) continue;
+
+        // Transition detected.
+        if (activeIdx < 0) {
+            // Leaving a clip into a gap → clear the layer so the
+            // arrangement goes quiet on this track.
+            m_visualEngine.clearLayer(t);
+        } else {
+            const auto& nc = track.arrangementClips[activeIdx];
+            if (nc.visualClip) {
+                launchVisualClipData(t, *nc.visualClip,
+                                      resolveShaderPath(nc.visualClip->shaderPath));
+                // Arrangement clips use transport-driven clock so
+                // scrubbing the playhead seeks the visuals. Origin =
+                // the clip's start beat on the arrangement timeline.
+                m_visualEngine.setLayerTransportClock(t, nc.startBeat);
+            }
+        }
+        m_activeArrVisualClip[t] = activeIdx;
+    }
+}
+
+int App::resolveFollowActionScene(int track, int currentScene,
+                                    FollowActionType action) const {
+    const int numScenes = m_project.numScenes();
+    if (track < 0 || track >= m_project.numTracks() || numScenes <= 0)
+        return -1;
+
+    // Build the set of occupied scenes on this track (same convention
+    // as the audio follow-action handler — visual and audio/MIDI slots
+    // all count as "occupied" for navigation purposes).
+    std::vector<int> occupied;
+    for (int s = 0; s < numScenes; ++s) {
+        auto* slot = m_project.getSlot(track, s);
+        if (slot && !slot->empty()) occupied.push_back(s);
+    }
+    if (occupied.empty()) return -1;
+
+    switch (action) {
+        case FollowActionType::Next: {
+            for (int s : occupied) if (s > currentScene) return s;
+            return occupied.front();  // wrap
+        }
+        case FollowActionType::Previous: {
+            for (int i = static_cast<int>(occupied.size()) - 1; i >= 0; --i)
+                if (occupied[i] < currentScene) return occupied[i];
+            return occupied.back();   // wrap
+        }
+        case FollowActionType::First:
+            return occupied.front();
+        case FollowActionType::Last:
+            return occupied.back();
+        case FollowActionType::Random:
+            return occupied[std::rand() % occupied.size()];
+        case FollowActionType::Any: {
+            std::vector<int> others;
+            for (int s : occupied) if (s != currentScene) others.push_back(s);
+            if (!others.empty()) return others[std::rand() % others.size()];
+            return currentScene;
+        }
+        case FollowActionType::PlayAgain:
+            return currentScene;
+        default:
+            return -1;
+    }
+}
+
+void App::pollVisualFollowActions() {
+    // One-shot init: mark all tracks as "not launched" on first call.
+    if (!m_visualLaunchInit) {
+        for (int i = 0; i < kMaxTracks; ++i) {
+            m_visualLaunchBeat[i]  = kNoVisualLaunch;
+            m_visualLaunchScene[i] = -1;
+        }
+        m_visualLaunchInit = true;
+    }
+
+    // Follow actions only fire while transport is actively advancing
+    // bars — matches the audio ClipEngine behavior. Stop-then-play
+    // resets each clip's bar counter (the set-launch-beat path).
+    if (!m_audioEngine.transport().isPlaying()) return;
+
+    const double beat = m_audioEngine.transport().positionInBeats();
+    const int beatsPerBar = std::max(1, m_audioEngine.transport().numerator());
+
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        if (m_project.track(t).type != Track::Type::Visual) continue;
+        if (m_visualLaunchBeat[t] == kNoVisualLaunch) continue;
+
+        const int scene = m_visualLaunchScene[t];
+        if (scene < 0) continue;
+        auto* slot = m_project.getSlot(t, scene);
+        if (!slot || !slot->visualClip) continue;
+        const auto& fa = slot->followAction;
+        if (!fa.enabled || fa.barCount <= 0) continue;
+
+        const double elapsedBeats = beat - m_visualLaunchBeat[t];
+        if (elapsedBeats < fa.barCount * beatsPerBar) continue;
+
+        // Roll A/B probability, pick action, resolve target scene.
+        const int roll = std::rand() % 100;
+        FollowActionType action = (roll < fa.chanceA) ? fa.actionA : fa.actionB;
+        if (action == FollowActionType::None) {
+            // Restart the bar timer so we roll again N bars later —
+            // None means "loop", not "disarm".
+            m_visualLaunchBeat[t] += fa.barCount * beatsPerBar;
+            continue;
+        }
+        if (action == FollowActionType::Stop) {
+            m_visualEngine.clearLayer(t);
+            m_visualLaunchBeat[t]  = kNoVisualLaunch;
+            m_visualLaunchScene[t] = -1;
+            m_sessionPanel->updateClipState(t, false, 0, -1);
+            continue;
+        }
+
+        const int target = resolveFollowActionScene(t, scene, action);
+        if (target < 0) {
+            // No valid target — stop to avoid infinite no-op retries.
+            m_visualEngine.clearLayer(t);
+            m_visualLaunchBeat[t]  = kNoVisualLaunch;
+            m_visualLaunchScene[t] = -1;
+            m_sessionPanel->updateClipState(t, false, 0, -1);
+            continue;
+        }
+        auto* tslot = m_project.getSlot(t, target);
+        if (!tslot || !tslot->visualClip) continue;
+
+        launchVisualClipData(t, *tslot->visualClip,
+                              resolveShaderPath(tslot->visualClip->shaderPath));
+        m_visualEngine.setLayerWallClock(t);
+        m_project.track(t).defaultScene = target;
+        m_visualLaunchBeat[t]  = beat;
+        m_visualLaunchScene[t] = target;
+        // Mirror the scene change into the session grid so the play
+        // indicator follows the active clip instead of staying stuck
+        // on the originally-launched row.
+        m_sessionPanel->updateClipState(t, /*playing*/true,
+                                          /*playPos*/0,
+                                          /*playingScene*/target);
+    }
+}
+
+void App::stopAllVisualLayers() {
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        if (m_project.track(t).type != Track::Type::Visual) continue;
+        m_visualEngine.clearLayer(t);
+        m_activeArrVisualClip[t]  = -1;
+        m_visualLaunchBeat[t]     = kNoVisualLaunch;
+        m_visualLaunchScene[t]    = -1;
+        m_sessionPanel->updateClipState(t, false, 0, -1);
+    }
+}
+
+void App::pollVisualKnobAutomation() {
+    // Evaluate visual-knob automation on the main thread. We reuse
+    // the existing AutomationLane data model (TargetType::VisualKnob
+    // with paramIndex = 0..7 for A..H) but bypass the audio-thread
+    // AutomationEngine — visual knobs don't need audio-thread jitter
+    // guarantees, and the project → audio-engine lane sync isn't
+    // wired for drawn envelopes anyway.
+    //
+    // Precedence (per the H.3 design):
+    //   1. Per-clip envelope (on the active arrangement clip)  — lower
+    //   2. Per-track arrangement lane                          — higher
+    // Applied in that order → the track lane's write wins when both
+    // target the same knob. LFOs still compose on top via the
+    // existing knobDisplayValues pipeline.
+    const double transportBeat = m_audioEngine.transport().positionInBeats();
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        auto& track = m_project.track(t);
+        if (track.type != Track::Type::Visual) continue;
+
+        // Pass 1a: session-grid clip envelopes. Clip-local beat is
+        // (transportBeat - launchBeat) wrapped mod lengthBeats, so
+        // envelopes loop with the clip. Session launches populate
+        // m_visualLaunchBeat[t] via the launch callback.
+        if (m_visualLaunchBeat[t] != kNoVisualLaunch &&
+            m_visualLaunchScene[t] >= 0) {
+            auto* slot = m_project.getSlot(t, m_visualLaunchScene[t]);
+            if (slot && slot->visualClip && !slot->clipAutomation.empty()) {
+                const double launchBeat = m_visualLaunchBeat[t];
+                const double lenBeats   = std::max(0.25,
+                                                    slot->visualClip->lengthBeats);
+                double clipBeat = std::fmod(transportBeat - launchBeat, lenBeats);
+                if (clipBeat < 0.0) clipBeat += lenBeats;
+                for (const auto& lane : slot->clipAutomation) {
+                    if (lane.envelope.empty()) continue;
+                    const float v = lane.envelope.valueAt(clipBeat);
+                    if (lane.target.type == automation::TargetType::VisualKnob) {
+                        const int knob = lane.target.paramIndex;
+                        if (knob >= 0 && knob < 8)
+                            m_visualEngine.setLayerKnob(t, knob, v);
+                    } else if (lane.target.type == automation::TargetType::VisualParam) {
+                        if (!lane.target.paramName.empty())
+                            m_visualEngine.setLayerParam(t, lane.target.paramName, v);
+                    }
+                }
+            }
+        }
+
+        // Pass 1b: arrangement-clip envelopes — deferred; ArrangementClip
+        // doesn't store clipAutomation yet. Placeholder for that phase.
+
+        // Pass 2: per-track arrangement lanes (absolute beat time).
+        // Only applied when autoMode isn't Off. Track lanes run AFTER
+        // clip envelopes so the arrangement layer always wins per the
+        // H.3 precedence design.
+        if (track.autoMode == automation::AutoMode::Off) continue;
+        for (const auto& lane : track.automationLanes) {
+            if (lane.target.trackIndex != t) continue;
+            if (lane.envelope.empty()) continue;
+            const float v = lane.envelope.valueAt(transportBeat);
+            if (lane.target.type == automation::TargetType::VisualKnob) {
+                const int knob = lane.target.paramIndex;
+                if (knob >= 0 && knob < 8)
+                    m_visualEngine.setLayerKnob(t, knob, v);
+            } else if (lane.target.type == automation::TargetType::VisualParam) {
+                if (!lane.target.paramName.empty())
+                    m_visualEngine.setLayerParam(t, lane.target.paramName, v);
+            }
+        }
+    }
+}
+
 void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my) {
     std::vector<ui::ContextMenu::Item> items;
     auto* slot = m_project.getSlot(trackIndex, sceneIndex);
@@ -965,10 +1307,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     self->m_pendingShaderScene = -1;
                     if (ti < 0 || si < 0) return;
                     auto vc = std::make_unique<visual::VisualClip>();
-                    vc->shaderPath = filelist[0];
-                    // Name: filename stem.
-                    std::filesystem::path p(vc->shaderPath);
-                    vc->name = p.stem().string();
+                    // Copy the source into <project>/shaders/<stem>.frag
+                    // and store the project-relative path. Bundled
+                    // shaders and pre-save loads pass through untouched.
+                    vc->shaderPath = self->localizeShader(filelist[0]);
+                    std::filesystem::path p(filelist[0]);
+                    vc->name       = p.stem().string();
                     vc->colorIndex = self->m_project.track(ti).colorIndex;
                     self->m_project.setVisualClip(ti, si, std::move(vc));
                     self->markDirty();
@@ -978,14 +1322,174 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 /*default_location*/ nullptr,
                 /*allow_many*/ false);
         }, false, true});
+
+        // "New Shader…" — prompts for a name, writes a minimal
+        // Shadertoy-compatible template to <project>/shaders/<name>.frag,
+        // and assigns it to this clip. Requires a saved project so the
+        // file has somewhere to land.
+        items.push_back({"New Shader…",
+            [this, trackIndex, sceneIndex]() {
+                if (m_projectPath.empty()) {
+                    LOG_WARN("Shader",
+                        "Save the project first — shaders live under "
+                        "<project>/shaders/.");
+                    return;
+                }
+                SDL_StartTextInput(m_mainWindow.getHandle());
+                m_textInputDialog->prompt("New Shader Name", "untitled",
+                    [this, trackIndex, sceneIndex](const std::string& raw) {
+                        SDL_StopTextInput(m_mainWindow.getHandle());
+                        if (raw.empty()) return;
+                        namespace fs = std::filesystem;
+                        // Sanitize: strip any extension, keep basename only.
+                        fs::path p(raw);
+                        std::string stem = p.stem().string();
+                        if (stem.empty()) stem = raw;
+                        fs::path dir = m_projectPath / "shaders";
+                        std::error_code ec;
+                        fs::create_directories(dir, ec);
+                        // Dedup — if <stem>.frag exists, pick <stem>_N.frag.
+                        fs::path target = dir / (stem + ".frag");
+                        for (int n = 2; fs::exists(target); ++n) {
+                            target = dir / (stem + "_" + std::to_string(n) + ".frag");
+                        }
+                        const char* kTemplate =
+                            "// Shadertoy-style fragment shader.\n"
+                            "// Available uniforms: iResolution, iTime, iBeat,\n"
+                            "// iAudioLevel/Low/Mid/High, iKick, knobA..knobH.\n"
+                            "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n"
+                            "    vec2 uv = fragCoord / iResolution.xy;\n"
+                            "    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));\n"
+                            "    fragColor = vec4(col, 1.0);\n"
+                            "}\n";
+                        FILE* f = std::fopen(target.string().c_str(), "wb");
+                        if (!f) {
+                            LOG_ERROR("Shader", "Failed to create %s",
+                                      target.string().c_str());
+                            return;
+                        }
+                        std::fwrite(kTemplate, 1, std::strlen(kTemplate), f);
+                        std::fclose(f);
+                        LOG_INFO("Shader", "Created new shader %s",
+                                 target.string().c_str());
+
+                        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                        if (!s) return;
+                        if (!s->visualClip)
+                            s->visualClip = std::make_unique<visual::VisualClip>();
+                        s->visualClip->shaderPath =
+                            "shaders/" + target.filename().string();
+                        s->visualClip->name = target.stem().string();
+                        s->visualClip->colorIndex =
+                            m_project.track(trackIndex).colorIndex;
+                        // Reload live layer if this is the launched clip.
+                        if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                            m_visualEngine.loadLayer(trackIndex,
+                                resolveShaderPath(s->visualClip->shaderPath),
+                                s->visualClip->audioSource);
+                        }
+                        markDirty();
+                    });
+            }, false, true});
+
+        // "Fork Shader" — duplicate the current shader file to a new
+        // <stem>_fork_N.frag so the user can edit it without touching
+        // shaders shared by other clips.
+        if (hasVisualClip && !slot->visualClip->shaderPath.empty()) {
+            items.push_back({"Fork Shader",
+                [this, trackIndex, sceneIndex]() {
+                    if (m_projectPath.empty()) {
+                        LOG_WARN("Shader",
+                            "Save the project first — shaders live under "
+                            "<project>/shaders/.");
+                        return;
+                    }
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s || !s->visualClip) return;
+                    namespace fs = std::filesystem;
+                    fs::path source = resolveShaderPath(s->visualClip->shaderPath);
+                    if (!fs::exists(source)) {
+                        LOG_ERROR("Shader", "Cannot fork — source missing: %s",
+                                  source.string().c_str());
+                        return;
+                    }
+                    fs::path dir = m_projectPath / "shaders";
+                    std::error_code ec;
+                    fs::create_directories(dir, ec);
+                    std::string baseStem = source.stem().string();
+                    fs::path target;
+                    for (int n = 1; ; ++n) {
+                        target = dir / (baseStem + "_fork_" +
+                                        std::to_string(n) + ".frag");
+                        if (!fs::exists(target)) break;
+                    }
+                    fs::copy_file(source, target,
+                                  fs::copy_options::overwrite_existing, ec);
+                    if (ec) {
+                        LOG_ERROR("Shader", "Fork copy failed: %s",
+                                  ec.message().c_str());
+                        return;
+                    }
+                    LOG_INFO("Shader", "Forked %s → %s",
+                             source.string().c_str(),
+                             target.string().c_str());
+                    s->visualClip->shaderPath =
+                        "shaders/" + target.filename().string();
+                    s->visualClip->name = target.stem().string();
+                    if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                        m_visualEngine.loadLayer(trackIndex,
+                            resolveShaderPath(s->visualClip->shaderPath),
+                            s->visualClip->audioSource);
+                    }
+                    markDirty();
+                }, false, true});
+        }
+
+        // "Localize Shader" — copy an external/bundled shader into
+        // <project>/shaders/ so the project is self-contained. Only
+        // offered when the current path isn't already project-relative.
+        if (hasVisualClip && !slot->visualClip->shaderPath.empty()) {
+            const std::string& sp = slot->visualClip->shaderPath;
+            const bool alreadyLocal =
+                sp.compare(0, 8, "shaders/") == 0;
+            if (!alreadyLocal) {
+                items.push_back({"Localize Shader",
+                    [this, trackIndex, sceneIndex]() {
+                        if (m_projectPath.empty()) {
+                            LOG_WARN("Shader",
+                                "Save the project first to localize shaders.");
+                            return;
+                        }
+                        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                        if (!s || !s->visualClip) return;
+                        std::string resolved =
+                            resolveShaderPath(s->visualClip->shaderPath);
+                        std::string newPath = localizeShader(resolved);
+                        if (newPath == resolved) return; // nothing changed
+                        s->visualClip->shaderPath = newPath;
+                        if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                            m_visualEngine.loadLayer(trackIndex,
+                                resolveShaderPath(newPath),
+                                s->visualClip->audioSource);
+                        }
+                        markDirty();
+                    }, false, true});
+            }
+        }
+
         // "Set Video…" — opens a file picker, kicks off the ffmpeg
         // transcode, and drops the imported .mp4 path into this clip.
         items.push_back({"Set Video…",
             [this, trackIndex, sceneIndex]() {
                 if (m_projectPath.empty()) {
-                    LOG_WARN("Video",
-                        "Save the project first — media folder is stored "
-                        "alongside the project file.");
+                    // Videos transcode into <project>/media/, so the
+                    // project must have a home on disk. Surface this
+                    // as a user-visible prompt instead of a silent
+                    // log — the menu item feels broken otherwise.
+                    m_confirmDialog->prompt(
+                        "Videos are imported into <project>/media/.\n"
+                        "Save the project first, then try again.",
+                        [this]() { saveProjectAs(); });
                     return;
                 }
                 m_pendingVideoTrack = trackIndex;
@@ -1006,6 +1510,262 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     this, m_mainWindow.getHandle(),
                     &filter, 1, nullptr, false);
             }, false, true});
+
+        // "Live Input ▸" — submenu listing discovered devices + a
+        // Custom URL… fallback + Clear when the clip is already live.
+        // Device enumeration is platform-best-effort; Linux returns
+        // /dev/video* with sysfs-derived names, others return empty.
+        {
+            // Shared action: assign `url` as the clip's live source and
+            // wire it into the engine if this is the launched scene.
+            auto applyLiveUrl = [this, trackIndex, sceneIndex](const std::string& url) {
+                if (url.empty()) return;
+                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                if (!s) return;
+                if (!s->visualClip)
+                    s->visualClip = std::make_unique<visual::VisualClip>();
+                s->visualClip->liveInput = true;
+                s->visualClip->liveUrl   = url;
+                // Live and file video are mutually exclusive — clear
+                // the file fields so the clip data stays consistent.
+                s->visualClip->videoPath.clear();
+                s->visualClip->thumbnailPath.clear();
+                if (s->visualClip->name.empty())
+                    s->visualClip->name = "Live";
+                if (s->visualClip->colorIndex == 0)
+                    s->visualClip->colorIndex =
+                        m_project.track(trackIndex).colorIndex;
+                if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                    m_visualEngine.setLayerLiveInput(trackIndex, url);
+                }
+                markDirty();
+            };
+
+            std::vector<ui::ContextMenu::Item> liveItems;
+
+            auto devices = visual::enumerateLiveInputDevices();
+            for (auto& d : devices) {
+                std::string url = d.url;
+                liveItems.push_back({d.label,
+                    [applyLiveUrl, url]{ applyLiveUrl(url); },
+                    false, true});
+            }
+            if (!devices.empty()) {
+                liveItems.push_back({"", nullptr, true, false}); // separator
+            }
+            liveItems.push_back({"Custom URL…",
+                [this, trackIndex, sceneIndex, applyLiveUrl]() {
+                    auto* s0 = m_project.getSlot(trackIndex, sceneIndex);
+                    std::string initial;
+                    if (s0 && s0->visualClip) initial = s0->visualClip->liveUrl;
+                    if (initial.empty()) initial = "v4l2:///dev/video0";
+                    SDL_StartTextInput(m_mainWindow.getHandle());
+                    m_textInputDialog->prompt("Live Input URL", initial,
+                        [this, applyLiveUrl](const std::string& url) {
+                            SDL_StopTextInput(m_mainWindow.getHandle());
+                            applyLiveUrl(url);
+                        });
+                }, false, true});
+
+            // Clear action is only meaningful when the clip is already
+            // configured for live input.
+            if (hasVisualClip && slot->visualClip->liveInput) {
+                liveItems.push_back({"Clear Live Input",
+                    [this, trackIndex, sceneIndex]() {
+                        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                        if (!s || !s->visualClip) return;
+                        s->visualClip->liveInput = false;
+                        s->visualClip->liveUrl.clear();
+                        if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                            m_visualEngine.setLayerLiveInput(trackIndex, "");
+                        markDirty();
+                    }, false, true});
+            }
+
+            ui::ContextMenu::Item liveEntry;
+            liveEntry.label   = "Live Input";
+            liveEntry.enabled = true;
+            liveEntry.submenu = std::move(liveItems);
+            items.push_back(std::move(liveEntry));
+        }
+
+        // "Set Model…" — pick a .glb / .gltf. On success we localize
+        // the file into <project>/models/ (only .glb is self-contained
+        // enough to safely copy; .gltf stays at its absolute path) and
+        // wire it into the engine if this is the launched clip.
+        {
+            const bool hasModel = hasVisualClip &&
+                                   !slot->visualClip->modelPath.empty();
+            const char* label = hasModel ? "Change Model…" : "Set Model…";
+            items.push_back({label,
+                [this, trackIndex, sceneIndex]() {
+                    m_pendingModelTrack = trackIndex;
+                    m_pendingModelScene = sceneIndex;
+                    static SDL_DialogFileFilter filter{
+                        "3D models (.glb .gltf)", "glb;gltf"};
+                    SDL_ShowOpenFileDialog(
+                        [](void* ud, const char* const* filelist, int) {
+                            auto* self = static_cast<App*>(ud);
+                            if (!filelist || !filelist[0]) return;
+                            int ti = self->m_pendingModelTrack;
+                            int si = self->m_pendingModelScene;
+                            self->m_pendingModelTrack = -1;
+                            self->m_pendingModelScene = -1;
+                            if (ti < 0 || si < 0) return;
+                            auto* s = self->m_project.getSlot(ti, si);
+                            if (!s) return;
+                            if (!s->visualClip)
+                                s->visualClip = std::make_unique<visual::VisualClip>();
+                            std::string stored =
+                                self->localizeModel(filelist[0]);
+                            s->visualClip->modelPath       = stored;
+                            s->visualClip->modelSourcePath = filelist[0];
+                            // Mutual exclusion — clear the other
+                            // iChannel2 sources at the data level too.
+                            s->visualClip->videoPath.clear();
+                            s->visualClip->thumbnailPath.clear();
+                            s->visualClip->liveInput = false;
+                            s->visualClip->liveUrl.clear();
+                            if (s->visualClip->name.empty()) {
+                                std::filesystem::path p(filelist[0]);
+                                s->visualClip->name = p.stem().string();
+                            }
+                            if (s->visualClip->colorIndex == 0) {
+                                s->visualClip->colorIndex =
+                                    self->m_project.track(ti).colorIndex;
+                            }
+                            if (self->m_project.track(ti).defaultScene == si) {
+                                self->m_visualEngine.setLayerModel(ti,
+                                    self->resolveModelPath(stored));
+                            }
+                            self->markDirty();
+                        },
+                        this, m_mainWindow.getHandle(),
+                        &filter, 1, nullptr, false);
+                }, false, true});
+
+            if (hasModel) {
+                items.push_back({"Clear Model",
+                    [this, trackIndex, sceneIndex]() {
+                        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                        if (!s || !s->visualClip) return;
+                        s->visualClip->modelPath.clear();
+                        s->visualClip->modelSourcePath.clear();
+                        // Scene script is only meaningful with a model
+                        // present — drop it too to keep state coherent.
+                        s->visualClip->scenePath.clear();
+                        if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                            m_visualEngine.setLayerModel(trackIndex, "");
+                            m_visualEngine.setLayerSceneScript(trackIndex, "");
+                        }
+                        markDirty();
+                    }, false, true});
+            }
+
+            // "Set Scene Script…" — only offered when the clip has a
+            // model (the script drives instances of that model). File
+            // picker filters to .lua; localizes to <project>/scripts/.
+            if (hasModel) {
+                const bool hasScript = !slot->visualClip->scenePath.empty();
+                const char* sLabel = hasScript ? "Change Scene Script…"
+                                                 : "Set Scene Script…";
+                items.push_back({sLabel,
+                    [this, trackIndex, sceneIndex]() {
+                        m_pendingSceneTrack = trackIndex;
+                        m_pendingSceneScene = sceneIndex;
+                        static SDL_DialogFileFilter filter{
+                            "Lua scene scripts (.lua)", "lua"};
+                        SDL_ShowOpenFileDialog(
+                            [](void* ud, const char* const* filelist, int) {
+                                auto* self = static_cast<App*>(ud);
+                                if (!filelist || !filelist[0]) return;
+                                int ti = self->m_pendingSceneTrack;
+                                int si = self->m_pendingSceneScene;
+                                self->m_pendingSceneTrack = -1;
+                                self->m_pendingSceneScene = -1;
+                                if (ti < 0 || si < 0) return;
+                                auto* s = self->m_project.getSlot(ti, si);
+                                if (!s || !s->visualClip) return;
+                                std::string stored =
+                                    self->localizeScene(filelist[0]);
+                                s->visualClip->scenePath = stored;
+                                if (self->m_project.track(ti).defaultScene == si) {
+                                    self->m_visualEngine.setLayerSceneScript(ti,
+                                        self->resolveScenePath(stored));
+                                }
+                                self->markDirty();
+                            },
+                            this, m_mainWindow.getHandle(),
+                            &filter, 1, nullptr, false);
+                    }, false, true});
+
+                if (hasScript) {
+                    items.push_back({"Clear Scene Script",
+                        [this, trackIndex, sceneIndex]() {
+                            auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                            if (!s || !s->visualClip) return;
+                            s->visualClip->scenePath.clear();
+                            if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                                m_visualEngine.setLayerSceneScript(trackIndex, "");
+                            markDirty();
+                        }, false, true});
+                }
+            }
+        }
+
+        // "Clip Length" submenu — drives the envelope loop / follow-
+        // action bar counter / session-clip "duration" abstraction.
+        if (hasVisualClip) {
+            const double curLen = slot->visualClip->lengthBeats;
+            const int    curBars = static_cast<int>(std::round(curLen / 4.0));
+            auto setLen = [this, trackIndex, sceneIndex](int bars) {
+                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                if (!s || !s->visualClip) return;
+                s->visualClip->lengthBeats = bars * 4.0;
+                markDirty();
+            };
+            std::vector<ui::ContextMenu::Item> lenItems;
+            auto addLen = [&](const char* label, int bars) {
+                lenItems.push_back({label, [setLen, bars]{ setLen(bars); },
+                                       false, curBars != bars});
+            };
+            addLen("1 bar",   1);
+            addLen("2 bars",  2);
+            addLen("4 bars",  4);
+            addLen("8 bars",  8);
+            addLen("16 bars", 16);
+            addLen("32 bars", 32);
+            items.push_back({"Clip Length", nullptr, false, true,
+                              std::move(lenItems)});
+        }
+
+        // "Send to Arrangement" — clone this visual clip onto the
+        // arrangement timeline at the current transport beat, so the
+        // user can lay out a long-form show without having to trigger
+        // clips live. Uses the session clip's lengthBeats as the
+        // duration; they can resize afterwards on the arrangement.
+        if (hasVisualClip) {
+            items.push_back({"Send to Arrangement",
+                [this, trackIndex, sceneIndex]() {
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s || !s->visualClip) return;
+                    ArrangementClip ac;
+                    ac.type         = ArrangementClip::Type::Visual;
+                    ac.startBeat    = m_audioEngine.transport().positionInBeats();
+                    ac.lengthBeats  = s->visualClip->lengthBeats > 0
+                                       ? s->visualClip->lengthBeats : 4.0;
+                    ac.name         = s->visualClip->name.empty()
+                                       ? "visual"
+                                       : s->visualClip->name;
+                    ac.colorIndex   = s->visualClip->colorIndex;
+                    ac.visualClip   = s->visualClip->clone();
+                    auto& clips = m_project.track(trackIndex).arrangementClips;
+                    clips.push_back(std::move(ac));
+                    m_project.track(trackIndex).sortArrangementClips();
+                    m_project.track(trackIndex).arrangementActive = true;
+                    markDirty();
+                }, false, true});
+        }
 
         // "Re-import Video" — delete cached transcode and rerun ffmpeg.
         // Visible only when we know the original source path (imported
@@ -1415,6 +2175,158 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     m_contextMenu.open(mx, my, std::move(items));
 }
 
+std::string App::resolveShaderPath(const std::string& stored) const {
+    if (stored.empty()) return stored;
+    std::filesystem::path p(stored);
+    if (p.is_absolute()) return stored;
+    // Paths from bundled YAWN resources (e.g. "assets/shaders/...") live
+    // alongside the binary in the app's working directory, so pass them
+    // through untouched. Only genuinely project-relative entries (the
+    // ones we start writing as "shaders/<stem>.frag") get prefixed.
+    if (!m_projectPath.empty() && stored.compare(0, 8, "shaders/") == 0) {
+        return (m_projectPath / stored).string();
+    }
+    return stored;
+}
+
+std::string App::resolveModelPath(const std::string& stored) const {
+    if (stored.empty()) return stored;
+    std::filesystem::path p(stored);
+    if (p.is_absolute()) return stored;
+    if (!m_projectPath.empty() && stored.compare(0, 7, "models/") == 0) {
+        return (m_projectPath / stored).string();
+    }
+    return stored;
+}
+
+std::string App::localizeModel(const std::string& sourcePath) {
+    if (sourcePath.empty()) return sourcePath;
+    if (m_projectPath.empty()) {
+        LOG_WARN("Model",
+            "Project not saved — model stays at %s. Save the project to "
+            "copy models into <project>/models/.", sourcePath.c_str());
+        return sourcePath;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path src(sourcePath);
+    std::string ext = src.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::tolower(c));
+
+    // .gltf references external .bin / texture files by relative path.
+    // Copying the .gltf without those files silently breaks the load,
+    // so for MVP we refuse to localize .gltf and just store the
+    // absolute path the user picked.
+    if (ext != ".glb") {
+        LOG_INFO("Model",
+            "Not localizing non-.glb model %s — use .glb for portable projects.",
+            sourcePath.c_str());
+        return sourcePath;
+    }
+
+    fs::path modelsDir = m_projectPath / "models";
+    std::error_code ec;
+    fs::create_directories(modelsDir, ec);
+
+    std::string stem = src.stem().string();
+    fs::path target = modelsDir / (stem + ".glb");
+
+    if (!fs::exists(target)) {
+        fs::copy_file(src, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_ERROR("Model", "Failed to copy %s → %s: %s",
+                      src.string().c_str(), target.string().c_str(),
+                      ec.message().c_str());
+            return sourcePath;
+        }
+        LOG_INFO("Model", "Localized %s → %s",
+                 src.string().c_str(), target.string().c_str());
+    }
+    return "models/" + stem + ".glb";
+}
+
+std::string App::resolveScenePath(const std::string& stored) const {
+    if (stored.empty()) return stored;
+    std::filesystem::path p(stored);
+    if (p.is_absolute()) return stored;
+    if (!m_projectPath.empty() && stored.compare(0, 8, "scripts/") == 0) {
+        return (m_projectPath / stored).string();
+    }
+    return stored;
+}
+
+std::string App::localizeScene(const std::string& sourcePath) {
+    if (sourcePath.empty()) return sourcePath;
+    if (m_projectPath.empty()) {
+        LOG_WARN("Scene",
+            "Project not saved — scene script stays at %s. Save the "
+            "project to copy scripts into <project>/scripts/.",
+            sourcePath.c_str());
+        return sourcePath;
+    }
+    namespace fs = std::filesystem;
+    fs::path src(sourcePath);
+    std::string stem = src.stem().string();
+    std::string ext  = src.extension().string();
+    if (ext.empty()) ext = ".lua";
+
+    fs::path scriptsDir = m_projectPath / "scripts";
+    std::error_code ec;
+    fs::create_directories(scriptsDir, ec);
+    fs::path target = scriptsDir / (stem + ext);
+
+    if (!fs::exists(target)) {
+        fs::copy_file(src, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_ERROR("Scene", "Failed to copy %s → %s: %s",
+                      src.string().c_str(), target.string().c_str(),
+                      ec.message().c_str());
+            return sourcePath;
+        }
+        LOG_INFO("Scene", "Localized %s → %s",
+                 src.string().c_str(), target.string().c_str());
+    }
+    return "scripts/" + stem + ext;
+}
+
+std::string App::localizeShader(const std::string& sourcePath) {
+    if (sourcePath.empty()) return sourcePath;
+    if (m_projectPath.empty()) {
+        LOG_WARN("Shader",
+            "Project not saved — shader stays at %s. Save the project to "
+            "copy shaders into <project>/shaders/.", sourcePath.c_str());
+        return sourcePath;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path shadersDir = m_projectPath / "shaders";
+    std::error_code ec;
+    fs::create_directories(shadersDir, ec);
+
+    fs::path src(sourcePath);
+    std::string stem = src.stem().string();
+    std::string ext  = src.extension().string();
+    if (ext.empty()) ext = ".frag";
+
+    fs::path target = shadersDir / (stem + ext);
+
+    // If a shader with the same stem already exists in the project:
+    //   - If `target` IS `src` (source IS project-local), nothing to do.
+    //   - Otherwise share it (user can Fork for a separate copy).
+    if (!fs::exists(target)) {
+        fs::copy_file(src, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_ERROR("Shader", "Failed to copy %s → %s: %s",
+                      src.string().c_str(), target.string().c_str(),
+                      ec.message().c_str());
+            return sourcePath;
+        }
+        LOG_INFO("Shader", "Localized %s → %s",
+                 src.string().c_str(), target.string().c_str());
+    }
+    return "shaders/" + stem + ext;
+}
+
 void App::startVideoImport(int track, int scene, const std::string& sourcePath) {
     if (m_projectPath.empty()) return;
 
@@ -1789,6 +2701,39 @@ void App::updateDetailForSelectedTrack() {
         auto params = m_visualEngine.getLayerParams(m_selectedTrack);
         std::string shaderLabel;
         int scene = m_project.track(m_selectedTrack).defaultScene;
+        // If the layer hasn't been launched yet, parse the selected
+        // clip's shader directly so the user can see and edit
+        // modelSpinY / speed / etc. before hitting play.
+        if (scene < 0) scene = m_selectedScene;
+        if (params.empty() && scene >= 0) {
+            auto* slot = m_project.getSlot(m_selectedTrack, scene);
+            if (slot && slot->visualClip) {
+                std::string shaderPath = slot->visualClip->shaderPath;
+                // Same passthrough fallbacks the launch path uses, so
+                // the pre-launch preview shows the same knob set the
+                // clip will actually get.
+                if (shaderPath.empty() && !slot->visualClip->modelPath.empty())
+                    shaderPath = "assets/shaders/model_passthrough.frag";
+                else if (shaderPath.empty() &&
+                          (!slot->visualClip->videoPath.empty() ||
+                           slot->visualClip->liveInput))
+                    shaderPath = "assets/shaders/video_passthrough.frag";
+                if (!shaderPath.empty()) {
+                    params = visual::VisualEngine::parseShaderFileParams(
+                        resolveShaderPath(shaderPath));
+                    // Overlay any persisted paramValues so the knobs
+                    // show the user's last saved positions, not the
+                    // bare @range defaults.
+                    for (auto& info : params) {
+                        for (auto& kv : slot->visualClip->paramValues) {
+                            if (kv.first == info.name) {
+                                info.value = kv.second; break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if (scene >= 0) {
             auto* slot = m_project.getSlot(m_selectedTrack, scene);
             if (slot && slot->visualClip) shaderLabel = slot->visualClip->name;
@@ -1808,8 +2753,39 @@ void App::updateDetailForSelectedTrack() {
                                   m_visualEngine.getPostFXParams(i));
         }
         m_visualParamsPanel->rebuildPostFX(fxChain);
+
+        // Wire the selected visual-clip slot's follow-action block
+        // into the browser-panel editor (the browser panel is shown
+        // for visual tracks too, via the Clip tab). Without this the
+        // editor stays in its "Select a clip slot" placeholder.
+        auto* vslot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+        const bool vhasClip = vslot && vslot->visualClip;
+        m_browserPanel->setFollowAction(vhasClip ? &vslot->followAction
+                                                    : nullptr);
+        // Also expose the clip's automation lanes so users can draw
+        // per-knob envelopes under the Follow Actions in the Clip
+        // tab. The shader's @range uniforms join A..H in the
+        // dropdown so any of them can be automated per clip.
+        if (vhasClip) {
+            std::vector<std::string> paramNames;
+            paramNames.reserve(params.size());
+            for (const auto& p : params) paramNames.push_back(p.name);
+            m_browserPanel->setVisualClipAutomation(
+                &vslot->clipAutomation,
+                m_selectedTrack,
+                vslot->visualClip->lengthBeats > 0.25
+                    ? vslot->visualClip->lengthBeats : 4.0,
+                std::move(paramNames));
+        } else {
+            m_browserPanel->setVisualClipAutomation(nullptr, -1, 4.0, {});
+        }
         return;
     }
+
+    // Non-visual tracks: clear the visual-clip envelope editor so
+    // that its leftover state doesn't re-appear when switching back
+    // to a visual track.
+    m_browserPanel->setVisualClipAutomation(nullptr, -1, 4.0, {});
 
     m_detailPanel->setTrackIndex(m_selectedTrack);
 
@@ -3015,6 +3991,16 @@ void App::processEvents() {
                     break;
                 }
 
+                // An open Clip-tab dropdown captures Up/Down/Enter/Esc
+                // for keyboard nav. Without this early-route, those
+                // keys get consumed by global shortcuts (Play/Stop,
+                // quit, etc.) and the dropdown stays unnavigable.
+                if (m_browserPanel->hasOpenDropdown()) {
+                    ui::fw::KeyEvent ke;
+                    ke.keyCode = static_cast<int>(event.key.key);
+                    if (m_browserPanel->onKeyDown(ke)) break;
+                }
+
                 // Transport editing (BPM / time signature) takes priority
                 if (m_transportPanel->isEditing()) {
                     int kc = 0;
@@ -3896,6 +4882,18 @@ void App::processEvents() {
                 auto mb = m_mixerPanel->bounds();
                 auto db = m_detailPanel->bounds();
                 auto pb = m_pianoRoll->bounds();
+                auto bb = m_browserPanel->bounds();
+
+                // Browser panel first — its dropdown popups live
+                // inside this region and need wheel events to scroll
+                // through lists that overflow the 8-item cap.
+                if (m_lastMouseX >= bb.x && m_lastMouseX < bb.x + bb.w &&
+                    m_lastMouseY >= bb.y && m_lastMouseY < bb.y + bb.h) {
+                    ui::fw::ScrollEvent se;
+                    se.x = m_lastMouseX; se.y = m_lastMouseY;
+                    se.dx = dx; se.dy = dy;
+                    if (m_browserPanel->onScroll(se)) break;
+                }
 
                 if (m_pianoRoll->isOpen() && m_lastMouseY >= pb.y) {
                     auto mod = SDL_GetModState();
@@ -4015,9 +5013,10 @@ void App::processEvents() {
                         m_project.track(targetTrack).type == Track::Type::Visual &&
                         isVideoExt(file)) {
                         if (m_projectPath.empty()) {
-                            LOG_WARN("Drop",
-                                "Save the project first — video imports "
-                                "live in <project>/media/.");
+                            m_confirmDialog->prompt(
+                                "Videos are imported into <project>/media/.\n"
+                                "Save the project first, then drag the video again.",
+                                [this]() { saveProjectAs(); });
                         } else {
                             startVideoImport(targetTrack, targetScene, file);
                         }
@@ -4060,6 +5059,32 @@ void App::update() {
     float dt = (m_lastFrameTicks > 0) ? (now - m_lastFrameTicks) / 1000.0f : 0.0f;
     m_lastFrameTicks = now;
     m_sessionPanel->updateAnimTimer(dt);
+
+    // Transport stop: whenever the stop-counter advances (even while
+    // transport is already stopped), clear every visual layer so
+    // session-launched shaders / models / videos go dark in lockstep
+    // with the audio / MIDI scheduleStop path.
+    {
+        const uint64_t stopCount = m_audioEngine.transport().stopCounter();
+        if (stopCount != m_lastSeenStopCounter) {
+            stopAllVisualLayers();
+            m_lastSeenStopCounter = stopCount;
+        }
+    }
+
+    // Arrangement-driven visual clip playback: detect which clip is
+    // under the transport head on each visual track and fire launch /
+    // clear on transitions. Main-thread polling is precise enough for
+    // visual cues (16 ms granularity at 60 Hz).
+    pollArrangementVisualPlayback();
+
+    // Per-track visual-knob automation lanes — evaluated here rather
+    // than on the audio thread (visuals don't need that precision).
+    pollVisualKnobAutomation();
+
+    // Session-view follow actions for visual clips. Fires Next /
+    // Random / etc. once barCount bars have elapsed since launch.
+    pollVisualFollowActions();
 
     // Video imports — advance each background transcode, apply results.
     for (auto it = m_pendingImports.begin(); it != m_pendingImports.end(); ) {

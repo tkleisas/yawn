@@ -81,6 +81,21 @@ std::string ArrangementPanel::autoLaneName(const automation::AutomationTarget& t
             std::snprintf(buf, sizeof(buf), "MFX%d P%d", tgt.chainIndex, tgt.paramIndex);
             return buf;
         }
+        case automation::TargetType::VisualKnob: {
+            // paramIndex 0..7 → A..H.
+            if (tgt.paramIndex >= 0 && tgt.paramIndex < 8) {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "Knob %c",
+                               static_cast<char>('A' + tgt.paramIndex));
+                return buf;
+            }
+            return "Knob ?";
+        }
+        case automation::TargetType::VisualParam: {
+            return tgt.paramName.empty() ? std::string("Param")
+                                          : tgt.paramName;
+        }
+        default: break;
     }
     return "Param";
 }
@@ -1289,6 +1304,29 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
                     r.drawRect(nx, ny, nw, nh, noteCol);
                 }
                 r.popClip();
+            }
+
+            // Visual clip decoration — a small type glyph in the
+            // upper-left so "video" vs "model" vs "shader" vs "live"
+            // is readable at a glance. The clip name is still drawn
+            // below (shared code path).
+            if (clip.type == ArrangementClip::Type::Visual &&
+                clip.visualClip && cw > 12.0f) {
+                const auto& vc = *clip.visualClip;
+                const char* glyph = "~";           // shader (default)
+                if      (vc.liveInput)            glyph = "●";  // live
+                else if (!vc.modelPath.empty())   glyph = "◆";  // 3D model
+                else if (!vc.videoPath.empty())   glyph = "▸";  // file video
+                else if (!vc.text.empty())        glyph = "T";  // text
+
+                float gScale = Theme::kSmallFontSize / f.pixelHeight();
+                float gx = cx + 4.0f;
+                float gy = cy + 2.0f;
+                uint32_t cp = ui::decodeUtf8(glyph);
+                auto g = f.getGlyph(cp, gx, gy, gScale);
+                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
+                                     g.u0, g.v0, g.u1, g.v1,
+                                     Color{255, 255, 255, 230}, f.textureId());
             }
 
             r.drawRectOutline(cx, cy, cw, ch,

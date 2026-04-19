@@ -9,10 +9,12 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
 #include "audio/FollowAction.h"
+#include "automation/AutomationLane.h"
 #include "midi/MidiMonitorBuffer.h"
 #include "BrowserFilesTab.h"
 #include "BrowserPresetsTab.h"
@@ -29,7 +31,10 @@ class BrowserPanel : public Widget {
 public:
     enum class Tab { Files = 0, Presets, Clip, Midi, COUNT };
 
-    BrowserPanel() { initFollowActionWidgets(); }
+    BrowserPanel() {
+        initFollowActionWidgets();
+        initClipEnvelopeWidgets();
+    }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({c.maxW, c.maxH});
@@ -40,6 +45,24 @@ public:
     }
 
     // ── Follow action API ──
+    // Set which visual clip's automation lanes the "Clip" tab edits.
+    // lanes may be null (no active visual slot — editor grays out).
+    // lengthBeats is the clip's loop length in beats, used for the
+    // envelope time axis. shaderParamNames is the list of @range
+    // uniforms declared by the clip's shader — they show up in the
+    // dropdown alongside A..H so the user can automate any of them.
+    void setVisualClipAutomation(std::vector<automation::AutomationLane>* lanes,
+                                   int trackIndex,
+                                   double lengthBeats,
+                                   std::vector<std::string> shaderParamNames = {}) {
+        m_clipAutoLanes       = lanes;
+        m_clipAutoTrackIdx    = trackIndex;
+        m_clipAutoLength      = lengthBeats > 0.25 ? lengthBeats : 4.0;
+        m_clipShaderParamNames = std::move(shaderParamNames);
+        rebuildClipTargetList();
+        syncClipEnvelope();
+    }
+
     void setFollowAction(FollowAction* fa) {
         m_followActionPtr = fa;
         if (fa) {
@@ -155,6 +178,16 @@ public:
             if (hitWidget(m_faCrossfader, mx, my))
                 return m_faCrossfader.onMouseDown(e);
         }
+        // Clip envelope editor (visual clips only — presence of
+        // m_clipAutoLanes gates it).
+        if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
+            if (m_clipTargetDropdown.isOpen())
+                return m_clipTargetDropdown.onMouseDown(e);
+            if (hitWidget(m_clipTargetDropdown, mx, my))
+                return m_clipTargetDropdown.onMouseDown(e);
+            if (hitWidget(m_clipEnvelope, mx, my))
+                return m_clipEnvelope.onMouseDown(e);
+        }
         return false;
     }
 
@@ -175,6 +208,20 @@ public:
             }
             if (m_faBarCountKnob.onMouseMove(me)) return true;
             if (m_faCrossfader.onMouseMove(me)) return true;
+        }
+        // Clip envelope drag (point move): the envelope widget
+        // captures on mouse-down, so we route moves to it while it
+        // reports a drag in progress.
+        if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
+            MouseMoveEvent me = e;
+            if (m_clipTargetDropdown.isOpen()) {
+                m_clipTargetDropdown.onMouseMove(me);
+                return true;
+            }
+            if (m_clipEnvelope.dragIndex() >= 0) {
+                m_clipEnvelope.onMouseMove(me);
+                return true;
+            }
         }
         return false;
     }
@@ -198,6 +245,33 @@ public:
                 return m_faActionBDropdown.onMouseUp(e);
             if (m_faCrossfader.onMouseUp(e)) return true;
         }
+        if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
+            if (m_clipTargetDropdown.isOpen())
+                return m_clipTargetDropdown.onMouseUp(e);
+            if (m_clipEnvelope.onMouseUp(e)) return true;
+        }
+        return false;
+    }
+
+    // True when any dropdown on the Clip tab is open. The App uses
+    // this to route Up/Down/Enter/Esc into the dropdown for keyboard
+    // navigation rather than intercepting them for transport /
+    // global shortcuts.
+    bool hasOpenDropdown() const {
+        return m_activeTab == Tab::Clip && (
+            m_faActionADropdown.isOpen() ||
+            m_faActionBDropdown.isOpen() ||
+            m_clipTargetDropdown.isOpen());
+    }
+
+    bool onKeyDown(KeyEvent& e) override {
+        if (m_activeTab != Tab::Clip) return false;
+        if (m_faActionADropdown.isOpen())
+            return m_faActionADropdown.onKeyDown(e);
+        if (m_faActionBDropdown.isOpen())
+            return m_faActionBDropdown.onKeyDown(e);
+        if (m_clipAutoLanes && m_clipTargetDropdown.isOpen())
+            return m_clipTargetDropdown.onKeyDown(e);
         return false;
     }
 
@@ -206,6 +280,20 @@ public:
             return m_filesTab.onScroll(e);
         if (m_activeTab == Tab::Presets)
             return m_presetsTab.onScroll(e);
+        // Route wheel events to open dropdowns on the Clip tab so
+        // the user can scroll through long item lists (shader @range
+        // uniforms, follow-action target lists, etc).
+        if (m_activeTab == Tab::Clip) {
+            if (m_faActionADropdown.isOpen()) {
+                return m_faActionADropdown.onScroll(e);
+            }
+            if (m_faActionBDropdown.isOpen()) {
+                return m_faActionBDropdown.onScroll(e);
+            }
+            if (m_clipAutoLanes && m_clipTargetDropdown.isOpen()) {
+                return m_clipTargetDropdown.onScroll(e);
+            }
+        }
         if (m_activeTab == Tab::Midi && m_midiMonitor) {
             m_midiScrollOffset += static_cast<int>(e.dy * 3);
             if (m_midiScrollOffset < 0) m_midiScrollOffset = 0;
@@ -309,6 +397,8 @@ public:
                 m_faActionADropdown.paintOverlay(ctx);
             if (m_faActionBDropdown.isOpen())
                 m_faActionBDropdown.paintOverlay(ctx);
+            if (m_clipAutoLanes && m_clipTargetDropdown.isOpen())
+                m_clipTargetDropdown.paintOverlay(ctx);
         }
     }
 
@@ -337,6 +427,23 @@ private:
     FollowAction* m_followActionPtr = nullptr;
     FwButton   m_faEnableBtn;
     FwKnob     m_faBarCountKnob;
+
+    // Clip-envelope editor state (visual clips only for now).
+    std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
+    int     m_clipAutoTrackIdx = -1;
+    double  m_clipAutoLength   = 4.0;
+    // Unified target entry: either one of the 8 A..H knobs OR a shader
+    // @range uniform. The dropdown lists all of these.
+    struct ClipTargetEntry {
+        bool        isShaderParam = false;  // false = A..H knob
+        int         knobIndex     = -1;     // 0..7 when isShaderParam=false
+        std::string paramName;              // non-empty when isShaderParam=true
+    };
+    std::vector<ClipTargetEntry> m_clipTargets;
+    std::vector<std::string>     m_clipShaderParamNames;
+    int      m_clipSelectedTarget = 0;
+    FwDropDown               m_clipTargetDropdown;
+    AutomationEnvelopeWidget m_clipEnvelope;
     FwDropDown m_faActionADropdown;
     FwDropDown m_faActionBDropdown;
     FwCrossfader m_faCrossfader;
@@ -344,6 +451,126 @@ private:
     static bool hitWidget(Widget& w, float mx, float my) {
         auto& b = w.bounds();
         return mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h;
+    }
+
+    // Build the dropdown list: A..H followed by every shader @range
+    // uniform the current clip exposes. Called whenever the set of
+    // available params changes (clip selection, shader reload).
+    void rebuildClipTargetList() {
+        m_clipTargets.clear();
+        std::vector<std::string> labels;
+        labels.reserve(8 + m_clipShaderParamNames.size());
+        for (int i = 0; i < 8; ++i) {
+            ClipTargetEntry e;
+            e.isShaderParam = false;
+            e.knobIndex     = i;
+            m_clipTargets.push_back(e);
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "Knob %c",
+                           static_cast<char>('A' + i));
+            labels.emplace_back(buf);
+        }
+        for (const auto& name : m_clipShaderParamNames) {
+            ClipTargetEntry e;
+            e.isShaderParam = true;
+            e.paramName     = name;
+            m_clipTargets.push_back(e);
+            labels.push_back(name);
+        }
+        m_clipTargetDropdown.setItems(labels);
+        if (m_clipSelectedTarget < 0 ||
+            m_clipSelectedTarget >= static_cast<int>(m_clipTargets.size())) {
+            m_clipSelectedTarget = 0;
+        }
+        m_clipTargetDropdown.setSelected(m_clipSelectedTarget);
+    }
+
+    // Find-or-create the lane for the currently-selected dropdown entry.
+    automation::AutomationLane* ensureSelectedLane() {
+        if (!m_clipAutoLanes) return nullptr;
+        if (m_clipSelectedTarget < 0 ||
+            m_clipSelectedTarget >= static_cast<int>(m_clipTargets.size()))
+            return nullptr;
+        const auto& entry = m_clipTargets[m_clipSelectedTarget];
+        for (auto& lane : *m_clipAutoLanes) {
+            if (entry.isShaderParam) {
+                if (lane.target.type == automation::TargetType::VisualParam &&
+                    lane.target.paramName == entry.paramName) {
+                    return &lane;
+                }
+            } else {
+                if (lane.target.type == automation::TargetType::VisualKnob &&
+                    lane.target.paramIndex == entry.knobIndex) {
+                    return &lane;
+                }
+            }
+        }
+        automation::AutomationLane fresh;
+        fresh.target = entry.isShaderParam
+            ? automation::AutomationTarget::visualParam(
+                  m_clipAutoTrackIdx, entry.paramName)
+            : automation::AutomationTarget::visualKnob(
+                  m_clipAutoTrackIdx, entry.knobIndex);
+        m_clipAutoLanes->push_back(std::move(fresh));
+        return &m_clipAutoLanes->back();
+    }
+
+    // Read the envelope points for the current selection and push
+    // them into the widget so users see what's saved.
+    void syncClipEnvelope() {
+        std::vector<std::pair<double, float>> pts;
+        if (m_clipAutoLanes && m_clipSelectedTarget >= 0 &&
+            m_clipSelectedTarget < static_cast<int>(m_clipTargets.size())) {
+            const auto& entry = m_clipTargets[m_clipSelectedTarget];
+            for (auto& lane : *m_clipAutoLanes) {
+                bool match = false;
+                if (entry.isShaderParam) {
+                    match = lane.target.type == automation::TargetType::VisualParam &&
+                            lane.target.paramName == entry.paramName;
+                } else {
+                    match = lane.target.type == automation::TargetType::VisualKnob &&
+                            lane.target.paramIndex == entry.knobIndex;
+                }
+                if (!match) continue;
+                for (auto& p : lane.envelope.points()) {
+                    pts.push_back({p.time, p.value});
+                }
+                break;
+            }
+        }
+        m_clipEnvelope.setPoints(pts);
+        m_clipEnvelope.setTimeRange(0.0, m_clipAutoLength);
+        m_clipEnvelope.setValueRange(0.0f, 1.0f);
+    }
+
+    void initClipEnvelopeWidgets() {
+        // Keep the default 8-item popup cap so the overlay doesn't
+        // run past the bottom of the browser panel. Wheel-scroll
+        // inside the popup reveals the rest of the entries.
+        rebuildClipTargetList();
+        m_clipTargetDropdown.setOnChange([this](int idx) {
+            m_clipSelectedTarget = idx;
+            syncClipEnvelope();
+        });
+
+        m_clipEnvelope.setOnPointAdd([this](double time, float value) {
+            auto* lane = ensureSelectedLane();
+            if (!lane) return;
+            lane->envelope.addPoint(time, value);
+            syncClipEnvelope();
+        });
+        m_clipEnvelope.setOnPointMove([this](int idx, double time, float value) {
+            auto* lane = ensureSelectedLane();
+            if (!lane) return;
+            lane->envelope.movePoint(idx, time, value);
+            syncClipEnvelope();
+        });
+        m_clipEnvelope.setOnPointRemove([this](int idx) {
+            auto* lane = ensureSelectedLane();
+            if (!lane) return;
+            lane->envelope.removePoint(idx);
+            syncClipEnvelope();
+        });
     }
 
     void initFollowActionWidgets() {
@@ -462,6 +689,31 @@ private:
         // Crossfader (A/B chance)
         m_faCrossfader.layout(Rect{sx, rowY, sw, 28.0f}, ctx);
         m_faCrossfader.paint(ctx);
+        rowY += 28.0f + 14.0f;
+
+        // ── Clip envelope editor ──────────────────────────────────
+        // Only meaningful when the slot has a visual clip (lanes
+        // pointer is set for visual slots only). For audio/MIDI we
+        // leave the section hidden to avoid UX confusion.
+        if (!m_clipAutoLanes) return;
+
+        r.drawRect(sx, rowY, sw, 1.0f, Color{50, 50, 55, 255});
+        f.drawText(r, "Clip Envelope", sx, rowY + 8.0f, labelScale,
+                    Theme::textPrimary);
+        // Larger gap between the section header and the button row
+        // so the label text isn't cropped by the button outlines.
+        rowY += 28.0f;
+
+        // Target dropdown — A..H plus shader @range uniforms.
+        m_clipTargetDropdown.layout(Rect{sx, rowY, sw, 20.0f}, ctx);
+        m_clipTargetDropdown.paint(ctx);
+        rowY += 24.0f;
+
+        // Envelope drawing area.
+        m_clipEnvelope.setTimeRange(0.0, m_clipAutoLength);
+        m_clipEnvelope.setValueRange(0.0f, 1.0f);
+        m_clipEnvelope.layout(Rect{sx, rowY, sw, 80.0f}, ctx);
+        m_clipEnvelope.paint(ctx);
     }
 
     void paintMidiTab(Renderer2D& r, Font& f, float x, float y,

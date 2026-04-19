@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(YAWN
-    VERSION 0.5.0
+    VERSION 0.34.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -47,12 +47,23 @@ endif()
 # code paths so builds without ffmpeg still work (menu items hidden).
 find_package(PkgConfig QUIET)
 set(YAWN_HAS_VIDEO 0)
+set(YAWN_HAS_AVDEVICE 0)
 if(PKG_CONFIG_FOUND)
     pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
         libavcodec libavformat libavutil libswscale)
     if(FFMPEG_FOUND)
         set(YAWN_HAS_VIDEO 1)
         message(STATUS "FFmpeg found — video track support enabled")
+    endif()
+    # libavdevice is optional — without it, network URLs (rtsp/http) still
+    # work but OS capture URLs (v4l2, avfoundation, dshow) don't resolve.
+    pkg_check_modules(FFMPEG_AVDEVICE QUIET IMPORTED_TARGET libavdevice)
+    if(FFMPEG_AVDEVICE_FOUND)
+        set(YAWN_HAS_AVDEVICE 1)
+        message(STATUS "libavdevice found — live device capture enabled")
+    else()
+        message(STATUS "libavdevice NOT found — live capture disabled "
+                       "(network URLs still work); install libavdevice-dev to enable")
     endif()
 endif()
 if(NOT YAWN_HAS_VIDEO)
@@ -85,6 +96,10 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/OfflineRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
+    # stb_image single-TU implementation. Lives in yawn_core so every
+    # downstream binary (main exe, tests, tinygltf impl) resolves the
+    # stbi_* symbols without needing its own dedicated TU.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util/stb_image_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryDatabase.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryScanner.cpp
@@ -105,10 +120,23 @@ if(YAWN_VST3)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vst3/VST3EditorWindow.cpp
     )
 endif()
+# 3D model loader (tinygltf single-TU impl). No GL deps — safe for
+# yawn_core; M3DRenderer (G.3) lives in the main exe with the GL code.
+if(YAWN_HAS_MODEL3D)
+    list(APPEND YAWN_CORE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/gltf/tinygltf_impl.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/gltf/M3DModel.cpp
+        # Lua scene-script glue. No GL deps; just Lua + stdlib.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/gltf/M3DSceneScript.cpp
+    )
+endif()
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
 target_include_directories(yawn_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${minimp3_SOURCE_DIR}
+    # stb lives in yawn_core now so stb_image_impl.cpp (and any
+    # consumer) can find stb_image.h without platform-specific paths.
+    ${stb_SOURCE_DIR}
 )
 target_compile_definitions(yawn_core PUBLIC YAWN_CORE_BUILD)
 target_link_libraries(yawn_core PUBLIC
@@ -127,6 +155,16 @@ target_link_libraries(yawn_core PUBLIC
 if(YAWN_VST3)
     target_link_libraries(yawn_core PUBLIC vst3_hosting)
     target_compile_definitions(yawn_core PUBLIC YAWN_HAS_VST3=1)
+endif()
+
+# 3D model loader (tinygltf). Header-only: include path + feature flag.
+# Lua is also needed here for the scene-script layer (M3DSceneScript).
+if(YAWN_HAS_MODEL3D)
+    target_include_directories(yawn_core PUBLIC
+        ${tinygltf_SOURCE_DIR}
+    )
+    target_link_libraries(yawn_core PUBLIC lua54)
+    target_compile_definitions(yawn_core PUBLIC YAWN_HAS_MODEL3D=1)
 endif()
 
 # Remove core sources from main exe (they're in yawn_core now)
@@ -160,6 +198,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 if(YAWN_HAS_VIDEO)
     target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG)
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_VIDEO=1)
+endif()
+if(YAWN_HAS_AVDEVICE)
+    target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG_AVDEVICE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_AVDEVICE=1)
 endif()
 
 # Platform-specific

@@ -21,13 +21,20 @@ public:
         m_visible = false;
     }
 
-    // Show the dialog with a prompt and default text.
+    // Show the dialog with a prompt and default text. maxLength limits
+    // how many bytes (UTF-8) m_text will accept — 0 means unlimited.
+    // Characters pasted/typed past the limit are silently dropped.
     void prompt(const std::string& title,
                 const std::string& defaultText,
-                std::function<void(const std::string&)> onConfirm) {
+                std::function<void(const std::string&)> onConfirm,
+                int maxLength = 0) {
         m_title     = title;
         m_text      = defaultText;
+        if (maxLength > 0 && static_cast<int>(m_text.size()) > maxLength)
+            m_text.resize(maxLength);
+        m_maxLength = maxLength;
         m_cursor    = static_cast<int>(m_text.size());
+        m_scrollX   = 0.0f;
         m_onConfirm = std::move(onConfirm);
         m_visible   = true;
     }
@@ -78,13 +85,31 @@ public:
         float textScale = 12.0f / Theme::kFontSize;
         float lineH = 48.0f * textScale;   // font pixel height * scale
         float textY = fy + (fh - lineH) * 0.5f;
-        font->drawText(*renderer, m_text.c_str(), fx + 6, textY, textScale,
-                       Theme::textPrimary);
+        constexpr float kInset = 6.0f;
+        float innerX = fx + kInset;
+        float innerW = fw - 2.0f * kInset;
 
-        // Cursor
+        // Horizontal auto-scroll so the cursor stays visible when the
+        // text is wider than the field. m_scrollX is in pixels of the
+        // unscrolled text space.
         std::string beforeCursor = m_text.substr(0, m_cursor);
-        float cursorX = fx + 6 + font->textWidth(beforeCursor.c_str(), textScale);
+        float cursorOffset = font->textWidth(beforeCursor.c_str(), textScale);
+        if (cursorOffset - m_scrollX > innerW - 2.0f) {
+            m_scrollX = cursorOffset - (innerW - 2.0f);
+        } else if (cursorOffset - m_scrollX < 0.0f) {
+            m_scrollX = cursorOffset;
+        }
+        if (m_scrollX < 0.0f) m_scrollX = 0.0f;
+
+        // Clip text + cursor to the inner field so overflow doesn't
+        // spill across the dialog or out of the window.
+        renderer->pushClip(innerX, fy + 2.0f, innerW, fh - 4.0f);
+        font->drawText(*renderer, m_text.c_str(),
+                       innerX - m_scrollX, textY, textScale,
+                       Theme::textPrimary);
+        float cursorX = innerX + cursorOffset - m_scrollX;
         renderer->drawRect(cursorX, fy + 4, 1, fh - 8, Theme::textPrimary);
+        renderer->popClip();
 
         // OK / Cancel buttons
         float btnScale = 13.0f / Theme::kFontSize;
@@ -173,10 +198,18 @@ public:
     }
 
     bool onTextInput(TextInputEvent& e) override {
-        if (e.text[0]) {
-            m_text.insert(m_cursor, e.text);
-            m_cursor += static_cast<int>(std::strlen(e.text));
+        if (!e.text[0]) return true;
+        int incoming = static_cast<int>(std::strlen(e.text));
+        // If a max length is set, truncate the incoming chunk so the
+        // field never exceeds it. Silently drop the overflow — simpler
+        // than surfacing a separate error state.
+        if (m_maxLength > 0) {
+            int remaining = m_maxLength - static_cast<int>(m_text.size());
+            if (remaining <= 0) return true;
+            if (incoming > remaining) incoming = remaining;
         }
+        m_text.insert(m_cursor, e.text, incoming);
+        m_cursor += incoming;
         return true;
     }
 
@@ -186,7 +219,9 @@ private:
 
     std::string m_title;
     std::string m_text;
-    int m_cursor = 0;
+    int m_cursor    = 0;
+    int m_maxLength = 0;     // 0 = unlimited
+    float m_scrollX = 0.0f;  // horizontal scroll offset in pixels
     std::function<void(const std::string&)> m_onConfirm;
 
     float m_screenW = 0;

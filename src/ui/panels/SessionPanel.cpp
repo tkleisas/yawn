@@ -109,9 +109,20 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                     if (m_onLaunchVisualClip)
                         m_onLaunchVisualClip(t, si, slot->visualClip->shaderPath);
                     m_project->track(t).defaultScene = si;
+                    // Reflect play state so the grid shows a stop
+                    // square (not a play triangle) on the active slot.
+                    m_trackStates[t].playing      = true;
+                    m_trackStates[t].playingScene = si;
                 } else if (m_project->track(t).type != Track::Type::Visual) {
                     m_engine->sendCommand(audio::StopClipMsg{t});
                     m_engine->sendCommand(audio::StopMidiClipMsg{t});
+                    m_project->track(t).defaultScene = -1;
+                } else {
+                    // Visual track with empty slot on this scene →
+                    // clear the layer so the running visual goes dark.
+                    if (m_onStopVisualClip) m_onStopVisualClip(t);
+                    m_trackStates[t].playing      = false;
+                    m_trackStates[t].playingScene = -1;
                     m_project->track(t).defaultScene = -1;
                 }
             }
@@ -229,7 +240,13 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
             m_engine->sendCommand(audio::StopClipMsg{ti});
         else if (slot && slot->midiClip)
             m_engine->sendCommand(audio::StopMidiClipMsg{ti});
-        // Visual clips don't have a stop gesture — shader stays loaded.
+        else if (slot && slot->visualClip) {
+            // Visual stop path — App clears the engine layer + resets
+            // its launch-state trackers via the callback.
+            if (m_onStopVisualClip) m_onStopVisualClip(ti);
+            m_trackStates[ti].playing      = false;
+            m_trackStates[ti].playingScene = -1;
+        }
         m_project->track(ti).defaultScene = -1;
     } else if (slot && slot->audioClip) {
         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
@@ -243,6 +260,10 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
         if (m_onLaunchVisualClip)
             m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
         m_project->track(ti).defaultScene = si;
+        // Reflect play state so the grid shows a stop square on this
+        // slot. Click again to stop via the isPlaying branch above.
+        m_trackStates[ti].playing      = true;
+        m_trackStates[ti].playingScene = si;
     } else if (trackArmed) {
         if (trackType == Track::Type::Midi)
             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
@@ -272,6 +293,8 @@ void SessionPanel::launchSlotAt(int ti, int si) {
         if (m_onLaunchVisualClip)
             m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
         m_project->track(ti).defaultScene = si;
+        m_trackStates[ti].playing      = true;
+        m_trackStates[ti].playingScene = si;
     }
 }
 
@@ -292,6 +315,8 @@ void SessionPanel::launchScene(int scene) {
             if (m_onLaunchVisualClip)
                 m_onLaunchVisualClip(t, scene, slot->visualClip->shaderPath);
             m_project->track(t).defaultScene = scene;
+            m_trackStates[t].playing      = true;
+            m_trackStates[t].playingScene = scene;
         } else if (m_project->track(t).type != Track::Type::Visual) {
             // Audio/MIDI tracks with empty slot → stop whatever's playing.
             // Visual tracks have no "stop" — leave the last shader loaded.
@@ -769,6 +794,32 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     } else if (isSelected) {
         // Subtle inner highlight when playing/recording already draws an outline
         r.drawRectOutline(ix + 2, iy + 2, iw - 4, ih - 4, Color{255, 255, 255, 80}, 1.0f);
+    }
+
+    // Live-input status pip — top-right of the content area. Shown only
+    // when the clip is configured as a live source; colour reflects the
+    // engine's LiveVideoSource::State for the launched layer, or grey
+    // when the clip isn't the currently-launched one on its track.
+    if (vClip && vClip->liveInput && !vClip->liveUrl.empty()) {
+        int state = -1;
+        if (m_onQueryLiveState) state = m_onQueryLiveState(ti, si);
+        Color pipCol;
+        switch (state) {
+            case 1: {  // Connecting — pulse
+                float pulse = (std::sin(m_animTimer * 6.0f) + 1.0f) * 0.5f;
+                uint8_t a = static_cast<uint8_t>(140 + pulse * 115);
+                pipCol = Color{230, 190, 50, a};
+                break;
+            }
+            case 2: pipCol = Color{80, 220, 100, 255}; break;  // Connected
+            case 3: pipCol = Color{220, 60, 60, 255};  break;  // Failed
+            case 0: // Stopped
+            default: pipCol = Color{130, 130, 130, 220}; break;
+        }
+        float pipCX = ix + iw - 9.0f;
+        float pipCY = iy + 9.0f;
+        r.drawFilledCircle(pipCX, pipCY, 5.0f, Color{0, 0, 0, 180}, 16);
+        r.drawFilledCircle(pipCX, pipCY, 4.0f, pipCol, 16);
     }
 
     r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);

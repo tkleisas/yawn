@@ -634,10 +634,104 @@ void deserializeMixer(audio::Mixer& mixer, const json& j,
 // Arrangement clip serialization
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Visual clip field serialization — extracted so both the session-grid
+// clip path and the arrangement-clip path stay in lock-step. Emits just
+// the data fields (no "type" tag, no wrapper); the caller composes the
+// envelope JSON around it.
+// ---------------------------------------------------------------------------
+
+void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
+    j["shaderPath"]  = vc.shaderPath;
+    j["name"]        = vc.name;
+    j["colorIndex"]  = vc.colorIndex;
+    j["lengthBeats"] = vc.lengthBeats;
+    j["audioSource"] = vc.audioSource;
+    if (!vc.paramValues.empty()) {
+        json pj = json::object();
+        for (auto& kv : vc.paramValues) pj[kv.first] = kv.second;
+        j["params"] = pj;
+    }
+    // LFO state — sparse: only write slots that are enabled.
+    json lfos = json::object();
+    static const char* kNames[8] = { "A","B","C","D","E","F","G","H" };
+    for (int i = 0; i < 8; ++i) {
+        const auto& s = vc.knobLFOs[i];
+        if (!s.enabled) continue;
+        json lj;
+        lj["shape"] = s.shape;
+        lj["rate"]  = s.rate;
+        lj["depth"] = s.depth;
+        lj["sync"]  = s.sync;
+        lfos[kNames[i]] = lj;
+    }
+    if (!lfos.empty()) j["lfos"] = lfos;
+    if (!vc.text.empty())             j["text"]            = vc.text;
+    if (!vc.videoPath.empty())        j["videoPath"]       = vc.videoPath;
+    if (!vc.thumbnailPath.empty())    j["thumbnailPath"]   = vc.thumbnailPath;
+    if (!vc.videoSourcePath.empty())  j["videoSourcePath"] = vc.videoSourcePath;
+    if (vc.videoLoopBars != 0)        j["videoLoopBars"]   = vc.videoLoopBars;
+    if (std::abs(vc.videoRate - 1.0f) > 0.001f) j["videoRate"] = vc.videoRate;
+    if (vc.videoIn  != 0.0f)          j["videoIn"]         = vc.videoIn;
+    if (vc.videoOut != 1.0f)          j["videoOut"]        = vc.videoOut;
+    if (vc.liveInput)                 j["liveInput"]       = true;
+    if (!vc.liveUrl.empty())          j["liveUrl"]         = vc.liveUrl;
+    if (!vc.modelPath.empty())        j["modelPath"]       = vc.modelPath;
+    if (!vc.modelSourcePath.empty())  j["modelSourcePath"] = vc.modelSourcePath;
+    if (!vc.scenePath.empty())        j["scenePath"]       = vc.scenePath;
+}
+
+std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val) {
+    auto vc = std::make_unique<visual::VisualClip>();
+    vc->shaderPath  = val.value("shaderPath", "");
+    vc->name        = val.value("name", "");
+    vc->colorIndex  = val.value("colorIndex", 0);
+    vc->lengthBeats = val.value("lengthBeats", 4.0);
+    vc->audioSource = val.value("audioSource", -1);
+    if (val.contains("params") && val["params"].is_object()) {
+        for (auto it = val["params"].begin(); it != val["params"].end(); ++it) {
+            vc->paramValues.emplace_back(it.key(), it.value().get<float>());
+        }
+    }
+    vc->text            = val.value("text",            std::string());
+    vc->videoPath       = val.value("videoPath",       std::string());
+    vc->thumbnailPath   = val.value("thumbnailPath",   std::string());
+    vc->videoSourcePath = val.value("videoSourcePath", std::string());
+    vc->videoLoopBars   = val.value("videoLoopBars",   0);
+    vc->videoRate       = val.value("videoRate",       1.0f);
+    vc->videoIn         = val.value("videoIn",         0.0f);
+    vc->videoOut        = val.value("videoOut",        1.0f);
+    vc->liveInput       = val.value("liveInput",       false);
+    vc->liveUrl         = val.value("liveUrl",         std::string());
+    vc->modelPath       = val.value("modelPath",       std::string());
+    vc->modelSourcePath = val.value("modelSourcePath", std::string());
+    vc->scenePath       = val.value("scenePath",       std::string());
+    if (val.contains("lfos") && val["lfos"].is_object()) {
+        static const char* kNames[8] = { "A","B","C","D","E","F","G","H" };
+        for (int i = 0; i < 8; ++i) {
+            if (!val["lfos"].contains(kNames[i])) continue;
+            const auto& lj = val["lfos"][kNames[i]];
+            auto& s = vc->knobLFOs[i];
+            s.enabled = true;
+            s.shape   = lj.value("shape", 0);
+            s.rate    = lj.value("rate",  1.0f);
+            s.depth   = lj.value("depth", 0.3f);
+            s.sync    = lj.value("sync",  true);
+        }
+    }
+    return vc;
+}
+
 json serializeArrangementClip(const ArrangementClip& clip,
                                const fs::path& samplesDir, int& sampleCounter) {
     json j;
-    j["type"] = clip.type == ArrangementClip::Type::Audio ? "Audio" : "Midi";
+    const char* typeStr = "Audio";
+    switch (clip.type) {
+        case ArrangementClip::Type::Audio:  typeStr = "Audio";  break;
+        case ArrangementClip::Type::Midi:   typeStr = "Midi";   break;
+        case ArrangementClip::Type::Visual: typeStr = "Visual"; break;
+    }
+    j["type"] = typeStr;
     j["startBeat"] = clip.startBeat;
     j["lengthBeats"] = clip.lengthBeats;
     j["offsetBeats"] = clip.offsetBeats;
@@ -652,6 +746,12 @@ json serializeArrangementClip(const ArrangementClip& clip,
         j["sampleFile"] = filename;
     } else if (clip.type == ArrangementClip::Type::Midi && clip.midiClip) {
         j["midiClip"] = serializeMidiClip(*clip.midiClip);
+    } else if (clip.type == ArrangementClip::Type::Visual && clip.visualClip) {
+        // Inline the visual-clip data fields under a "visual" key so
+        // the outer "type"/"startBeat"/etc. envelope stays clean.
+        json vj;
+        serializeVisualClipFields(*clip.visualClip, vj);
+        j["visual"] = std::move(vj);
     }
 
     return j;
@@ -661,7 +761,9 @@ ArrangementClip deserializeArrangementClip(const json& j,
                                             const fs::path& projectDir) {
     ArrangementClip clip;
     std::string typeStr = j.value("type", "Audio");
-    clip.type = (typeStr == "Midi") ? ArrangementClip::Type::Midi : ArrangementClip::Type::Audio;
+    if      (typeStr == "Midi")   clip.type = ArrangementClip::Type::Midi;
+    else if (typeStr == "Visual") clip.type = ArrangementClip::Type::Visual;
+    else                           clip.type = ArrangementClip::Type::Audio;
     clip.startBeat = j.value("startBeat", 0.0);
     clip.lengthBeats = j.value("lengthBeats", 4.0);
     clip.offsetBeats = j.value("offsetBeats", 0.0);
@@ -674,6 +776,8 @@ ArrangementClip deserializeArrangementClip(const json& j,
         if (buf) clip.audioBuffer = std::move(buf);
     } else if (clip.type == ArrangementClip::Type::Midi && j.contains("midiClip")) {
         clip.midiClip = deserializeMidiClip(j["midiClip"]);
+    } else if (clip.type == ArrangementClip::Type::Visual && j.contains("visual")) {
+        clip.visualClip = deserializeVisualClipFields(j["visual"]);
     }
 
     return clip;
@@ -799,49 +903,8 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
             else if (slot->midiClip)
                 clipJ = serializeMidiClip(*slot->midiClip);
             else if (slot->visualClip) {
-                clipJ["type"]        = "visual";
-                clipJ["shaderPath"]  = slot->visualClip->shaderPath;
-                clipJ["name"]        = slot->visualClip->name;
-                clipJ["colorIndex"]  = slot->visualClip->colorIndex;
-                clipJ["lengthBeats"] = slot->visualClip->lengthBeats;
-                clipJ["audioSource"] = slot->visualClip->audioSource;
-                if (!slot->visualClip->paramValues.empty()) {
-                    json pj = json::object();
-                    for (auto& kv : slot->visualClip->paramValues)
-                        pj[kv.first] = kv.second;
-                    clipJ["params"] = pj;
-                }
-                // LFO state — sparse: only write slots that are enabled.
-                json lfos = json::object();
-                static const char* kNames[8] = {
-                    "A","B","C","D","E","F","G","H"};
-                for (int i = 0; i < 8; ++i) {
-                    const auto& s = slot->visualClip->knobLFOs[i];
-                    if (!s.enabled) continue;
-                    json lj;
-                    lj["shape"] = s.shape;
-                    lj["rate"]  = s.rate;
-                    lj["depth"] = s.depth;
-                    lj["sync"]  = s.sync;
-                    lfos[kNames[i]] = lj;
-                }
-                if (!lfos.empty()) clipJ["lfos"] = lfos;
-                if (!slot->visualClip->text.empty())
-                    clipJ["text"] = slot->visualClip->text;
-                if (!slot->visualClip->videoPath.empty())
-                    clipJ["videoPath"] = slot->visualClip->videoPath;
-                if (!slot->visualClip->thumbnailPath.empty())
-                    clipJ["thumbnailPath"] = slot->visualClip->thumbnailPath;
-                if (!slot->visualClip->videoSourcePath.empty())
-                    clipJ["videoSourcePath"] = slot->visualClip->videoSourcePath;
-                if (slot->visualClip->videoLoopBars != 0)
-                    clipJ["videoLoopBars"] = slot->visualClip->videoLoopBars;
-                if (std::abs(slot->visualClip->videoRate - 1.0f) > 0.001f)
-                    clipJ["videoRate"] = slot->visualClip->videoRate;
-                if (slot->visualClip->videoIn != 0.0f)
-                    clipJ["videoIn"]  = slot->visualClip->videoIn;
-                if (slot->visualClip->videoOut != 1.0f)
-                    clipJ["videoOut"] = slot->visualClip->videoOut;
+                clipJ["type"] = "visual";
+                serializeVisualClipFields(*slot->visualClip, clipJ);
             }
             if (!slot->clipAutomation.empty())
                 clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
@@ -1038,42 +1101,8 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 if (clip)
                     project.setMidiClip(trackIdx, sceneIdx, std::move(clip));
             } else if (clipType == "visual") {
-                auto vc = std::make_unique<visual::VisualClip>();
-                vc->shaderPath  = val.value("shaderPath", "");
-                vc->name        = val.value("name", "");
-                vc->colorIndex  = val.value("colorIndex", 0);
-                vc->lengthBeats = val.value("lengthBeats", 4.0);
-                vc->audioSource = val.value("audioSource", -1);
-                if (val.contains("params") && val["params"].is_object()) {
-                    for (auto it = val["params"].begin();
-                         it != val["params"].end(); ++it) {
-                        vc->paramValues.emplace_back(it.key(),
-                                                      it.value().get<float>());
-                    }
-                }
-                vc->text          = val.value("text",          std::string());
-                vc->videoPath       = val.value("videoPath",       std::string());
-                vc->thumbnailPath   = val.value("thumbnailPath",   std::string());
-                vc->videoSourcePath = val.value("videoSourcePath", std::string());
-                vc->videoLoopBars = val.value("videoLoopBars", 0);
-                vc->videoRate     = val.value("videoRate",     1.0f);
-                vc->videoIn       = val.value("videoIn",       0.0f);
-                vc->videoOut      = val.value("videoOut",      1.0f);
-                if (val.contains("lfos") && val["lfos"].is_object()) {
-                    static const char* kNames[8] = {
-                        "A","B","C","D","E","F","G","H"};
-                    for (int i = 0; i < 8; ++i) {
-                        if (!val["lfos"].contains(kNames[i])) continue;
-                        const auto& lj = val["lfos"][kNames[i]];
-                        auto& s = vc->knobLFOs[i];
-                        s.enabled = true;
-                        s.shape   = lj.value("shape", 0);
-                        s.rate    = lj.value("rate",  1.0f);
-                        s.depth   = lj.value("depth", 0.3f);
-                        s.sync    = lj.value("sync",  true);
-                    }
-                }
-                project.setVisualClip(trackIdx, sceneIdx, std::move(vc));
+                project.setVisualClip(trackIdx, sceneIdx,
+                                       deserializeVisualClipFields(val));
             }
 
             // Clip-level automation

@@ -98,7 +98,30 @@ public:
                 }
             }
 
-            // --- Read-back: apply track (arrangement) lanes, then clip lanes ---
+            // --- Read-back: precedence rules ---
+            //
+            // Audio / MIDI / Mixer targets: track lanes first, clip
+            // lanes second → the clip envelope wins (existing behavior,
+            // "most specific wins").
+            //
+            // Visual-knob targets: clip lanes FIRST, track lanes
+            // second → the track (arrangement) lane wins, matching
+            // the VJ workflow where long-form arrangement automation
+            // is the "final cut" layer on top of per-clip envelopes.
+            const auto& ci = ctx.clips[t];
+            const bool clipActive = ci.playing && ci.clipLanes &&
+                                      !ci.clipLanes->empty();
+
+            if (clipActive) {
+                for (const auto& lane : *ci.clipLanes) {
+                    if (lane.target.type != TargetType::VisualKnob &&
+                        lane.target.type != TargetType::VisualParam) continue;
+                    if (lane.envelope.empty()) continue;
+                    float val = lane.envelope.valueAt(ci.clipLocalBeat);
+                    applyValue(ctx, lane.target, val);
+                }
+            }
+
             if (ctx.trackLanes[t]) {
                 for (const auto& lane : *ctx.trackLanes[t]) {
                     if (lane.envelope.empty()) continue;
@@ -107,11 +130,10 @@ public:
                 }
             }
 
-            // Clip lanes use local beat position (already wrapped by clip engine)
-            // Clip automation always plays back regardless of track AutoMode
-            const auto& ci = ctx.clips[t];
-            if (ci.playing && ci.clipLanes && !ci.clipLanes->empty()) {
+            if (clipActive) {
                 for (const auto& lane : *ci.clipLanes) {
+                    if (lane.target.type == TargetType::VisualKnob ||
+                        lane.target.type == TargetType::VisualParam) continue;
                     if (lane.envelope.empty()) continue;
                     float val = lane.envelope.valueAt(ci.clipLocalBeat);
                     applyValue(ctx, lane.target, val);

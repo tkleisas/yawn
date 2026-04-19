@@ -740,7 +740,14 @@ public:
     static constexpr int kMaxVisible = 8;
 
     void setScreenHeight(float h) { m_screenH = h; }
-    int maxVisible() const { return std::min(static_cast<int>(m_items.size()), kMaxVisible); }
+    // Override the default 8-item popup cap. Useful for dropdowns
+    // whose full list is naturally longer (e.g. clip-automation
+    // target picker that includes 8 knobs + N shader @range uniforms).
+    void setMaxVisible(int n) { m_maxVisibleOverride = std::max(1, n); }
+    int maxVisible() const {
+        int cap = m_maxVisibleOverride > 0 ? m_maxVisibleOverride : kMaxVisible;
+        return std::min(static_cast<int>(m_items.size()), cap);
+    }
     int totalItems() const { return static_cast<int>(m_items.size()); }
     bool needsScroll() const { return totalItems() > maxVisible(); }
 
@@ -839,6 +846,62 @@ public:
         return true;
     }
 
+    // Scroll-wheel support — only relevant while the popup is open.
+    // One wheel notch moves one item. Positive dy = up = earlier item.
+    bool onScroll(ScrollEvent& e) override {
+        if (!m_open || !needsScroll()) return false;
+        if (!hitPopup(e.x, e.y)) return false;
+        int delta = (e.dy > 0.0f) ? -1 : (e.dy < 0.0f) ? 1 : 0;
+        if (delta != 0) {
+            scrollPopup(delta);
+            // Keep hover tracking correct for the new scroll offset.
+            float relY = e.y - popupTop();
+            int visIdx = static_cast<int>(relY / m_bounds.h);
+            m_hoverItem = visIdx + m_scrollOffset;
+            if (m_hoverItem < 0 || m_hoverItem >= totalItems()) m_hoverItem = -1;
+        }
+        return true;
+    }
+
+    // Keyboard nav — when the popup is open: Up/Down move the
+    // selection, Enter commits, Esc closes without changing. SDL
+    // keycodes: Up = 0x40000052, Down = 0x40000051.
+    bool onKeyDown(KeyEvent& e) override {
+        if (!m_open) return false;
+        const int KEY_UP   = 0x40000052;
+        const int KEY_DOWN = 0x40000051;
+        if (e.keyCode == KEY_UP || e.keyCode == KEY_DOWN) {
+            int step = (e.keyCode == KEY_DOWN) ? 1 : -1;
+            int newSel = m_selected + step;
+            if (newSel < 0) newSel = 0;
+            if (newSel >= totalItems()) newSel = totalItems() - 1;
+            m_selected  = newSel;
+            m_hoverItem = newSel;
+            // Keep the newly-selected item visible inside the popup.
+            if (needsScroll()) {
+                int vis = maxVisible();
+                if (m_hoverItem < m_scrollOffset) m_scrollOffset = m_hoverItem;
+                else if (m_hoverItem >= m_scrollOffset + vis)
+                    m_scrollOffset = m_hoverItem - vis + 1;
+            }
+            return true;
+        }
+        if (e.isEnter()) {
+            m_open = false;
+            m_hoverItem = -1;
+            m_scrollOffset = 0;
+            if (m_onChange) m_onChange(m_selected);
+            return true;
+        }
+        if (e.isEscape()) {
+            m_open = false;
+            m_hoverItem = -1;
+            m_scrollOffset = 0;
+            return true;
+        }
+        return false;
+    }
+
 private:
     std::vector<std::string> m_items;
     int m_selected = 0;
@@ -851,6 +914,7 @@ private:
     float m_marqueeOffset = 0.0f;  // current horizontal scroll for selected text
     float m_marqueeDir = 1.0f;    // 1.0 = scrolling left, -1.0 = scrolling right
     float m_marqueePause = 0.0f;  // pause timer at ends
+    int   m_maxVisibleOverride = 0;  // 0 = use kMaxVisible default
     IndexCallback m_onChange;
 };
 

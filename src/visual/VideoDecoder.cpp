@@ -10,10 +10,25 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
+#if defined(YAWN_HAS_AVDEVICE) && YAWN_HAS_AVDEVICE
+#include <libavdevice/avdevice.h>
+#endif
 }
 
 namespace yawn {
 namespace visual {
+
+#if defined(YAWN_HAS_AVDEVICE) && YAWN_HAS_AVDEVICE
+// One-shot registration of libavdevice input/output demuxers (v4l2,
+// avfoundation, dshow, …) so live URLs like "v4l2:///dev/video0" resolve.
+// Safe to call from any libav entry point; guarded so init-once.
+namespace {
+struct AvDeviceInit {
+    AvDeviceInit() { avdevice_register_all(); }
+};
+static AvDeviceInit s_avDeviceInit;
+} // namespace
+#endif
 
 VideoDecoder::~VideoDecoder() { close(); }
 

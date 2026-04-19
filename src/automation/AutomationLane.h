@@ -24,6 +24,7 @@ inline nlohmann::json targetToJson(const AutomationTarget& t) {
     j["trackIndex"] = t.trackIndex;
     j["chainIndex"] = t.chainIndex;
     j["paramIndex"] = t.paramIndex;
+    if (!t.paramName.empty()) j["paramName"] = t.paramName;
     return j;
 }
 
@@ -33,6 +34,7 @@ inline AutomationTarget targetFromJson(const nlohmann::json& j) {
     t.trackIndex = j.value("trackIndex", 0);
     t.chainIndex = j.value("chainIndex", 0);
     t.paramIndex = j.value("paramIndex", 0);
+    t.paramName  = j.value("paramName", std::string());
     return t;
 }
 

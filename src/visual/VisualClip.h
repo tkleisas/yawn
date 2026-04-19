@@ -78,6 +78,27 @@ struct VisualClip {
     float videoIn       = 0.0f;
     float videoOut      = 1.0f;
 
+    // Live video input (webcam, RTSP, etc). When `liveInput` is true the
+    // layer ignores videoPath/loop/rate/in-out and instead opens `liveUrl`
+    // through libavformat (+ libavdevice). Any URL libav can demux works:
+    //   v4l2:///dev/video0, avfoundation://..., rtsp://..., http://..., ...
+    bool        liveInput = false;
+    std::string liveUrl;
+
+    // 3D model (glTF / glb) rendered into the layer's iChannel2 slot —
+    // mutually exclusive with videoPath / liveUrl at the engine level.
+    // Transform (position, rotation, scale) is driven by shader @range
+    // uniforms named modelPosX/Y/Z, modelRotX/Y/Z, modelScale, so A..H
+    // knobs and LFOs can modulate it with no extra plumbing.
+    std::string modelPath;        // project-relative or absolute
+    std::string modelSourcePath;  // original path the user imported from
+
+    // Optional Lua scene script. When non-empty and a model is loaded,
+    // the engine calls script.tick() each frame to get the list of
+    // transforms used for this layer's model; otherwise the static
+    // @range-uniform path runs.
+    std::string scenePath;        // project-relative or absolute
+
     std::unique_ptr<VisualClip> clone() const {
         auto c = std::make_unique<VisualClip>();
         c->shaderPath  = shaderPath;
@@ -95,6 +116,11 @@ struct VisualClip {
         c->videoRate       = videoRate;
         c->videoIn         = videoIn;
         c->videoOut        = videoOut;
+        c->liveInput       = liveInput;
+        c->liveUrl         = liveUrl;
+        c->modelPath       = modelPath;
+        c->modelSourcePath = modelSourcePath;
+        c->scenePath       = scenePath;
         return c;
     }
 };

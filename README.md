@@ -206,13 +206,21 @@
 - **Audio sibling track** — If the source video had audio, a matching audio track is appended and the WAV loaded at the same scene row. Scene-launch fires image + audio in sync.
 - **Video playback modes** — Free-running at native 30 fps, or bar-synced (1/2/4/8/16 bars — the full video stretches to fit exactly that many bars of transport time). Rate knob (0.25× / 0.5× / 1× / 2× / 4×). Trim to sub-range (First/Last half, Middle, quarters).
 - **Session-grid thumbnails** — 160×90 JPEG extracted during import, lazy-loaded by SessionPanel into a GL texture cache, drawn behind the clip content.
-- **Bundled shader pack** — 24 original MIT-licensed shaders (`assets/shaders/examples/`) covering plasma, palette sweeps, flow noise, concentric rings, spectrum/waveform visualisers, spirals, chequerboards, voronoi, tunnels, fractal circles, kaleidoscopes, aurora bands, radial EQ bars, chromatic aberration, beat strobes, kick flashes, and three text-overlay variants — all using the `@range` convention so they play nicely with the knob UI out of the box.
-- **Project portability** — Transcoded media lives in `<project>.yawn/media/` alongside samples. Moving the project folder carries the video with it.
+- **Live video input** — Right-click → **Live Input ▸** for a submenu of discovered capture devices (Linux: globs `/dev/video*` with sysfs names), plus a Custom URL… fallback that accepts any libav URL (`v4l2:///dev/video0`, `rtsp://…`, `http://…`, `dshow://` on Windows, `avfoundation://` on macOS). Dedicated decode thread with drop-frames-on-overrun. Status pip on the clip cell: grey / yellow / green / red. Auto-reconnect with exponential backoff (cap 30 s) after drops; bad URLs fail after three 1/2/4-second attempts so typos surface quickly.
+- **3D model clips (glTF 2.0)** — Right-click → **Set Model…** to load a `.glb` / `.gltf`. Models render into the layer's `iChannel2` via a Lambert + ambient pipeline with a dedicated 640×360 FBO + depth buffer; every existing shader that samples `iChannel2` works on 3D output with no changes. Auto-normalises model size to ~90 % of the frame regardless of the asset's authored units. Control via `modelPosX/Y/Z`, `modelRotX/Y/Z`, `modelSpinX/Y/Z` (deg/sec), `modelScale` — all standard `@range` uniforms, so A–H knobs, LFOs, and automation all work on them. **Skeletal animation** supported for standard glTF rigs (TRS channels, Step/Linear interpolation, up to 128 joints, 4-bones-per-vertex skinning) — drop a rigged + animated Fox and it walks. Bundled: `assets/examples/3d/Duck.glb`, `Fox.glb` (CC-BY 4.0, Khronos sample assets).
+- **Lua scene scripts** — Opt-in per-clip script drives multi-instance rendering. Define `function tick(ctx)` returning a list of `{position, rotation, scale}` transforms; engine draws the clip's primary model once per entry into a shared depth buffer. Read-only context: `ctx.time`, `ctx.beat`, `ctx.audio.{level,low,mid,high,kick}`, `ctx.knobs.A..H`. Sandboxed stdlib (`math`, `table`, `string`, `utf8`). Hot-reload on `mtime` change. Bundled: `kick_ring.lua` (eight-copy ring breathing on the kick).
+- **Arrangement-timeline visual clips** — Visual clips join audio/MIDI as first-class duration blocks on the arrangement. Right-click a session-grid clip → **Send to Arrangement** to place it at the playhead. Resize / move / delete like any other arrangement clip. On playback, crossing a clip fires the same launch path as a session click; leaving into a gap clears the layer.
+- **Timeline scrubbing** — Drag the arrangement playhead and visuals seek with it. Arrangement-launched layers run on a transport-driven clock (`iTime = transportBeats − clipStartBeat` converted via current BPM), so shaders, 3D animations, and video frames all follow the scrub — forward or backward — pause-previews included. Session launches keep their wall-clock `iTime` so the existing session-performance feel is unchanged.
+- **A–H knob + shader-param automation** — Per-track arrangement lanes and per-clip envelopes for visual parameters. Dropdown picks either one of the eight generic knobs or any `@range` uniform the clip's shader declares. Envelope editor in the browser panel's Clip tab; breakpoints loop with `clip.lengthBeats` (editable via the Clip Length submenu: 1/2/4/8/16/32 bars). Precedence: arrangement lane overrides clip envelope — LFO still composes on top. Audio-thread automation engine already dispatched visual-knob targets through a lock-free bus; new `TargetType::VisualParam` round-trips a uniform name for shader-param lanes.
+- **Follow actions for visual session clips** — The same per-slot follow-action data audio/MIDI clips use (Stop / PlayAgain / Next / Previous / First / Last / Random / Any with barCount + chanceA probability split) now fires for visual clips too. Session-view only; main-thread polling.
+- **Per-track stop gesture** — Clicking an active visual clip stops it (mirrors audio/MIDI). Transport stop clears every visual layer in lockstep with audio's `scheduleStop` so "Stop" means Stop everywhere.
+- **Bundled shader pack** — 25 original MIT-licensed shaders (`assets/shaders/examples/`) covering plasma, palette sweeps, flow noise, concentric rings, spectrum/waveform visualisers, spirals, chequerboards, voronoi, tunnels, fractal circles, kaleidoscopes, aurora bands, radial EQ bars, chromatic aberration, beat strobes, kick flashes, text-overlay variants, and an audio-reactive 3D example (`25_model_audio_glow.frag`) — all using the `@range` convention. Plus `model_passthrough.frag` with the full model-transform uniform set as the default for model-only clips.
+- **Project portability** — Transcoded media lives in `<project>.yawn/media/`, shaders in `<project>.yawn/shaders/`, models in `<project>.yawn/models/`, scene scripts in `<project>.yawn/scripts/`. Moving the project folder carries everything with it.
 
-> See [docs/visual.md](docs/visual.md) for the full shader-authoring guide, uniform reference, import pipeline details, and file layout.
+> See [docs/visual.md](docs/visual.md) for the full shader-authoring guide, uniform reference, video / live / 3D / Lua / automation details, and file layout.
 
 ### Quality
-- **Test-Driven Development** — 844 unit & integration tests across 39 test suites via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 907 unit & integration tests across 40+ test suites via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
@@ -249,7 +257,10 @@
 | Font Rendering | stb_truetype |
 | Image Decode | stb_image (icons, video thumbnails) |
 | Video Decode | libavcodec / libavformat / libswscale (optional) |
+| Live Video | libavdevice (optional — webcam / device URLs) |
 | Video Import | `ffmpeg` binary (runtime) |
+| 3D Models (glTF 2.0) | tinygltf (optional) |
+| Scene Scripting | Lua 5.4 (vendored, sandboxed) |
 | Build System | CMake 3.20+ |
 | Testing | Google Test 1.14 |
 | Platforms | Windows, Linux |
@@ -298,6 +309,17 @@ sudo apt install \
 The `ffmpeg` binary is used at runtime for the transcode step; `libav*`
 headers and libraries are linked for real-time video decoding. Without
 them, the build still succeeds but the video menu items are hidden.
+
+For **live video input** (optional — gated by `YAWN_HAS_AVDEVICE`,
+adds webcam / `v4l2://` / `avfoundation://` / `dshow://` device URLs
+on top of the network URLs that work with base FFmpeg):
+
+```bash
+sudo apt install libavdevice-dev
+```
+
+Network-only URLs (`rtsp://`, `http://`) work without this — the
+guard just switches on the OS device demuxers.
 
 ### Build
 

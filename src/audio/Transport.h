@@ -28,9 +28,19 @@ public:
         m_playing.store(false, std::memory_order_release);
         m_recording.store(false, std::memory_order_release);
         m_countInRemaining.store(0, std::memory_order_release);
+        // Counter increments on every stop() call — even when already
+        // stopped — so main-thread observers can detect the "Stop
+        // button was pressed" event rather than just "transport went
+        // from playing to not-playing" (which is only a subset).
+        m_stopCounter.fetch_add(1, std::memory_order_release);
     }
 
     bool isPlaying() const { return m_playing.load(std::memory_order_acquire); }
+    // Monotonic counter — reading across threads is lock-free via
+    // atomic. Compare against a cached value to detect stop events.
+    uint64_t stopCounter() const {
+        return m_stopCounter.load(std::memory_order_acquire);
+    }
 
     // Recording state
     void startRecording() { m_recording.store(true, std::memory_order_release); }
@@ -184,6 +194,7 @@ private:
     std::atomic<int> m_denominator{kDefaultDenominator};
     std::atomic<int> m_countInBars{0};
     std::atomic<int64_t> m_countInRemaining{0};
+    std::atomic<uint64_t> m_stopCounter{0};
     std::atomic<bool> m_loopEnabled{false};
     std::atomic<double> m_loopStartBeats{0.0};
     std::atomic<double> m_loopEndBeats{0.0};

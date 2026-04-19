@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "app/ArrangementClip.h"
 #include "app/Project.h"
+#include "visual/VisualClip.h"
 
 using namespace yawn;
 
@@ -11,6 +12,36 @@ TEST(ArrangementClip, EndBeat) {
     c.startBeat = 4.0;
     c.lengthBeats = 8.0;
     EXPECT_DOUBLE_EQ(c.endBeat(), 12.0);
+}
+
+TEST(ArrangementClip, VisualTypeHoldsVisualClip) {
+    ArrangementClip c;
+    c.type = ArrangementClip::Type::Visual;
+    c.startBeat = 2.0;
+    c.lengthBeats = 4.0;
+    c.visualClip = std::make_unique<visual::VisualClip>();
+    c.visualClip->shaderPath = "shaders/demo.frag";
+    c.visualClip->name       = "demo";
+
+    ASSERT_NE(c.visualClip, nullptr);
+    EXPECT_EQ(c.visualClip->shaderPath, "shaders/demo.frag");
+    EXPECT_EQ(c.type, ArrangementClip::Type::Visual);
+}
+
+TEST(ArrangementClip, CopyDeepClonesVisualClip) {
+    ArrangementClip a;
+    a.type = ArrangementClip::Type::Visual;
+    a.visualClip = std::make_unique<visual::VisualClip>();
+    a.visualClip->shaderPath = "shaders/a.frag";
+
+    ArrangementClip b = a;  // uses the copy constructor
+    ASSERT_NE(b.visualClip, nullptr);
+    // Deep clone — the two should be distinct instances.
+    EXPECT_NE(b.visualClip.get(), a.visualClip.get());
+    EXPECT_EQ(b.visualClip->shaderPath, "shaders/a.frag");
+    // Mutating one must not touch the other.
+    b.visualClip->shaderPath = "shaders/b.frag";
+    EXPECT_EQ(a.visualClip->shaderPath, "shaders/a.frag");
 }
 
 TEST(ArrangementClip, OverlapsTrue) {

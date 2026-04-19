@@ -168,6 +168,30 @@ set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
 # ──────────────────────────────────────────────
+# tinygltf (glTF 2.0 loader — optional, 3D models)
+# Header-only. We provide a single translation unit (tinygltf_impl.cpp)
+# that defines TINYGLTF_IMPLEMENTATION and configures it to reuse our
+# existing stb_image + nlohmann/json rather than the bundled copies.
+# ──────────────────────────────────────────────
+option(YAWN_HAS_MODEL3D "Enable 3D model loading via tinygltf" ON)
+if(YAWN_HAS_MODEL3D)
+    FetchContent_Declare(
+        tinygltf
+        GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+        GIT_TAG        v2.9.3
+        GIT_SHALLOW    TRUE
+    )
+    # Avoid tinygltf building its loader_example / tests / installs.
+    set(TINYGLTF_BUILD_LOADER_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_GL_EXAMPLES    OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_VALIDATOR_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_BUILDER_EXAMPLE   OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_HEADER_ONLY ON CACHE BOOL "" FORCE)
+    set(TINYGLTF_INSTALL     OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(tinygltf)
+endif()
+
+# ──────────────────────────────────────────────
 # VST3 SDK (plugin hosting — optional)
 # ──────────────────────────────────────────────
 option(YAWN_VST3 "Enable VST3 plugin hosting support" ON)

@@ -21,6 +21,11 @@
 #include "visual/VisualLFO.h"
 #include "visual/TextRasterizer.h"
 #include "visual/VideoDecoder.h"
+#include "visual/LiveVideoSource.h"
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+#include "visual/gltf/M3DRenderer.h"
+#include "visual/gltf/M3DSceneScript.h"
+#endif
 
 #include <memory>
 
@@ -80,6 +85,37 @@ public:
     // (iChannel2 reverts to the dummy black texture). Returns false if
     // the file couldn't be opened.
     bool setLayerVideo(int track, const std::string& path);
+    // Attach or detach a live video source (webcam, RTSP, …). Empty
+    // url → no live input. Live and file video are mutually exclusive;
+    // setting one tears down the other.
+    bool setLayerLiveInput(int track, const std::string& url);
+    // Returns LiveVideoSource::State::Stopped if no layer exists or the
+    // layer has no live source currently attached. Used by the session
+    // panel to paint a connection-status pip on live clips.
+    LiveVideoSource::State getLayerLiveState(int track) const;
+    // Last-seen error message for the layer's live source, or empty
+    // if no live source is attached / nothing failed yet.
+    std::string getLayerLiveError(int track) const;
+
+    // Attach or detach a 3D model to the layer. Mutually exclusive with
+    // file video and live video — setting one tears down the others.
+    // Empty path clears the model.
+    bool setLayerModel(int track, const std::string& path);
+
+    // Pick the clock driving iTime / animTime / video frame advance on
+    // a layer. Session-grid clips default to wall-clock (iTime starts
+    // at 0 on launch, advances with real time). Arrangement-placed
+    // clips should use the transport clock so scrubbing the playhead
+    // actually seeks the visuals — iTime = transportBeats*60/bpm -
+    // clipStartBeat*60/bpm, which follows the playhead both forward
+    // and backward.
+    void setLayerWallClock(int track);
+    void setLayerTransportClock(int track, double clipStartBeat);
+
+    // Attach or detach a Lua scene script. Only meaningful once a
+    // model has been set — the script supplies transforms for the
+    // model each frame. Empty path clears any existing script.
+    bool setLayerSceneScript(int track, const std::string& path);
     // Per-clip video timing: loopBars=0 → native-rate free-run (loops when
     // source ends). loopBars>0 → stretch playback so the clip loops at
     // exactly N bars of transport time. rate is an additional multiplier
@@ -102,6 +138,13 @@ public:
         float max;
         float defaultValue;
     };
+
+    // Parse a shader file from disk and return its @range uniforms
+    // without loading a layer / GL program. Lets the Detail panel show
+    // the params before the clip has ever been launched.
+    // Returns value = defaultValue for each entry.
+    static std::vector<LayerParamInfo>
+        parseShaderFileParams(const std::string& shaderPath);
 
     // ── Post-FX chain (master) ─────────────────────────────────────────
     // Ordered list of post-process effects applied to the composited
@@ -170,6 +213,12 @@ private:
             std::chrono::steady_clock::now();
         double lastWallSeconds = 0.0;
         int    frameCounter    = 0;
+        // When true, iTime / animTime / video advance are driven by
+        // the transport clock (beats → seconds via current BPM) with
+        // the given clip start beat as origin. False = wall-clock
+        // (session-grid launch default).
+        bool   transportDriven = false;
+        double clipStartBeat   = 0.0;
 
         // Per-layer audio source (-1 = master).
         int       audioSource = -1;
@@ -232,6 +281,28 @@ private:
         std::string  videoPath;
         GLuint       videoTex        = 0;
         int          lastVideoFrame  = -1;
+        // Live video source (mutually exclusive with `video`). When
+        // present, replaces the file-decode upload path each frame with
+        // a pull from the LiveVideoSource's latest ready frame.
+        std::unique_ptr<LiveVideoSource> liveVideo;
+        std::string  liveUrl;
+
+        // 3D model renderer (also mutually exclusive with video /
+        // liveVideo — they all feed iChannel2). When present, its
+        // colorTexture() is bound instead of videoTex.
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+        std::unique_ptr<M3DRenderer>    modelRenderer;
+        // Optional Lua scene script. When present, takes over from the
+        // @range-uniform-driven static-transform path — its tick()
+        // return value becomes the list of instances to draw each frame.
+        std::unique_ptr<M3DSceneScript> sceneScript;
+        std::string                     scenePath;
+        // Integrated spin from the modelSpinX/Y/Z uniforms. Accumulates
+        // while the layer is alive, wrapped mod 360 so floats don't lose
+        // precision across long sessions.
+        float        modelSpinAccum[3] = { 0.0f, 0.0f, 0.0f };
+#endif
+        std::string  modelPath;
         std::chrono::steady_clock::time_point videoLaunchTime =
             std::chrono::steady_clock::now();
         // Transport-locked loop: 0 = free-running. >0 = loop every N bars.

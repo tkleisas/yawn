@@ -90,6 +90,42 @@ private:
     void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
     void showSceneContextMenu(int sceneIndex, float mx, float my);
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
+
+    // Shared launch logic for visual clips — routes either a
+    // session-grid clip (via its source slot) or an arrangement clip
+    // (via its inline VisualClip) through the same engine setup path
+    // so behaviour stays consistent. `shaderPath` may be empty to
+    // trigger the video/live/model fallback defaults.
+    void launchVisualClipData(int track,
+                               const visual::VisualClip& vc,
+                               const std::string& shaderPath);
+    // Arrangement playback — polled each frame; fires launch / clear
+    // on visual tracks as the transport head crosses clip boundaries.
+    void pollArrangementVisualPlayback();
+
+    // Clear every visual track's layer and reset its launch state.
+    // Called whenever the transport "Stop" gesture fires, so visuals
+    // end in lockstep with audio / MIDI regardless of whether the
+    // transport was actually playing.
+    void stopAllVisualLayers();
+
+    // Visual-knob automation — also polled from the main thread. The
+    // project-side lane store (Project.track.automationLanes) is the
+    // source of truth; visual knobs don't need audio-thread precision
+    // so we skip the AutomationEngine/m_trackAutoLanes path entirely.
+    // Precedence: arrangement lane overrides clip envelope (per the
+    // H.3 design note).
+    void pollVisualKnobAutomation();
+
+    // Session-view follow actions for visual clips. Polled each frame
+    // while transport is playing: once (transportBeat - launchBeat) ≥
+    // barCount × beatsPerBar, rolls chanceA, resolves the action to
+    // a target scene, and fires the session launch path. Mirrors the
+    // audio ClipEngine follow-action behavior; shares target-scene
+    // resolution via `resolveFollowActionScene`.
+    void pollVisualFollowActions();
+    int  resolveFollowActionScene(int track, int currentScene,
+                                   FollowActionType action) const;
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
     void updateDetailForSelectedTrack();
     void updateDetailForReturnBus(int bus);
@@ -214,6 +250,12 @@ private:
     // Target slot for the pending "Set Video…" file dialog.
     int m_pendingVideoTrack = -1;
     int m_pendingVideoScene = -1;
+    // Target slot for the pending "Set Model…" file dialog.
+    int m_pendingModelTrack = -1;
+    int m_pendingModelScene = -1;
+    // Target slot for the pending "Set Scene Script…" file dialog.
+    int m_pendingSceneTrack = -1;
+    int m_pendingSceneScene = -1;
 
     // Active video imports (transcoding in the background via ffmpeg).
     struct PendingVideoImport {
@@ -227,9 +269,54 @@ private:
     void startVideoImport(int track, int scene, const std::string& sourcePath);
     void onVideoImportDone(PendingVideoImport& pi);
 
+    // Shader-path helpers (localization + resolution).
+    // localizeShader copies an externally-picked .frag into
+    //   <project>/shaders/<stem>.frag and returns the project-relative
+    //   path ("shaders/<stem>.frag"). If a file with the same stem
+    //   already exists in the project it's reused (shared-by-default).
+    //   Returns the original path if the project isn't saved yet.
+    // resolveShaderPath turns a stored path (relative or absolute) into
+    //   something loadShaderFromFile can open. Relative paths are
+    //   resolved against the project root.
+    std::string localizeShader(const std::string& sourcePath);
+    std::string resolveShaderPath(const std::string& storedPath) const;
+
+    // Model-path equivalents — same contract as the shader helpers but
+    // write into <project>/models/ and resolve "models/..." prefixes.
+    // localizeModel only copies .glb (self-contained) so references
+    // embedded in a .gltf don't silently break; .gltf paths pass through
+    // unchanged with a warning.
+    std::string localizeModel(const std::string& sourcePath);
+    std::string resolveModelPath(const std::string& storedPath) const;
+
+    // Scene-script helpers — same contract as the shader/model pair
+    // but write into <project>/scripts/ and resolve "scripts/..." .
+    std::string localizeScene(const std::string& sourcePath);
+    std::string resolveScenePath(const std::string& storedPath) const;
+
     // Per-(track, knob) last-seen version from VisualKnobBus, so we only
     // act on fresh MIDI CC writes (avoids stomping on user drags).
     uint32_t m_visualKnobBusVersions[kMaxTracks][8] = {};
+
+    // Arrangement playback tracking — per visual track, the index of
+    // the currently-active arrangement clip (-1 = none / in a gap).
+    // Compared against each frame's lookup to detect transitions.
+    int m_activeArrVisualClip[kMaxTracks] = {};
+    bool m_activeArrInit = false;
+
+    // Tracks the last-seen transport stop counter so we can clear
+    // visual layers exactly once per stop-press — including stops
+    // fired while the transport wasn't playing (session-only visual
+    // launches), which a play→stop edge detector would miss.
+    uint64_t m_lastSeenStopCounter = 0;
+
+    // Per-track launch beat of the currently-playing session visual
+    // clip (used by the follow-action poller to decide when barCount
+    // bars have elapsed). NaN-equivalent = not launched.
+    static constexpr double kNoVisualLaunch = -1.0;
+    double m_visualLaunchBeat[kMaxTracks] = {};
+    int    m_visualLaunchScene[kMaxTracks] = {};
+    bool   m_visualLaunchInit = false;
 
     // UI state from audio thread
     double m_displayBeats = 0.0;

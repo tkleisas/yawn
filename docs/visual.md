@@ -24,6 +24,11 @@ shader-authoring conventions, video workflow, and known limitations.
   - [Import pipeline](#import-pipeline)
   - [Playback modes](#playback-modes)
   - [File layout & project portability](#file-layout--project-portability)
+- [Live video input](#live-video-input)
+- [3D model clips](#3d-model-clips)
+  - [Loading and localization](#loading-and-localization)
+  - [Transform uniform convention](#transform-uniform-convention)
+  - [Lua scene scripts](#lua-scene-scripts)
 - [Output window & fullscreen](#output-window--fullscreen)
 - [Bundled shader pack](#bundled-shader-pack)
 - [Limitations](#limitations)
@@ -220,6 +225,34 @@ Each of the 8 A–H knobs has an **optional LFO**:
   applies to the live layer + persists to the clip.
 - Mapping label shows in the menu; "Remove MIDI Mapping" unbinds.
 
+## Parameter automation
+
+Visual clips participate in the project-wide automation model with two
+scopes:
+
+- **Per-clip envelopes** — edited in the Browser panel's **Clip** tab
+  under the Follow Actions section. A dropdown picks either one of the
+  eight generic knobs (A..H) or any `@range` uniform the clip's shader
+  declares. Breakpoints are clip-local beats; they loop with
+  `clip.lengthBeats` (set via right-click → **Clip Length**:
+  1/2/4/8/16/32 bars).
+- **Per-track arrangement lanes** — absolute timeline beats, shown as
+  expandable automation rows under each visual track on the arrangement
+  view. Create via right-click a visual track header → **Add Knob
+  Lane**. `autoMode = Read` is auto-enabled on first lane add so the
+  curve plays immediately.
+
+Evaluation order per frame: clip envelope → track lane → LFO. The
+arrangement lane always wins when both the clip envelope and the track
+lane target the same knob (matches the "final cut" layering used in
+typical DAWs). LFOs compose on top of whichever source was chosen.
+
+Main-thread polling, 60 Hz, no audio-thread involvement for visual
+targets — visuals don't need the jitter budget and it keeps the path
+simple. Shader-param automation uses `TargetType::VisualParam` with the
+uniform name stored on the target; it round-trips through the project
+file.
+
 ## Post-FX chain
 
 A global ordered chain of effects runs on the composited output before
@@ -334,6 +367,150 @@ All settings persist per clip.
 
 Moving or sharing the `.yawn` folder brings the video with it.
 
+## Live video input
+
+The same `iChannel2` slot that hosts imported video can also pull a live
+stream. Right-click any visual clip → **Live Input** to open a submenu
+of discovered capture devices (Linux: `/dev/video*` with friendly names
+from sysfs) plus a **Custom URL…** entry. Any libav-readable URL works:
+
+```
+v4l2:///dev/video0        # Linux webcam
+rtsp://cam.local/stream   # IP camera
+http://example.com/a.ts   # MPEG-TS HTTP stream
+```
+
+Live input has its own decode thread with drop-frames-on-overrun
+semantics. A small status pip on the clip cell in the session grid
+shows connection state: grey (stopped), pulsing yellow (connecting),
+green (connected), red (failed). YAWN auto-reconnects with exponential
+backoff (cap 30 s) after a live drop; bad URLs fail after three 1-, 2-,
+4-second attempts so typos surface quickly.
+
+Requires `libavdevice-dev` at build time for device URLs; network URLs
+work with base FFmpeg alone.
+
+## 3D model clips
+
+`iChannel2` is also the landing pad for rendered 3D. A clip with a glTF
+2.0 model assigned (`.glb` or `.gltf`) gets a dedicated M3DRenderer
+that draws into the layer's 640×360 RGBA8 + depth FBO with a Lambert +
+ambient lit material; that colour attachment is then bound as
+`iChannel2` and the layer's shader post-processes it exactly like a
+video frame. Every existing `iChannel2`-sampling shader works on
+models without changes.
+
+Right-click a visual clip → **Set Model…** → pick a `.glb` (or
+`.gltf`). If no shader is assigned, YAWN falls back to
+`assets/shaders/model_passthrough.frag`, which blits `iChannel2`
+straight out and declares the transform uniforms (see below) so the
+custom-knob row of the Visual Params panel immediately gives you
+position / rotation / spin / scale controls.
+
+### Loading and localization
+
+Models go through the same project-local copy pattern as shaders: the
+first time you pick a `.glb` outside the project, YAWN copies it into
+`<project>/models/<stem>.glb` and stores the project-relative path,
+so projects are portable. `.gltf` files reference external `.bin` and
+texture files by relative path — copying just the `.gltf` would break
+them — so `.gltf` inputs stay at the absolute path the user picked
+(log a warning and use `.glb` for portable projects).
+
+Models are mutually exclusive with file video and live video at the
+engine level: assigning a model to a layer tears down any existing
+video decoder and `LiveVideoSource`. A bundled Duck
+(`assets/examples/3d/Duck.glb`, CC-BY 4.0 via Khronos sample assets)
+is shipped for smoke-testing.
+
+The renderer normalises every loaded model to a common on-screen
+scale: vertices are recentered to the origin and uniformly scaled so
+the largest single-axis half-extent fits ~90 % of the camera's
+visible half-height. Camera sits at `(0, 0, 2.5)` looking at the
+origin with a 45° vertical FOV. The net effect: whether the glTF was
+authored in millimetres, metres, or arbitrary units, the model fills
+the frame at `modelScale = 1.0` without hand-tuning.
+
+### Transform uniform convention
+
+The engine looks up **named** `@range` uniforms in the shader each
+frame and feeds their values to the M3DRenderer's transform. Any
+shader that declares any subset of these names gets the
+corresponding control:
+
+| Uniform name                     | Meaning                          | Units      |
+|----------------------------------|----------------------------------|------------|
+| `modelPosX` / `modelPosY` / `modelPosZ` | Translation added on top of the auto-center | world units |
+| `modelRotX` / `modelRotY` / `modelRotZ` | Static Euler rotation (applied Z·Y·X) | degrees |
+| `modelSpinX` / `modelSpinY` / `modelSpinZ` | Continuous auto-rotation speed, integrated by the engine each frame | degrees / second |
+| `modelScale`                     | Uniform scale multiplier on top of the auto-fit | dimensionless (1 = full auto-fit) |
+
+Because they're plain `@range` uniforms, A–H knobs, LFOs, MIDI learn,
+and clip automation all work on them with zero extra wiring. Map a
+saw-shaped LFO to `modelRotY` for a clean transport-synced spin, or
+point knob G at `modelScale` and let an envelope drive a breathing
+pulse on the kick.
+
+`assets/shaders/examples/25_model_audio_glow.frag` is a worked
+example: same transform controls plus `iKick`-driven bloom and
+low/mid/high band tinting. Drop it on any model clip and the object
+pulses with the music out of the box.
+
+### Lua scene scripts
+
+For scenes that need more than one model instance or event-driven
+logic (spawn on kick, procedural arrangement, parametric choreography),
+a clip can carry an optional **Lua scene script**. Right-click a
+visual clip with a model assigned → **Set Scene Script…** → pick a
+`.lua` file. YAWN localizes it into `<project>/scripts/<stem>.lua` on
+load, same pattern as shaders and models.
+
+The contract is one global function:
+
+```lua
+function tick(ctx)
+    -- ctx.time         (float, wall-clock seconds)
+    -- ctx.beat         (float, transport beat position)
+    -- ctx.playing      (bool)
+    -- ctx.audio.level  (float, 0..1 smoothed)
+    -- ctx.audio.low    (float)
+    -- ctx.audio.mid    (float)
+    -- ctx.audio.high   (float)
+    -- ctx.audio.kick   (float, peak-triggered, decays)
+    -- ctx.knobs.A .. ctx.knobs.H  (floats, 0..1)
+    --
+    -- Returns a list of transforms — the engine draws the clip's
+    -- primary model once per entry, all accumulating into the same
+    -- depth buffer.
+    return {
+        { position = {x, y, z},
+          rotation = {x, y, z},    -- euler XYZ degrees
+          scale    = s },
+        -- … more instances …
+    }
+end
+```
+
+Missing table fields default to `position={0,0,0}, rotation={0,0,0},
+scale=1`. Returning `nil` or an empty table skips the draw this frame —
+handy for gating on `ctx.audio.kick > 0.5`.
+
+The Lua sandbox exposes the standard `math`, `table`, `string`, and
+`utf8` libraries. `io`, `os`, `package`, and `debug` are intentionally
+absent. Runtime errors are logged, don't crash the app, and don't
+disable the script — edit and save to fix, YAWN polls `mtime` and
+hot-reloads automatically.
+
+`assets/examples/scripts/`:
+
+- `static_demo.lua` — minimal template: one instance, slow Y-spin.
+- `kick_ring.lua`   — ring of eight copies around the origin, whole
+  ring rotating, each copy scaled by the kick envelope.
+
+Because the script's per-instance transforms sit in the same shader
+pipeline, every existing iChannel2 post-processing shader (including
+`25_model_audio_glow.frag`) works on top of a Lua-driven scene.
+
 ## Output window & fullscreen
 
 A secondary SDL3 window hosts the compositor output. It's hidden on
@@ -355,17 +532,31 @@ distances.
 
 ## Bundled shader pack
 
-`assets/shaders/examples/` — 24 original MIT-licensed shaders covering
+`assets/shaders/examples/` — 25 original MIT-licensed shaders covering
 plasma, palette sweeps, flow noise, rings, spectrum/waveform visualisers,
 spirals, chequerboards, voronoi, tunnels, fractal circles, triangular
 grids, FBM clouds, kaleidoscopes, pulse grids, auroras, radial EQ bars,
-RGB-split, beat strobes, kick flashes, and the text shaders described
-above. All use the `@range` annotation convention so they play nicely
-with the knob UI out of the box.
+RGB-split, beat strobes, kick flashes, the text shaders (marquee, kick
+pulse, glitch, debug), and the audio-reactive 3D example
+(`25_model_audio_glow.frag`). All use the `@range` annotation
+convention so they play nicely with the knob UI out of the box.
 
 `assets/shaders/default.frag` — the startup demo; uses A–E knobs as
 palette speed, hue offset, audio-splash strength, kick-flash strength,
 and spectrum bar height.
+
+`assets/shaders/model_passthrough.frag` — minimal shader used as the
+fallback when a clip has a model but no custom shader: just blits
+`iChannel2` and declares the full `model*` transform-uniform set so
+knob mapping works immediately.
+
+`assets/examples/3d/Duck.glb` — bundled Khronos sample model (CC-BY 4.0)
+for smoke-testing the static 3D pipeline.
+
+`assets/examples/3d/Fox.glb` — rigged and animated (CC-BY 4.0, Khronos
+sample asset). Ships three clips (Survey / Walk / Run); the renderer
+auto-plays clip 0 on wall-clock time, so dropping Fox.glb on a visual
+clip immediately shows the skeletal-animation path end to end.
 
 ## Limitations
 
@@ -387,3 +578,17 @@ and spectrum bar height.
   apply immediately.
 - **Visual tracks appear in the mixer** (needed for the volume→opacity
   fader) but their I/O region is blank; audio sends don't apply.
+- **Skeletal animation** is supported for standard glTF rigs: TRS
+  channels (translation / rotation / scale) with Step or Linear
+  interpolation, up to 128 joints per skin, 4-bones-per-vertex
+  skinning. **Cubic-spline interpolation** falls back to linear, and
+  **morph-target weights** are parsed but not yet applied (both
+  deferred). Per-clip UI to pick *which* animation to play and/or
+  sync it to transport is also deferred — the renderer currently
+  auto-plays animation clip 0 on wall-clock time.
+- **3D lighting is a minimal Lambert + ambient** — no PBR, no shadows,
+  no IBL. Suitable for VJ silhouettes and stylised renders, not
+  product-viz quality.
+- **Lua scene scripts only clone the clip's primary model** — loading
+  additional `.glb` files from Lua (e.g. `load_model("cube.glb")`) is
+  a planned follow-up. Per-instance material overrides also deferred.

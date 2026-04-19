@@ -1,5 +1,9 @@
 #include "visual/VisualEngine.h"
 #include "visual/VisualEngineAPI.h"
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+#include "visual/gltf/M3DModel.h"
+#include "visual/gltf/M3DRenderer.h"
+#endif
 #include "util/Logger.h"
 #include "audio/AudioEngine.h"
 #include "audio/Mixer.h"
@@ -365,6 +369,14 @@ void VisualEngine::destroyLayer(Layer& L) {
     if (L.textTex)  { glDeleteTextures(1, &L.textTex); L.textTex = 0; }
     if (L.videoTex) { glDeleteTextures(1, &L.videoTex); L.videoTex = 0; }
     L.video.reset();
+    if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
+    L.liveUrl.clear();
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
+    L.modelPath.clear();
+    L.sceneScript.reset();
+    L.scenePath.clear();
+#endif
 }
 
 void VisualEngine::uploadLayerText(Layer& L) {
@@ -451,6 +463,31 @@ parseShaderParams(const std::string& source) {
             p.min = 0.0f; p.max = 1.0f; p.defaultValue = 0.0f;
         }
         out.push_back(std::move(p));
+    }
+    return out;
+}
+
+// Public helper — parse @range uniforms from a shader file on disk,
+// without ever loading a GL program. Exposed so UI code can populate
+// the custom-param knob row before the clip is launched.
+std::vector<VisualEngine::LayerParamInfo>
+VisualEngine::parseShaderFileParams(const std::string& shaderPath) {
+    std::vector<LayerParamInfo> out;
+    if (shaderPath.empty()) return out;
+    std::ifstream f(shaderPath);
+    if (!f) return out;
+    std::stringstream buf;
+    buf << f.rdbuf();
+    auto parsed = parseShaderParams(buf.str());
+    out.reserve(parsed.size());
+    for (const auto& p : parsed) {
+        LayerParamInfo info;
+        info.name         = p.name;
+        info.min          = p.min;
+        info.max          = p.max;
+        info.defaultValue = p.defaultValue;
+        info.value        = p.defaultValue;
+        out.push_back(std::move(info));
     }
     return out;
 }
@@ -807,6 +844,14 @@ bool VisualEngine::setLayerVideo(int track, const std::string& path) {
     L.video.reset();
     L.videoPath.clear();
     L.lastVideoFrame = -1;
+    // File and live are mutually exclusive — stop any live source too.
+    if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
+    L.liveUrl.clear();
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    // And drop any loaded 3D model — all three paths share iChannel2.
+    if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
+    L.modelPath.clear();
+#endif
 
     if (path.empty()) {
         // Keep the GL texture around at zeros — we rebind to the dummy
@@ -839,6 +884,176 @@ bool VisualEngine::setLayerVideo(int track, const std::string& path) {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     return true;
+}
+
+LiveVideoSource::State VisualEngine::getLayerLiveState(int track) const {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end() || !it->second.liveVideo)
+        return LiveVideoSource::State::Stopped;
+    return it->second.liveVideo->state();
+}
+
+std::string VisualEngine::getLayerLiveError(int track) const {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end() || !it->second.liveVideo) return {};
+    return it->second.liveVideo->error();
+}
+
+bool VisualEngine::setLayerLiveInput(int track, const std::string& url) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    Layer& L = it->second;
+
+    ContextScope scope(m_outputWindow, m_outputContext);
+
+    // Live and file video are mutually exclusive — tear down file side.
+    if (L.video) L.video->close();
+    L.video.reset();
+    L.videoPath.clear();
+    L.lastVideoFrame = -1;
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
+    L.modelPath.clear();
+#endif
+
+    // Same URL as already running? Leave the running source alone so
+    // re-launching the clip doesn't stall it on a reconnect.
+    if (L.liveVideo && L.liveUrl == url &&
+        L.liveVideo->state() != LiveVideoSource::State::Stopped &&
+        L.liveVideo->state() != LiveVideoSource::State::Failed) {
+        return true;
+    }
+
+    // URL changed / empty / previously failed → stop any old session.
+    if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
+    L.liveUrl.clear();
+
+    if (url.empty()) return true;
+
+    L.liveVideo = std::make_unique<LiveVideoSource>();
+    if (!L.liveVideo->start(url)) {
+        LOG_WARN("Visual", "Layer %d: failed to start live input %s",
+                  track, url.c_str());
+        L.liveVideo.reset();
+        return false;
+    }
+    L.liveUrl = url;
+
+    // Share the same GL texture the file-video path uses — upload target
+    // is identical (kWidth×kHeight RGBA8).
+    if (L.videoTex == 0) {
+        glGenTextures(1, &L.videoTex);
+        glBindTexture(GL_TEXTURE_2D, L.videoTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+                     LiveVideoSource::kWidth, LiveVideoSource::kHeight, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    return true;
+}
+
+bool VisualEngine::setLayerSceneScript(int track, const std::string& path) {
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    Layer& L = it->second;
+
+    if (path.empty()) {
+        L.sceneScript.reset();
+        L.scenePath.clear();
+        return true;
+    }
+
+    // Same script already loaded → leave it alone (hot-reload handles
+    // mtime-driven refresh).
+    if (L.scenePath == path && L.sceneScript) return true;
+
+    auto s = std::make_unique<M3DSceneScript>();
+    s->load(path);   // load() logs failures but keeps state for retry
+    L.sceneScript = std::move(s);
+    L.scenePath   = path;
+    return true;
+#else
+    (void)track; (void)path;
+    return false;
+#endif
+}
+
+void VisualEngine::setLayerWallClock(int track) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    L.transportDriven  = false;
+    L.clipStartBeat    = 0.0;
+    // Reset wall-clock origin so iTime restarts at 0 on next render.
+    L.wallStart        = std::chrono::steady_clock::now();
+    L.lastWallSeconds  = 0.0;
+}
+
+void VisualEngine::setLayerTransportClock(int track, double clipStartBeat) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    L.transportDriven  = true;
+    L.clipStartBeat    = clipStartBeat;
+    // Reset lastWallSeconds so tDelta on the first transport-driven
+    // frame is a small positive number rather than a huge wall-clock
+    // spike carried over from the previous session-clock phase.
+    L.lastWallSeconds  = 0.0;
+}
+
+bool VisualEngine::setLayerModel(int track, const std::string& path) {
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    Layer& L = it->second;
+
+    ContextScope scope(m_outputWindow, m_outputContext);
+
+    // Mutual exclusion with file / live video. All three paths feed
+    // iChannel2; a layer can only have one source at a time.
+    if (L.video) L.video->close();
+    L.video.reset();
+    L.videoPath.clear();
+    L.lastVideoFrame = -1;
+    if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
+    L.liveUrl.clear();
+
+    // Same path already loaded → keep as-is (avoid churning the GL
+    // upload on every re-launch of the clip).
+    if (L.modelRenderer && L.modelPath == path && !path.empty())
+        return true;
+
+    if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
+    L.modelPath.clear();
+
+    if (path.empty()) return true;
+
+    M3DModel cpu;
+    if (!cpu.load(path)) {
+        LOG_WARN("Visual", "Layer %d: failed to load model %s (%s)",
+                  track, path.c_str(), cpu.error().c_str());
+        return false;
+    }
+
+    L.modelRenderer = std::make_unique<M3DRenderer>();
+    if (!L.modelRenderer->init()) {
+        LOG_ERROR("Visual", "Layer %d: M3DRenderer init failed", track);
+        L.modelRenderer.reset();
+        return false;
+    }
+    L.modelRenderer->setModel(cpu);
+    L.modelPath = path;
+    return true;
+#else
+    (void)track; (void)path;
+    LOG_WARN("Visual", "3D model support disabled at build time");
+    return false;
+#endif
 }
 
 void VisualEngine::clearLayer(int track) {
@@ -1200,6 +1415,105 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
                                       double transportBeats, bool playing) {
     if (!L.program || !L.fbo) return;
 
+    // Clock selection: wall-clock for session launches, transport-beat
+    // for arrangement launches (so scrubbing the playhead seeks the
+    // visuals). Beats → seconds via the audio engine's current BPM —
+    // BPM changes mid-clip gently rescale iTime, which is acceptable
+    // loose-sync behavior for visuals.
+    double preWall = 0.0;
+    if (L.transportDriven && m_audioEngine) {
+        const double bpm = std::max(1.0, m_audioEngine->transport().bpm());
+        const double clipBeats = transportBeats - L.clipStartBeat;
+        // Clamp to zero if the user scrubs before the clip starts.
+        // clipBeats can also go negative momentarily between an arm
+        // and the first pollArrangementVisualPlayback tick; guard too.
+        preWall = std::max(0.0, clipBeats) * 60.0 / bpm;
+    } else {
+        preWall = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - L.wallStart).count();
+    }
+    // tDelta can be negative when the user scrubs backwards — clamp so
+    // the spin integrator doesn't accumulate massive negative values
+    // that then take seconds to burn off. Scrubbing visually jumps;
+    // it doesn't need to feed continuous-velocity effects.
+    const float  tDelta  = std::max(0.0f,
+                                      static_cast<float>(preWall - L.lastWallSeconds));
+
+    // Audio reactivity: sampled once per frame because readLayerKick /
+    // readLayerLevel mutate the layer's envelope/decay state. The 3D
+    // pass (scene script) and the later shader-uniform block both
+    // consume these same values.
+    const float audioLevel = readLayerLevel(L);
+    const auto  audioBands = readLayerBands(L);
+    const float audioKick  = readLayerKick(L, tDelta);
+
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    // 3D pass: render the layer's model into the M3DRenderer's own FBO
+    // so its color attachment is ready to bind as iChannel2.
+    //
+    // Two modes:
+    //   • No scene script → single instance, pose driven by @range
+    //     uniforms (modelPos*, modelRot*, modelSpin*, modelScale).
+    //   • Scene script    → the script's tick() callback returns a
+    //     list of transforms, one draw call per entry, accumulating
+    //     into the FBO with the shared depth buffer.
+    if (L.modelRenderer && L.modelRenderer->hasModel()) {
+        auto readParam = [&](const char* name, float fallback) -> float {
+            for (const auto& p : L.params) {
+                if (p.name == name) return p.value;
+            }
+            return fallback;
+        };
+
+        if (L.sceneScript) {
+            L.sceneScript->pollHotReload();
+            M3DSceneScript::Inputs in;
+            in.time       = static_cast<float>(preWall);
+            in.beat       = static_cast<float>(transportBeats);
+            in.playing    = playing;
+            in.audioLevel = audioLevel;
+            in.audioLow   = audioBands.low;
+            in.audioMid   = audioBands.mid;
+            in.audioHigh  = audioBands.high;
+            in.kick       = audioKick;
+            for (int i = 0; i < 8; ++i) in.knobs[i] = L.knobDisplayValues[i];
+
+            static thread_local std::vector<M3DTransform> instances;
+            instances.clear();
+            L.sceneScript->tick(in, instances);
+
+            L.modelRenderer->beginFrame(static_cast<float>(preWall));
+            for (const auto& inst : instances) {
+                L.modelRenderer->drawInstance(inst);
+            }
+            L.modelRenderer->endFrame();
+        } else {
+            // Static path — integrate spin and read @range uniforms.
+            float spinX = readParam("modelSpinX", 0.0f);
+            float spinY = readParam("modelSpinY", 0.0f);
+            float spinZ = readParam("modelSpinZ", 0.0f);
+            L.modelSpinAccum[0] = std::fmod(L.modelSpinAccum[0] + spinX * tDelta, 360.0f);
+            L.modelSpinAccum[1] = std::fmod(L.modelSpinAccum[1] + spinY * tDelta, 360.0f);
+            L.modelSpinAccum[2] = std::fmod(L.modelSpinAccum[2] + spinZ * tDelta, 360.0f);
+
+            M3DRenderer::Transform xf;
+            xf.position[0]    = readParam("modelPosX", 0.0f);
+            xf.position[1]    = readParam("modelPosY", 0.0f);
+            xf.position[2]    = readParam("modelPosZ", 0.0f);
+            xf.rotationDeg[0] = readParam("modelRotX", 0.0f) + L.modelSpinAccum[0];
+            xf.rotationDeg[1] = readParam("modelRotY", 0.0f) + L.modelSpinAccum[1];
+            xf.rotationDeg[2] = readParam("modelRotZ", 0.0f) + L.modelSpinAccum[2];
+            xf.scale          = readParam("modelScale", 1.0f);
+            // Use the begin/draw/end form (rather than the convenience
+            // render(xf)) so wall-clock time drives skeletal animation
+            // on rigged models even without a scene script.
+            L.modelRenderer->beginFrame(static_cast<float>(preWall));
+            L.modelRenderer->drawInstance(xf);
+            L.modelRenderer->endFrame();
+        }
+    }
+#endif
+
     glBindFramebuffer(GL_FRAMEBUFFER, L.fbo);
     glViewport(0, 0, kInternalWidth, kInternalHeight);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -1207,12 +1521,10 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
 
     glUseProgram(L.program);
 
-    const double wallSecs =
-        std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - L.wallStart).count();
-    const float tSecs  = static_cast<float>(wallSecs);
-    const float tDelta = static_cast<float>(wallSecs - L.lastWallSeconds);
-    L.lastWallSeconds  = wallSecs;
+    // tDelta was computed up top so the 3D pass could use it; just
+    // finalize the per-layer wall clock here for shader uniforms.
+    const float tSecs  = static_cast<float>(preWall);
+    L.lastWallSeconds  = preWall;
 
     if (L.loc_iResolution >= 0)
         glUniform3f(L.loc_iResolution,
@@ -1241,13 +1553,14 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     if (L.loc_iTransportPlaying >= 0) glUniform1f(L.loc_iTransportPlaying, playing ? 1.0f : 0.0f);
     if (L.loc_iTransportTime    >= 0) glUniform1f(L.loc_iTransportTime, static_cast<float>(transportSeconds));
 
-    // Audio reactivity uniforms — per-layer state updated here.
-    if (L.loc_iAudioLevel >= 0) glUniform1f(L.loc_iAudioLevel, readLayerLevel(L));
-    auto bands = readLayerBands(L);
-    if (L.loc_iAudioLow  >= 0) glUniform1f(L.loc_iAudioLow,  bands.low);
-    if (L.loc_iAudioMid  >= 0) glUniform1f(L.loc_iAudioMid,  bands.mid);
-    if (L.loc_iAudioHigh >= 0) glUniform1f(L.loc_iAudioHigh, bands.high);
-    if (L.loc_iKick      >= 0) glUniform1f(L.loc_iKick, readLayerKick(L, tDelta));
+    // Audio reactivity uniforms — sampled once above so the 3D pass
+    // and the shader block see consistent values (readLayerKick etc.
+    // are stateful and can't be called twice per frame).
+    if (L.loc_iAudioLevel >= 0) glUniform1f(L.loc_iAudioLevel, audioLevel);
+    if (L.loc_iAudioLow   >= 0) glUniform1f(L.loc_iAudioLow,   audioBands.low);
+    if (L.loc_iAudioMid   >= 0) glUniform1f(L.loc_iAudioMid,   audioBands.mid);
+    if (L.loc_iAudioHigh  >= 0) glUniform1f(L.loc_iAudioHigh,  audioBands.high);
+    if (L.loc_iKick       >= 0) glUniform1f(L.loc_iKick,       audioKick);
 
     // iChannel0 = audio (FFT + waveform). iChannel1 = text strip (R8,
     // alpha-only, swizzled to read as .rrrr). iChannel2..3 dummy.
@@ -1274,6 +1587,23 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     }
 
     // iChannel2 = video frame if attached, else dummy black.
+    // Live source: just pull the newest frame. latestFrame() returns false
+    // when nothing is ready yet (pre-connect) or when no new frame has
+    // arrived since the last tick — no GL upload either way.
+    if (L.liveVideo && L.videoTex) {
+        static thread_local std::vector<uint8_t> liveRGBA;
+        const size_t need = size_t(LiveVideoSource::kWidth) *
+                             LiveVideoSource::kHeight * 4;
+        if (liveRGBA.size() != need) liveRGBA.assign(need, 0);
+        if (L.liveVideo->latestFrame(liveRGBA.data())) {
+            glBindTexture(GL_TEXTURE_2D, L.videoTex);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                             LiveVideoSource::kWidth,
+                             LiveVideoSource::kHeight,
+                             GL_RGBA, GL_UNSIGNED_BYTE, liveRGBA.data());
+        }
+    }
     if (L.video && L.video->isOpen() && L.videoTex) {
         const double fps   = L.video->fps() > 1.0 ? L.video->fps() : 30.0;
         const int    count = L.video->frameCount();
@@ -1287,7 +1617,14 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         int rangeLen = std::max(1, outFrame - inFrame);
 
         int targetFrame = inFrame;
-        if (L.videoLoopBars > 0 && count > 0) {
+        if (L.transportDriven) {
+            // Arrangement mode: frame index is clip-relative and
+            // directly follows the transport playhead, so scrubbing
+            // seeks to the exact frame the user hovers.
+            const double elapsed = std::max(0.0, preWall);
+            int advanced = static_cast<int>(elapsed * fps * rate);
+            targetFrame = inFrame + (advanced % std::max(1, rangeLen));
+        } else if (L.videoLoopBars > 0 && count > 0) {
             // Transport-locked: N bars worth of beats maps to the whole
             // playable range, regardless of the video's native duration.
             if (L.videoLaunchBeats == 0.0) L.videoLaunchBeats = transportBeats;
@@ -1321,8 +1658,17 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         }
     }
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, (L.video && L.videoTex) ? L.videoTex
-                                                          : m_dummyChannelTex[2]);
+    GLuint iCh2Tex = m_dummyChannelTex[2];
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    if (L.modelRenderer && L.modelRenderer->hasModel() &&
+        L.modelRenderer->colorTexture()) {
+        iCh2Tex = L.modelRenderer->colorTexture();
+    } else
+#endif
+    if ((L.video || L.liveVideo) && L.videoTex) {
+        iCh2Tex = L.videoTex;
+    }
+    glBindTexture(GL_TEXTURE_2D, iCh2Tex);
     if (L.loc_iChannel[2] >= 0) glUniform1i(L.loc_iChannel[2], 2);
 
     glActiveTexture(GL_TEXTURE3);
@@ -1359,7 +1705,7 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     for (int i = 0; i < 8; ++i) {
         float v = L.knobValues[i];
         if (L.knobLFOs[i].enabled) {
-            float m = L.knobLFOs[i].evaluate(transportBeats, wallSecs);
+            float m = L.knobLFOs[i].evaluate(transportBeats, preWall);
             v = std::clamp(v + m * L.knobLFOs[i].depth, 0.0f, 1.0f);
         }
         L.knobDisplayValues[i] = v;  // cache for the UI

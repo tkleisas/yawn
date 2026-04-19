@@ -21,6 +21,11 @@ TEST(VisualClipTest, DefaultsAreSane) {
     EXPECT_FLOAT_EQ(c.videoRate, 1.0f);
     EXPECT_FLOAT_EQ(c.videoIn,  0.0f);
     EXPECT_FLOAT_EQ(c.videoOut, 1.0f);
+    EXPECT_FALSE(c.liveInput);
+    EXPECT_TRUE(c.liveUrl.empty());
+    EXPECT_TRUE(c.modelPath.empty());
+    EXPECT_TRUE(c.modelSourcePath.empty());
+    EXPECT_TRUE(c.scenePath.empty());
     for (auto& l : c.knobLFOs) {
         EXPECT_FALSE(l.enabled);
     }
@@ -42,6 +47,11 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     c.videoRate        = 2.0f;
     c.videoIn          = 0.25f;
     c.videoOut         = 0.75f;
+    c.liveInput        = true;
+    c.liveUrl          = "v4l2:///dev/video0";
+    c.modelPath        = "models/robot.glb";
+    c.modelSourcePath  = "/orig/robot.glb";
+    c.scenePath        = "scripts/kick_ring.lua";
     c.knobLFOs[0].enabled = true;
     c.knobLFOs[0].shape   = 2;
     c.knobLFOs[0].rate    = 1.0f;
@@ -69,6 +79,11 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     EXPECT_FLOAT_EQ(clone->videoRate,  c.videoRate);
     EXPECT_FLOAT_EQ(clone->videoIn,    c.videoIn);
     EXPECT_FLOAT_EQ(clone->videoOut,   c.videoOut);
+    EXPECT_TRUE (clone->liveInput);
+    EXPECT_EQ   (clone->liveUrl, c.liveUrl);
+    EXPECT_EQ   (clone->modelPath,       c.modelPath);
+    EXPECT_EQ   (clone->modelSourcePath, c.modelSourcePath);
+    EXPECT_EQ   (clone->scenePath,       c.scenePath);
     EXPECT_TRUE (clone->knobLFOs[0].enabled);
     EXPECT_EQ   (clone->knobLFOs[0].shape, 2);
     EXPECT_FLOAT_EQ(clone->knobLFOs[0].rate,  c.knobLFOs[0].rate);

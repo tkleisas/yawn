@@ -162,6 +162,24 @@ public:
     using VisualLaunchCallback = std::function<void(int track, int scene, const std::string& shaderPath)>;
     void setOnLaunchVisualClip(VisualLaunchCallback cb) { m_onLaunchVisualClip = std::move(cb); }
 
+    // Fired when the user clicks an active visual clip (stop gesture)
+    // or scene-launches over an empty slot on a visual track. App
+    // wires it to VisualEngine::clearLayer + launch-state reset.
+    using VisualStopCallback = std::function<void(int track)>;
+    void setOnStopVisualClip(VisualStopCallback cb) { m_onStopVisualClip = std::move(cb); }
+
+    // ─── Live input status query ───────────────────────────────────────
+    // App wires this so the grid can colour the per-clip "LIVE" pip by
+    // the engine's current connection state. Return values encode
+    // LiveVideoSource::State:
+    //   0 = Stopped, 1 = Connecting, 2 = Connected, 3 = Failed.
+    // Return -1 if the clip at (track, scene) isn't the launched one on
+    // its track (so we paint a neutral grey indicator instead).
+    using VisualLiveStateCallback = std::function<int(int track, int scene)>;
+    void setOnQueryLiveState(VisualLiveStateCallback cb) {
+        m_onQueryLiveState = std::move(cb);
+    }
+
     // ─── Importing overlay (for background video transcodes) ───────────
     void setSlotImporting(int track, int scene, bool importing) {
         int64_t key = static_cast<int64_t>(track) * 10000 + scene;
@@ -549,6 +567,8 @@ private:
     std::function<void(float)> m_onScrollChanged;
     RenameCallback m_onTrackRenamed;
     VisualLaunchCallback m_onLaunchVisualClip;
+    VisualStopCallback   m_onStopVisualClip;
+    VisualLiveStateCallback m_onQueryLiveState;
 
     // Inline track rename state
     int         m_renameTrack = -1;

@@ -1,0 +1,21 @@
+Bundled 3D model assets
+=======================
+
+Duck.glb
+--------
+Source:   https://github.com/KhronosGroup/glTF-Sample-Assets
+Path:     Models/Duck/glTF-Binary/Duck.glb
+License:  CC-BY 4.0
+Author:   Sony Computer Entertainment Inc.
+Notes:    One of the classic glTF reference assets. Used here as a
+          smoke-test for YAWN's M3DModel loader + M3DRenderer.
+
+Fox.glb
+-------
+Source:   https://github.com/KhronosGroup/glTF-Sample-Assets
+Path:     Models/Fox/glTF-Binary/Fox.glb
+License:  CC-BY 4.0
+Author:   PixelMannen / tomkranis (via the Khronos sample set)
+Notes:    Rigged + animated character used as the reference for
+          skeletal-animation testing (three animation clips:
+          Survey, Walk, Run).

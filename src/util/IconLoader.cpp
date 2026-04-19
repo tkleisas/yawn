@@ -1,9 +1,7 @@
-#define STB_IMAGE_IMPLEMENTATION
-// PNG (for the app icon) + JPEG (for video thumbnails). No other formats.
-#define STBI_ONLY_PNG
-#define STBI_ONLY_JPEG
+// The stb_image single-TU implementation lives in yawn_core
+// (util/stb_image_impl.cpp) so tests + tinygltf can resolve the
+// symbols. This file just uses the declarations.
 #include "stb_image.h"
-#undef STB_IMAGE_IMPLEMENTATION
 
 #include "IconLoader.h"
 #include <cstdio>

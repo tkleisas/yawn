@@ -104,7 +104,41 @@ public:
     void rebuildCustom(const std::vector<visual::VisualEngine::LayerParamInfo>& params,
                        const std::string& shaderName) {
         m_shaderName = shaderName;
+
+        // This is called every frame from the main update loop. If the
+        // params signature hasn't changed, we MUST reuse the existing
+        // FwKnob instances — destroying one mid-drag invalidates the
+        // captured-widget pointer and silently breaks the drag. We
+        // cache the signature alongside the knobs; any change (shader
+        // swap, @range edit) triggers a full rebuild.
+        bool matches = (m_customSig.size() == params.size()) &&
+                        (m_customKnobs.size() == params.size());
+        if (matches) {
+            for (size_t i = 0; i < params.size(); ++i) {
+                const auto& p  = params[i];
+                const auto& sg = m_customSig[i];
+                if (sg.name    != p.name ||
+                    sg.min     != p.min  ||
+                    sg.max     != p.max  ||
+                    sg.defVal  != p.defaultValue) {
+                    matches = false;
+                    break;
+                }
+            }
+        }
+
+        if (matches) {
+            // Same shader / same uniforms — just resync values from
+            // the engine without touching knob identity.
+            for (size_t i = 0; i < params.size(); ++i) {
+                m_customKnobs[i]->setValue(params[i].value);
+            }
+            return;
+        }
+
         m_customKnobs.clear();
+        m_customSig.clear();
+        m_customSig.reserve(params.size());
         for (const auto& p : params) {
             auto k = std::make_unique<FwKnob>();
             k->setLabel(p.name);
@@ -121,6 +155,7 @@ public:
                 return std::string(b);
             });
             m_customKnobs.push_back(std::move(k));
+            m_customSig.push_back({p.name, p.min, p.max, p.defaultValue});
         }
     }
 
@@ -133,10 +168,52 @@ public:
     void rebuildPostFX(
         const std::vector<std::pair<std::string,
             std::vector<visual::VisualEngine::LayerParamInfo>>>& chain) {
+        // Same idempotence rule as rebuildCustom: don't destroy the
+        // FwKnob instances while the user may be mid-drag. Full rebuild
+        // only when the chain structurally changes.
+        bool matches = (m_postFXSig.size() == chain.size()) &&
+                        (m_postFX.size()    == chain.size());
+        if (matches) {
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const auto& sig  = m_postFXSig[i];
+                const auto& incoming = chain[i];
+                if (sig.name != incoming.first ||
+                    sig.params.size() != incoming.second.size()) {
+                    matches = false;
+                    break;
+                }
+                for (size_t j = 0; j < incoming.second.size(); ++j) {
+                    const auto& sp = sig.params[j];
+                    const auto& p  = incoming.second[j];
+                    if (sp.name != p.name || sp.min != p.min ||
+                        sp.max  != p.max  || sp.defVal != p.defaultValue) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (!matches) break;
+            }
+        }
+
+        if (matches) {
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const auto& incoming = chain[i].second;
+                auto& entry = m_postFX[i];
+                for (size_t j = 0; j < incoming.size(); ++j) {
+                    entry.knobs[j]->setValue(incoming[j].value);
+                }
+            }
+            return;
+        }
+
         m_postFX.clear();
+        m_postFXSig.clear();
+        m_postFXSig.reserve(chain.size());
         for (size_t i = 0; i < chain.size(); ++i) {
             PostFXEntry entry;
             entry.name = chain[i].first;
+            PostFXSig sig;
+            sig.name = chain[i].first;
             for (const auto& p : chain[i].second) {
                 auto k = std::make_unique<FwKnob>();
                 k->setLabel(p.name);
@@ -154,18 +231,23 @@ public:
                     return std::string(b);
                 });
                 entry.knobs.push_back(std::move(k));
+                sig.params.push_back({p.name, p.min, p.max, p.defaultValue});
             }
             m_postFX.push_back(std::move(entry));
+            m_postFXSig.push_back(std::move(sig));
         }
     }
 
     // Widget interface -----------------------------------------------------
 
-    Size measure(const Constraints& c, const UIContext&) override {
-        // Use the detail panel's user-configured height, not its animated
-        // height — the animated value collapses toward 0 when the detail
-        // panel is hidden (which is exactly when *we're* showing).
-        float h = m_detail ? m_detail->panelHeight() : kPanelHeight;
+    Size measure(const Constraints& c, const UIContext& ctx) override {
+        // Configured height comes from the shared drag handle. We may
+        // need more to actually fit every knob row — clicks below the
+        // measured bounds never reach the panel, so rows outside the
+        // box are invisible to event routing (not just truncated).
+        float configuredH = m_detail ? m_detail->panelHeight() : kPanelHeight;
+        float minH = computeRequiredHeight(c.maxW, ctx);
+        float h    = std::max(configuredH, minH);
         return c.constrain({c.maxW, h});
     }
 
@@ -177,16 +259,19 @@ public:
             float x = x0 + i * (kKnobW + kKnobGapX);
             m_knobAH[i]->layout(Rect{x, y0, kKnobW, kKnobH}, ctx);
         }
-        // Row 2+: custom knobs, flow-wrapped.
+        // Row 2+: custom knobs, flow-wrapped. Per-knob column width
+        // grows to fit the label so long names (e.g. "bandCenterY")
+        // don't collide with neighbours.
         float y = y0 + kKnobH + kRowGap;
         float x = x0;
         for (auto& k : m_customKnobs) {
-            if (x + kKnobW > bounds.x + bounds.w - kPad) {
+            float colW = columnWidthFor(*k, ctx);
+            if (x + colW > bounds.x + bounds.w - kPad && x > x0) {
                 x = x0;
                 y += kKnobH + kKnobGapY;
             }
-            k->layout(Rect{x, y, kKnobW, kKnobH}, ctx);
-            x += kKnobW + kKnobGapX;
+            k->layout(Rect{x, y, colW, kKnobH}, ctx);
+            x += colW + kKnobGapX;
         }
 
         // Post-FX cards start on a new row below the last custom knob.
@@ -350,9 +435,73 @@ private:
         return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
     }
 
+    // Column width for a single custom knob: wide enough to fit its
+    // label at the same scale FwKnob uses (9px), plus a small padding
+    // so adjacent labels don't kiss. Floored at kKnobW so the knob
+    // graphic never shrinks.
+    float columnWidthFor(const FwKnob& k, const UIContext& ctx) const {
+#ifndef YAWN_TEST_BUILD
+        if (!ctx.font) return kKnobW;
+        float labelScale = 9.0f / Theme::kFontSize;
+        float lw = ctx.font->textWidth(k.label(), labelScale);
+        return std::max(kKnobW, lw + 6.0f);
+#else
+        (void)k; (void)ctx;
+        return kKnobW;
+#endif
+    }
+
+    // Minimum height that'll fit the full content: generic knob row,
+    // wrapped custom knob rows, and (if present) the post-fx cards. UI
+    // event routing uses the measured bounds — if we undersell, any
+    // widget below the box is effectively unclickable.
+    float computeRequiredHeight(float panelW, const UIContext& ctx) const {
+        float topY   = kHandleH + kTitleH + 22.0f;
+        float rowH   = kKnobH + kKnobGapY;
+        // Generic knobs are one fixed row.
+        float y      = topY + kKnobH + kRowGap;
+        float xLimit = panelW - kPad;
+        float x      = kPad;
+        float lastY  = y;
+        for (auto& k : m_customKnobs) {
+            float colW = columnWidthFor(*k, ctx);
+            if (x + colW > xLimit && x > kPad) {
+                x = kPad;
+                y += rowH;
+            }
+            x += colW + kKnobGapX;
+            lastY = y;
+        }
+        float customBottom = lastY + (m_customKnobs.empty() ? 0.0f : kKnobH);
+        // Post-FX block (if any): one row per card wrap, rough but
+        // close enough given we just need "big enough" not "exact".
+        float fxBottom = customBottom + 14.0f;
+        if (!m_postFX.empty()) {
+            float py = customBottom + 18.0f;
+            float px = kPad;
+            for (auto& entry : m_postFX) {
+                float cardW = kLabelW + kRemoveW + kKnobGapX +
+                               static_cast<float>(entry.knobs.size()) *
+                               (kKnobW + kKnobGapX);
+                if (px + cardW > panelW - kPad && px > kPad) {
+                    px = kPad;
+                    py += rowH;
+                }
+                px += cardW + 18.0f;
+            }
+            fxBottom = py + kKnobH;
+        }
+        return fxBottom + kPad;
+    }
+
     Rect m_bounds{};
     std::unique_ptr<FwKnob> m_knobAH[8];
     std::vector<std::unique_ptr<FwKnob>> m_customKnobs;
+    // Parallel array tracking the identity (name+range+default) each
+    // custom knob was built for, so the per-frame rebuild call can
+    // reuse existing instances when nothing structural changed.
+    struct CustomSig { std::string name; float min, max, defVal; };
+    std::vector<CustomSig> m_customSig;
     std::string m_shaderName;
     ChangeCallback         m_onChanged;
     KnobChangeCallback     m_onKnobChanged;
@@ -360,6 +509,11 @@ private:
 
     // Post-FX section
     std::vector<PostFXEntry> m_postFX;
+    struct PostFXSig {
+        std::string name;
+        std::vector<CustomSig> params;
+    };
+    std::vector<PostFXSig>   m_postFXSig;
     std::vector<Rect>        m_removeRects;
     float                    m_postFXSectionY = 0.0f;
     PostFXChangeCallback     m_onPostFXChanged;
