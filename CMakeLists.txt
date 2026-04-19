@@ -88,6 +88,12 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryDatabase.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryScanner.cpp
+    # Slim-API stub — delegates to the main exe's VisualEngine when
+    # linked into YAWN, safely no-ops in the test binary.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/VisualEngineAPI.cpp
+    # Video import logic (POSIX fork+exec ffmpeg). Windows gets a stub
+    # inside the .cpp. No SDL/GL deps, safe for yawn_core.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/VideoImporter.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)

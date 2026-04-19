@@ -6,6 +6,12 @@
 #include <cmath>
 #include <cstring>
 
+// MSVC doesn't define M_PI by default. Local definition keeps this
+// translation unit self-contained without polluting a header.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace yawn {
 namespace audio {
 

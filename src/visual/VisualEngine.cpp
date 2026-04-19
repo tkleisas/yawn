@@ -1560,29 +1560,48 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
     SDL_GL_SwapWindow(m_outputWindow);
 }
 
-// ── Free accessors (header in VisualEngineAPI.h) ──────────────────────────
+// ── Free-accessor registrar (header in VisualEngineAPI.h) ─────────────────
+//
+// Fills in the PostFXAPI function-pointer table at static-init time so
+// yawn_core's stub accessors start calling the real implementations.
+// yawn_tests doesn't link this translation unit, so the table stays
+// null there and post-fx serialisation becomes a no-op — which is what
+// the tests want.
 
-int postFX_count(const VisualEngine& e)          { return e.numPostFX(); }
-std::string postFX_path(const VisualEngine& e, int i) { return e.postFXPath(i); }
-void postFX_clear(VisualEngine& e) {
+namespace {
+int impl_count(const VisualEngine& e)                    { return e.numPostFX(); }
+std::string impl_path(const VisualEngine& e, int i)      { return e.postFXPath(i); }
+void impl_clear(VisualEngine& e) {
     while (e.numPostFX() > 0) e.removePostFX(0);
 }
-bool postFX_add(VisualEngine& e, const std::string& path) {
-    return e.addPostFX(path);
-}
-
+bool impl_add(VisualEngine& e, const std::string& path)  { return e.addPostFX(path); }
 std::vector<std::pair<std::string, float>>
-postFX_getParamValues(const VisualEngine& e, int index) {
+impl_getParamValues(const VisualEngine& e, int index) {
     std::vector<std::pair<std::string, float>> out;
     auto params = e.getPostFXParams(index);
     out.reserve(params.size());
     for (const auto& p : params) out.emplace_back(p.name, p.value);
     return out;
 }
-void postFX_applyParamValues(VisualEngine& e, int index,
+void impl_applyParamValues(VisualEngine& e, int index,
         const std::vector<std::pair<std::string, float>>& values) {
     e.applyPostFXParamValues(index, values);
 }
+
+struct Registrar {
+    Registrar() {
+        auto& t = postFXAPITable();
+        t.count             = &impl_count;
+        t.path              = &impl_path;
+        t.clear             = &impl_clear;
+        t.add               = &impl_add;
+        t.getParamValues    = &impl_getParamValues;
+        t.applyParamValues  = &impl_applyParamValues;
+    }
+};
+// Static-init fills the dispatch table when the main exe loads.
+static Registrar g_registrar;
+} // anonymous
 
 } // namespace visual
 } // namespace yawn

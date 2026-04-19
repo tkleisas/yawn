@@ -8,10 +8,13 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
+
+#ifndef _WIN32
+#  include <fcntl.h>
+#  include <sys/types.h>
+#  include <sys/wait.h>
+#  include <unistd.h>
+#endif
 
 namespace yawn {
 namespace visual {
@@ -56,6 +59,7 @@ void VideoImporter::poll() {
     }
 }
 
+#ifndef _WIN32
 namespace {
 
 // fork+exec ffmpeg with the given argv. Returns true if child exited
@@ -296,6 +300,19 @@ bool VideoImporter::start(const std::string& sourcePath,
     });
     return true;
 }
+
+#else  // _WIN32 — stub that reports the feature isn't available here yet
+
+bool VideoImporter::start(const std::string& sourcePath,
+                            const fs::path& /*mediaDir*/) {
+    m_result.sourcePath = sourcePath;
+    m_error  = "video import not implemented on Windows yet";
+    m_state  = State::Failed;
+    m_workerFinished = true;
+    return false;
+}
+
+#endif  // _WIN32
 
 } // namespace visual
 } // namespace yawn
