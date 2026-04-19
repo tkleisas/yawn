@@ -6,6 +6,7 @@
 #include "audio/ClipEngine.h"
 #include "audio/FollowAction.h"
 #include "midi/MidiClip.h"
+#include "visual/VisualClip.h"
 #include "automation/AutomationLane.h"
 #include <vector>
 #include <memory>
@@ -15,8 +16,11 @@
 namespace yawn {
 
 struct Track {
-    enum class Type : uint8_t { Audio, Midi };
+    enum class Type : uint8_t { Audio, Midi, Visual };
     enum class MonitorMode : uint8_t { Auto, In, Off };
+    // Blend mode used when compositing this visual track over lower ones.
+    // Ignored for non-Visual tracks.
+    enum class VisualBlendMode : uint8_t { Normal, Add, Multiply, Screen };
 
     std::string name;
     Type type = Type::Audio;
@@ -34,6 +38,7 @@ struct Track {
     int resampleSource = -1;   // -1=none, track index for resampling audio input
     bool armed = false;
     MonitorMode monitorMode = MonitorMode::Auto;
+    VisualBlendMode visualBlendMode = VisualBlendMode::Normal;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
     int recordLengthBars = 0;  // 0 = unlimited (free recording)
 
@@ -71,20 +76,27 @@ struct Scene {
 // A clip slot can hold either an audio clip or a MIDI clip (or be empty)
 
 struct ClipSlot {
-    enum class Type { Empty, Audio, Midi };
+    enum class Type { Empty, Audio, Midi, Visual };
 
     Type type() const {
-        if (audioClip) return Type::Audio;
-        if (midiClip) return Type::Midi;
+        if (audioClip)  return Type::Audio;
+        if (midiClip)   return Type::Midi;
+        if (visualClip) return Type::Visual;
         return Type::Empty;
     }
 
-    bool empty() const { return !audioClip && !midiClip; }
+    bool empty() const { return !audioClip && !midiClip && !visualClip; }
 
-    void clear() { audioClip.reset(); midiClip.reset(); clipAutomation.clear(); }
+    void clear() {
+        audioClip.reset();
+        midiClip.reset();
+        visualClip.reset();
+        clipAutomation.clear();
+    }
 
     std::unique_ptr<audio::Clip> audioClip;
     std::unique_ptr<midi::MidiClip> midiClip;
+    std::unique_ptr<visual::VisualClip> visualClip;
     audio::QuantizeMode launchQuantize = audio::QuantizeMode::NextBar;
 
     // Follow action — triggers after clip plays for N bars
@@ -162,7 +174,8 @@ public:
     audio::Clip* setClip(int trackIndex, int sceneIndex, std::unique_ptr<audio::Clip> clip) {
         auto* slot = getSlot(trackIndex, sceneIndex);
         if (!slot) return nullptr;
-        slot->midiClip.reset(); // Clear any existing MIDI clip
+        slot->midiClip.reset();   // Clear any existing MIDI clip
+        slot->visualClip.reset(); // Clear any existing visual clip
         slot->audioClip = std::move(clip);
         return slot->audioClip.get();
     }
@@ -171,18 +184,31 @@ public:
     midi::MidiClip* setMidiClip(int trackIndex, int sceneIndex, std::unique_ptr<midi::MidiClip> clip) {
         auto* slot = getSlot(trackIndex, sceneIndex);
         if (!slot) return nullptr;
-        slot->audioClip.reset(); // Clear any existing audio clip
+        slot->audioClip.reset();   // Clear any existing audio clip
+        slot->visualClip.reset();  // Clear any existing visual clip
         slot->midiClip = std::move(clip);
         return slot->midiClip.get();
     }
 
-    // Move a clip slot's contents (audio or MIDI + follow action + automation)
+    // Set visual clip
+    visual::VisualClip* setVisualClip(int trackIndex, int sceneIndex,
+                                       std::unique_ptr<visual::VisualClip> clip) {
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        if (!slot) return nullptr;
+        slot->audioClip.reset();
+        slot->midiClip.reset();
+        slot->visualClip = std::move(clip);
+        return slot->visualClip.get();
+    }
+
+    // Move a clip slot's contents (audio/MIDI/visual + follow action + automation)
     void moveSlot(int srcTrack, int srcScene, int dstTrack, int dstScene) {
         auto* src = getSlot(srcTrack, srcScene);
         auto* dst = getSlot(dstTrack, dstScene);
         if (!src || !dst || src == dst) return;
         dst->audioClip      = std::move(src->audioClip);
         dst->midiClip       = std::move(src->midiClip);
+        dst->visualClip     = std::move(src->visualClip);
         dst->followAction   = src->followAction;
         dst->clipAutomation = std::move(src->clipAutomation);
         dst->launchQuantize = src->launchQuantize;
@@ -196,14 +222,9 @@ public:
         auto* src = getSlot(srcTrack, srcScene);
         auto* dst = getSlot(dstTrack, dstScene);
         if (!src || !dst || src == dst) return;
-        if (src->audioClip)
-            dst->audioClip = src->audioClip->clone();
-        else
-            dst->audioClip.reset();
-        if (src->midiClip)
-            dst->midiClip = src->midiClip->clone();
-        else
-            dst->midiClip.reset();
+        if (src->audioClip)   dst->audioClip  = src->audioClip->clone();  else dst->audioClip.reset();
+        if (src->midiClip)    dst->midiClip   = src->midiClip->clone();   else dst->midiClip.reset();
+        if (src->visualClip)  dst->visualClip = src->visualClip->clone(); else dst->visualClip.reset();
         dst->followAction   = src->followAction;
         dst->clipAutomation = src->clipAutomation;
         dst->launchQuantize = src->launchQuantize;
@@ -284,8 +305,9 @@ public:
         for (auto& trackSlots : m_clipSlots) {
             auto srcSlot = ClipSlot{};
             auto& orig = trackSlots[index];
-            if (orig.audioClip) srcSlot.audioClip = orig.audioClip->clone();
-            if (orig.midiClip) srcSlot.midiClip = orig.midiClip->clone();
+            if (orig.audioClip)  srcSlot.audioClip  = orig.audioClip->clone();
+            if (orig.midiClip)   srcSlot.midiClip   = orig.midiClip->clone();
+            if (orig.visualClip) srcSlot.visualClip = orig.visualClip->clone();
             srcSlot.launchQuantize = orig.launchQuantize;
             srcSlot.followAction = orig.followAction;
             srcSlot.clipAutomation = orig.clipAutomation;

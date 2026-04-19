@@ -10,6 +10,7 @@
 #include "midi/MidiMonitorBuffer.h"
 #include "midi/MidiMapping.h"
 #include "util/MessageQueue.h"
+#include "visual/VisualKnobBus.h"
 #include <array>
 #include <functional>
 #include <memory>
@@ -323,6 +324,12 @@ private:
             }
             break;
         }
+        case TargetType::VisualKnob:
+            // VisualEngine can't be touched from the audio thread — hand
+            // the value to the lock-free bus, UI thread polls it.
+            visual::VisualKnobBus::instance().write(
+                target.trackIndex, target.paramIndex, value);
+            break;
         }
     }
 

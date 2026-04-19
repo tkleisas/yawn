@@ -144,9 +144,10 @@ public:
                 float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
                 if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
                 auto& s = m_strips[t];
-                if (m_project->track(t).type == Track::Type::Audio) {
+                auto type = m_project->track(t).type;
+                if (type == Track::Type::Audio) {
                     s.audioInputDrop.onMouseMove(e);
-                } else {
+                } else if (type == Track::Type::Midi) {
                     s.midiInDrop.onMouseMove(e);
                     s.midiInChDrop.onMouseMove(e);
                     s.midiOutDrop.onMouseMove(e);
@@ -186,9 +187,10 @@ public:
             };
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto& s = m_strips[t];
-                if (m_project->track(t).type == Track::Type::Audio) {
+                auto type = m_project->track(t).type;
+                if (type == Track::Type::Audio) {
                     if (tryScroll(s.audioInputDrop)) return true;
-                } else {
+                } else if (type == Track::Type::Midi) {
                     if (tryScroll(s.midiInDrop)) return true;
                     if (tryScroll(s.midiInChDrop)) return true;
                     if (tryScroll(s.midiOutDrop)) return true;

@@ -69,15 +69,17 @@ void MixerPanel::paint(UIContext& ctx) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
             if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
             auto& s = m_strips[t];
-            if (m_project->track(t).type == Track::Type::Audio) {
+            auto type = m_project->track(t).type;
+            if (type == Track::Type::Audio) {
                 s.audioInputDrop.paintOverlay(ctx);
-            } else {
+            } else if (type == Track::Type::Midi) {
                 s.midiInDrop.paintOverlay(ctx);
                 s.midiInChDrop.paintOverlay(ctx);
                 s.midiOutDrop.paintOverlay(ctx);
                 s.midiOutChDrop.paintOverlay(ctx);
                 s.sidechainDrop.paintOverlay(ctx);
             }
+            // Visual: no I/O overlays.
         }
     }
 
@@ -125,10 +127,11 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
             if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
             auto& s = m_strips[t];
-            if (m_project->track(t).type == Track::Type::Audio) {
+            auto type = m_project->track(t).type;
+            if (type == Track::Type::Audio) {
                 if (s.audioInputDrop.hitPopup(mx, my))
                     return s.audioInputDrop.handlePopupClick(mx, my);
-            } else {
+            } else if (type == Track::Type::Midi) {
                 if (s.midiInDrop.hitPopup(mx, my))
                     return s.midiInDrop.handlePopupClick(mx, my);
                 if (s.midiInChDrop.hitPopup(mx, my))
@@ -146,9 +149,10 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
     // Close any open dropdowns if click is outside all popups
     for (int t = 0; t < m_project->numTracks(); ++t) {
         auto& s = m_strips[t];
-        if (m_project->track(t).type == Track::Type::Audio) {
+        auto type = m_project->track(t).type;
+        if (type == Track::Type::Audio) {
             if (s.audioInputDrop.isOpen()) { s.audioInputDrop.close(); }
-        } else {
+        } else if (type == Track::Type::Midi) {
             if (s.midiInDrop.isOpen()) s.midiInDrop.close();
             if (s.midiInChDrop.isOpen()) s.midiInChDrop.close();
             if (s.midiOutDrop.isOpen()) s.midiOutDrop.close();
@@ -215,7 +219,7 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                 return s.audioInputDrop.onMouseDown(e);
             if (!rightClick && hitWidget(s.monoBtn, mx, my))
                 return s.monoBtn.onMouseDown(e);
-        } else if (m_showIO) {
+        } else if (m_showIO && m_project->track(t).type == Track::Type::Midi) {
             if (!rightClick && hitWidget(s.midiInDrop, mx, my))
                 return s.midiInDrop.onMouseDown(e);
             if (!rightClick && hitWidget(s.midiInChDrop, mx, my))
@@ -879,9 +883,10 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         float ioW = ix + iw - ioX - 2;
         if (track.type == Track::Type::Audio) {
             paintAudioIO(ctx, s, track, idx, ioX, ioW, curY, faderH);
-        } else {
+        } else if (track.type == Track::Type::Midi) {
             paintMidiIO(ctx, s, track, idx, ioX, ioW, curY, faderH);
         }
+        // Visual tracks have no audio/MIDI I/O — leave the region blank.
     }
 
     float db = ch.volume > 0.001f ? 20.0f * std::log10(ch.volume) : -60.0f;

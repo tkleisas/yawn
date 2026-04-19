@@ -24,6 +24,7 @@ namespace yawn { namespace audio { class AudioEngine; class Clip; } }
 #include <cstdlib>
 #include <string>
 #include <functional>
+#include <unordered_set>
 
 namespace yawn {
 namespace ui {
@@ -154,6 +155,32 @@ public:
     // ─── Track rename ──────────────────────────────────────────────────
     using RenameCallback = std::function<void(int track, const std::string& oldName, const std::string& newName)>;
     void setOnTrackRenamed(RenameCallback cb) { m_onTrackRenamed = std::move(cb); }
+
+    // ─── Visual clip launch (loads a shader) ───────────────────────────
+    // App owns VisualEngine; SessionPanel just asks it to switch shaders
+    // via this callback when a visual clip is launched.
+    using VisualLaunchCallback = std::function<void(int track, int scene, const std::string& shaderPath)>;
+    void setOnLaunchVisualClip(VisualLaunchCallback cb) { m_onLaunchVisualClip = std::move(cb); }
+
+    // ─── Importing overlay (for background video transcodes) ───────────
+    void setSlotImporting(int track, int scene, bool importing) {
+        int64_t key = static_cast<int64_t>(track) * 10000 + scene;
+        if (importing) m_importingSlots.insert(key);
+        else         { m_importingSlots.erase(key); m_importProgress.erase(key); }
+    }
+    bool isSlotImporting(int track, int scene) const {
+        int64_t key = static_cast<int64_t>(track) * 10000 + scene;
+        return m_importingSlots.count(key) > 0;
+    }
+    void setSlotImportProgress(int track, int scene, float progress) {
+        int64_t key = static_cast<int64_t>(track) * 10000 + scene;
+        m_importProgress[key] = progress;
+    }
+    float slotImportProgress(int track, int scene) const {
+        int64_t key = static_cast<int64_t>(track) * 10000 + scene;
+        auto it = m_importProgress.find(key);
+        return it != m_importProgress.end() ? it->second : 0.0f;
+    }
 
     void startTrackRename(int track) {
         if (!m_project || track < 0 || track >= m_project->numTracks()) return;
@@ -494,6 +521,16 @@ private:
     int   m_gridRows        = 8;    // controller pad rows
     bool  m_showGridRegion  = false;
 
+    // Set of (track*10000 + scene) currently importing a video file.
+    std::unordered_set<int64_t> m_importingSlots;
+    std::unordered_map<int64_t, float> m_importProgress;
+
+    // Cache of loaded video thumbnails: path → GL texture id. Entries are
+    // created lazily in paintClipSlot the first time a slot references a
+    // thumbnail. Never freed in MVP — typical sessions have tens of clips.
+    mutable std::unordered_map<std::string, unsigned> m_thumbnailCache;
+    unsigned getThumbnailTexture(const std::string& path) const;
+
     // Clip drag-and-drop state
     bool  m_clipDragPending   = false;  // mouse down, waiting to exceed threshold
     bool  m_clipDragging      = false;  // actively dragging a clip
@@ -511,6 +548,7 @@ private:
 
     std::function<void(float)> m_onScrollChanged;
     RenameCallback m_onTrackRenamed;
+    VisualLaunchCallback m_onLaunchVisualClip;
 
     // Inline track rename state
     int         m_renameTrack = -1;

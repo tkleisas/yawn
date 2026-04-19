@@ -7,7 +7,7 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · Controller Scripting<br/><br/>
+  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · Controller Scripting · <strong>Visual / VJ Engine · Video Clips</strong><br/><br/>
   <em>Made with AI-Sloptronic™ technology</em><br/>
   <sub>Where "it compiles" is the new "it works" and every bug is a ✨feature request✨</sub>
 </p>
@@ -188,6 +188,29 @@
 
 > See [docs/controller-scripting.md](docs/controller-scripting.md) for the full Lua API reference, Push 1 button map, and guide to writing controller scripts.
 
+### Visual / VJ Engine
+
+*The AI wrote a DAW. Then it wrote a GPU-based VJ tool **inside** the DAW. Then it wrote an ffmpeg import pipeline so you can drop a Lumière Brothers film onto a visual track and bar-sync it to your bass line. This is how the singularity comes for techno.*
+
+- **Secondary output window** — Separate SDL3 window with its own GL context (shared resources with the main UI context). F11 toggles fullscreen; typical workflow is main UI on display 1, fullscreen visuals on display 2.
+- **Per-track GPU layers** — Each Visual track gets its own 640×360 FBO and shader program. Track volume = layer opacity, track index = compositor order (lower on bottom). Compositor uses ping-pong accumulator FBOs with four blend modes: **Normal / Add / Multiply / Screen**, source-alpha aware so partial-alpha shaders composite correctly.
+- **Shadertoy-compatible shaders** — Standard `mainImage(out vec4, in vec2)` entry point, standard uniforms (`iResolution`, `iTime`, `iTimeDelta`, `iFrame`, `iMouse`, `iDate`, `iSampleRate`, `iChannel0..3`, `iChannelResolution`, `iChannelTime`) plus YAWN-specific extensions (`iBeat`, `iTransportTime`, `iTransportPlaying`, `iAudioLevel`, `iAudioLow/Mid/High`, `iKick`, `iTextWidth`, `iTextTexWidth`). Paste most Shadertoy snippets in verbatim.
+- **Hot-reload shader authoring** — `.frag` files live on disk; mtime polled each frame. Save in any editor, YAWN recompiles. Compile errors keep the previous program active so the show continues.
+- **8 generic playable knobs (A–H)** — Always-available `uniform float knobA..knobH` in every shader. Matches hardware encoder banks (Push/Move/APC). Per-knob LFO (Sine/Triangle/Saw/Square/S&H, beat-synced rate, 10–100% depth) and per-knob MIDI Learn via right-click menu.
+- **Custom shader parameters** — Declare `uniform float speed; // @range 0..4 default=1.0` in your shader, get an auto-generated knob in the Visual Params panel. Values persist per clip.
+- **Audio-reactive rendering** — 3-band biquad analyzer on the UI-thread-selected source (wiring gated, so unused tracks cost zero CPU), envelope-smoothed on the UI side. A lock-free 1024-sample master tap drives an FFT on `iChannel0` every frame (row 0 = spectrum, row 1 = waveform — Shadertoy-compatible).
+- **Transient detection** — Baseline-tracking envelope detector on the low band with 80 ms refractory. Drives `iKick` as a decaying impulse (~120 ms tail) for kick-synced flash effects.
+- **Text rendering on `iChannel1`** — Right-click a visual clip → Set Text. Rendered into a 2048×64 R8 alpha texture via `stb_truetype` (JetBrainsMono). Shaders get `iTextWidth` for wrap-correct scrolling. Bundled examples: marquee, kick-pulse, RGB-glitch.
+- **Master post-FX chain** — Ordered list applied after compositor, same ping-pong pattern. Bundled effects: Bloom (thresholded blur), Pixelate, Kaleidoscope, Chromatic Split (audio-reactive), Vignette, Invert. Each has `@range` params exposed as knobs at the bottom of the Visual Params panel. Chain + values persist.
+- **Video clip import** — Drop `.mp4/.mov/.mkv/.webm/.avi/.m4v` onto a visual track (or right-click → Set Video…). Background `ffmpeg` transcodes to 640×360 all-intra H.264 at 30 fps with aspect-preserving black padding, extracts audio to WAV, generates a thumbnail. Inline progress bar with %. Hash-keyed cache so re-imports are instant.
+- **Audio sibling track** — If the source video had audio, a matching audio track is appended and the WAV loaded at the same scene row. Scene-launch fires image + audio in sync.
+- **Video playback modes** — Free-running at native 30 fps, or bar-synced (1/2/4/8/16 bars — the full video stretches to fit exactly that many bars of transport time). Rate knob (0.25× / 0.5× / 1× / 2× / 4×). Trim to sub-range (First/Last half, Middle, quarters).
+- **Session-grid thumbnails** — 160×90 JPEG extracted during import, lazy-loaded by SessionPanel into a GL texture cache, drawn behind the clip content.
+- **Bundled shader pack** — 24 original MIT-licensed shaders (`assets/shaders/examples/`) covering plasma, palette sweeps, flow noise, concentric rings, spectrum/waveform visualisers, spirals, chequerboards, voronoi, tunnels, fractal circles, kaleidoscopes, aurora bands, radial EQ bars, chromatic aberration, beat strobes, kick flashes, and three text-overlay variants — all using the `@range` convention so they play nicely with the knob UI out of the box.
+- **Project portability** — Transcoded media lives in `<project>.yawn/media/` alongside samples. Moving the project folder carries the video with it.
+
+> See [docs/visual.md](docs/visual.md) for the full shader-authoring guide, uniform reference, import pipeline details, and file layout.
+
 ### Quality
 - **Test-Driven Development** — 844 unit & integration tests across 39 test suites via Google Test (because the AI doesn't trust itself either)
 - **Zero audio-thread allocations** — All memory preallocated at startup
@@ -224,6 +247,9 @@
 | Controller Scripting | Lua 5.4 (vendored) |
 | Audio Files | libsndfile |
 | Font Rendering | stb_truetype |
+| Image Decode | stb_image (icons, video thumbnails) |
+| Video Decode | libavcodec / libavformat / libswscale (optional) |
+| Video Import | `ffmpeg` binary (runtime) |
 | Build System | CMake 3.20+ |
 | Testing | Google Test 1.14 |
 | Platforms | Windows, Linux |
@@ -261,6 +287,17 @@ sudo apt install \
   libdbus-1-dev libibus-1.0-dev libudev-dev \
   libasound2-dev libpulse-dev libjack-dev libsndio-dev
 ```
+
+For **video clip import/playback** (optional — gated by `YAWN_HAS_VIDEO`):
+
+```bash
+sudo apt install \
+  ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+```
+
+The `ffmpeg` binary is used at runtime for the transcode step; `libav*`
+headers and libraries are linked for real-time video decoding. Without
+them, the build still succeeds but the video menu items are hidden.
 
 ### Build
 
@@ -304,6 +341,7 @@ cd build && ctest --output-on-failure -C Release
 | `Tab` | Toggle Session / Arrangement view |
 | `M` | Toggle mixer view |
 | `D` | Toggle detail panel |
+| `F11` | Toggle Visual Output fullscreen |
 | `L` | Toggle loop on/off (arrangement) |
 | `F` | Toggle auto-scroll / follow playhead (arrangement) |
 | `Delete` / `Backspace` | Delete selected clip (arrangement) |

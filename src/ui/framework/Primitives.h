@@ -290,6 +290,15 @@ public:
     float value() const { return m_value; }
     void setRange(float mn, float mx) { m_min = mn; m_max = mx; }
     void setDefault(float d) { m_default = d; }
+
+    // Optional "display-only" override: while set, the arc renders at this
+    // value without changing the stored m_value / callback state. Use for
+    // showing live modulation (LFO, automation) on a user-configured knob.
+    void setDisplayValue(float v) {
+        m_hasDisplayOverride = true;
+        m_displayValue = detail::cclamp(v, m_min, m_max);
+    }
+    void clearDisplayValue() { m_hasDisplayOverride = false; }
     void setOnChange(ValueCallback cb) { m_onChange = std::move(cb); }
     void setOnTouch(TouchCallback cb) { m_onTouch = std::move(cb); }
     void setLabel(const std::string& l) { m_label = l; }
@@ -451,6 +460,8 @@ private:
 
     float m_value = 0.0f;
     float m_rawValue = 0.0f;  // unsnapped tracking value for smooth discrete drag
+    float m_displayValue = 0.0f;
+    bool  m_hasDisplayOverride = false;
     float m_min = 0.0f, m_max = 1.0f;
     float m_default = 0.0f;
     float m_sensitivity = 1.0f;

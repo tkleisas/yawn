@@ -2,6 +2,7 @@
 
 #include "ProjectSerializer.h"
 #include "util/Base64.h"
+#include "visual/VisualEngineAPI.h"
 
 #ifdef YAWN_HAS_VST3
 #include "vst3/VST3Instrument.h"
@@ -685,7 +686,8 @@ ArrangementClip deserializeArrangementClip(const json& j,
 bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                                      const Project& project,
                                      const audio::AudioEngine& engine,
-                                     const midi::MidiLearnManager* learnMgr) {
+                                     const midi::MidiLearnManager* learnMgr,
+                                     const visual::VisualEngine* visualEngine) {
     // Create directory structure
     fs::create_directories(folderPath / "samples");
 
@@ -717,7 +719,9 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         const auto& tr = project.track(t);
         json tj;
         tj["name"] = tr.name;
-        tj["type"] = (tr.type == Track::Type::Audio) ? "Audio" : "Midi";
+        tj["type"] = (tr.type == Track::Type::Audio)  ? "Audio"
+                    : (tr.type == Track::Type::Midi)   ? "Midi"
+                                                         : "Visual";
         tj["colorIndex"] = tr.colorIndex;
         tj["volume"] = tr.volume;
         tj["muted"] = tr.muted;
@@ -729,6 +733,19 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["sidechainSource"] = tr.sidechainSource;
         tj["resampleSource"] = tr.resampleSource;
         tj["recordLengthBars"] = tr.recordLengthBars;
+
+        // Visual blend mode — only meaningful for Visual tracks but always
+        // written for round-trip safety.
+        {
+            const char* bm = "Normal";
+            switch (tr.visualBlendMode) {
+                case Track::VisualBlendMode::Add:      bm = "Add";      break;
+                case Track::VisualBlendMode::Multiply: bm = "Multiply"; break;
+                case Track::VisualBlendMode::Screen:   bm = "Screen";   break;
+                case Track::VisualBlendMode::Normal:   bm = "Normal";   break;
+            }
+            tj["visualBlendMode"] = bm;
+        }
 
         // Automation mode and lanes
         tj["autoMode"] = static_cast<int>(tr.autoMode);
@@ -781,6 +798,51 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                 clipJ = serializeAudioClip(*slot->audioClip, samplesDir, sampleCounter);
             else if (slot->midiClip)
                 clipJ = serializeMidiClip(*slot->midiClip);
+            else if (slot->visualClip) {
+                clipJ["type"]        = "visual";
+                clipJ["shaderPath"]  = slot->visualClip->shaderPath;
+                clipJ["name"]        = slot->visualClip->name;
+                clipJ["colorIndex"]  = slot->visualClip->colorIndex;
+                clipJ["lengthBeats"] = slot->visualClip->lengthBeats;
+                clipJ["audioSource"] = slot->visualClip->audioSource;
+                if (!slot->visualClip->paramValues.empty()) {
+                    json pj = json::object();
+                    for (auto& kv : slot->visualClip->paramValues)
+                        pj[kv.first] = kv.second;
+                    clipJ["params"] = pj;
+                }
+                // LFO state — sparse: only write slots that are enabled.
+                json lfos = json::object();
+                static const char* kNames[8] = {
+                    "A","B","C","D","E","F","G","H"};
+                for (int i = 0; i < 8; ++i) {
+                    const auto& s = slot->visualClip->knobLFOs[i];
+                    if (!s.enabled) continue;
+                    json lj;
+                    lj["shape"] = s.shape;
+                    lj["rate"]  = s.rate;
+                    lj["depth"] = s.depth;
+                    lj["sync"]  = s.sync;
+                    lfos[kNames[i]] = lj;
+                }
+                if (!lfos.empty()) clipJ["lfos"] = lfos;
+                if (!slot->visualClip->text.empty())
+                    clipJ["text"] = slot->visualClip->text;
+                if (!slot->visualClip->videoPath.empty())
+                    clipJ["videoPath"] = slot->visualClip->videoPath;
+                if (!slot->visualClip->thumbnailPath.empty())
+                    clipJ["thumbnailPath"] = slot->visualClip->thumbnailPath;
+                if (!slot->visualClip->videoSourcePath.empty())
+                    clipJ["videoSourcePath"] = slot->visualClip->videoSourcePath;
+                if (slot->visualClip->videoLoopBars != 0)
+                    clipJ["videoLoopBars"] = slot->visualClip->videoLoopBars;
+                if (std::abs(slot->visualClip->videoRate - 1.0f) > 0.001f)
+                    clipJ["videoRate"] = slot->visualClip->videoRate;
+                if (slot->visualClip->videoIn != 0.0f)
+                    clipJ["videoIn"]  = slot->visualClip->videoIn;
+                if (slot->visualClip->videoOut != 1.0f)
+                    clipJ["videoOut"] = slot->visualClip->videoOut;
+            }
             if (!slot->clipAutomation.empty())
                 clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
             // Follow action
@@ -806,6 +868,24 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         root["midiMappings"] = learnMgr->toJson();
     }
 
+    // Visual post-FX chain — ordered list of { path, params } per effect.
+    if (visualEngine) {
+        json fx = json::array();
+        int n = visual::postFX_count(*visualEngine);
+        for (int i = 0; i < n; ++i) {
+            json entry;
+            entry["path"] = visual::postFX_path(*visualEngine, i);
+            auto pv = visual::postFX_getParamValues(*visualEngine, i);
+            if (!pv.empty()) {
+                json pj = json::object();
+                for (auto& kv : pv) pj[kv.first] = kv.second;
+                entry["params"] = pj;
+            }
+            fx.push_back(entry);
+        }
+        if (!fx.empty()) root["visualPostFX"] = fx;
+    }
+
     // Write project.json
     std::ofstream out(folderPath / "project.json");
     if (!out.is_open()) return false;
@@ -818,7 +898,8 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
 bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                                        Project& project,
                                        audio::AudioEngine& engine,
-                                       midi::MidiLearnManager* learnMgr) {
+                                       midi::MidiLearnManager* learnMgr,
+                                       visual::VisualEngine* visualEngine) {
     fs::path jsonPath = folderPath / "project.json";
     if (!fs::exists(jsonPath)) return false;
 
@@ -866,7 +947,9 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             auto& tr = project.track(t);
             tr.name = tj.value("name", "Track " + std::to_string(t + 1));
             std::string typeStr = tj.value("type", "Audio");
-            tr.type = (typeStr == "Midi") ? Track::Type::Midi : Track::Type::Audio;
+            tr.type = (typeStr == "Midi")   ? Track::Type::Midi
+                     : (typeStr == "Visual") ? Track::Type::Visual
+                                               : Track::Type::Audio;
             tr.colorIndex = tj.value("colorIndex", t);
             tr.volume = tj.value("volume", 1.0f);
             tr.muted = tj.value("muted", false);
@@ -878,6 +961,14 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.sidechainSource = tj.value("sidechainSource", -1);
             tr.resampleSource = tj.value("resampleSource", -1);
             tr.recordLengthBars = tj.value("recordLengthBars", 0);
+
+            {
+                std::string bm = tj.value("visualBlendMode", "Normal");
+                tr.visualBlendMode = (bm == "Add")      ? Track::VisualBlendMode::Add
+                                    : (bm == "Multiply") ? Track::VisualBlendMode::Multiply
+                                    : (bm == "Screen")   ? Track::VisualBlendMode::Screen
+                                                           : Track::VisualBlendMode::Normal;
+            }
 
             // Automation mode and lanes
             tr.autoMode = static_cast<automation::AutoMode>(tj.value("autoMode", 0));
@@ -946,6 +1037,43 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 auto clip = deserializeMidiClip(val);
                 if (clip)
                     project.setMidiClip(trackIdx, sceneIdx, std::move(clip));
+            } else if (clipType == "visual") {
+                auto vc = std::make_unique<visual::VisualClip>();
+                vc->shaderPath  = val.value("shaderPath", "");
+                vc->name        = val.value("name", "");
+                vc->colorIndex  = val.value("colorIndex", 0);
+                vc->lengthBeats = val.value("lengthBeats", 4.0);
+                vc->audioSource = val.value("audioSource", -1);
+                if (val.contains("params") && val["params"].is_object()) {
+                    for (auto it = val["params"].begin();
+                         it != val["params"].end(); ++it) {
+                        vc->paramValues.emplace_back(it.key(),
+                                                      it.value().get<float>());
+                    }
+                }
+                vc->text          = val.value("text",          std::string());
+                vc->videoPath       = val.value("videoPath",       std::string());
+                vc->thumbnailPath   = val.value("thumbnailPath",   std::string());
+                vc->videoSourcePath = val.value("videoSourcePath", std::string());
+                vc->videoLoopBars = val.value("videoLoopBars", 0);
+                vc->videoRate     = val.value("videoRate",     1.0f);
+                vc->videoIn       = val.value("videoIn",       0.0f);
+                vc->videoOut      = val.value("videoOut",      1.0f);
+                if (val.contains("lfos") && val["lfos"].is_object()) {
+                    static const char* kNames[8] = {
+                        "A","B","C","D","E","F","G","H"};
+                    for (int i = 0; i < 8; ++i) {
+                        if (!val["lfos"].contains(kNames[i])) continue;
+                        const auto& lj = val["lfos"][kNames[i]];
+                        auto& s = vc->knobLFOs[i];
+                        s.enabled = true;
+                        s.shape   = lj.value("shape", 0);
+                        s.rate    = lj.value("rate",  1.0f);
+                        s.depth   = lj.value("depth", 0.3f);
+                        s.sync    = lj.value("sync",  true);
+                    }
+                }
+                project.setVisualClip(trackIdx, sceneIdx, std::move(vc));
             }
 
             // Clip-level automation
@@ -979,6 +1107,34 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
         learnMgr->clearAll();
         if (root.contains("midiMappings")) {
             learnMgr->fromJson(root["midiMappings"]);
+        }
+    }
+
+    // Visual post-FX chain — rebuild from the saved ordered list.
+    // Back-compat: an older save may have stored plain path strings.
+    if (visualEngine) {
+        visual::postFX_clear(*visualEngine);
+        if (root.contains("visualPostFX") && root["visualPostFX"].is_array()) {
+            int idx = 0;
+            for (const auto& entry : root["visualPostFX"]) {
+                if (entry.is_string()) {
+                    visual::postFX_add(*visualEngine, entry.get<std::string>());
+                    ++idx;
+                } else if (entry.is_object() && entry.contains("path")) {
+                    if (visual::postFX_add(*visualEngine,
+                                             entry["path"].get<std::string>())) {
+                        if (entry.contains("params") && entry["params"].is_object()) {
+                            std::vector<std::pair<std::string, float>> pv;
+                            for (auto it = entry["params"].begin();
+                                 it != entry["params"].end(); ++it) {
+                                pv.emplace_back(it.key(), it.value().get<float>());
+                            }
+                            visual::postFX_applyParamValues(*visualEngine, idx, pv);
+                        }
+                        ++idx;
+                    }
+                }
+            }
         }
     }
 

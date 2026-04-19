@@ -532,7 +532,10 @@ static int l_get_track_type(lua_State* L) {
         return 1;
     }
     auto type = mgr->project()->track(t).type;
-    lua_pushstring(L, type == Track::Type::Audio ? "audio" : "midi");
+    const char* s = (type == Track::Type::Audio)  ? "audio"
+                  : (type == Track::Type::Midi)   ? "midi"
+                                                   : "visual";
+    lua_pushstring(L, s);
     return 1;
 }
 
@@ -669,8 +672,9 @@ static int l_start_record(lua_State* L) {
 
     if (trackType == Track::Type::Midi)
         mgr->sendCommand(audio::StartMidiRecordMsg{t, s, overdub, rlb});
-    else
+    else if (trackType == Track::Type::Audio)
         mgr->sendCommand(audio::StartAudioRecordMsg{t, s, overdub, rlb});
+    // Visual tracks don't record.
     return 0;
 }
 
@@ -687,8 +691,9 @@ static int l_stop_record(lua_State* L) {
 
     if (trackType == Track::Type::Midi)
         mgr->sendCommand(audio::StopMidiRecordMsg{t, recQ});
-    else
+    else if (trackType == Track::Type::Audio)
         mgr->sendCommand(audio::StopAudioRecordMsg{t, recQ});
+    // Visual tracks don't record.
     return 0;
 }
 

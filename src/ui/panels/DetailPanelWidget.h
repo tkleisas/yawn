@@ -92,6 +92,12 @@ public:
     void  toggle() { setOpen(!m_open); }
     float height() const { return m_animatedHeight; }
     float panelHeight() const { return m_userPanelHeight; }
+    // Programmatic height setter (used by VisualParamsPanel's drag handle
+    // so its resize mirrors the audio/midi detail panel's resize).
+    void setPanelHeight(float h) {
+        m_userPanelHeight = std::clamp(h, kMinPanelH, maxPanelHeight());
+        if (m_open) m_targetHeight = m_userPanelHeight;
+    }
 
     // Call when window resizes so max panel height scales with screen
     void setWindowHeight(float h) { m_windowHeight = h; }

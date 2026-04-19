@@ -169,6 +169,60 @@ void App::setupMenuBar() {
         {"Reload Controller Scripts", "", [this]() {
             m_controllerManager.reloadScripts("");
         }},
+        {"Visual Output Window", "", [this]() {
+            m_visualEngine.setOutputVisible(!m_visualEngine.isOutputVisible());
+        }},
+        {"Visual Output Fullscreen", "F11", [this]() {
+            // If output is hidden, show it first — fullscreen on a hidden
+            // window is a no-op and confusing. Toggle on a visible window.
+            if (!m_visualEngine.isOutputVisible())
+                m_visualEngine.setOutputVisible(true);
+            m_visualEngine.setFullscreen(!m_visualEngine.isFullscreen());
+        }},
+        {"Post FX: Add Bloom",         "", [this]() {
+            m_visualEngine.addPostFX("assets/shaders/post/bloom.frag");
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
+        {"Post FX: Add Pixelate",      "", [this]() {
+            m_visualEngine.addPostFX("assets/shaders/post/pixelate.frag");
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
+        {"Post FX: Add Kaleidoscope",  "", [this]() {
+            m_visualEngine.addPostFX("assets/shaders/post/kaleidoscope.frag");
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
+        {"Post FX: Add Chromatic Split","", [this]() {
+            m_visualEngine.addPostFX("assets/shaders/post/chroma.frag");
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
+        {"Post FX: Add Vignette",      "", [this]() {
+            m_visualEngine.addPostFX("assets/shaders/post/vignette.frag");
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
+        {"Post FX: Add Invert",        "", [this]() {
+            m_visualEngine.addPostFX("assets/shaders/post/invert.frag");
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
+        {"Post FX: Remove Last",       "", [this]() {
+            int n = m_visualEngine.numPostFX();
+            if (n > 0) {
+                m_visualEngine.removePostFX(n - 1);
+                markDirty();
+                updateDetailForSelectedTrack();
+            }
+        }},
+        {"Post FX: Clear All",         "", [this]() {
+            while (m_visualEngine.numPostFX() > 0)
+                m_visualEngine.removePostFX(0);
+            markDirty();
+            updateDetailForSelectedTrack();
+        }},
     });
 
     // Track menu
@@ -210,6 +264,23 @@ void App::setupMenuBar() {
                 }, ""});
             LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
         }},
+        {"Add Visual Track", "",  [this]() {
+            int idx = m_project.numTracks();
+            m_project.addTrack("Visual " + std::to_string(idx + 1), Track::Type::Visual);
+            // Visual tracks don't participate in audio engine processing, but
+            // keep the engine's track-type map in sync for UI consistency.
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 2});
+            markDirty();
+            m_undoManager.push({"Add Visual Track",
+                [this]{ m_project.removeLastTrack(); markDirty(); },
+                [this]{
+                    int i = m_project.numTracks();
+                    m_project.addTrack("Visual " + std::to_string(i + 1), Track::Type::Visual);
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 2});
+                    markDirty();
+                }, ""});
+            LOG_INFO("Visual", "Added Visual track %d", m_project.numTracks());
+        }},
         {"Delete Track",     "",  nullptr, true},
         {"Rename Track",     "",  [this]() {
             if (m_sessionPanel->visible()) {
@@ -250,6 +321,7 @@ void App::buildWidgetTree() {
     auto returnMstP = std::make_unique<ReturnMasterPanel>();
     auto gridP      = std::make_unique<ContentGrid>();
     auto detailP    = std::make_unique<DetailPanelWidget>();
+    auto visualPP   = std::make_unique<VisualParamsPanel>();
     auto pianoP     = std::make_unique<PianoRollPanel>();
     auto aboutDlg   = std::make_unique<AboutDialog>();
     auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
@@ -270,6 +342,7 @@ void App::buildWidgetTree() {
     m_returnMasterPanel = returnMstP.get();
     m_contentGrid       = gridP.get();
     m_detailPanel       = detailP.get();
+    m_visualParamsPanel = visualPP.get();
     m_pianoRoll         = pianoP.get();
     m_aboutDialog       = aboutDlg.get();
     m_confirmDialog     = confirmDlg.get();
@@ -363,7 +436,63 @@ void App::buildWidgetTree() {
     m_rootLayout->addChild(m_transportPanel);
     m_rootLayout->addChild(m_contentGrid);
     m_rootLayout->addChild(m_detailPanel);
+    m_rootLayout->addChild(m_visualParamsPanel);
+    m_visualParamsPanel->setVisible(false);
+    m_visualParamsPanel->setDetailPanel(m_detailPanel);
     m_rootLayout->addChild(m_pianoRoll);
+
+    // When a custom-named knob on the panel is turned, update both the
+    // live VisualEngine layer and the clip's persistent store.
+    auto persistParamValue = [this](const std::string& name, float v) {
+        int track = m_selectedTrack;
+        auto* slot = m_project.getSlot(track, m_project.track(track).defaultScene);
+        if (!slot || !slot->visualClip) return;
+        bool found = false;
+        for (auto& kv : slot->visualClip->paramValues) {
+            if (kv.first == name) { kv.second = v; found = true; break; }
+        }
+        if (!found)
+            slot->visualClip->paramValues.emplace_back(name, v);
+        markDirty();
+    };
+
+    m_visualParamsPanel->setOnChanged(
+        [this, persistParamValue](const std::string& name, float v) {
+            m_visualEngine.setLayerParam(m_selectedTrack, name, v);
+            persistParamValue(name, v);
+        });
+
+    // A..H knob row: indexed 0..7, persisted under reserved names "knobA".."knobH".
+    m_visualParamsPanel->setOnKnobChanged(
+        [this, persistParamValue](int idx, float v) {
+            static const char* names[8] = {
+                "knobA","knobB","knobC","knobD","knobE","knobF","knobG","knobH"
+            };
+            m_visualEngine.setLayerKnob(m_selectedTrack, idx, v);
+            if (idx >= 0 && idx < 8)
+                persistParamValue(names[idx], v);
+        });
+
+    // Right-click on an A..H knob → LFO configuration context menu.
+    m_visualParamsPanel->setOnKnobRightClick(
+        [this](int idx, float mx, float my) {
+            showVisualKnobLFOMenu(idx, mx, my);
+        });
+
+    // Post-FX knob change → update engine, mark project dirty.
+    m_visualParamsPanel->setOnPostFXChanged(
+        [this](int fxIdx, const std::string& name, float v) {
+            m_visualEngine.setPostFXParam(fxIdx, name, v);
+            markDirty();
+        });
+    // Post-FX remove (× button) — drops it from the chain and refreshes UI.
+    m_visualParamsPanel->setOnPostFXRemove(
+        [this](int fxIdx) {
+            m_visualEngine.removePostFX(fxIdx);
+            markDirty();
+            // Rebuild panel right away so the removed card disappears.
+            updateDetailForSelectedTrack();
+        });
 
     // Synchronized horizontal scrolling between session clips and mixer strips
     m_sessionPanel->setOnScrollChanged([this](float sx) {
@@ -384,6 +513,56 @@ void App::buildWidgetTree() {
     m_sessionPanel->setOnTrackRenamed(renameHandler);
     m_arrangementPanel->setOnTrackRenamed(renameHandler);
 
+    // Launching a Visual clip loads its shader into that track's layer and
+    // sets the layer's audio source for iAudioLevel / bands / kick. Each
+    // visual track owns one compositor layer; track volume acts as opacity.
+    m_sessionPanel->setOnLaunchVisualClip(
+        [this](int track, int scene, const std::string& shaderPath) {
+            auto* slot = m_project.getSlot(track, scene);
+            int audioSource = -1;
+            if (slot && slot->visualClip)
+                audioSource = slot->visualClip->audioSource;
+
+            // Video clip without a custom shader → fall back to the
+            // bundled passthrough so the video simply plays full-frame.
+            std::string effectiveShader = shaderPath;
+            const bool hasVideo = slot && slot->visualClip &&
+                                   !slot->visualClip->videoPath.empty();
+            if (effectiveShader.empty() && hasVideo) {
+                effectiveShader = "assets/shaders/video_passthrough.frag";
+            }
+            if (effectiveShader.empty()) return;
+            m_visualEngine.loadLayer(track, effectiveShader, audioSource);
+            // Track persists the blend mode — apply it to the fresh layer.
+            m_visualEngine.setLayerBlendMode(track,
+                static_cast<visual::VisualEngine::BlendMode>(
+                    m_project.track(track).visualBlendMode));
+            // Apply any saved shader-param values.
+            if (slot && slot->visualClip) {
+                m_visualEngine.applyLayerParamValues(track,
+                    slot->visualClip->paramValues);
+                // Restore saved LFOs.
+                for (int i = 0; i < 8; ++i) {
+                    const auto& s = slot->visualClip->knobLFOs[i];
+                    visual::VisualLFO lfo;
+                    lfo.enabled = s.enabled;
+                    lfo.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
+                    lfo.rate    = s.rate;
+                    lfo.depth   = s.depth;
+                    lfo.sync    = s.sync;
+                    m_visualEngine.setLayerKnobLFO(track, i, lfo);
+                }
+                m_visualEngine.setLayerText(track, slot->visualClip->text);
+                m_visualEngine.setLayerVideo(track, slot->visualClip->videoPath);
+                m_visualEngine.setLayerVideoTiming(track,
+                    slot->visualClip->videoLoopBars,
+                    slot->visualClip->videoRate);
+                m_visualEngine.setLayerVideoTrim(track,
+                    slot->visualClip->videoIn,
+                    slot->visualClip->videoOut);
+            }
+        });
+
     // Transfer ownership
     m_wrappers.push_back(std::move(menuW));
     m_wrappers.push_back(std::move(transportP));
@@ -394,6 +573,7 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(returnMstP));
     m_wrappers.push_back(std::move(gridP));
     m_wrappers.push_back(std::move(detailP));
+    m_wrappers.push_back(std::move(visualPP));
     m_wrappers.push_back(std::move(pianoP));
     m_wrappers.push_back(std::move(aboutDlg));
     m_wrappers.push_back(std::move(confirmDlg));
@@ -413,7 +593,12 @@ void App::computeLayout() {
 
     // Update panel visibility
     m_detailPanel->setWindowHeight(static_cast<float>(h));
-    m_detailPanel->setVisible(m_showDetailPanel);
+    const bool selectedIsVisual =
+        m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks() &&
+        m_project.track(m_selectedTrack).type == Track::Type::Visual;
+    // Detail panel + Visual-params panel share a slot: never both at once.
+    m_detailPanel->setVisible(m_showDetailPanel && !selectedIsVisual);
+    m_visualParamsPanel->setVisible(m_showDetailPanel && selectedIsVisual);
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
     // ContentGrid manages session + mixer + browser + returns visibility
@@ -467,6 +652,45 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             });
     }, false, track.type != Track::Type::Midi});
 
+    items.push_back({"Set as Visual Track", [this, trackIndex]() {
+        auto& trk = m_project.track(trackIndex);
+        if (trk.type == Track::Type::Visual) return;
+        m_confirmDialog->prompt(
+            "Change track type to Visual? All devices will be removed.",
+            [this, trackIndex]() {
+                m_audioEngine.midiEffectChain(trackIndex).clear();
+                m_audioEngine.mixer().trackEffects(trackIndex).clear();
+                m_audioEngine.setInstrument(trackIndex, nullptr);
+                m_project.track(trackIndex).type = Track::Type::Visual;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 2});
+                m_detailPanel->clear();
+                markDirty();
+            });
+    }, false, track.type != Track::Type::Visual});
+
+    // Blend Mode submenu — visible on Visual tracks only.
+    if (track.type == Track::Type::Visual) {
+        std::vector<ui::ContextMenu::Item> bmItems;
+        const auto cur = track.visualBlendMode;
+        auto addMode = [&](const char* label, Track::VisualBlendMode m,
+                            visual::VisualEngine::BlendMode vm) {
+            bmItems.push_back({label, [this, trackIndex, m, vm]{
+                m_project.track(trackIndex).visualBlendMode = m;
+                m_visualEngine.setLayerBlendMode(trackIndex, vm);
+                markDirty();
+            }, false, cur != m});
+        };
+        addMode("Normal",   Track::VisualBlendMode::Normal,
+                visual::VisualEngine::BlendMode::Normal);
+        addMode("Add",      Track::VisualBlendMode::Add,
+                visual::VisualEngine::BlendMode::Add);
+        addMode("Multiply", Track::VisualBlendMode::Multiply,
+                visual::VisualEngine::BlendMode::Multiply);
+        addMode("Screen",   Track::VisualBlendMode::Screen,
+                visual::VisualEngine::BlendMode::Screen);
+        items.push_back({"Blend Mode", nullptr, false, true, std::move(bmItems)});
+    }
+
     // Separator + Instruments submenu
     std::vector<ui::ContextMenu::Item> instrItems;
     auto addInstrItem = [&](const char* label, auto factory) {
@@ -475,7 +699,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             std::string oldInstr;
             auto* inst = m_audioEngine.instrument(trackIndex);
             if (inst) oldInstr = inst->name();
-            uint8_t oldTypeVal = (oldType == Track::Type::Audio) ? 0 : 1;
+            uint8_t oldTypeVal = (oldType == Track::Type::Audio)  ? 0
+                                : (oldType == Track::Type::Midi)   ? 1
+                                                                    : 2;
             m_project.track(trackIndex).type = Track::Type::Midi;
             m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
             m_audioEngine.setInstrument(trackIndex, factory());
@@ -717,6 +943,218 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     auto* slot = m_project.getSlot(trackIndex, sceneIndex);
     bool hasClip = slot && !slot->empty();
     bool hasClipboard = m_clipboard.type != ClipboardData::Type::None;
+    const bool isVisualTrack =
+        m_project.track(trackIndex).type == Track::Type::Visual;
+
+    // Visual track: offer a shader picker at the top. Label flips between
+    // "Load Shader…" (empty slot) and "Replace Shader…" (clip present).
+    if (isVisualTrack) {
+        const bool hasVisualClip = slot && slot->visualClip;
+        const char* label = hasVisualClip ? "Replace Shader…" : "Load Shader…";
+        items.push_back({label, [this, trackIndex, sceneIndex]() {
+            m_pendingShaderTrack = trackIndex;
+            m_pendingShaderScene = sceneIndex;
+            static SDL_DialogFileFilter filter{"Fragment shaders", "frag;glsl;fs"};
+            SDL_ShowOpenFileDialog(
+                [](void* ud, const char* const* filelist, int) {
+                    auto* self = static_cast<App*>(ud);
+                    if (!filelist || !filelist[0]) return;
+                    int ti = self->m_pendingShaderTrack;
+                    int si = self->m_pendingShaderScene;
+                    self->m_pendingShaderTrack = -1;
+                    self->m_pendingShaderScene = -1;
+                    if (ti < 0 || si < 0) return;
+                    auto vc = std::make_unique<visual::VisualClip>();
+                    vc->shaderPath = filelist[0];
+                    // Name: filename stem.
+                    std::filesystem::path p(vc->shaderPath);
+                    vc->name = p.stem().string();
+                    vc->colorIndex = self->m_project.track(ti).colorIndex;
+                    self->m_project.setVisualClip(ti, si, std::move(vc));
+                    self->markDirty();
+                },
+                this, m_mainWindow.getHandle(),
+                &filter, 1,
+                /*default_location*/ nullptr,
+                /*allow_many*/ false);
+        }, false, true});
+        // "Set Video…" — opens a file picker, kicks off the ffmpeg
+        // transcode, and drops the imported .mp4 path into this clip.
+        items.push_back({"Set Video…",
+            [this, trackIndex, sceneIndex]() {
+                if (m_projectPath.empty()) {
+                    LOG_WARN("Video",
+                        "Save the project first — media folder is stored "
+                        "alongside the project file.");
+                    return;
+                }
+                m_pendingVideoTrack = trackIndex;
+                m_pendingVideoScene = sceneIndex;
+                static SDL_DialogFileFilter filter{
+                    "Video files", "mp4;mov;mkv;webm;avi;m4v"};
+                SDL_ShowOpenFileDialog(
+                    [](void* ud, const char* const* filelist, int) {
+                        auto* self = static_cast<App*>(ud);
+                        if (!filelist || !filelist[0]) return;
+                        int ti = self->m_pendingVideoTrack;
+                        int si = self->m_pendingVideoScene;
+                        self->m_pendingVideoTrack = -1;
+                        self->m_pendingVideoScene = -1;
+                        if (ti < 0 || si < 0) return;
+                        self->startVideoImport(ti, si, filelist[0]);
+                    },
+                    this, m_mainWindow.getHandle(),
+                    &filter, 1, nullptr, false);
+            }, false, true});
+
+        // "Re-import Video" — delete cached transcode and rerun ffmpeg.
+        // Visible only when we know the original source path (imported
+        // under the current code path).
+        if (slot && slot->visualClip &&
+            !slot->visualClip->videoSourcePath.empty()) {
+            std::string src = slot->visualClip->videoSourcePath;
+            items.push_back({"Re-import Video", [this, trackIndex, sceneIndex, src]() {
+                if (m_projectPath.empty()) return;
+                // Delete the cached files so the importer actually re-runs.
+                std::filesystem::path mediaDir = m_projectPath / "media";
+                std::string id = visual::VideoImporter::shortHash(src);
+                std::error_code ec;
+                for (const char* ext : { ".mp4", ".wav", "_thumb.jpg" }) {
+                    std::filesystem::remove(mediaDir / (id + ext), ec);
+                }
+                startVideoImport(trackIndex, sceneIndex, src);
+            }, false, true});
+        }
+
+        // Video-only: loop length + playback rate submenus. Only useful
+        // if a video is assigned to the clip; shown always on visual
+        // clips so the user can queue settings before import.
+        if (slot && slot->visualClip && !slot->visualClip->videoPath.empty()) {
+            const int curBars = slot->visualClip->videoLoopBars;
+            const float curRate = slot->visualClip->videoRate;
+
+            auto applyTiming = [this, trackIndex, sceneIndex](int bars, float rate) {
+                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                if (!s || !s->visualClip) return;
+                s->visualClip->videoLoopBars = bars;
+                s->visualClip->videoRate     = rate;
+                if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                    m_visualEngine.setLayerVideoTiming(trackIndex, bars, rate);
+                markDirty();
+            };
+
+            // Loop Length submenu.
+            std::vector<ui::ContextMenu::Item> loopItems;
+            auto addLoop = [&](const char* label, int bars) {
+                loopItems.push_back({label,
+                    [applyTiming, curRate, bars]{ applyTiming(bars, curRate); },
+                    false, curBars != bars});
+            };
+            addLoop("Free (native rate)", 0);
+            addLoop("1/2 bar", 0); // placeholder — overwritten below
+            loopItems.pop_back();
+            addLoop("1 bar",  1);
+            addLoop("2 bars", 2);
+            addLoop("4 bars", 4);
+            addLoop("8 bars", 8);
+            addLoop("16 bars",16);
+            items.push_back({"Video Loop", nullptr, false, true, std::move(loopItems)});
+
+            // Playback Rate submenu (F.3).
+            std::vector<ui::ContextMenu::Item> rateItems;
+            auto addRate = [&](const char* label, float rate) {
+                rateItems.push_back({label,
+                    [applyTiming, curBars, rate]{ applyTiming(curBars, rate); },
+                    false, std::abs(curRate - rate) > 0.001f});
+            };
+            addRate("0.25×", 0.25f);
+            addRate("0.5×",  0.5f);
+            addRate("1× (normal)", 1.0f);
+            addRate("2×",    2.0f);
+            addRate("4×",    4.0f);
+            items.push_back({"Video Rate", nullptr, false, true, std::move(rateItems)});
+
+            // In/Out trim submenu — picks a sub-range of the source.
+            const float curIn  = slot->visualClip->videoIn;
+            const float curOut = slot->visualClip->videoOut;
+            std::vector<ui::ContextMenu::Item> trimItems;
+            auto addTrim = [&](const char* label, float inF, float outF) {
+                trimItems.push_back({label,
+                    [this, trackIndex, sceneIndex, inF, outF]() {
+                        auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                        if (!s || !s->visualClip) return;
+                        s->visualClip->videoIn  = inF;
+                        s->visualClip->videoOut = outF;
+                        if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                            m_visualEngine.setLayerVideoTrim(trackIndex, inF, outF);
+                        markDirty();
+                    },
+                    false,
+                    !(std::abs(curIn - inF) < 0.005f &&
+                      std::abs(curOut - outF) < 0.005f)});
+            };
+            addTrim("Full (0–100%)",         0.00f, 1.00f);
+            addTrim("First half (0–50%)",    0.00f, 0.50f);
+            addTrim("Last half (50–100%)",   0.50f, 1.00f);
+            addTrim("Middle (25–75%)",       0.25f, 0.75f);
+            addTrim("First quarter (0–25%)", 0.00f, 0.25f);
+            addTrim("Last quarter (75–100%)",0.75f, 1.00f);
+            items.push_back({"Video Trim", nullptr, false, true, std::move(trimItems)});
+
+            items.push_back({"", nullptr, true}); // separator
+        }
+
+        // "Set Text…" — edits the string that gets rasterised to iChannel1.
+        if (slot && slot->visualClip) {
+            items.push_back({"Set Text…",
+                [this, trackIndex, sceneIndex]() {
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s || !s->visualClip) return;
+                    SDL_StartTextInput(m_mainWindow.getHandle());
+                    m_textInputDialog->prompt("Text (for iChannel1)",
+                        s->visualClip->text,
+                        [this, trackIndex, sceneIndex](const std::string& txt) {
+                            SDL_StopTextInput(m_mainWindow.getHandle());
+                            auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                            if (!s2 || !s2->visualClip) return;
+                            s2->visualClip->text = txt;
+                            // Only push to the live layer if this clip is the
+                            // currently-launched one on its track.
+                            if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                                m_visualEngine.setLayerText(trackIndex, txt);
+                            markDirty();
+                        });
+                }, false, true});
+        }
+
+        // Audio source submenu — what track's level drives iAudioLevel.
+        if (slot && slot->visualClip) {
+            std::vector<ui::ContextMenu::Item> srcItems;
+            const int curSource = slot->visualClip->audioSource;
+            auto reassign = [this, trackIndex, sceneIndex](int newSrc) {
+                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                if (!s || !s->visualClip) return;
+                s->visualClip->audioSource = newSrc;
+                // If this clip is the currently-launched one on its track,
+                // update the visual engine layer's live source too.
+                if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                    m_visualEngine.setLayerAudioSource(trackIndex, newSrc);
+                markDirty();
+            };
+            srcItems.push_back({"Master", [reassign]{ reassign(-1); },
+                                false, curSource != -1});
+            srcItems.push_back({"", nullptr, true}); // separator
+            for (int t = 0; t < m_project.numTracks(); ++t) {
+                if (m_project.track(t).type == Track::Type::Visual) continue;
+                std::string label = "Track " + std::to_string(t + 1) + ": "
+                                     + m_project.track(t).name;
+                srcItems.push_back({label, [reassign, t]{ reassign(t); },
+                                     false, curSource != t});
+            }
+            items.push_back({"Audio Source", nullptr, false, true, std::move(srcItems)});
+        }
+        items.push_back({"", nullptr, true}); // separator
+    }
 
     items.push_back({"Copy", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
@@ -842,8 +1280,9 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         for (int s = sceneIndex + 1; s < m_project.numScenes(); ++s) {
             auto* dst = m_project.getSlot(trackIndex, s);
             if (dst && dst->empty()) {
-                if (src->audioClip) dst->audioClip = src->audioClip->clone();
-                else if (src->midiClip) dst->midiClip = src->midiClip->clone();
+                if (src->audioClip)       dst->audioClip  = src->audioClip->clone();
+                else if (src->midiClip)   dst->midiClip   = src->midiClip->clone();
+                else if (src->visualClip) dst->visualClip = src->visualClip->clone();
                 int destScene = s;
                 m_selectedScene = s;
                 m_sessionPanel->setSelectedScene(s);
@@ -857,8 +1296,9 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         auto* src2 = m_project.getSlot(trackIndex, sceneIndex);
                         auto* dst2 = m_project.getSlot(trackIndex, destScene);
                         if (src2 && dst2) {
-                            if (src2->audioClip) dst2->audioClip = src2->audioClip->clone();
-                            else if (src2->midiClip) dst2->midiClip = src2->midiClip->clone();
+                            if (src2->audioClip)       dst2->audioClip  = src2->audioClip->clone();
+                            else if (src2->midiClip)   dst2->midiClip   = src2->midiClip->clone();
+                            else if (src2->visualClip) dst2->visualClip = src2->visualClip->clone();
                             markDirty();
                         }
                     }, ""});
@@ -894,18 +1334,21 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         if (s && !s->empty()) {
             std::shared_ptr<audio::Clip> oldAudio;
             std::shared_ptr<midi::MidiClip> oldMidi;
-            if (s->audioClip) oldAudio.reset(s->audioClip->clone().release());
-            if (s->midiClip) oldMidi.reset(s->midiClip->clone().release());
+            std::shared_ptr<visual::VisualClip> oldVisual;
+            if (s->audioClip)  oldAudio.reset(s->audioClip->clone().release());
+            if (s->midiClip)   oldMidi.reset(s->midiClip->clone().release());
+            if (s->visualClip) oldVisual.reset(s->visualClip->clone().release());
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
             s->clear();
             markDirty();
             m_undoManager.push({"Delete Clip",
-                [this, trackIndex, sceneIndex, oldAudio, oldMidi]{
+                [this, trackIndex, sceneIndex, oldAudio, oldMidi, oldVisual]{
                     auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s2) return;
-                    if (oldAudio) s2->audioClip = oldAudio->clone();
-                    if (oldMidi) s2->midiClip = oldMidi->clone();
+                    if (oldAudio)  s2->audioClip  = oldAudio->clone();
+                    if (oldMidi)   s2->midiClip   = oldMidi->clone();
+                    if (oldVisual) s2->visualClip = oldVisual->clone();
                     markDirty();
                 },
                 [this, trackIndex, sceneIndex]{
@@ -968,6 +1411,193 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         }});
         items.push_back({rlLabel.c_str(), nullptr, false, true, std::move(rlItems)});
     }
+
+    m_contextMenu.open(mx, my, std::move(items));
+}
+
+void App::startVideoImport(int track, int scene, const std::string& sourcePath) {
+    if (m_projectPath.empty()) return;
+
+    // Ensure the slot has a VisualClip — create one named after the file
+    // if necessary. The videoPath gets filled when the import finishes.
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot) return;
+    if (!slot->visualClip) {
+        auto vc = std::make_unique<visual::VisualClip>();
+        std::filesystem::path p(sourcePath);
+        vc->name       = p.stem().string();
+        vc->colorIndex = m_project.track(track).colorIndex;
+        m_project.setVisualClip(track, scene, std::move(vc));
+    }
+
+    auto importer = std::make_unique<visual::VideoImporter>();
+    std::filesystem::path mediaDir = m_projectPath / "media";
+    if (!importer->start(sourcePath, mediaDir)) {
+        LOG_ERROR("Video", "Import failed to start: %s", sourcePath.c_str());
+        return;
+    }
+
+    PendingVideoImport pi;
+    pi.track      = track;
+    pi.scene      = scene;
+    pi.sourcePath = sourcePath;
+    pi.importer   = std::move(importer);
+    m_pendingImports.push_back(std::move(pi));
+
+    m_sessionPanel->setSlotImporting(track, scene, true);
+    LOG_INFO("Video", "Import started: %s", sourcePath.c_str());
+}
+
+void App::onVideoImportDone(PendingVideoImport& pi) {
+    const auto& r = pi.importer->result();
+    auto* slot = m_project.getSlot(pi.track, pi.scene);
+    if (slot && slot->visualClip) {
+        slot->visualClip->videoPath       = r.videoPath;
+        slot->visualClip->thumbnailPath   = r.thumbnailPath;
+        slot->visualClip->videoSourcePath = pi.sourcePath;
+        markDirty();
+    }
+
+    // If audio was extracted, append a new audio track named
+    // "<stem> audio" and load the WAV as an audio clip at the same scene
+    // so the user can scene-launch both together.
+    if (!r.audioPath.empty()) {
+        std::filesystem::path srcP(pi.sourcePath);
+        std::string newTrackName = srcP.stem().string() + " audio";
+        m_project.addTrack(newTrackName, Track::Type::Audio);
+        int newTrack = m_project.numTracks() - 1;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{newTrack, 0});
+        if (loadClipToSlot(r.audioPath, newTrack, pi.scene)) {
+            LOG_INFO("Video", "Audio track created for %s at scene %d",
+                      srcP.stem().string().c_str(), pi.scene);
+        }
+        syncTracksToEngine();
+        markDirty();
+    }
+
+    m_sessionPanel->setSlotImporting(pi.track, pi.scene, false);
+    LOG_INFO("Video", "Import done: %s", pi.sourcePath.c_str());
+}
+
+void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
+    if (knobIdx < 0 || knobIdx >= 8) return;
+    if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+    if (m_project.track(m_selectedTrack).type != Track::Type::Visual) return;
+
+    const visual::VisualLFO* cur =
+        m_visualEngine.getLayerKnobLFO(m_selectedTrack, knobIdx);
+    if (!cur) return;  // layer doesn't exist yet (no clip launched)
+    visual::VisualLFO snapshot = *cur;
+
+    auto apply = [this, knobIdx](visual::VisualLFO lfo) {
+        m_visualEngine.setLayerKnobLFO(m_selectedTrack, knobIdx, lfo);
+        // Mirror into the clip for persistence.
+        int scene = m_project.track(m_selectedTrack).defaultScene;
+        auto* slot = m_project.getSlot(m_selectedTrack, scene);
+        if (slot && slot->visualClip) {
+            auto& saved = slot->visualClip->knobLFOs[knobIdx];
+            saved.enabled = lfo.enabled;
+            saved.shape   = static_cast<uint8_t>(lfo.shape);
+            saved.rate    = lfo.rate;
+            saved.depth   = lfo.depth;
+            saved.sync    = lfo.sync;
+            markDirty();
+        }
+    };
+
+    std::vector<ui::ContextMenu::Item> items;
+    char title[32];
+    std::snprintf(title, sizeof(title), "Knob %c",
+                   static_cast<char>('A' + knobIdx));
+    items.push_back({title, nullptr, false, false});  // header (disabled)
+    items.push_back({"", nullptr, true});  // separator
+
+    // MIDI Learn / Remove Mapping — routes a MIDI CC to this knob.
+    {
+        auto tgt = automation::AutomationTarget::visualKnob(m_selectedTrack, knobIdx);
+        bool mapped = false;
+        std::string mappedLabel;
+        for (const auto& mm : m_midiLearnManager.mappings()) {
+            if (mm.target == tgt) { mapped = true; mappedLabel = mm.label(); break; }
+        }
+        const bool learning = m_midiLearnManager.isLearning() &&
+                              m_midiLearnManager.learnTarget() == tgt;
+        if (learning) {
+            items.push_back({"Cancel MIDI Learn", [this]() {
+                m_midiLearnManager.cancelLearn();
+            }, false, true});
+        } else if (mapped) {
+            std::string label = "MIDI: " + mappedLabel + "  (click to re-learn)";
+            items.push_back({label, [this, tgt]() {
+                m_midiLearnManager.startLearn(tgt, 0.0f, 1.0f);
+            }, false, true});
+            items.push_back({"Remove MIDI Mapping", [this, tgt]() {
+                m_midiLearnManager.removeByTarget(tgt);
+            }, false, true});
+        } else {
+            items.push_back({"MIDI Learn…", [this, tgt]() {
+                m_midiLearnManager.startLearn(tgt, 0.0f, 1.0f);
+            }, false, true});
+        }
+        items.push_back({"", nullptr, true});
+    }
+
+    items.push_back({"-- LFO --", nullptr, false, false});
+
+    // On/off toggle — shown checked when disabled so the active state stays.
+    items.push_back({cur->enabled ? "Disable LFO" : "Enable LFO",
+        [apply, snapshot]() mutable {
+            snapshot.enabled = !snapshot.enabled;
+            apply(snapshot);
+        }, false, true});
+
+    items.push_back({"", nullptr, true});
+
+    // Shape submenu.
+    std::vector<ui::ContextMenu::Item> shapeItems;
+    const char* shapeNames[] = {"Sine", "Triangle", "Saw", "Square", "Sample & Hold"};
+    for (int s = 0; s < 5; ++s) {
+        shapeItems.push_back({shapeNames[s],
+            [apply, snapshot, s]() mutable {
+                snapshot.shape = static_cast<visual::VisualLFO::Shape>(s);
+                snapshot.enabled = true;
+                apply(snapshot);
+            }, false, static_cast<int>(cur->shape) != s});
+    }
+    items.push_back({"Shape", nullptr, false, true, std::move(shapeItems)});
+
+    // Rate submenu (beats per cycle).
+    std::vector<ui::ContextMenu::Item> rateItems;
+    struct RatePreset { const char* label; float beats; };
+    static const RatePreset rates[] = {
+        {"1/16",   0.25f}, {"1/8",   0.5f}, {"1/4",   1.0f}, {"1/2",   2.0f},
+        {"1 bar",  4.0f},  {"2 bars",8.0f}, {"4 bars", 16.0f},
+    };
+    for (const auto& rp : rates) {
+        rateItems.push_back({rp.label,
+            [apply, snapshot, rp]() mutable {
+                snapshot.rate = rp.beats;
+                snapshot.sync = true;
+                snapshot.enabled = true;
+                apply(snapshot);
+            }, false, std::abs(cur->rate - rp.beats) > 0.001f});
+    }
+    items.push_back({"Rate", nullptr, false, true, std::move(rateItems)});
+
+    // Depth submenu.
+    std::vector<ui::ContextMenu::Item> depthItems;
+    static const float depths[] = {0.1f, 0.25f, 0.5f, 0.75f, 1.0f};
+    static const char* depthLabels[] = {"10%", "25%", "50%", "75%", "100%"};
+    for (int d = 0; d < 5; ++d) {
+        float dv = depths[d];
+        depthItems.push_back({depthLabels[d],
+            [apply, snapshot, dv]() mutable {
+                snapshot.depth = dv;
+                snapshot.enabled = true;
+                apply(snapshot);
+            }, false, std::abs(cur->depth - dv) > 0.001f});
+    }
+    items.push_back({"Depth", nullptr, false, true, std::move(depthItems)});
 
     m_contextMenu.open(mx, my, std::move(items));
 }
@@ -1154,6 +1784,33 @@ void App::updateDetailForSelectedTrack() {
         return;
     }
 
+    // Visual track: rebuild the params panel (computeLayout handles show/hide).
+    if (m_project.track(m_selectedTrack).type == Track::Type::Visual) {
+        auto params = m_visualEngine.getLayerParams(m_selectedTrack);
+        std::string shaderLabel;
+        int scene = m_project.track(m_selectedTrack).defaultScene;
+        if (scene >= 0) {
+            auto* slot = m_project.getSlot(m_selectedTrack, scene);
+            if (slot && slot->visualClip) shaderLabel = slot->visualClip->name;
+        }
+        m_visualParamsPanel->rebuildCustom(params, shaderLabel);
+        float knobs[8];
+        for (int i = 0; i < 8; ++i)
+            knobs[i] = m_visualEngine.getLayerKnob(m_selectedTrack, i);
+        m_visualParamsPanel->setKnobValues(knobs);
+
+        // Build the post-fx chain snapshot: (displayName, params) per effect.
+        std::vector<std::pair<std::string,
+            std::vector<visual::VisualEngine::LayerParamInfo>>> fxChain;
+        for (int i = 0; i < m_visualEngine.numPostFX(); ++i) {
+            std::filesystem::path p(m_visualEngine.postFXPath(i));
+            fxChain.emplace_back(p.stem().string(),
+                                  m_visualEngine.getPostFXParams(i));
+        }
+        m_visualParamsPanel->rebuildPostFX(fxChain);
+        return;
+    }
+
     m_detailPanel->setTrackIndex(m_selectedTrack);
 
     // Update browser panel follow action for any clip slot
@@ -1230,6 +1887,15 @@ bool App::init() {
         LOG_ERROR("UI", "Failed to initialize 2D renderer");
         return false;
     }
+
+    // Visual engine: creates secondary output window (hidden until toggled).
+    // Shares GL resources with the main context, so creation happens while
+    // the main context is still current.
+    if (!m_visualEngine.init()) {
+        LOG_WARN("Visual", "VisualEngine init failed — visual output disabled");
+    }
+    m_visualEngine.setAudioEngine(&m_audioEngine);
+    m_mainWindow.makeCurrent();  // init() left the main context current, but be explicit
 
     // Load application icon — set window icon and create GL texture for About dialog
     {
@@ -1940,6 +2606,8 @@ void App::shutdown() {
     m_vst3Scanner.reset();
 #endif
     m_audioEngine.shutdown();
+    // Tear down visual output window + GL resources while SDL is still up.
+    m_visualEngine.shutdown();
     // Destroy cached cursors
     if (m_cursorDefault)  SDL_DestroyCursor(m_cursorDefault);
     if (m_cursorEWResize) SDL_DestroyCursor(m_cursorEWResize);
@@ -2612,13 +3280,24 @@ void App::processEvents() {
 
                 switch (event.key.key) {
                     case SDLK_ESCAPE:
-                        if (m_contextMenu.isOpen()) {
+                        // ESC exits fullscreen on the visual output if
+                        // that's what's currently going on; otherwise it
+                        // keeps its menu/quit behaviour.
+                        if (m_visualEngine.isFullscreen()) {
+                            m_visualEngine.setFullscreen(false);
+                        } else if (m_contextMenu.isOpen()) {
                             m_contextMenu.close();
                         } else if (m_menuBar.isOpen()) {
                             m_menuBar.close();
                         } else {
                             m_running = false;
                         }
+                        break;
+
+                    case SDLK_F11:
+                        if (!m_visualEngine.isOutputVisible())
+                            m_visualEngine.setOutputVisible(true);
+                        m_visualEngine.setFullscreen(!m_visualEngine.isFullscreen());
                         break;
 
                     case SDLK_SPACE:
@@ -2962,22 +3641,33 @@ void App::processEvents() {
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 bool hadEditingKnob = m_showDetailPanel && m_detailPanel->hasEditingKnob();
                 if (m_showDetailPanel) {
-                    if (rightClick) {
-                        if (m_detailPanel->handleRightClick(mx, my)) {
-                            m_detailPanel->setFocused(true);
-                            break;
-                        }
-                    } else {
+                    // Visual-params panel is shown in place of detail panel
+                    // when the selected track is a Visual track.
+                    if (m_visualParamsPanel->visible()) {
                         ui::fw::MouseEvent me;
                         me.x = mx; me.y = my;
-                        me.button = ui::fw::MouseButton::Left;
-                        if (m_detailPanel->onMouseDown(me)) {
-                            // Start/stop SDL text input for knob edit mode
-                            if (m_detailPanel->hasEditingKnob() && !hadEditingKnob)
-                                SDL_StartTextInput(m_mainWindow.getHandle());
-                            else if (!m_detailPanel->hasEditingKnob() && hadEditingKnob)
-                                SDL_StopTextInput(m_mainWindow.getHandle());
-                            break;
+                        me.button = rightClick ? ui::fw::MouseButton::Right
+                                                : ui::fw::MouseButton::Left;
+                        if (m_visualParamsPanel->onMouseDown(me)) break;
+                    }
+                    if (m_detailPanel->visible()) {
+                        if (rightClick) {
+                            if (m_detailPanel->handleRightClick(mx, my)) {
+                                m_detailPanel->setFocused(true);
+                                break;
+                            }
+                        } else {
+                            ui::fw::MouseEvent me;
+                            me.x = mx; me.y = my;
+                            me.button = ui::fw::MouseButton::Left;
+                            if (m_detailPanel->onMouseDown(me)) {
+                                // Start/stop SDL text input for knob edit mode
+                                if (m_detailPanel->hasEditingKnob() && !hadEditingKnob)
+                                    SDL_StartTextInput(m_mainWindow.getHandle());
+                                else if (!m_detailPanel->hasEditingKnob() && hadEditingKnob)
+                                    SDL_StopTextInput(m_mainWindow.getHandle());
+                                break;
+                            }
                         }
                     }
                 }
@@ -3272,14 +3962,18 @@ void App::processEvents() {
                             double beatPos = static_cast<double>(relX) / m_arrangementPanel->zoom();
                             beatPos = m_arrangementPanel->snapBeat(beatPos);
                             if (trackIdx >= 0 && trackIdx < m_project.numTracks()) {
-                                if (m_project.track(trackIdx).type == Track::Type::Audio) {
+                                auto trackType = m_project.track(trackIdx).type;
+                                if (trackType == Track::Type::Audio) {
                                     loadClipToArrangement(file, trackIdx, beatPos);
-                                } else {
+                                } else if (trackType == Track::Type::Midi) {
                                     // For MIDI tracks, try loading as sample to instrument
                                     if (!loadSampleToSampler(file, trackIdx))
                                         if (!loadSampleToDrumRack(file, trackIdx))
                                             if (!loadSampleToGranular(file, trackIdx))
                                                 LOG_WARN("Drop", "Cannot drop audio on MIDI arrangement track");
+                                } else {
+                                    // Visual or other: ignore audio drop.
+                                    LOG_WARN("Drop", "Cannot drop audio file on visual track");
                                 }
                             }
                         }
@@ -3300,6 +3994,34 @@ void App::processEvents() {
                         int s = static_cast<int>(contentMY / ui::Theme::kClipSlotHeight);
                         if (t >= 0 && t < m_project.numTracks()) targetTrack = t;
                         if (s >= 0 && s < m_project.numScenes()) targetScene = s;
+                    }
+
+                    // Video drop onto a Visual track → kick off an import.
+                    // Detection is purely extension-based; ffmpeg handles
+                    // whatever the actual format turns out to be.
+                    auto isVideoExt = [](const std::string& path) {
+                        static const char* exts[] = {
+                            ".mp4",".mov",".mkv",".webm",".avi",".m4v"};
+                        std::string p = path;
+                        for (auto& c : p) c = static_cast<char>(std::tolower(c));
+                        for (const char* e : exts) {
+                            size_t n = std::strlen(e);
+                            if (p.size() >= n && p.compare(p.size() - n, n, e) == 0)
+                                return true;
+                        }
+                        return false;
+                    };
+                    if (targetTrack >= 0 && targetTrack < m_project.numTracks() &&
+                        m_project.track(targetTrack).type == Track::Type::Visual &&
+                        isVideoExt(file)) {
+                        if (m_projectPath.empty()) {
+                            LOG_WARN("Drop",
+                                "Save the project first — video imports "
+                                "live in <project>/media/.");
+                        } else {
+                            startVideoImport(targetTrack, targetScene, file);
+                        }
+                        break;
                     }
 
                     // If the target track has a sample-based instrument, load sample
@@ -3338,6 +4060,71 @@ void App::update() {
     float dt = (m_lastFrameTicks > 0) ? (now - m_lastFrameTicks) / 1000.0f : 0.0f;
     m_lastFrameTicks = now;
     m_sessionPanel->updateAnimTimer(dt);
+
+    // Video imports — advance each background transcode, apply results.
+    for (auto it = m_pendingImports.begin(); it != m_pendingImports.end(); ) {
+        it->importer->poll();
+        auto st = it->importer->state();
+        m_sessionPanel->setSlotImportProgress(it->track, it->scene,
+                                                it->importer->progress());
+        if (st == visual::VideoImporter::State::Done) {
+            onVideoImportDone(*it);
+            it = m_pendingImports.erase(it);
+        } else if (st == visual::VideoImporter::State::Failed) {
+            LOG_ERROR("Video", "Import failed: %s", it->importer->error().c_str());
+            m_sessionPanel->setSlotImporting(it->track, it->scene, false);
+            it = m_pendingImports.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Pull any fresh MIDI CC values for visual-knob targets off the bus
+    // and apply them to the layer + clip. Audio thread writes, UI thread
+    // reads once per frame.
+    for (int t = 0; t < m_project.numTracks() && t < kMaxTracks; ++t) {
+        if (m_project.track(t).type != Track::Type::Visual) continue;
+        for (int k = 0; k < 8; ++k) {
+            float v;
+            if (!visual::VisualKnobBus::instance().readIfChanged(
+                    t, k, m_visualKnobBusVersions[t][k], &v)) continue;
+            m_visualEngine.setLayerKnob(t, k, v);
+            // Persist into the active clip on this track (if any).
+            int scene = m_project.track(t).defaultScene;
+            auto* slot = m_project.getSlot(t, scene);
+            if (slot && slot->visualClip) {
+                static const char* names[8] = {
+                    "knobA","knobB","knobC","knobD","knobE","knobF","knobG","knobH"};
+                bool found = false;
+                for (auto& kv : slot->visualClip->paramValues) {
+                    if (kv.first == names[k]) { kv.second = v; found = true; break; }
+                }
+                if (!found) slot->visualClip->paramValues.emplace_back(names[k], v);
+                markDirty();
+            }
+            // Reflect into the panel immediately if this is the selected track.
+            if (t == m_selectedTrack) {
+                float knobs[8];
+                for (int i = 0; i < 8; ++i)
+                    knobs[i] = m_visualEngine.getLayerKnob(t, i);
+                m_visualParamsPanel->setKnobValues(knobs);
+            }
+        }
+    }
+
+    // Push live modulated knob values into the visual-params panel so the
+    // A..H arcs breathe with their LFOs. Only active while the panel is
+    // visible — audio/midi tracks get cleared overrides.
+    if (m_visualParamsPanel->visible() &&
+        m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks() &&
+        m_project.track(m_selectedTrack).type == Track::Type::Visual) {
+        float disp[8];
+        for (int i = 0; i < 8; ++i)
+            disp[i] = m_visualEngine.getLayerKnobDisplayValue(m_selectedTrack, i);
+        m_visualParamsPanel->setKnobDisplayValues(disp);
+    } else {
+        m_visualParamsPanel->setKnobDisplayValues(nullptr);
+    }
 
     // Poll controller scripts (MIDI input → Lua callbacks)
     m_controllerManager.update();
@@ -3694,6 +4481,17 @@ void App::render() {
     m_renderer.endFrame();
 
     m_mainWindow.swap();
+
+    // Visual output: render after the main UI has swapped. tick() saves and
+    // restores the current GL context, so it's safe to call here without
+    // disturbing the next main-window frame.
+    if (m_visualEngine.isOutputVisible()) {
+        const auto& transport = m_audioEngine.transport();
+        const double sr = std::max(1.0, m_audioEngine.sampleRate());
+        const double seconds = static_cast<double>(transport.positionInSamples()) / sr;
+        const double beats   = transport.positionInBeats();
+        m_visualEngine.tick(seconds, beats, transport.isPlaying());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3797,7 +4595,7 @@ void App::doSaveProject(const std::filesystem::path& path) {
     if (projectDir.extension() != ".yawn")
         projectDir += ".yawn";
 
-    if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine, &m_midiLearnManager)) {
+    if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
         m_projectPath = projectDir;
         m_projectDirty = false;
         updateWindowTitle();
@@ -3831,7 +4629,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
     m_audioEngine.mixer().masterEffects().clear();
 
     Project loadedProject;
-    if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine, &m_midiLearnManager)) {
+    if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
         m_project = std::move(loadedProject);
         syncTracksToEngine();
         m_projectPath = projectDir;
@@ -3853,7 +4651,9 @@ void App::doOpenProject(const std::filesystem::path& path) {
 void App::syncTracksToEngine() {
     for (int i = 0; i < m_project.numTracks(); ++i) {
         const auto& trk = m_project.track(i);
-        uint8_t type = (trk.type == Track::Type::Midi) ? 1 : 0;
+        uint8_t type = (trk.type == Track::Type::Audio)  ? 0
+                      : (trk.type == Track::Type::Midi)   ? 1
+                                                           : 2;  // Visual
         m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, type});
         m_audioEngine.sendCommand(audio::SetTrackArmedMsg{i, trk.armed});
         m_audioEngine.sendCommand(audio::SetTrackMonitorMsg{i, static_cast<uint8_t>(trk.monitorMode)});

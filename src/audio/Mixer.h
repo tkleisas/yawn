@@ -3,6 +3,7 @@
 #include "core/Constants.h"
 #include "effects/EffectChain.h"
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -22,6 +23,39 @@ struct Send {
     bool enabled = false;
 };
 
+// 3-band energy analyzer for visual reactivity. Three 2nd-order biquads
+// in parallel (LP ~200Hz, BP ~800Hz, HP ~2kHz). Fed from mono mix each
+// block. Peaks are written by the audio thread, read by the UI/visual
+// thread (torn-read safe at 32 bits — same pattern as peakL/peakR).
+struct BandAnalyzer {
+    // Coefficients — initialised once from sample rate.
+    float lpB0 = 0, lpB1 = 0, lpB2 = 0, lpA1 = 0, lpA2 = 0;
+    float bpB0 = 0, bpB1 = 0, bpB2 = 0, bpA1 = 0, bpA2 = 0;
+    float hpB0 = 0, hpB1 = 0, hpB2 = 0, hpA1 = 0, hpA2 = 0;
+    bool  coeffsReady = false;
+
+    // Per-filter state (transposed direct form II).
+    float lpZ1 = 0, lpZ2 = 0;
+    float bpZ1 = 0, bpZ2 = 0;
+    float hpZ1 = 0, hpZ2 = 0;
+
+    // Latest per-band peak. Envelope-follower style — audio thread writes
+    // the max of the block; UI thread reads and may smooth further.
+    float peakLow  = 0.0f;
+    float peakMid  = 0.0f;
+    float peakHigh = 0.0f;
+
+    // True when something visual is listening. Lets the audio thread skip
+    // the biquads on unwatched channels. Plain bool — torn reads are safe
+    // because the cost of one wrong block is a single frame of stale data.
+    bool wired = false;
+
+    void initCoeffs(double sr);
+    void feedBlock(const float* interleaved, int nFrames, int nCh, float decay);
+    void applyDecay(float decay);
+    void reset();
+};
+
 struct ChannelStrip {
     float volume = 1.0f;          // 0.0 to ~2.0 (linear)
     float pan = 0.0f;             // -1.0 (L) to +1.0 (R)
@@ -31,6 +65,8 @@ struct ChannelStrip {
     // Peak metering (written by audio thread, read by UI)
     float peakL = 0.0f;
     float peakR = 0.0f;
+
+    BandAnalyzer bands;
 };
 
 struct TrackChannel : ChannelStrip {
@@ -45,6 +81,8 @@ struct MasterChannel {
     float volume = 1.0f;
     float peakL = 0.0f;
     float peakR = 0.0f;
+
+    BandAnalyzer bands;
 };
 
 // Mixer: full signal-flow processor.
@@ -202,6 +240,44 @@ private:
     static constexpr int kMaxBufferSize = 4096 * 2; // max frames * max channels
     std::vector<float> m_returnBufferHeap;  // kMaxReturnBuses * kMaxBufferSize
     float* m_returnBufPtrs[kMaxReturnBuses] = {};
+
+public:
+    // ── Visual-engine sample tap ───────────────────────────────────────
+    // Ring buffer of the last kVisTapSize mono samples of master output,
+    // fed each block. Used by VisualEngine to compute the Shadertoy FFT
+    // texture. Writes happen on the audio thread; reads on the UI thread
+    // — torn reads are acceptable because an FFT window smooths them out.
+    // Wire exactly the passed set of analysis sources — -1 = master,
+    // 0..N-1 = track. Everything else gets wired=false so we skip the
+    // biquads on it. Safe to call while the audio thread runs: reads of
+    // `wired` are plain bool loads — a single torn frame of stale data
+    // has no visible effect.
+    void setVisualAudioSources(const std::vector<int>& sources) {
+        bool masterWired = false;
+        std::array<bool, kMaxTracks> trackWired{};
+        for (int s : sources) {
+            if (s < 0) masterWired = true;
+            else if (s < kMaxTracks) trackWired[s] = true;
+        }
+        m_master.bands.wired = masterWired;
+        for (int i = 0; i < kMaxTracks; ++i)
+            m_tracks[i].bands.wired = trackWired[i];
+    }
+
+    static constexpr int kVisTapSize = 1024;
+    void readVisualSamples(float* out, int n) const {
+        if (n > kVisTapSize) n = kVisTapSize;
+        const uint32_t wp = m_visWritePos.load(std::memory_order_acquire);
+        // Copy the n most-recent samples, newest last.
+        for (int i = 0; i < n; ++i) {
+            int idx = static_cast<int>((wp + kVisTapSize - n + i) % kVisTapSize);
+            out[i] = m_visSamples[idx];
+        }
+    }
+
+private:
+    std::array<float, kVisTapSize> m_visSamples{};
+    std::atomic<uint32_t>          m_visWritePos{0};
 };
 
 } // namespace audio

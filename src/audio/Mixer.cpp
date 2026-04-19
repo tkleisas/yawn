@@ -9,6 +9,110 @@
 namespace yawn {
 namespace audio {
 
+// ── BandAnalyzer ──────────────────────────────────────────────────────────
+//
+// RBJ cookbook biquads. Fixed crossover points chosen for musical content:
+//   Low  : low-pass @ 200 Hz
+//   Mid  : band-pass @ 800 Hz (Q=1)
+//   High : high-pass @ 2 kHz
+// The bands overlap in the crossover regions — fine for visual reactivity.
+
+static constexpr double kLowHz  = 200.0;
+static constexpr double kMidHz  = 800.0;
+static constexpr double kHighHz = 2000.0;
+static constexpr double kQ      = 0.707;  // Butterworth-ish
+
+static void rbjLowpass(double sr, double f, double q,
+                        float& b0, float& b1, float& b2, float& a1, float& a2) {
+    const double w0 = 2.0 * M_PI * f / sr;
+    const double cw = std::cos(w0);
+    const double sw = std::sin(w0);
+    const double alpha = sw / (2.0 * q);
+    const double a0 = 1.0 + alpha;
+    b0 = static_cast<float>((1.0 - cw) / 2.0 / a0);
+    b1 = static_cast<float>((1.0 - cw) / a0);
+    b2 = static_cast<float>((1.0 - cw) / 2.0 / a0);
+    a1 = static_cast<float>(-2.0 * cw / a0);
+    a2 = static_cast<float>((1.0 - alpha) / a0);
+}
+
+static void rbjBandpass(double sr, double f, double q,
+                         float& b0, float& b1, float& b2, float& a1, float& a2) {
+    const double w0 = 2.0 * M_PI * f / sr;
+    const double cw = std::cos(w0);
+    const double sw = std::sin(w0);
+    const double alpha = sw / (2.0 * q);
+    const double a0 = 1.0 + alpha;
+    b0 = static_cast<float>(alpha / a0);
+    b1 = 0.0f;
+    b2 = static_cast<float>(-alpha / a0);
+    a1 = static_cast<float>(-2.0 * cw / a0);
+    a2 = static_cast<float>((1.0 - alpha) / a0);
+}
+
+static void rbjHighpass(double sr, double f, double q,
+                         float& b0, float& b1, float& b2, float& a1, float& a2) {
+    const double w0 = 2.0 * M_PI * f / sr;
+    const double cw = std::cos(w0);
+    const double sw = std::sin(w0);
+    const double alpha = sw / (2.0 * q);
+    const double a0 = 1.0 + alpha;
+    b0 = static_cast<float>((1.0 + cw) / 2.0 / a0);
+    b1 = static_cast<float>(-(1.0 + cw) / a0);
+    b2 = static_cast<float>((1.0 + cw) / 2.0 / a0);
+    a1 = static_cast<float>(-2.0 * cw / a0);
+    a2 = static_cast<float>((1.0 - alpha) / a0);
+}
+
+void BandAnalyzer::initCoeffs(double sr) {
+    rbjLowpass (sr, kLowHz,  kQ,   lpB0, lpB1, lpB2, lpA1, lpA2);
+    rbjBandpass(sr, kMidHz,  1.0,  bpB0, bpB1, bpB2, bpA1, bpA2);
+    rbjHighpass(sr, kHighHz, kQ,   hpB0, hpB1, hpB2, hpA1, hpA2);
+    coeffsReady = true;
+}
+
+void BandAnalyzer::reset() {
+    lpZ1 = lpZ2 = bpZ1 = bpZ2 = hpZ1 = hpZ2 = 0.0f;
+    peakLow = peakMid = peakHigh = 0.0f;
+}
+
+void BandAnalyzer::applyDecay(float decay) {
+    peakLow  *= decay;
+    peakMid  *= decay;
+    peakHigh *= decay;
+}
+
+void BandAnalyzer::feedBlock(const float* interleaved, int nFrames, int nCh, float decay) {
+    if (!coeffsReady) return;
+    float blkLow = 0.0f, blkMid = 0.0f, blkHigh = 0.0f;
+    for (int i = 0; i < nFrames; ++i) {
+        // Mono sum.
+        float s = interleaved[i * nCh];
+        if (nCh > 1) s = 0.5f * (s + interleaved[i * nCh + 1]);
+
+        // LP — transposed direct form II
+        float yLp = lpB0 * s + lpZ1;
+        lpZ1 = lpB1 * s - lpA1 * yLp + lpZ2;
+        lpZ2 = lpB2 * s - lpA2 * yLp;
+
+        float yBp = bpB0 * s + bpZ1;
+        bpZ1 = bpB1 * s - bpA1 * yBp + bpZ2;
+        bpZ2 = bpB2 * s - bpA2 * yBp;
+
+        float yHp = hpB0 * s + hpZ1;
+        hpZ1 = hpB1 * s - hpA1 * yHp + hpZ2;
+        hpZ2 = hpB2 * s - hpA2 * yHp;
+
+        blkLow  = std::max(blkLow,  std::abs(yLp));
+        blkMid  = std::max(blkMid,  std::abs(yBp));
+        blkHigh = std::max(blkHigh, std::abs(yHp));
+    }
+    peakLow  = std::max(blkLow,  peakLow  * decay);
+    peakMid  = std::max(blkMid,  peakMid  * decay);
+    peakHigh = std::max(blkHigh, peakHigh * decay);
+}
+// ──────────────────────────────────────────────────────────────────────────
+
 Mixer::Mixer() {
     // Preallocate return bus scratch buffers on heap
     m_returnBufferHeap.resize(kMaxReturnBuses * kMaxBufferSize, 0.0f);
@@ -22,6 +126,11 @@ void Mixer::initEffectChains(double sampleRate, int maxBlockSize) {
     for (auto& chain : m_trackFx)  chain.init(sampleRate, maxBlockSize);
     for (auto& chain : m_returnFx) chain.init(sampleRate, maxBlockSize);
     m_masterFx.init(sampleRate, maxBlockSize);
+
+    // Band analyzer coefficients depend on sample rate — init once here.
+    for (auto& ch : m_tracks)  ch.bands.initCoeffs(sampleRate);
+    for (auto& rb : m_returns) rb.bands.initCoeffs(sampleRate);
+    m_master.bands.initCoeffs(sampleRate);
 }
 
 void Mixer::reset() {
@@ -86,6 +195,8 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
             float gainR = ch.volume * std::sin(panAngle);
 
             float trackPeakL = 0.0f, trackPeakR = 0.0f;
+            float blkLow = 0.0f, blkMid = 0.0f, blkHigh = 0.0f;
+            auto& bd = ch.bands;
 
             const float* src = trackBuffers[t];
             for (int i = 0; i < numFrames; ++i) {
@@ -112,13 +223,39 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
 
                 trackPeakL = std::max(trackPeakL, std::abs(outL));
                 trackPeakR = std::max(trackPeakR, std::abs(outR));
+
+                // Per-sample 3-band biquads on post-fader mono sum.
+                // Skip entirely when no visual is listening to this track —
+                // saves ~40 flops per sample per unwatched track.
+                if (bd.coeffsReady && bd.wired) {
+                    float mono = 0.5f * (outL + outR);
+                    float yLp = bd.lpB0 * mono + bd.lpZ1;
+                    bd.lpZ1 = bd.lpB1 * mono - bd.lpA1 * yLp + bd.lpZ2;
+                    bd.lpZ2 = bd.lpB2 * mono - bd.lpA2 * yLp;
+
+                    float yBp = bd.bpB0 * mono + bd.bpZ1;
+                    bd.bpZ1 = bd.bpB1 * mono - bd.bpA1 * yBp + bd.bpZ2;
+                    bd.bpZ2 = bd.bpB2 * mono - bd.bpA2 * yBp;
+
+                    float yHp = bd.hpB0 * mono + bd.hpZ1;
+                    bd.hpZ1 = bd.hpB1 * mono - bd.hpA1 * yHp + bd.hpZ2;
+                    bd.hpZ2 = bd.hpB2 * mono - bd.hpA2 * yHp;
+
+                    blkLow  = std::max(blkLow,  std::abs(yLp));
+                    blkMid  = std::max(blkMid,  std::abs(yBp));
+                    blkHigh = std::max(blkHigh, std::abs(yHp));
+                }
             }
 
             ch.peakL = std::max(trackPeakL, ch.peakL * kPeakDecay);
             ch.peakR = std::max(trackPeakR, ch.peakR * kPeakDecay);
+            bd.peakLow  = std::max(blkLow,  bd.peakLow  * kPeakDecay);
+            bd.peakMid  = std::max(blkMid,  bd.peakMid  * kPeakDecay);
+            bd.peakHigh = std::max(blkHigh, bd.peakHigh * kPeakDecay);
         } else {
             ch.peakL *= kPeakDecay;
             ch.peakR *= kPeakDecay;
+            ch.bands.applyDecay(kPeakDecay);
         }
     }
 
@@ -177,13 +314,39 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
 
     m_master.peakL = std::max(mPeakL, m_master.peakL * kPeakDecay);
     m_master.peakR = std::max(mPeakR, m_master.peakR * kPeakDecay);
+
+    // Master 3-band analysis — cheap to feed the contiguous output buffer.
+    // Skip when nothing listens to master (e.g. the active visual clip is
+    // wired to a specific track instead).
+    if (m_master.bands.wired)
+        m_master.bands.feedBlock(output, numFrames, nc, kPeakDecay);
+
+    // Visual sample tap: write mono master into the circular buffer. The UI
+    // thread reads this each frame to compute the Shadertoy-style FFT.
+    {
+        uint32_t wp = m_visWritePos.load(std::memory_order_relaxed);
+        for (int i = 0; i < numFrames; ++i) {
+            float s = output[i * nc];
+            if (nc > 1) s = 0.5f * (s + output[i * nc + 1]);
+            m_visSamples[wp] = s;
+            wp = (wp + 1) % kVisTapSize;
+        }
+        m_visWritePos.store(wp, std::memory_order_release);
+    }
 }
 
 void Mixer::decayPeaks() {
-    for (auto& ch : m_tracks) { ch.peakL *= kPeakDecay; ch.peakR *= kPeakDecay; }
-    for (auto& rb : m_returns) { rb.peakL *= kPeakDecay; rb.peakR *= kPeakDecay; }
+    for (auto& ch : m_tracks) {
+        ch.peakL *= kPeakDecay; ch.peakR *= kPeakDecay;
+        ch.bands.applyDecay(kPeakDecay);
+    }
+    for (auto& rb : m_returns) {
+        rb.peakL *= kPeakDecay; rb.peakR *= kPeakDecay;
+        rb.bands.applyDecay(kPeakDecay);
+    }
     m_master.peakL *= kPeakDecay;
     m_master.peakR *= kPeakDecay;
+    m_master.bands.applyDecay(kPeakDecay);
 }
 
 } // namespace audio

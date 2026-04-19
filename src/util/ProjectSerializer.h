@@ -124,6 +124,8 @@ ArrangementClip deserializeArrangementClip(const json& j,
 // ProjectSerializer — top-level save/load
 // ---------------------------------------------------------------------------
 
+namespace visual { class VisualEngine; }
+
 class ProjectSerializer {
 public:
 
@@ -132,14 +134,16 @@ public:
     static bool saveToFolder(const fs::path& folderPath,
                              const Project& project,
                              const audio::AudioEngine& engine,
-                             const midi::MidiLearnManager* learnMgr = nullptr);
+                             const midi::MidiLearnManager* learnMgr = nullptr,
+                             const visual::VisualEngine* visualEngine = nullptr);
 
     // Load a project from a .yawn folder.
     // Returns true on success.
     static bool loadFromFolder(const fs::path& folderPath,
                                Project& project,
                                audio::AudioEngine& engine,
-                               midi::MidiLearnManager* learnMgr = nullptr);
+                               midi::MidiLearnManager* learnMgr = nullptr,
+                               visual::VisualEngine* visualEngine = nullptr);
 };
 
 } // namespace yawn

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(YAWN
-    VERSION 0.4.3
+    VERSION 0.5.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -40,6 +40,23 @@ add_library(sqlite3 STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3/sqlit
 target_include_directories(sqlite3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3)
 if(MSVC)
     target_compile_definitions(sqlite3 PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# ── FFmpeg (video playback) ──────────────────────────────────────────────
+# Optional dep, detected via pkg-config. YAWN_HAS_VIDEO gates the video
+# code paths so builds without ffmpeg still work (menu items hidden).
+find_package(PkgConfig QUIET)
+set(YAWN_HAS_VIDEO 0)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
+        libavcodec libavformat libavutil libswscale)
+    if(FFMPEG_FOUND)
+        set(YAWN_HAS_VIDEO 1)
+        message(STATUS "FFmpeg found — video track support enabled")
+    endif()
+endif()
+if(NOT YAWN_HAS_VIDEO)
+    message(STATUS "FFmpeg NOT found — video track support disabled")
 endif()
 
 # Lua 5.4 (vendored)
@@ -133,6 +150,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glad
     lua54
 )
+
+if(YAWN_HAS_VIDEO)
+    target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_VIDEO=1)
+endif()
 
 # Platform-specific
 if(WIN32)

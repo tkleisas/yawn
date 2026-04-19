@@ -8,6 +8,9 @@
 #include "../Renderer.h"
 #include "../Font.h"
 
+#include "stb_image.h"
+#include <glad/gl.h>
+
 namespace yawn {
 namespace ui {
 namespace fw {
@@ -102,7 +105,11 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                 } else if (slot && slot->midiClip) {
                     m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
                     m_project->track(t).defaultScene = si;
-                } else {
+                } else if (slot && slot->visualClip) {
+                    if (m_onLaunchVisualClip)
+                        m_onLaunchVisualClip(t, si, slot->visualClip->shaderPath);
+                    m_project->track(t).defaultScene = si;
+                } else if (m_project->track(t).type != Track::Type::Visual) {
                     m_engine->sendCommand(audio::StopClipMsg{t});
                     m_engine->sendCommand(audio::StopMidiClipMsg{t});
                     m_project->track(t).defaultScene = -1;
@@ -132,12 +139,14 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
             bool isSlotRecording = m_trackStates[ti].recording
                                && m_trackStates[ti].recordingScene == si;
 
+            const auto trackType = m_project->track(ti).type;
+
             if (isSlotRecording) {
                 // Any click on a recording slot stops recording (takes priority over context menu)
                 auto recQ = m_project->track(ti).recordQuantize;
-                if (m_project->track(ti).type == Track::Type::Midi)
+                if (trackType == Track::Type::Midi)
                     m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
-                else
+                else if (trackType == Track::Type::Audio)
                     m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
             } else if (rightClick) {
                 m_lastRightClickTrack = ti;
@@ -148,8 +157,9 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                 if (isPlaying) {
                     if (slot->audioClip)
                         m_engine->sendCommand(audio::StopClipMsg{ti});
-                    else
+                    else if (slot->midiClip)
                         m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+                    // Visual clips have no "stop" — shader stays loaded.
                     m_project->track(ti).defaultScene = -1;
                 } else if (hasClip) {
                     auto lq = slot->launchQuantize;
@@ -157,13 +167,16 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation, slot->followAction});
                     else if (slot->midiClip)
                         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation, slot->followAction});
+                    else if (slot->visualClip && m_onLaunchVisualClip)
+                        m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
                     m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
                     int rlb = m_project->track(ti).recordLengthBars;
-                    if (m_project->track(ti).type == Track::Type::Midi)
+                    if (trackType == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true, rlb});
-                    else
+                    else if (trackType == Track::Type::Audio)
                         m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, true, rlb});
+                    // Visual tracks can't record.
                 }
             } else {
                 m_selectedTrack  = ti;
@@ -182,9 +195,9 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                     captureMouse();  // ensure we receive mouse move events
                 } else if (trackArmed) {
                     int rlb = m_project->track(ti).recordLengthBars;
-                    if (m_project->track(ti).type == Track::Type::Midi)
+                    if (trackType == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift, rlb});
-                    else
+                    else if (trackType == Track::Type::Audio)
                         m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !e.mods.shift, rlb});
                 }
             }
@@ -203,18 +216,20 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
     bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
     bool isRecording = m_trackStates[ti].recording && m_trackStates[ti].recordingScene == si;
     bool trackArmed = m_project->track(ti).armed;
+    const auto trackType = m_project->track(ti).type;
 
     if (isRecording) {
         auto recQ = m_project->track(ti).recordQuantize;
-        if (m_project->track(ti).type == Track::Type::Midi)
+        if (trackType == Track::Type::Midi)
             m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
-        else
+        else if (trackType == Track::Type::Audio)
             m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
     } else if (isPlaying) {
         if (slot && slot->audioClip)
             m_engine->sendCommand(audio::StopClipMsg{ti});
-        else
+        else if (slot && slot->midiClip)
             m_engine->sendCommand(audio::StopMidiClipMsg{ti});
+        // Visual clips don't have a stop gesture — shader stays loaded.
         m_project->track(ti).defaultScene = -1;
     } else if (slot && slot->audioClip) {
         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
@@ -224,11 +239,16 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
         m_project->track(ti).defaultScene = si;
+    } else if (slot && slot->visualClip) {
+        if (m_onLaunchVisualClip)
+            m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
+        m_project->track(ti).defaultScene = si;
     } else if (trackArmed) {
-        if (m_project->track(ti).type == Track::Type::Midi)
+        if (trackType == Track::Type::Midi)
             m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true});
-        else
+        else if (trackType == Track::Type::Audio)
             m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, true});
+        // Visual tracks can't record.
     } else {
         return false;
     }
@@ -248,6 +268,10 @@ void SessionPanel::launchSlotAt(int ti, int si) {
         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
         m_project->track(ti).defaultScene = si;
+    } else if (slot && slot->visualClip) {
+        if (m_onLaunchVisualClip)
+            m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
+        m_project->track(ti).defaultScene = si;
     }
 }
 
@@ -264,7 +288,13 @@ void SessionPanel::launchScene(int scene) {
             m_engine->sendCommand(audio::LaunchMidiClipMsg{t, scene, slot->midiClip.get(),
                 slot->launchQuantize, &slot->clipAutomation, slot->followAction});
             m_project->track(t).defaultScene = scene;
-        } else {
+        } else if (slot && slot->visualClip) {
+            if (m_onLaunchVisualClip)
+                m_onLaunchVisualClip(t, scene, slot->visualClip->shaderPath);
+            m_project->track(t).defaultScene = scene;
+        } else if (m_project->track(t).type != Track::Type::Visual) {
+            // Audio/MIDI tracks with empty slot → stop whatever's playing.
+            // Visual tracks have no "stop" — leave the last shader loaded.
             m_engine->sendCommand(audio::StopClipMsg{t});
             m_engine->sendCommand(audio::StopMidiClipMsg{t});
             m_project->track(t).defaultScene = -1;
@@ -366,14 +396,14 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
             }
         }
 
-        // Track type icon(left side) — waveform for Audio, MIDI port for MIDI
+        // Track type icon (left side) — waveform / MIDI port / visual frame.
         {
-            bool isMidi = (m_project->track(t).type == Track::Type::Midi);
-            Color iconCol = isMidi ? Color{180,130,255,200} : Color{130,200,130,200};
+            const auto trackType = m_project->track(t).type;
             float iconSize = 10.0f;
             float ix = tx + 6;
             float iy = y + 7;  // above the track name
-            if (isMidi) {
+            if (trackType == Track::Type::Midi) {
+                Color iconCol{180,130,255,200};
                 // MIDI DIN connector: circle with 3 dots inside
                 float cr = iconSize * 0.5f;
                 float ccx = ix + cr, ccy = iy + cr;
@@ -383,7 +413,17 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
                 r.drawFilledCircle(ccx - 2.5f, ccy, dotR, dot, 8);
                 r.drawFilledCircle(ccx,        ccy, dotR, dot, 8);
                 r.drawFilledCircle(ccx + 2.5f, ccy, dotR, dot, 8);
+            } else if (trackType == Track::Type::Visual) {
+                // Little monitor/frame glyph for visual tracks.
+                Color iconCol{110,200,230,220};
+                r.drawRect(ix,              iy,              iconSize, 1.5f, iconCol);
+                r.drawRect(ix,              iy + iconSize-1.5f, iconSize, 1.5f, iconCol);
+                r.drawRect(ix,              iy,              1.5f, iconSize, iconCol);
+                r.drawRect(ix + iconSize-1.5f, iy,           1.5f, iconSize, iconCol);
+                r.drawFilledCircle(ix + iconSize*0.5f, iy + iconSize*0.5f,
+                                    1.8f, iconCol, 10);
             } else {
+                Color iconCol{130,200,130,200};
                 // Audio waveform icon: 5 vertical bars of varying height
                 float barW = 1.5f, gap = 1.0f;
                 float heights[] = {3, 7, 10, 6, 4};
@@ -504,6 +544,34 @@ void SessionPanel::paintHScrollbar(Renderer2D& r, float x, float y, float w) {
     r.drawRect(thumbX, y, thumbW, kScrollbarH, thumbCol);
 }
 
+unsigned SessionPanel::getThumbnailTexture(const std::string& path) const {
+    if (path.empty()) return 0;
+    auto it = m_thumbnailCache.find(path);
+    if (it != m_thumbnailCache.end()) return it->second;
+
+    int w = 0, h = 0, n = 0;
+    unsigned char* pix = stbi_load(path.c_str(), &w, &h, &n, 4);
+    if (!pix) {
+        // Cache the negative result (0) so we don't retry every frame.
+        m_thumbnailCache.emplace(path, 0);
+        return 0;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pix);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pix);
+
+    m_thumbnailCache.emplace(path, tex);
+    return tex;
+}
+
 void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
                    float x, float y, float w, float h) {
     float pad = Theme::kSlotPadding;
@@ -514,6 +582,7 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     bool hasClip = slot && !slot->empty();
     const audio::Clip* aClip = slot ? slot->audioClip.get() : nullptr;
     const midi::MidiClip* mClip = slot ? slot->midiClip.get() : nullptr;
+    const visual::VisualClip* vClip = slot ? slot->visualClip.get() : nullptr;
     bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
     bool trackArmed = m_project->track(ti).armed;
     bool recReady = !hasClip && trackArmed;
@@ -525,6 +594,40 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
 
     Color bgCol = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
     r.drawRect(ix, iy, iw, ih, bgCol);
+
+    // Video thumbnail behind the clip content, dimmed so the clip name
+    // and play icon stay readable.
+    if (vClip && !vClip->thumbnailPath.empty()) {
+        GLuint tex = getThumbnailTexture(vClip->thumbnailPath);
+        if (tex) {
+            float contentX = ix + kIconZoneW;
+            float contentW = iw - kIconZoneW;
+            r.drawTexturedQuad(contentX, iy, contentW, ih,
+                                0.0f, 0.0f, 1.0f, 1.0f,
+                                Color{255, 255, 255, 160}, tex);
+        }
+    }
+
+    // "Importing…" overlay — shown while a background video transcode is
+    // in progress for this slot.
+    if (isSlotImporting(ti, si)) {
+        r.drawRect(ix, iy, iw, ih, Color{30, 50, 80, 220});
+        float scale = Theme::kSmallFontSize / f.pixelHeight();
+        float pct   = std::clamp(slotImportProgress(ti, si), 0.0f, 1.0f);
+        char label[48];
+        if (pct > 0.0f) std::snprintf(label, sizeof(label), "importing… %d%%",
+                                        static_cast<int>(pct * 100.0f));
+        else            std::snprintf(label, sizeof(label), "importing…");
+        if (f.isLoaded()) {
+            f.drawText(r, label, ix + 6, iy + ih * 0.5f, scale,
+                        Color{200, 220, 255, 255});
+        }
+        // Thin progress bar hugging the bottom of the slot.
+        float barH = 3.0f;
+        r.drawRect(ix, iy + ih - barH, iw, barH, Color{20, 30, 50, 255});
+        r.drawRect(ix, iy + ih - barH, iw * pct, barH, Color{120, 200, 255, 255});
+        return;
+    }
 
     // Icon zone (left side)
     float iconCX = ix + kIconZoneW * 0.5f;
@@ -570,7 +673,8 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
 
         // Clip name
         const std::string& name = aClip ? aClip->name
-            : (mClip ? mClip->name() : std::string());
+            : (mClip ? mClip->name()
+            : (vClip ? vClip->name : std::string()));
         float scale = Theme::kSmallFontSize / f.pixelHeight();
         if (f.isLoaded() && !name.empty()) {
             float tx2 = contentX + 5, ty2 = iy + 2;

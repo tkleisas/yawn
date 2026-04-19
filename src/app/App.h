@@ -2,6 +2,7 @@
 
 #include "ui/Window.h"
 #include "ui/Renderer.h"
+#include "visual/VisualEngine.h"
 #include "ui/Font.h"
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
@@ -22,6 +23,7 @@
 #include "ui/panels/ArrangementPanel.h"
 #include "ui/panels/TransportPanel.h"
 #include "ui/panels/BrowserPanel.h"
+#include "ui/panels/VisualParamsPanel.h"
 #include "library/LibraryDatabase.h"
 #include "library/LibraryScanner.h"
 #include "controllers/ControllerManager.h"
@@ -43,6 +45,7 @@
 
 #include "presets/PresetManager.h"
 #include "presets/DevicePresetHelpers.h"
+#include "visual/VideoImporter.h"
 
 #ifdef YAWN_HAS_VST3
 #include "vst3/VST3Scanner.h"
@@ -86,6 +89,7 @@ private:
     void showTrackContextMenu(int trackIndex, float mx, float my);
     void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
     void showSceneContextMenu(int sceneIndex, float mx, float my);
+    void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
     void updateDetailForSelectedTrack();
     void updateDetailForReturnBus(int bus);
@@ -111,6 +115,7 @@ private:
     static void SDLCALL onSaveFolderResult(void* userdata, const char* const* filelist, int filter);
 
     ui::Window m_mainWindow;
+    visual::VisualEngine m_visualEngine;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
     ui::MenuBar m_menuBar;
@@ -130,6 +135,7 @@ private:
     ui::fw::ContentGrid*         m_contentGrid     = nullptr;
     ui::fw::BrowserPanel*        m_browserPanel    = nullptr;
     ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
+    ui::fw::VisualParamsPanel*   m_visualParamsPanel = nullptr;
     ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
     ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
     ui::fw::TextInputDialogWidget* m_textInputDialog = nullptr;
@@ -201,6 +207,29 @@ private:
 
     // Track which scene/track to assign next dropped file to
     int m_nextDropScene = 0;
+
+    // Target slot for the pending "Load Shader…" file dialog.
+    int m_pendingShaderTrack = -1;
+    int m_pendingShaderScene = -1;
+    // Target slot for the pending "Set Video…" file dialog.
+    int m_pendingVideoTrack = -1;
+    int m_pendingVideoScene = -1;
+
+    // Active video imports (transcoding in the background via ffmpeg).
+    struct PendingVideoImport {
+        int track;
+        int scene;
+        std::string sourcePath;
+        std::unique_ptr<visual::VideoImporter> importer;
+    };
+    std::vector<PendingVideoImport> m_pendingImports;
+
+    void startVideoImport(int track, int scene, const std::string& sourcePath);
+    void onVideoImportDone(PendingVideoImport& pi);
+
+    // Per-(track, knob) last-seen version from VisualKnobBus, so we only
+    // act on fresh MIDI CC writes (avoids stomping on user drags).
+    uint32_t m_visualKnobBusVersions[kMaxTracks][8] = {};
 
     // UI state from audio thread
     double m_displayBeats = 0.0;

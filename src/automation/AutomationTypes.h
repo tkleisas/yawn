@@ -12,7 +12,8 @@ enum class TargetType : uint8_t {
     AudioEffect,    // Audio effect chain parameter
     MidiEffect,     // MIDI effect chain parameter
     Mixer,          // Mixer channel control (volume, pan, send, etc.)
-    Transport       // Transport controls (BPM, play, stop, record)
+    Transport,      // Transport controls (BPM, play, stop, record)
+    VisualKnob      // Generic A..H knob on a visual layer (paramIndex = 0..7)
 };
 
 // Sub-types for mixer automation (volume, pan, sends, etc.)
@@ -68,6 +69,9 @@ struct AutomationTarget {
     }
     static AutomationTarget transport(TransportParam tp) {
         return {TargetType::Transport, 0, 0, static_cast<int>(tp)};
+    }
+    static AutomationTarget visualKnob(int track, int knobIdx) {
+        return {TargetType::VisualKnob, track, 0, knobIdx};
     }
 };
 
