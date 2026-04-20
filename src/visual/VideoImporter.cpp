@@ -9,7 +9,10 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
 #  include <fcntl.h>
 #  include <sys/types.h>
 #  include <sys/wait.h>
@@ -59,8 +62,266 @@ void VideoImporter::poll() {
     }
 }
 
-#ifndef _WIN32
+// ── Platform-specific child-process helpers ───────────────────────────────
+//
+// Three primitives drive the importer:
+//   runFFmpeg(args)            — spawn, wait, return success flag
+//   probeDuration(path)        — spawn ffprobe, read stdout, parse double
+//   runFFmpegWithProgress(..)  — spawn, stream stdout line-by-line to cb
+//
+// POSIX uses fork+exec with pipe(); Windows uses CreateProcessW with
+// CreatePipe. Identical signatures so start() below is platform-agnostic.
+
 namespace {
+
+#ifdef _WIN32
+
+// UTF-8 ↔ UTF-16 conversion for the W-API boundary. CreateProcessW takes
+// wchar_t*, but our args come through as UTF-8 std::string (from the
+// JSON project files and user input).
+std::wstring toWide(const std::string& s) {
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
+                                static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
+                        static_cast<int>(s.size()),
+                        w.data(), n);
+    return w;
+}
+
+std::string toUtf8(const std::wstring& w) {
+    if (w.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
+                                static_cast<int>(w.size()),
+                                nullptr, 0, nullptr, nullptr);
+    std::string s(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
+                        static_cast<int>(w.size()),
+                        s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+// Quote one argv element using the standard Windows command-line parsing
+// rules (the ones CommandLineToArgvW reverses): wrap in "…", escape each
+// internal " as \", and double any run of backslashes that immediately
+// precedes a " or end-of-string. Essential for paths with spaces — the
+// common case on Windows ("C:\Users\Foo Bar\clip.mp4").
+std::string quoteArg(const std::string& in) {
+    if (!in.empty()
+        && in.find_first_of(" \t\"") == std::string::npos) {
+        return in;
+    }
+    std::string out = "\"";
+    for (size_t i = 0; i < in.size(); ) {
+        size_t nb = 0;
+        while (i < in.size() && in[i] == '\\') { ++nb; ++i; }
+        if (i == in.size()) {
+            // Trailing backslashes before closing quote: double them.
+            out.append(nb * 2, '\\');
+            break;
+        }
+        if (in[i] == '"') {
+            out.append(nb * 2 + 1, '\\');
+            out.push_back('"');
+            ++i;
+        } else {
+            out.append(nb, '\\');
+            out.push_back(in[i]);
+            ++i;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+std::wstring buildCommandLine(const std::vector<std::string>& args) {
+    std::string joined;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i) joined.push_back(' ');
+        joined += quoteArg(args[i]);
+    }
+    return toWide(joined);
+}
+
+// Resolve "ffmpeg" / "ffprobe" → absolute path when possible. Prefers
+// the copy sitting next to YAWN.exe (shipped by the installer / CI
+// package step) so the app is self-contained and doesn't depend on the
+// user having a PATH-visible ffmpeg. Falls back to "ffmpeg.exe" which
+// CreateProcessW will then resolve through PATH / App Paths.
+std::string resolveBinary(const std::string& name) {
+    // Already a concrete path or has an extension — take as-is.
+    if (name.find('\\') != std::string::npos
+     || name.find('/')  != std::string::npos
+     || name.find('.')  != std::string::npos) {
+        return name;
+    }
+    wchar_t exePath[MAX_PATH] = {};
+    DWORD n = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        std::wstring p(exePath, n);
+        size_t slash = p.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+            std::wstring bundled = p.substr(0, slash + 1)
+                                 + toWide(name) + L".exe";
+            DWORD attr = GetFileAttributesW(bundled.c_str());
+            if (attr != INVALID_FILE_ATTRIBUTES
+             && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                return toUtf8(bundled);
+            }
+        }
+    }
+    return name + ".exe";
+}
+
+// Thin handle bag — RAII closes everything on scope exit. The read pipe
+// is non-null only when the caller asked for captured stdout.
+struct ProcHandle {
+    HANDLE hProcess  = nullptr;
+    HANDLE hThread   = nullptr;
+    HANDLE hReadPipe = nullptr;
+    bool   ok() const { return hProcess != nullptr; }
+    ~ProcHandle() {
+        if (hReadPipe) CloseHandle(hReadPipe);
+        if (hThread)   CloseHandle(hThread);
+        if (hProcess)  CloseHandle(hProcess);
+    }
+};
+
+// Launch ffmpeg/ffprobe. When captureStdout=true, the child's stdout
+// AND stderr are merged into a single pipe (simpler — our progress
+// parser harmlessly ignores non-`key=value` lines, and users rarely
+// want ffmpeg's stderr on a GUI app anyway). Stdin is wired to NUL so
+// USESTDHANDLES has three valid handles even when YAWN.exe was launched
+// from Explorer with no console attached.
+ProcHandle spawnChild(const std::vector<std::string>& args,
+                      bool captureStdout) {
+    ProcHandle h;
+    if (args.empty()) return h;
+    std::vector<std::string> a = args;
+    a[0] = resolveBinary(a[0]);
+    std::wstring cmd = buildCommandLine(a);
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back(L'\0');
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+
+    HANDLE rd = nullptr, wr = nullptr;
+    HANDLE hNulIn = INVALID_HANDLE_VALUE;
+    if (captureStdout) {
+        if (!CreatePipe(&rd, &wr, &sa, 0)) return h;
+        // Parent's read end must NOT be inherited — otherwise the write
+        // end stays alive through the child's copies and ReadFile never
+        // sees EOF after the child exits.
+        SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+        hNulIn = CreateFileW(L"NUL", GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             &sa, OPEN_EXISTING, 0, nullptr);
+    }
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    if (captureStdout) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdInput  = hNulIn;
+        si.hStdOutput = wr;
+        si.hStdError  = wr;
+    }
+
+    PROCESS_INFORMATION pi = {};
+    BOOL ok = CreateProcessW(nullptr, cmdBuf.data(),
+                             nullptr, nullptr,
+                             /*bInheritHandles=*/captureStdout,
+                             CREATE_NO_WINDOW,
+                             nullptr, nullptr,
+                             &si, &pi);
+    if (captureStdout) {
+        // Parent doesn't need the write end; close now so the child's
+        // exit is the pipe's only remaining writer.
+        if (wr)     CloseHandle(wr);
+        if (hNulIn != INVALID_HANDLE_VALUE) CloseHandle(hNulIn);
+    }
+    if (!ok) {
+        if (rd) CloseHandle(rd);
+        std::fprintf(stderr, "[Video] CreateProcess(%s) failed: %lu\n",
+                      args[0].c_str(), GetLastError());
+        return h;
+    }
+    h.hProcess  = pi.hProcess;
+    h.hThread   = pi.hThread;
+    h.hReadPipe = rd;
+    return h;
+}
+
+bool waitForChild(ProcHandle& h) {
+    if (!h.hProcess) return false;
+    WaitForSingleObject(h.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(h.hProcess, &code);
+    return code == 0;
+}
+
+bool runFFmpegWithProgress(const std::vector<std::string>& args,
+                             const std::function<void(const std::string&)>& onLine) {
+    ProcHandle h = spawnChild(args, /*captureStdout=*/true);
+    if (!h.ok()) return false;
+
+    std::string partial;
+    char buf[512];
+    for (;;) {
+        DWORD n = 0;
+        BOOL ok = ReadFile(h.hReadPipe, buf, sizeof(buf), &n, nullptr);
+        if (!ok || n == 0) {
+            if (!partial.empty()) onLine(partial);
+            break;
+        }
+        partial.append(buf, buf + n);
+        size_t pos;
+        while ((pos = partial.find('\n')) != std::string::npos) {
+            std::string line = partial.substr(0, pos);
+            // Strip trailing \r from Windows line endings — ffmpeg's
+            // progress output on Windows uses \r\n.
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            onLine(line);
+            partial.erase(0, pos + 1);
+        }
+    }
+    return waitForChild(h);
+}
+
+bool runFFmpeg(const std::vector<std::string>& args) {
+    // Reuse the captured-stdout path with a no-op callback so both
+    // flavors share one code path. The extra pipe is cheap; the
+    // alternative (leaving stdout/stderr inherited) blows up on
+    // console-less GUI launches.
+    return runFFmpegWithProgress(args, [](const std::string&){});
+}
+
+double probeDuration(const std::string& sourcePath) {
+    std::vector<std::string> args = {
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        sourcePath,
+    };
+    ProcHandle h = spawnChild(args, /*captureStdout=*/true);
+    if (!h.ok()) return 0.0;
+    std::string acc;
+    char buf[128];
+    for (;;) {
+        DWORD n = 0;
+        BOOL ok = ReadFile(h.hReadPipe, buf, sizeof(buf), &n, nullptr);
+        if (!ok || n == 0) break;
+        acc.append(buf, buf + n);
+        if (acc.size() > 4096) break;  // safety: ffprobe's number is tiny
+    }
+    waitForChild(h);
+    try { return std::stod(acc); } catch (...) { return 0.0; }
+}
+
+#else  // POSIX
 
 // fork+exec ffmpeg with the given argv. Returns true if child exited
 // with status 0. Child stderr is inherited from the parent so ffmpeg's
@@ -166,7 +427,16 @@ bool runFFmpegWithProgress(const std::vector<std::string>& args,
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+#endif  // _WIN32
+
 } // anon
+
+// ── Public API ────────────────────────────────────────────────────────────
+//
+// Kick off a background transcode. The worker thread owns three ffmpeg
+// passes: video (with progress), audio (best-effort), thumbnail (from
+// the already-transcoded MP4). Cache-hit path avoids all of that when
+// the target files already exist from a previous import.
 
 bool VideoImporter::start(const std::string& sourcePath,
                             const fs::path& mediaDir) {
@@ -300,19 +570,6 @@ bool VideoImporter::start(const std::string& sourcePath,
     });
     return true;
 }
-
-#else  // _WIN32 — stub that reports the feature isn't available here yet
-
-bool VideoImporter::start(const std::string& sourcePath,
-                            const fs::path& /*mediaDir*/) {
-    m_result.sourcePath = sourcePath;
-    m_error  = "video import not implemented on Windows yet";
-    m_state  = State::Failed;
-    m_workerFinished = true;
-    return false;
-}
-
-#endif  // _WIN32
 
 } // namespace visual
 } // namespace yawn

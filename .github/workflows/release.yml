@@ -62,13 +62,31 @@ jobs:
             libgbm-dev \
             libdbus-1-dev \
             libibus-1.0-dev \
-            libudev-dev
+            libudev-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libavdevice-dev
+
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          $dest = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $root = (Get-ChildItem -Path $dest -Directory | Select-Object -First 1).FullName
+          echo "FFMPEG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install Python dependencies
         run: pip install jinja2
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe"', env.pythonLocation) || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
@@ -96,6 +114,14 @@ jobs:
           }
           Get-ChildItem build/bin/Release/*.dll -ErrorAction SilentlyContinue |
             Copy-Item -Destination $dir/
+          if ($env:FFMPEG_ROOT -and (Test-Path "$env:FFMPEG_ROOT\bin")) {
+            Copy-Item "$env:FFMPEG_ROOT\bin\*.dll" $dir/ -ErrorAction SilentlyContinue
+            foreach ($exe in 'ffmpeg.exe','ffprobe.exe') {
+              if (Test-Path "$env:FFMPEG_ROOT\bin\$exe") {
+                Copy-Item "$env:FFMPEG_ROOT\bin\$exe" $dir/
+              }
+            }
+          }
           Compress-Archive -Path $dir -DestinationPath "YAWN-${version}-windows.zip"
 
       - name: Package (Linux)

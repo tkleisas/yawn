@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(YAWN
-    VERSION 0.34.0
+    VERSION 0.35.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -43,31 +43,93 @@ if(MSVC)
 endif()
 
 # ── FFmpeg (video playback) ──────────────────────────────────────────────
-# Optional dep, detected via pkg-config. YAWN_HAS_VIDEO gates the video
-# code paths so builds without ffmpeg still work (menu items hidden).
-find_package(PkgConfig QUIET)
+# Optional dep. Two detection paths:
+#
+#   1. pkg-config — the normal route on Linux/macOS and inside envs that
+#      ship .pc files (e.g. vcpkg, MSYS2). Produces PkgConfig::FFMPEG
+#      imported targets with all flags pre-wired.
+#
+#   2. Manual find — fallback for Windows where pkg-config typically
+#      isn't present. Consumes an FFMPEG_ROOT hint (either -D or env)
+#      pointing at a prebuilt FFmpeg tree shaped like:
+#          <root>/include/libavcodec/avcodec.h
+#          <root>/lib/avcodec.lib     (or libavcodec.a on unix)
+#          <root>/bin/avcodec-*.dll   (shared builds on Windows)
+#      This matches the BtbN prebuilt layout used in CI.
+#
+# YAWN_HAS_VIDEO / YAWN_HAS_AVDEVICE gate the video code paths so builds
+# without ffmpeg still work (menu items hidden).
 set(YAWN_HAS_VIDEO 0)
 set(YAWN_HAS_AVDEVICE 0)
+set(YAWN_FFMPEG_TARGET "")
+set(YAWN_FFMPEG_AVDEVICE_TARGET "")
+
+find_package(PkgConfig QUIET)
 if(PKG_CONFIG_FOUND)
     pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
         libavcodec libavformat libavutil libswscale)
     if(FFMPEG_FOUND)
         set(YAWN_HAS_VIDEO 1)
-        message(STATUS "FFmpeg found — video track support enabled")
+        set(YAWN_FFMPEG_TARGET PkgConfig::FFMPEG)
+        message(STATUS "FFmpeg found via pkg-config — video track support enabled")
     endif()
     # libavdevice is optional — without it, network URLs (rtsp/http) still
     # work but OS capture URLs (v4l2, avfoundation, dshow) don't resolve.
     pkg_check_modules(FFMPEG_AVDEVICE QUIET IMPORTED_TARGET libavdevice)
     if(FFMPEG_AVDEVICE_FOUND)
         set(YAWN_HAS_AVDEVICE 1)
-        message(STATUS "libavdevice found — live device capture enabled")
-    else()
-        message(STATUS "libavdevice NOT found — live capture disabled "
-                       "(network URLs still work); install libavdevice-dev to enable")
+        set(YAWN_FFMPEG_AVDEVICE_TARGET PkgConfig::FFMPEG_AVDEVICE)
+        message(STATUS "libavdevice found via pkg-config — live device capture enabled")
     endif()
 endif()
+
+# Manual detection fallback — picks up prebuilt FFmpeg via FFMPEG_ROOT.
+if(NOT YAWN_HAS_VIDEO)
+    if(NOT DEFINED FFMPEG_ROOT AND DEFINED ENV{FFMPEG_ROOT})
+        set(FFMPEG_ROOT "$ENV{FFMPEG_ROOT}" CACHE PATH "FFmpeg install root")
+    endif()
+    if(FFMPEG_ROOT)
+        find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h
+            HINTS ${FFMPEG_ROOT}
+            PATH_SUFFIXES include
+            NO_DEFAULT_PATH)
+        find_library(FFMPEG_avcodec  NAMES avcodec  HINTS ${FFMPEG_ROOT} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+        find_library(FFMPEG_avformat NAMES avformat HINTS ${FFMPEG_ROOT} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+        find_library(FFMPEG_avutil   NAMES avutil   HINTS ${FFMPEG_ROOT} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+        find_library(FFMPEG_swscale  NAMES swscale  HINTS ${FFMPEG_ROOT} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+        if(FFMPEG_INCLUDE_DIR AND FFMPEG_avcodec AND FFMPEG_avformat
+           AND FFMPEG_avutil AND FFMPEG_swscale)
+            add_library(yawn_ffmpeg INTERFACE)
+            target_include_directories(yawn_ffmpeg INTERFACE ${FFMPEG_INCLUDE_DIR})
+            target_link_libraries(yawn_ffmpeg INTERFACE
+                ${FFMPEG_avcodec} ${FFMPEG_avformat}
+                ${FFMPEG_avutil}  ${FFMPEG_swscale})
+            set(YAWN_HAS_VIDEO 1)
+            set(YAWN_FFMPEG_TARGET yawn_ffmpeg)
+            message(STATUS "FFmpeg found via FFMPEG_ROOT=${FFMPEG_ROOT} — video track support enabled")
+
+            # libavdevice is a separate component.
+            find_library(FFMPEG_avdevice NAMES avdevice
+                HINTS ${FFMPEG_ROOT} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+            if(FFMPEG_avdevice)
+                add_library(yawn_ffmpeg_avdevice INTERFACE)
+                target_link_libraries(yawn_ffmpeg_avdevice INTERFACE ${FFMPEG_avdevice})
+                set(YAWN_HAS_AVDEVICE 1)
+                set(YAWN_FFMPEG_AVDEVICE_TARGET yawn_ffmpeg_avdevice)
+                message(STATUS "libavdevice found via FFMPEG_ROOT — live device capture enabled")
+            endif()
+        else()
+            message(WARNING "FFMPEG_ROOT=${FFMPEG_ROOT} set but headers/libs not found")
+        endif()
+    endif()
+endif()
+
 if(NOT YAWN_HAS_VIDEO)
     message(STATUS "FFmpeg NOT found — video track support disabled")
+endif()
+if(NOT YAWN_HAS_AVDEVICE)
+    message(STATUS "libavdevice NOT found — live capture disabled "
+                   "(network URLs still work)")
 endif()
 
 # Lua 5.4 (vendored)
@@ -196,11 +258,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 if(YAWN_HAS_VIDEO)
-    target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_TARGET})
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_VIDEO=1)
 endif()
 if(YAWN_HAS_AVDEVICE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG_AVDEVICE)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_AVDEVICE_TARGET})
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_AVDEVICE=1)
 endif()
 

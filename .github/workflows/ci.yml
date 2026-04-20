@@ -57,13 +57,39 @@ jobs:
             libgbm-dev \
             libdbus-1-dev \
             libibus-1.0-dev \
-            libudev-dev
+            libudev-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libavdevice-dev
+
+      # Prebuilt FFmpeg (shared, includes headers + import libs + DLLs +
+      # ffmpeg.exe/ffprobe.exe). BtbN publishes these under their
+      # autobuild releases on GitHub; we grab the stable "latest" alias
+      # for the GPL shared variant. Exports FFMPEG_ROOT so CMake's manual
+      # detection path picks it up, and prepends bin/ to PATH so the
+      # test binary can find the DLLs during ctest.
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          $dest = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $root = (Get-ChildItem -Path $dest -Directory | Select-Object -First 1).FullName
+          echo "FFMPEG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "FFMPEG_ROOT=$root"
+          Get-ChildItem "$root\bin" | Select-Object Name
 
       - name: Install Python dependencies
         run: pip install jinja2
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe"', env.pythonLocation) || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
@@ -87,9 +113,20 @@ jobs:
           if (Test-Path build/bin/Release/scripts) {
             Copy-Item -Recurse build/bin/Release/scripts package/
           }
-          # Bundle any runtime DLLs
+          # Bundle any runtime DLLs from the build tree
           Get-ChildItem build/bin/Release/*.dll -ErrorAction SilentlyContinue |
             Copy-Item -Destination package/
+          # Bundle FFmpeg runtime: DLLs (needed to launch) + ffmpeg/ffprobe
+          # (used by the future Windows VideoImporter). Skip silently if
+          # FFMPEG_ROOT wasn't set (video disabled build).
+          if ($env:FFMPEG_ROOT -and (Test-Path "$env:FFMPEG_ROOT\bin")) {
+            Copy-Item "$env:FFMPEG_ROOT\bin\*.dll" package/ -ErrorAction SilentlyContinue
+            foreach ($exe in 'ffmpeg.exe','ffprobe.exe') {
+              if (Test-Path "$env:FFMPEG_ROOT\bin\$exe") {
+                Copy-Item "$env:FFMPEG_ROOT\bin\$exe" package/
+              }
+            }
+          }
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
