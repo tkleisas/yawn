@@ -61,10 +61,10 @@ can think of.
 | ✓ | Spec | Widget | Notes |
 |---|---|---|---|
 | ✓ | [fader.md](fader.md) | **FwFader** | Vertical linear control. First spec — proof of concept for the template. |
-| ☐ | button.md | **FwButton** | Push button. Clickable, optionally toggleable. |
-| ☐ | toggle.md | **FwToggle** | Two-state on/off. Simpler state machine than Button. |
+| ✓ | [button.md](button.md) | **FwButton** | Push button. Clickable, optionally toggleable. |
+| ✓ | [toggle.md](toggle.md) | **FwToggle** | Two-state on/off. Simpler state machine than Button. |
 | ☐ | knob.md | **FwKnob** | Circular rotary control. Shares drag infrastructure with Fader. |
-| ☐ | label.md | **Label** | Text display. Measures from font; truncation policy. |
+| ✓ | [label.md](label.md) | **Label** | Text display. Measures from font; truncation policy. |
 | ☐ | text_input.md | **FwTextInput** | Single-line editable text. Focus, caret, selection, clipboard. |
 | ☐ | number_input.md | **FwNumberInput** | Numeric text entry with clamping and formatting. Inline text-entry for knobs/faders. |
 | ☐ | dropdown.md | **FwDropDown** | Select-one from a list. Primary consumer of the Overlay layer. |
@@ -79,7 +79,7 @@ can think of.
 
 | ✓ | Spec | Widget | Notes |
 |---|---|---|---|
-| ☐ | flex_box.md | **FlexBox** | Row / column layout engine. Flexbox semantics (grow, shrink, basis, justify, align). Mirrors Yoga. |
+| ✓ | [flex_box.md](flex_box.md) | **FlexBox** | Row / column layout engine. Flexbox semantics (grow, shrink, basis, justify, align). Mirrors Yoga. |
 | ☐ | fw_grid.md | **FwGrid** | Row-major grid (current v1 naming). Auto-wraps children into rows of fixed column count. Simple; good for device parameter knob grids. |
 | ☐ | grid.md | **Grid** | 2D CSS-grid-style layout. Named tracks, span declarations, explicit placement. More powerful than FwGrid, used by the Mixer and Session panel layouts. |
 | ☐ | table.md | **Table** | Tabular data: header row, body rows, sortable columns, selection model, virtualized scroll for large datasets. Used by MIDI Monitor, preset browsers. |
