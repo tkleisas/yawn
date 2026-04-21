@@ -237,6 +237,14 @@ struct Constraints {
         return {detail::cmax(0.0f, minW - hw), detail::cmax(0.0f, minH - vw),
                 detail::cmax(0.0f, maxW - hw), detail::cmax(0.0f, maxH - vw)};
     }
+
+    // v2 measure-cache comparison. Equality on all four bounds — any
+    // difference forces a re-measure.
+    constexpr bool operator==(const Constraints& o) const {
+        return minW == o.minW && minH == o.minH
+            && maxW == o.maxW && maxH == o.maxH;
+    }
+    constexpr bool operator!=(const Constraints& o) const { return !(*this == o); }
 };
 
 } // namespace fw

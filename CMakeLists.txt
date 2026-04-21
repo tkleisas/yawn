@@ -171,6 +171,13 @@ set(YAWN_CORE_SOURCES
     # Video import logic (POSIX fork+exec ffmpeg). Windows gets a stub
     # inside the .cpp. No SDL/GL deps, safe for yawn_core.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/VideoImporter.cpp
+    # UI framework v2 — design-doc-driven rewrite; coexists with v1.
+    # No GL deps in these TUs — pure layout/measure/event/cache logic.
+    # Widgets that do paint link against the renderer in the main exe.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/UIContext.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Theme.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Widget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Fader.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)
