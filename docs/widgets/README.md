@@ -140,10 +140,10 @@ These aren't widgets but need their own design docs before v2 lands:
 | ✓ | Doc | Covers |
 |---|---|---|
 | ✓ | [`../ui-v2-architecture.md`](../ui-v2-architecture.md) | Framework-level: layers, cache, events, theme, multi-toast, debug overlay |
-| ☐ | `../ui-v2-layer-stack.md` | Full LayerStack API + OverlayEntry lifecycle + hit-test ordering + dismissal rules |
-| ☐ | `../ui-v2-measure-layout.md` | Detailed constraint rules, cache internals, relayout boundary semantics, invalidation propagation, animation interaction |
-| ☐ | `../ui-v2-theme.md` | Theme struct + loading + runtime switching + JSON file format |
-| ☐ | `../ui-v2-events.md` | Full event model: raw → gesture → command, dispatching, capture, focus |
+| ✓ | [`../ui-v2-layer-stack.md`](../ui-v2-layer-stack.md) | Full LayerStack API + OverlayEntry lifecycle + hit-test ordering + dismissal rules |
+| ✓ | [`../ui-v2-measure-layout.md`](../ui-v2-measure-layout.md) | Detailed constraint rules, cache internals, relayout boundary semantics, invalidation propagation, animation interaction |
+| ✓ | [`../ui-v2-theme.md`](../ui-v2-theme.md) | Theme struct + loading + runtime switching + JSON file format |
+| ✓ | [`../ui-v2-events.md`](../ui-v2-events.md) | Full event model: raw → gesture → command, dispatching, capture, focus |
 
 The architecture doc is the high-level overview; these infrastructure
 docs expand specific areas when the abstract overview isn't enough
