@@ -214,6 +214,7 @@ void LibraryScanner::doScanPresets() {
             rec.name         = data.name;
             rec.deviceId     = data.deviceId;
             rec.deviceName   = data.deviceName;
+            rec.deviceType   = classifyDeviceType(data.deviceId, data.deviceName);
             rec.genre        = data.genre;
             rec.instrument   = data.instrument;
             rec.lastModified = epoch;

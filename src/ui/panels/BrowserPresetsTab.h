@@ -31,40 +31,15 @@ struct PresetListEntry {
     bool        isHeader = false;
 };
 
-// ─── v1 → fw2 event bridge ──────────────────────────────────────────
-// Embedding a v2 widget inside a v1 panel means translating v1's
-// EventSystem events into fw2::Widget::dispatch* calls. Keep this
-// local to the migration for now; when we migrate the second dropdown
-// we'll pull it into a shared header.
-
-namespace detail {
-
-inline uint64_t fw2NowMs() {
-    using namespace std::chrono;
-    static const auto start = steady_clock::now();
-    return static_cast<uint64_t>(
-        duration_cast<milliseconds>(steady_clock::now() - start).count());
-}
-
-inline ::yawn::ui::fw2::MouseEvent toFw2Mouse(const MouseEvent& e, Rect widgetBounds) {
-    using ::yawn::ui::fw2::MouseButton;
-    ::yawn::ui::fw2::MouseEvent out{};
-    out.x  = e.x;
-    out.y  = e.y;
-    out.lx = e.x - widgetBounds.x;
-    out.ly = e.y - widgetBounds.y;
-    out.button = (e.button == ::yawn::ui::fw::MouseButton::Right)  ? MouseButton::Right
-               : (e.button == ::yawn::ui::fw::MouseButton::Middle) ? MouseButton::Middle
-                                                                    : MouseButton::Left;
-    using namespace ::yawn::ui::fw2::ModifierKey;
-    if (e.mods.shift) out.modifiers |= Shift;
-    if (e.mods.ctrl)  out.modifiers |= Ctrl;
-    if (e.mods.alt)   out.modifiers |= Alt;
-    out.timestampMs = fw2NowMs();
-    return out;
-}
-
-} // namespace detail
+// NB: v1 panels hosting a single v2 widget like FwDropDown call the
+// widget's high-level method (toggle/open/close) directly from their
+// own onMouseDown, bypassing v2's gesture state machine. That's
+// because App.cpp only routes mouseUp into the v1 tree when v1's
+// Widget::capturedWidget() is non-null — v2's captureMouse() uses a
+// separate slot, so v1 never re-enters here on release and the
+// gesture state machine's click would never fire. A future v1→fw2
+// event-translation helper lives in this file when a migration
+// actually needs the full gesture pipeline.
 
 class BrowserPresetsTab {
 public:
@@ -89,7 +64,7 @@ public:
         m_entries.clear();
         m_searching = false;
 
-        auto presets = m_db->getAllPresets();
+        auto presets = m_db->getFilteredPresets(currentFilterType());
         buildGroupedList(presets);
         m_scrollOffset = 0;
         m_selectedIndex = -1;
@@ -108,10 +83,23 @@ public:
 
         // Filter dropdown (closed button only — the open popup lives
         // on fw2::LayerStack and is handled before we see events).
+        //
+        // We call toggle() directly instead of going through the full
+        // v2 gesture state machine via dispatchMouseDown + dispatchMouseUp.
+        // Reason: v1's App.cpp only dispatches mouseUp into the widget
+        // tree when Widget::capturedWidget() (v1's capture slot) is
+        // non-null. v2's captureMouse() uses a separate slot, so v1
+        // never routes the mouseUp back here — the gesture SM's click
+        // never fires, toggle never runs. Direct toggle() matches
+        // v1 FwDropDown behaviour exactly (open/close on mouse-down)
+        // and is the right pattern for v1-hosted v2 widgets until we
+        // have v2-native panels that do their own tree dispatch.
         float ddX = x + w - 72, ddY = y + 4;
         if (hitRect(mx, my, ddX, ddY, 68, 20)) {
-            auto ev = detail::toFw2Mouse(e, Rect{ddX, ddY, 68, 20});
-            return m_filterDropdown.dispatchMouseDown(ev);
+            if (e.button == ::yawn::ui::fw::MouseButton::Left) {
+                m_filterDropdown.toggle();
+            }
+            return true;
         }
 
         // List area
@@ -155,12 +143,9 @@ public:
     }
 
     bool onMouseUp(MouseEvent& e) {
-        // If the v2 dropdown button is in pressed state we forward so
-        // its gesture state machine fires the click → toggle open.
-        if (m_filterDropdown.isPressed()) {
-            auto ev = detail::toFw2Mouse(e, m_filterDropdown.bounds());
-            return m_filterDropdown.dispatchMouseUp(ev);
-        }
+        // v2 dropdown toggles on mouse-down directly (no gesture SM
+        // pipeline — see comment in onMouseDown) so there's nothing to
+        // forward here.
         return m_searchInput.onMouseUp(e);
     }
 
@@ -327,6 +312,19 @@ private:
         return mx >= rx && mx < rx + rw && my >= ry && my < ry + rh;
     }
 
+    // Translate the filter dropdown's selection into a DB query token:
+    //   0 → "" (all) — LibraryDatabase::getFilteredPresets returns all.
+    //   1 → "instrument"
+    //   2 → "effect"
+    // Any other index (shouldn't happen) falls through to "".
+    std::string currentFilterType() const {
+        switch (m_filterDropdown.selectedIndex()) {
+            case 1: return "instrument";
+            case 2: return "effect";
+            default: return "";
+        }
+    }
+
     void buildGroupedList(const std::vector<library::PresetRecord>& presets) {
         m_entries.clear();
         std::string lastDevice;
@@ -361,6 +359,17 @@ private:
 
         m_searching = true;
         auto results = m_db->searchPresets(query);
+        // Apply the current filter to search results too, so "Instruments"
+        // + "bass" narrows search instead of ignoring the dropdown.
+        const std::string filter = currentFilterType();
+        if (!filter.empty()) {
+            results.erase(
+                std::remove_if(results.begin(), results.end(),
+                    [&](const library::PresetRecord& p) {
+                        return p.deviceType != filter;
+                    }),
+                results.end());
+        }
         buildGroupedList(results);
         m_scrollOffset = 0;
     }
