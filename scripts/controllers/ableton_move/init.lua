@@ -1,10 +1,15 @@
--- Ableton Move controller script for YAWN (MVP)
+-- Ableton Move controller script for YAWN
 --
--- Confident parts (Ableton conventions — same across Push family):
---   • Pads send velocity-sensitive notes 36..67
---   • 8 encoders send relative CC 71..78 on channel 0
--- Unverified parts are marked TODO — they're best guesses, fill in real
--- values by pressing the button and checking YAWN's MIDI monitor panel.
+-- Verified on hardware:
+--   • Pads send velocity-sensitive notes 68..99 (bottom-left → top-right)
+--   • Pads accept NoteOn(pad, color) back on channel 0 to light LEDs
+--     (Push convention), but Move's firmware decays the LED state unless
+--     we re-assert it — so we run a 1 Hz heartbeat in on_tick
+-- Best-guess / TODO:
+--   • 8 encoders assumed CC 71..78 ch 0 (Push convention)
+--   • Transport CCs are Push 1 guesses — real values unknown
+--   • Color palette indices below are best guesses — iterate as we map
+--     Move's actual palette
 --
 -- When a CC/note isn't recognised, we log it once (throttled) so you can
 -- watch the YAWN log and quickly build up the mapping.
@@ -91,15 +96,86 @@ local function apply_encoder(cc, value)
     return true
 end
 
+-- ── Pad LEDs ───────────────────────────────────────────────────────────────
+--
+-- Move accepts NoteOn(pad_note, palette_index) on channel 0 to set a
+-- pad's color (Push family convention). Velocity 0 turns the pad off.
+-- Move's firmware clears LEDs on its own if not re-asserted, so we keep
+-- an in-memory buffer and re-broadcast it on a 1 Hz heartbeat below.
+--
+-- These color constants are velocity values and correspond to palette
+-- indices. They're best guesses based on the Push 2 palette — Move
+-- likely differs. If colors look wrong, tweak these numbers and the
+-- change takes effect on the next relaunch.
+
+-- Palette values observed from a 1..32 velocity sweep (see docs):
+--   vel  2 → red         (good for root)
+--   vel 10 → mid-green   (good for in-scale, unobtrusive)
+--   vel 15 → cyan
+--   vel 17 → blue
+--   vel 23 → magenta
+--   vel 29 → bright yellow  (good for pressed / active)
+--   vel 31 → bright green
+-- Higher ranges (33..127) not yet mapped.
+local COLOR_OFF         = 0
+local COLOR_OUT_OF_SCALE = 0
+local COLOR_IN_SCALE    = 10    -- mid-green
+local COLOR_ROOT        = 2     -- red
+local COLOR_PRESSED     = 29    -- bright yellow
+
+-- Desired LED state — pad index (0..31) → velocity (0..127). Composed
+-- from scale layout + held-pad set, flushed to the device by flush().
+local pad_led_buf = {}
+for i = 0, 31 do pad_led_buf[i] = COLOR_OFF end
+
+-- Which pads are currently pressed — brightens them above scale color.
+local pad_held = {}
+
+local function compose_pad_leds()
+    local root = pads.root_note
+    for idx = 0, (pads.PAD_COLS * pads.PAD_ROWS) - 1 do
+        if pad_held[idx] then
+            pad_led_buf[idx] = COLOR_PRESSED
+        else
+            local note = pads.index_to_note(idx)
+            if note == nil then
+                pad_led_buf[idx] = COLOR_OUT_OF_SCALE
+            elseif (note % 12) == root then
+                pad_led_buf[idx] = COLOR_ROOT
+            else
+                pad_led_buf[idx] = COLOR_IN_SCALE
+            end
+        end
+    end
+end
+
+local function flush_pad_leds()
+    for idx = 0, (pads.PAD_COLS * pads.PAD_ROWS) - 1 do
+        yawn.midi_send(0x90, pads.PAD_GRID_START + idx, pad_led_buf[idx])
+    end
+end
+
+local function refresh_pad_leds()
+    compose_pad_leds()
+    flush_pad_leds()
+end
+
+local function clear_pad_leds()
+    for i = 0, 31 do pad_led_buf[i] = COLOR_OFF end
+    flush_pad_leds()
+end
+
 -- ── Lua callbacks ──────────────────────────────────────────────────────────
 
 function on_connect()
-    yawn.log("[Move] Connected; MVP mode (no LED/display feedback yet)")
+    yawn.log("[Move] Connected; painting pad LEDs for scale visualization")
     pads.recompute(scales)
+    refresh_pad_leds()
 end
 
 function on_disconnect()
-    yawn.log("[Move] Disconnected")
+    yawn.log("[Move] Disconnected; clearing pad LEDs")
+    clear_pad_leds()
 end
 
 -- MIDI dispatch. We see raw bytes; interpret by status nibble.
@@ -111,7 +187,9 @@ function on_midi(data)
 
     -- Note On. The C++ binding treats velocity=0 as Note Off internally,
     -- so both on-pad-press (vel > 0) and on-pad-release (running-status
-    -- vel=0) fall through the same call.
+    -- vel=0) fall through the same call. LED-wise we track the held
+    -- state so the pad lights up bright on press and falls back to its
+    -- scale color on release.
     if st_hi == 0x90 and #data >= 3 then
         local note = data[2]
         local vel  = data[3]
@@ -122,6 +200,8 @@ function on_midi(data)
                 local track = yawn.get_selected_track()
                 yawn.send_note_to_track(track, mapped, vel, 0)
             end
+            pad_held[idx] = (vel > 0) or nil
+            refresh_pad_leds()
             return
         end
         -- Not a pad: log for discovery
@@ -140,6 +220,8 @@ function on_midi(data)
                 local track = yawn.get_selected_track()
                 yawn.send_note_to_track(track, mapped, 0, 0)
             end
+            pad_held[idx] = nil
+            refresh_pad_leds()
         end
         return
     end
@@ -185,12 +267,26 @@ function on_midi(data)
     end
 end
 
--- 30 Hz tick for periodic work (display refresh, animations). Nothing yet
--- in MVP, but we track selected-track change to recompute pads if we ever
--- wire per-track scales.
+-- 30 Hz tick for periodic work.
+--
+-- LED heartbeat: Move's firmware appears to clear pad LEDs on its own
+-- shortly after a NoteOn-to-pad message, probably because it's waiting
+-- for Ableton Live's pairing handshake to confirm a host is driving
+-- the surface. Re-sending the full pad state on a 1 Hz heartbeat keeps
+-- the pads visibly lit without that handshake. ~32 msg/s is negligible
+-- for USB MIDI.
+local LED_HEARTBEAT_TICKS = 30   -- at 30 Hz → 1 second
+local led_heartbeat_counter = 0
+
 function on_tick()
     local t = yawn.get_selected_track()
     if t ~= last_track then
         last_track = t
+    end
+
+    led_heartbeat_counter = led_heartbeat_counter + 1
+    if led_heartbeat_counter >= LED_HEARTBEAT_TICKS then
+        led_heartbeat_counter = 0
+        refresh_pad_leds()
     end
 end
