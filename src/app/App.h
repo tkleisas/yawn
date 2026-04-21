@@ -4,6 +4,7 @@
 #include "ui/Renderer.h"
 #include "visual/VisualEngine.h"
 #include "ui/Font.h"
+#include "ui/ToastManager.h"
 #include "ui/Widget.h"
 #include "ui/MenuBar.h"
 #include "ui/panels/DetailPanelWidget.h"
@@ -154,6 +155,7 @@ private:
     visual::VisualEngine m_visualEngine;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
+    ui::ToastManager m_toastManager;
     ui::MenuBar m_menuBar;
     ui::VirtualKeyboard m_virtualKeyboard;
     ui::ContextMenu m_contextMenu;

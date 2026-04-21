@@ -137,6 +137,9 @@ void ControllerManager::autoConnect() {
 
         // Open ports — open all matching inputs and outputs
         m_port = std::make_unique<ControllerMidiPort>();
+        // Attach monitor BEFORE opening inputs so the first MIDI
+        // callback already has somewhere to push.
+        if (m_monitor) m_port->setMonitorBuffer(m_monitor, m_monitorPortBase);
         bool anyInput = false;
         for (int idx : inIndices) {
             if (m_port->openInput(idx))

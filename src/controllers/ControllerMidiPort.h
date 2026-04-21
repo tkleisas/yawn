@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "midi/MidiMonitorBuffer.h"
 #include "util/Logger.h"
 
 namespace yawn {
@@ -180,6 +181,17 @@ public:
         sendRawBytes(msg, 3);
     }
 
+    // Route incoming MIDI into YAWN's shared monitor buffer so
+    // controller-claimed ports show up in the MIDI Monitor panel just
+    // like normal inputs. portIdxBase becomes the displayed port index
+    // (monitor shows portIdxBase + 1). Pick a base that doesn't clash
+    // with MidiEngine's port numbering — App.cpp uses 100 so controller
+    // ports show as 101..104, visually distinct from normal 1..N.
+    void setMonitorBuffer(midi::MidiMonitorBuffer* buf, uint8_t portIdxBase) {
+        m_monitor = buf;
+        m_monitorPortBase = portIdxBase;
+    }
+
     // Static enumeration (delegates to RtMidi)
     static std::vector<std::string> enumerateInputPorts() {
         std::vector<std::string> names;
@@ -228,7 +240,22 @@ private:
                               void* userData) {
         auto* port = static_cast<ControllerMidiPort*>(userData);
         if (!message || message->empty()) return;
-        port->m_ring.push(message->data(), static_cast<int>(message->size()));
+        const uint8_t* data = message->data();
+        const int length = static_cast<int>(message->size());
+
+        // Always enqueue for the Lua script.
+        port->m_ring.push(data, length);
+
+        // Also forward into the shared monitor so the MIDI Monitor panel
+        // sees controller activity. Ports are enumerated per-
+        // ControllerMidiPort instance (all 4 Move inputs share the
+        // same base, which is fine for debugging).
+        if (port->m_monitor && port->m_monitor->enabled()) {
+            const uint32_t ts = port->m_monitor->elapsedMs();
+            port->m_monitor->push(
+                midi::makeMonitorEntryFromRaw(data, length,
+                                               port->m_monitorPortBase, ts));
+        }
     }
 
     std::vector<std::unique_ptr<RtMidiIn>> m_ins;
@@ -237,6 +264,8 @@ private:
     std::vector<std::string> m_outNames;
     static inline const std::string kEmpty;
     RawMidiRingBuffer m_ring;
+    midi::MidiMonitorBuffer* m_monitor = nullptr;
+    uint8_t m_monitorPortBase = 0;
 };
 
 } // namespace controllers

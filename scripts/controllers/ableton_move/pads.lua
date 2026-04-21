@@ -135,4 +135,14 @@ function pads.octave_down(scales)
     end
 end
 
+-- Set the row interval (semitones between adjacent rows) and recompute
+-- the pad grid. Called from controllers that want to offer multiple
+-- layouts (3rds, 4ths, 5ths, Octaves, ...).
+function pads.set_row_interval(scales, semis)
+    if semis and semis > 0 then
+        pads.row_interval = semis
+        compute(scales)
+    end
+end
+
 return pads

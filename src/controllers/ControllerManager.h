@@ -85,6 +85,15 @@ public:
     void setClipLauncher(std::function<void(int track, int scene)> fn) { m_launchClip = std::move(fn); }
     void setSceneLauncher(std::function<void(int scene)> fn) { m_launchScene = std::move(fn); }
 
+    // Toast handler — fed by App so yawn.toast(...) from Lua surfaces
+    // in the ToastManager. signature: (message, duration_seconds, severity_0_1_2)
+    void setToastHandler(std::function<void(const std::string&, float, int)> fn) {
+        m_toastHandler = std::move(fn);
+    }
+    void showToast(const std::string& msg, float durationSec = 1.5f, int severity = 0) {
+        if (m_toastHandler) m_toastHandler(msg, durationSec, severity);
+    }
+
     // Called from Lua
     ClipSlotState getClipSlotState(int track, int scene) const {
         return m_getClipState ? m_getClipState(track, scene) : ClipSlotState{};
@@ -116,6 +125,17 @@ public:
     std::vector<std::string> claimedInputPortNames() const;
     std::vector<std::string> claimedOutputPortNames() const;
 
+    // Route controller MIDI into YAWN's shared monitor buffer so claimed
+    // ports still show up in the MIDI Monitor panel. Applied to the
+    // current port (if any) and re-applied whenever autoConnect creates
+    // a new port. The port-index base is what the panel shows as
+    // "port N+1" — 100 keeps it visually separate from regular inputs.
+    void setMonitorBuffer(midi::MidiMonitorBuffer* buf, uint8_t portIdxBase = 100) {
+        m_monitor = buf;
+        m_monitorPortBase = portIdxBase;
+        if (m_port) m_port->setMonitorBuffer(buf, portIdxBase);
+    }
+
 private:
     // Load manifest.lua from a script directory, returns true if valid
     bool loadManifest(const std::string& dir, ControllerScript& out);
@@ -129,6 +149,7 @@ private:
     std::function<ClipSlotState(int, int)> m_getClipState;
     std::function<void(int, int)> m_launchClip;
     std::function<void(int)> m_launchScene;
+    std::function<void(const std::string&, float, int)> m_toastHandler;
     SessionFocus m_sessionFocus;
 
     // Discovered scripts
@@ -147,6 +168,11 @@ private:
 
     // Cached bundled path for reload
     std::string m_bundledPath;
+
+    // Forwarded to every ControllerMidiPort we create so the MIDI
+    // Monitor panel sees controller activity. Null until App wires it.
+    midi::MidiMonitorBuffer* m_monitor = nullptr;
+    uint8_t                  m_monitorPortBase = 100;
 };
 
 } // namespace controllers

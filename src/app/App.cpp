@@ -2346,6 +2346,9 @@ void App::startVideoImport(int track, int scene, const std::string& sourcePath) 
     std::filesystem::path mediaDir = m_projectPath / "media";
     if (!importer->start(sourcePath, mediaDir)) {
         LOG_ERROR("Video", "Import failed to start: %s", sourcePath.c_str());
+        m_toastManager.show(
+            std::string("Video import failed: ") + importer->error(),
+            3.0f, ui::ToastManager::Severity::Error);
         return;
     }
 
@@ -2389,6 +2392,8 @@ void App::onVideoImportDone(PendingVideoImport& pi) {
 
     m_sessionPanel->setSlotImporting(pi.track, pi.scene, false);
     LOG_INFO("Video", "Import done: %s", pi.sourcePath.c_str());
+    m_toastManager.show("Video imported",
+                        1.5f, ui::ToastManager::Severity::Info);
 }
 
 void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
@@ -3074,6 +3079,11 @@ bool App::init() {
         if (m_sessionPanel)
             m_sessionPanel->launchScene(scene);
     });
+    m_controllerManager.setToastHandler(
+        [this](const std::string& msg, float dur, int sev) {
+            m_toastManager.show(msg, dur,
+                static_cast<ui::ToastManager::Severity>(sev));
+        });
     m_controllerManager.scanScripts("scripts/controllers");
     m_controllerManager.autoConnect();
 
@@ -3124,6 +3134,11 @@ bool App::init() {
         m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
     m_midiEngine.setMonitorBuffer(&m_midiMonitor);
+    // Controller-claimed ports bypass MidiEngine — route them into the
+    // same monitor buffer so the MIDI Monitor panel shows Push / Move /
+    // etc. activity just like any other input. Port-index base 100
+    // keeps controller entries visually separate from regular inputs.
+    m_controllerManager.setMonitorBuffer(&m_midiMonitor, 100);
 
     // Wire MIDI Learn manager
     m_midiEngine.setLearnManager(&m_midiLearnManager);
@@ -3136,6 +3151,12 @@ bool App::init() {
     m_browserPanel->setPortNameFn([this](int idx) -> std::string {
         if (idx >= 0 && idx < m_midiEngine.availableInputCount())
             return m_midiEngine.availableInputName(idx);
+        // Controller-claimed ports are forwarded to the monitor with
+        // portIdxBase >= 100 (set in setMonitorBuffer above). Surface
+        // them with the connected script's name, so the panel column
+        // reads e.g. "Ableton Move" instead of a bare "100".
+        if (idx >= 100 && m_controllerManager.isConnected())
+            return m_controllerManager.connectedName();
         return std::to_string(idx);
     });
 
@@ -5098,6 +5119,8 @@ void App::update() {
         } else if (st == visual::VideoImporter::State::Failed) {
             LOG_ERROR("Video", "Import failed: %s", it->importer->error().c_str());
             m_sessionPanel->setSlotImporting(it->track, it->scene, false);
+            m_toastManager.show("Video import failed",
+                                2.5f, ui::ToastManager::Severity::Error);
             it = m_pendingImports.erase(it);
         } else {
             ++it;
@@ -5503,6 +5526,10 @@ void App::render() {
         }
     }
 
+    // Toasts draw last so they float above every dialog/panel.
+    m_toastManager.render(m_renderer, m_font,
+                          m_mainWindow.getWidth(), m_mainWindow.getHeight());
+
     m_renderer.endFrame();
 
     m_mainWindow.swap();
@@ -5625,8 +5652,10 @@ void App::doSaveProject(const std::filesystem::path& path) {
         m_projectDirty = false;
         updateWindowTitle();
         LOG_INFO("Project", "Saved to: %s", projectDir.string().c_str());
+        m_toastManager.show("Saved: " + projectDir.filename().string());
     } else {
         LOG_ERROR("Project", "Failed to save: %s", projectDir.string().c_str());
+        m_toastManager.show("Save failed", 2.5f, ui::ToastManager::Severity::Error);
     }
 }
 
@@ -5667,9 +5696,11 @@ void App::doOpenProject(const std::filesystem::path& path) {
         m_pianoRoll->close();
         updateWindowTitle();
         LOG_INFO("Project", "Loaded: %s", projectDir.string().c_str());
+        m_toastManager.show("Loaded: " + projectDir.filename().string());
     } else {
         LOG_ERROR("Project", "Failed to load: %s",
                      projectDir.string().c_str());
+        m_toastManager.show("Load failed", 2.5f, ui::ToastManager::Severity::Error);
     }
 }
 

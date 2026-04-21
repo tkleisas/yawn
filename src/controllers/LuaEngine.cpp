@@ -36,6 +36,21 @@ static int l_log(lua_State* L) {
     return 0;
 }
 
+// ── Lua API: yawn.toast(message, [duration_sec=1.5], [severity=0]) ──────────
+//
+// Display a transient toast in the YAWN UI. Severity: 0=info, 1=warn, 2=error.
+// Replaces any currently visible toast; does not queue.
+
+static int l_toast(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    const char* msg = luaL_checkstring(L, 1);
+    double dur = luaL_optnumber(L, 2, 1.5);
+    int sev = static_cast<int>(luaL_optinteger(L, 3, 0));
+    mgr->showToast(msg ? msg : "", static_cast<float>(dur), sev);
+    return 0;
+}
+
 // ── Lua API: yawn.midi_send(b1, b2, ...) ────────────────────────────────────
 
 static int l_midi_send(lua_State* L) {
@@ -854,6 +869,7 @@ void LuaEngine::registerAPI() {
     // Register functions
     static const luaL_Reg funcs[] = {
         {"log",                     l_log},
+        {"toast",                   l_toast},
         {"midi_send",               l_midi_send},
         {"midi_send_sysex",         l_midi_send_sysex},
         {"get_selected_track",      l_get_selected_track},

@@ -7,7 +7,7 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · Controller Scripting · <strong>Visual / VJ Engine · Video Clips</strong><br/><br/>
+  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · Controller Scripting (Push 1 + Ableton Move) · <strong>Visual / VJ Engine · Video Clips</strong><br/><br/>
   <em>Made with AI-Sloptronic™ technology</em><br/>
   <sub>Where "it compiles" is the new "it works" and every bug is a ✨feature request✨</sub>
 </p>
@@ -155,6 +155,7 @@
 - **Context Menus** — Right-click track headers, scene labels, clips, transport buttons, knobs for MIDI Learn
 - **DPI Scaling** — Auto-detect display scale (SDL3), user override, scaled() helper for all layout constants
 - **Panel Animations** — Smooth exponential-lerp height transitions on panel collapse/expand
+- **Toast Notifications** — Top-center status banner with replace-latest semantics, severity accent (info/warn/error), 1.5 s hold + 200 ms fade. Thread-safe; fired from controller scripts (`yawn.toast(...)`), project save/load, video import, and other async events. Designed partly as a screen substitute for controllers without their own display (e.g. Ableton Move)
 - **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking
 - **Track Selection** — Click to select tracks, highlight in session & mixer views
 - **Track Type Icons** — Waveform icon for audio tracks, DIN circle icon for MIDI tracks
@@ -186,6 +187,20 @@
 - **LED Ripple Animation** — Expanding ring animation on pad press with held-pad persistence
 - **Auto-Detection** — Drum instruments auto-switch to 4×4 pad layout; melodic instruments restore note mode
 
+#### Ableton Move
+
+*No OLED, no problem. Move's display is proprietary-protocol territory that only Ableton Live speaks, so YAWN drives the pad LEDs over standard Push-family MIDI (which Move accepts) and uses a top-center toast banner as the screen substitute.*
+
+- **Full-coverage pad grid** — All 32 velocity-sensitive pads (notes 68–99) play the current scale; LED colors mark root / in-scale / out-of-scale / pressed
+- **Scale visualization + layout presets** — 30+ scales (shared catalog with Push 1), cycle layouts **4ths / 3rds / 5ths / Octaves** via Shift+Track/Session
+- **Shift-modifier navigation** — `+`/`−` = octave (Shift = root note ±1 semitone), `<`/`>` = track (Shift = scale), Track 1–4 buttons jump directly
+- **Two encoders** — Main (dented) encoder navigates tracks/scales; Master (smooth) encoder controls volume/BPM. Touch-sensitive: tap the knob to peek the current value without changing it
+- **Push-style LED ripple** — Expanding 3-ring wave on every pad press (~500 ms), cyan → blue → brown fade, configurable palette and speed
+- **Scene launch** — First 8 numbered buttons launch scenes 0–7
+- **1 Hz LED heartbeat** — Move's firmware clears pad state on its own without Ableton Live's pairing; YAWN re-asserts the grid once a second so the layout stays visible during a long session
+
+> See [docs/ableton-move.md](docs/ableton-move.md) for the full button map, encoder behavior, LED palette, toast scheme, and Lua internals.
+>
 > See [docs/controller-scripting.md](docs/controller-scripting.md) for the full Lua API reference, Push 1 button map, and guide to writing controller scripts.
 
 ### Visual / VJ Engine
@@ -227,7 +242,9 @@
 
 ### Planned
 
-- 🎛️ More controller scripts (Ableton Move, Novation Launchpad, etc.)
+- 🎛️ More controller scripts (Novation Launchpad, Akai APC, etc.)
+- 🖥️ Move OLED display — pending reverse-engineering of Ableton's proprietary USB pairing protocol
+- 🪪 Lua bindings for Undo/Mute/Copy/Loop so the remaining Move buttons can be wired
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
@@ -596,9 +613,14 @@ yawn/
 │   └── WidgetHint.h            # Widget type hints
 ├── scripts/
 │   └── controllers/
-│       └── ableton_push1/      # Ableton Push 1 controller script
-│           ├── manifest.lua    # Port matching metadata
-│           └── init.lua        # Encoder/display/pad logic
+│       ├── ableton_push1/      # Ableton Push 1 controller script
+│       │   ├── manifest.lua    # Port matching metadata
+│       │   └── init.lua        # Encoder/display/pad logic
+│       └── ableton_move/       # Ableton Move controller script
+│           ├── manifest.lua    # Port matching
+│           ├── init.lua        # Buttons, encoders, LEDs, toasts
+│           ├── pads.lua        # Pad grid + scale walker
+│           └── scales.lua      # 30+ scale catalog (shared w/ Push 1)
 ├── tests/                      # 844 unit & integration tests (Google Test)
 │   ├── CMakeLists.txt
 │   ├── test_Arrangement.cpp    # Arrangement clips, playback, transport loop
