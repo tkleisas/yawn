@@ -178,6 +178,9 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Theme.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Widget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Fader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/FlexBox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Label.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Button.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)

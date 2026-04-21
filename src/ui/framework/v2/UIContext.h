@@ -9,14 +9,26 @@
 // See docs/ui-v2-measure-layout.md for how epoch interacts with
 // caching.
 
+#include <string>
+
 namespace yawn {
 namespace ui {
 
 // Forward-decl v1 types consumed through pointers.
 class Renderer2D;
-class Font;
 
 namespace fw2 {
+
+// Text-metrics abstraction so v2 doesn't pull glad/GL via v1's Font.h.
+// Production wires a FontAdapter around v1 Font; tests use nullptr
+// (widgets fall back to a predictable "8 px per char" measurement)
+// or a custom mock for precise text-width tests.
+class TextMetrics {
+public:
+    virtual ~TextMetrics() = default;
+    virtual float textWidth(const std::string& s, float fontSize) const = 0;
+    virtual float lineHeight(float fontSize) const = 0;
+};
 
 class UIContext {
 public:
@@ -46,11 +58,11 @@ public:
     }
 
     // ─── Rendering hooks ────────────────────────────────────────────
-    // Pointers to the framework's 2D renderer + font. Plumbed through
-    // by App so widgets can paint via ctx.renderer / ctx.font. Null
-    // during unit tests that don't render.
-    Renderer2D* renderer = nullptr;
-    Font*       font     = nullptr;
+    // Pointers to the framework's 2D renderer + text metrics provider.
+    // App wires them at startup. Null during unit tests → widgets use
+    // predictable fallback measurements.
+    Renderer2D*   renderer     = nullptr;
+    TextMetrics*  textMetrics  = nullptr;
 
 private:
     int   m_epoch    = 0;
