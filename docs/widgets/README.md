@@ -81,8 +81,8 @@ can think of.
 |---|---|---|---|
 | ✓ | [flex_box.md](flex_box.md) | **FlexBox** | Row / column layout engine. Flexbox semantics (grow, shrink, basis, justify, align). Mirrors Yoga. |
 | ☐ | fw_grid.md | **FwGrid** | Row-major grid (current v1 naming). Auto-wraps children into rows of fixed column count. Simple; good for device parameter knob grids. |
-| ☐ | grid.md | **Grid** | 2D CSS-grid-style layout. Named tracks, span declarations, explicit placement. More powerful than FwGrid, used by the Mixer and Session panel layouts. |
-| ☐ | table.md | **Table** | Tabular data: header row, body rows, sortable columns, selection model, virtualized scroll for large datasets. Used by MIDI Monitor, preset browsers. |
+| ✓ | [grid.md](grid.md) | **Grid** | 2D CSS-grid-style layout. Named tracks, span declarations, explicit placement. More powerful than FwGrid, used by the Mixer and Session panel layouts. |
+| ✓ | [table.md](table.md) | **Table** | Tabular data: header row, body rows, sortable columns, selection model, virtualized scroll for large datasets. Used by MIDI Monitor, preset browsers. |
 | ✓ | [snap_scroll_container.md](snap_scroll_container.md) | **SnapScrollContainer** | Horizontal snap-to-page scroll viewport with nav buttons. Used by device chain. |
 | ✓ | [scroll_view.md](scroll_view.md) | **ScrollView** | Generic scrollable viewport (vertical + horizontal, free-form). New in v2. Different from SnapScrollContainer's paged behavior. |
 | ✓ | [stack.md](stack.md) | **Stack** | Z-order stacking within a single rect — children overlap, drawn in order. Useful for overlays, visual layers, composite widgets. |
