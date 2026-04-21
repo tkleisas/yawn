@@ -438,6 +438,12 @@ struct ThemePalette {
     Color success, warn, error;
     Color playing, recording, queued;
 
+    // Modulation overlays (LFO / automation / CC visible-on-knob trails).
+    // Distinct from accent so user's set-value and modulated-value are
+    // visually separable at a glance.
+    Color modulation;          // tail arc + indicator dot
+    Color modulationRange;     // range halo (typically `modulation.withAlpha(60)`)
+
     // Text
     Color textPrimary, textSecondary, textDim;
     Color textOnAccent, textOnError;

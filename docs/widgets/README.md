@@ -63,10 +63,10 @@ can think of.
 | ✓ | [fader.md](fader.md) | **FwFader** | Vertical linear control. First spec — proof of concept for the template. |
 | ✓ | [button.md](button.md) | **FwButton** | Push button. Clickable, optionally toggleable. |
 | ✓ | [toggle.md](toggle.md) | **FwToggle** | Two-state on/off. Simpler state machine than Button. |
-| ☐ | knob.md | **FwKnob** | Circular rotary control. Shares drag infrastructure with Fader. |
+| ✓ | [knob.md](knob.md) | **FwKnob** | Circular rotary control. Shares drag infrastructure with Fader. Includes secondary value display for LFO / automation / CC modulation overlay. |
 | ✓ | [label.md](label.md) | **Label** | Text display. Measures from font; truncation policy. |
-| ☐ | text_input.md | **FwTextInput** | Single-line editable text. Focus, caret, selection, clipboard. |
-| ☐ | number_input.md | **FwNumberInput** | Numeric text entry with clamping and formatting. Inline text-entry for knobs/faders. |
+| ✓ | [text_input.md](text_input.md) | **FwTextInput** | Single-line editable text. Focus, caret, selection, clipboard. |
+| ✓ | [number_input.md](number_input.md) | **FwNumberInput** | Numeric text entry with clamping and formatting. Inline text-entry for knobs/faders. |
 | ☐ | dropdown.md | **FwDropDown** | Select-one from a list. Primary consumer of the Overlay layer. |
 | ☐ | checkbox.md | **FwCheckbox** | Tri-state optional (off / on / indeterminate). |
 | ☐ | radio_group.md | **FwRadioGroup** | Mutually exclusive selection. Composed of FwRadioButtons. |
