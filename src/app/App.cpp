@@ -4,6 +4,7 @@
 #include "ui/framework/PanelWrappers.h"
 #include "ui/framework/v2/Fw2Painters.h"
 #include "ui/framework/v2/Tooltip.h"
+#include "ui/framework/v2/ContextMenu.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -5616,9 +5617,9 @@ void App::render() {
                               static_cast<float>(w),
                               static_cast<float>(h)};
 
-    // Advance the tooltip show-delay timer. We measure wall-clock
-    // between frames; chrono::steady_clock is immune to NTP jumps and
-    // DST. Separate from audio callbacks — purely UI-thread timing.
+    // Advance v2 per-frame timers (tooltip show delay, context menu
+    // hover-to-open submenu). Both measure wall-clock between frames
+    // via steady_clock — immune to NTP jumps and DST.
     {
         using clk = std::chrono::steady_clock;
         static auto lastTick = clk::now();
@@ -5626,6 +5627,7 @@ void App::render() {
         const float dt = std::chrono::duration<float>(now - lastTick).count();
         lastTick = now;
         ui::fw2::TooltipManager::instance().tick(dt);
+        ui::fw2::ContextMenuManager::instance().tick(dt);
     }
 
     // Compute widget tree layout and render all panels

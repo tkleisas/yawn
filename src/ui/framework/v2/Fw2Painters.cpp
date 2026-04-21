@@ -17,6 +17,7 @@
 #include "ui/framework/v2/Fader.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Tooltip.h"
+#include "ui/framework/v2/ContextMenu.h"
 
 #include "ui/Renderer.h"
 #include "ui/Theme.h"
@@ -329,6 +330,118 @@ static void paintTooltip(const Rect& b, const std::string& text, UIContext& ctx)
     }
 }
 
+// ─── ContextMenu ────────────────────────────────────────────────────
+
+static void paintContextMenuLevels(
+    const std::vector<ContextMenuManager::Level>& levels,
+    UIContext& ctx) {
+    if (!ctx.renderer || levels.empty()) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    for (const auto& L : levels) {
+        const Rect& b = L.bounds;
+
+        // Drop shadow + body + border.
+        ctx.renderer->drawRoundedRect(b.x + 2.0f, b.y + 3.0f, b.w, b.h,
+                                       m.cornerRadius, p.dropShadow);
+        ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h,
+                                       m.cornerRadius, p.elevated);
+        ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, m.borderWidth);
+
+        // Clip items to body so long labels don't bleed.
+        ctx.renderer->pushClip(b.x, b.y, b.w, b.h);
+
+        const float padX       = m.baseUnit * 2.0f;
+        const float padY       = m.baseUnit * 0.5f;
+        const float leftMarker = m.fontSize;          // space for check/radio indicator
+        const float arrowW     = m.fontSize * 0.75f;
+        const float rowH       = ContextMenuManager::rowHeight();
+        const float sepH       = ContextMenuManager::separatorRowHeight();
+
+        float rowY = b.y + padY;
+        for (int i = 0; i < static_cast<int>(L.entries.size()); ++i) {
+            const MenuEntry& e = L.entries[i];
+
+            if (e.kind == MenuEntryKind::Separator) {
+                const float ly = rowY + sepH * 0.5f;
+                ctx.renderer->drawLine(b.x + padX, ly,
+                                        b.x + b.w - padX, ly,
+                                        p.borderSubtle, 1.0f);
+                rowY += sepH;
+                continue;
+            }
+
+            const bool selectable = (e.kind != MenuEntryKind::Header) && e.enabled;
+            const bool highlighted = (i == L.highlighted) && selectable;
+
+            // Row background on hover/highlight.
+            if (highlighted) {
+                ctx.renderer->drawRect(b.x + 1.0f, rowY,
+                                        b.w - 2.0f, rowH,
+                                        p.accent.withAlpha(80));
+            }
+
+            // Check / radio indicator on the left gutter.
+            if ((e.kind == MenuEntryKind::Checkable || e.kind == MenuEntryKind::Radio) &&
+                e.checked) {
+                // Draw a small filled circle for Radio, checkmark-ish
+                // rect for Checkable. Simplified; we can upgrade to
+                // glyph rendering later.
+                const float cx = b.x + padX + leftMarker * 0.5f;
+                const float cy = rowY + rowH * 0.5f;
+                if (e.kind == MenuEntryKind::Radio) {
+                    ctx.renderer->drawFilledCircle(cx, cy, 3.0f, p.accent, 12);
+                } else {
+                    ctx.renderer->drawRect(cx - 3.0f, cy - 3.0f, 6.0f, 6.0f, p.accent);
+                }
+            }
+
+            // Label.
+            if (ctx.textMetrics && !e.label.empty()) {
+                const float fontSize = m.fontSize;
+                const float lh = ctx.textMetrics->lineHeight(fontSize);
+                const float tx = b.x + padX + leftMarker;
+                const float ty = rowY + (rowH - lh) * 0.5f - lh * 0.15f;
+                Color col = e.enabled ? p.textPrimary : p.textDim;
+                if (e.kind == MenuEntryKind::Header) col = p.textSecondary;
+                ctx.textMetrics->drawText(*ctx.renderer, e.label, tx, ty, fontSize, col);
+            }
+
+            // Shortcut text, right-aligned (with room for a submenu arrow).
+            if (ctx.textMetrics && !e.shortcut.empty()) {
+                const float fontSize = m.fontSize;
+                const float lh = ctx.textMetrics->lineHeight(fontSize);
+                const float sw = ctx.textMetrics->textWidth(e.shortcut, fontSize);
+                const float tx = b.x + b.w - padX - arrowW - sw;
+                const float ty = rowY + (rowH - lh) * 0.5f - lh * 0.15f;
+                ctx.textMetrics->drawText(*ctx.renderer, e.shortcut, tx, ty,
+                                           fontSize, p.textSecondary);
+            }
+
+            // Submenu chevron ▸.
+            if (e.kind == MenuEntryKind::Submenu) {
+                const float cx = b.x + b.w - padX - arrowW * 0.5f;
+                const float cy = rowY + rowH * 0.5f;
+                const float w  = arrowW * 0.55f;
+                const float h  = arrowW * 0.5f;
+                Color c = e.enabled ? p.textPrimary : p.textDim;
+                // Triangle pointing right.
+                ctx.renderer->drawTriangle(
+                    cx - w * 0.5f, cy - h * 0.5f,
+                    cx - w * 0.5f, cy + h * 0.5f,
+                    cx + w * 0.5f, cy,
+                    c);
+            }
+
+            rowY += rowH;
+        }
+
+        ctx.renderer->popClip();
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -343,6 +456,9 @@ void registerAllFw2Painters() {
     // TooltipManager uses the same pattern — the overlay entry's paint
     // closure dispatches through this function pointer.
     TooltipManager::setPainter(&paintTooltip);
+    // ContextMenuManager: same pattern — one function paints all open
+    // levels (root + submenus).
+    ContextMenuManager::setPainter(&paintContextMenuLevels);
     // FlexBox has no paint — it's a pure layout container; its
     // children paint themselves via Widget::render recursion.
 }

@@ -4,6 +4,7 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/UIContext.h"
@@ -102,6 +103,25 @@ public:
         if (hitRect(mx, my, ddX, ddY, 68, 20)) {
             if (e.button == ::yawn::ui::fw::MouseButton::Left) {
                 m_filterDropdown.toggle();
+            } else if (e.button == ::yawn::ui::fw::MouseButton::Right) {
+                // Demo v2 ContextMenu — right-click the filter to set
+                // a preset category directly (bypasses the dropdown)
+                // and exercise a submenu entry.
+                namespace fw2 = ::yawn::ui::fw2;
+                fw2::ContextMenu::show({
+                    fw2::Menu::header("Filter"),
+                    fw2::Menu::radio("filter", "All",         m_filterDropdown.selectedIndex() == 0,
+                                      [this]{ m_filterDropdown.setSelectedIndex(0, fw2::ValueChangeSource::User); }),
+                    fw2::Menu::radio("filter", "Instruments", m_filterDropdown.selectedIndex() == 1,
+                                      [this]{ m_filterDropdown.setSelectedIndex(1, fw2::ValueChangeSource::User); }),
+                    fw2::Menu::radio("filter", "Effects",     m_filterDropdown.selectedIndex() == 2,
+                                      [this]{ m_filterDropdown.setSelectedIndex(2, fw2::ValueChangeSource::User); }),
+                    fw2::Menu::separator(),
+                    fw2::Menu::submenu("Quick actions", {
+                        fw2::Menu::item("Refresh list", [this]{ refreshList(); }, "F5"),
+                        fw2::Menu::item("Clear search", [this]{ m_searchInput.setText(""); refreshList(); }),
+                    }),
+                }, fw2::Point{e.x, e.y});
             }
             return true;
         }
