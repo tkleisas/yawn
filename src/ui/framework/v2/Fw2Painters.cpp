@@ -15,9 +15,12 @@
 #include "ui/framework/v2/Label.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Fader.h"
+#include "ui/framework/v2/DropDown.h"
 
 #include "ui/Renderer.h"
 #include "ui/Theme.h"
+
+#include <algorithm>
 
 namespace yawn {
 namespace ui {
@@ -159,10 +162,154 @@ void paintFader(Widget& w, UIContext& ctx) {
 
 // ─── Registration ──────────────────────────────────────────────────
 
+// ─── DropDown (closed button + open popup) ──────────────────────────
+
+static void paintDropDownButton(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& dd = static_cast<FwDropDown&>(w);
+    const Rect& b = dd.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // State → background.
+    Color bg = p.controlBg;
+    if (!dd.isEnabled())      bg = Color{50, 50, 53, 255};
+    else if (dd.isOpen())     bg = p.controlActive;
+    else if (dd.isPressed())  bg = p.controlActive;
+    else if (dd.isHovered())  bg = p.controlHover;
+
+    ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h, m.cornerRadius, bg);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, m.borderWidth);
+
+    const float fontSize = m.fontSize;
+    const float pad      = m.baseUnit * 2.0f;
+
+    // Label or placeholder.
+    const std::string shown =
+        (dd.selectedIndex() >= 0) ? dd.selectedLabel() : dd.placeholder();
+    Color textColor = (dd.selectedIndex() >= 0) ? p.textPrimary : p.textSecondary;
+    if (!dd.isEnabled()) textColor = p.textDim;
+
+    if (ctx.textMetrics && !shown.empty()) {
+        const float lh = ctx.textMetrics->lineHeight(fontSize);
+        const float tx = b.x + pad;
+        const float ty = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+        // Clip label to the area left of the glyph so long items
+        // don't run into the ▾ / ▴.
+        ctx.renderer->pushClip(b.x, b.y,
+                                b.w - pad * 1.5f - fontSize, b.h);
+        ctx.textMetrics->drawText(*ctx.renderer, shown, tx, ty, fontSize, textColor);
+        ctx.renderer->popClip();
+    }
+
+    // Dropdown glyph: ▾ when closed / opening down, ▴ when opening up.
+    // The geometry is a small centered triangle drawn with drawTriangle.
+    if (ctx.renderer) {
+        const float gx = b.x + b.w - pad - fontSize * 0.5f;
+        const float gy = b.y + b.h * 0.5f;
+        const float gw = fontSize * 0.35f;   // half-base
+        const float gh = fontSize * 0.28f;   // tip offset
+        Color gc = dd.isEnabled() ? p.textSecondary : p.textDim;
+        if (dd.isOpen() && dd.popupOpensUpward()) {
+            // ▴ — tip up
+            ctx.renderer->drawTriangle(gx - gw, gy + gh * 0.5f,
+                                        gx + gw, gy + gh * 0.5f,
+                                        gx,      gy - gh * 0.5f,
+                                        gc);
+        } else {
+            // ▾ — tip down
+            ctx.renderer->drawTriangle(gx - gw, gy - gh * 0.5f,
+                                        gx + gw, gy - gh * 0.5f,
+                                        gx,      gy + gh * 0.5f,
+                                        gc);
+        }
+    }
+}
+
+static void paintDropDownPopup(const FwDropDown& dd, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    const Rect& b = dd.popupBounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // Drop shadow — rendered as a slightly-offset, semi-transparent
+    // rectangle below the popup body.
+    ctx.renderer->drawRoundedRect(b.x + 2.0f, b.y + 3.0f, b.w, b.h,
+                                   m.cornerRadius, p.dropShadow);
+    // Popup body.
+    ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h, m.cornerRadius, p.elevated);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, m.borderWidth);
+
+    // Items — scissor to popup body so overlong text doesn't bleed.
+    ctx.renderer->pushClip(b.x, b.y, b.w, b.h);
+
+    const float ih       = dd.itemHeight();
+    const float pad      = m.baseUnit * 0.5f;
+    const float textPad  = m.baseUnit * 2.0f;
+    const float fontSize = m.fontSize;
+
+    const auto& items    = dd.items();
+    const int   rows     = std::min(static_cast<int>(items.size()),
+                                     dd.maxVisibleItems());
+    const int   startIdx = dd.scrollOffset();
+    const int   selIdx   = dd.selectedIndex();
+    const int   hlIdx    = dd.highlightedIndex();
+    const Color accent   = dd.accentColor().value_or(p.accent);
+
+    for (int row = 0; row < rows; ++row) {
+        const int idx = startIdx + row;
+        if (idx < 0 || idx >= static_cast<int>(items.size())) break;
+        const auto& it = items[idx];
+        const float ry = b.y + pad + row * ih;
+
+        if (it.separator) {
+            // Divider row: thin line centered vertically.
+            const float ly = ry + ih * 0.5f;
+            ctx.renderer->drawLine(b.x + textPad, ly,
+                                    b.x + b.w - textPad, ly,
+                                    p.borderSubtle, 1.0f);
+            continue;
+        }
+
+        // Hover / highlight background.
+        if (idx == hlIdx && it.enabled) {
+            ctx.renderer->drawRect(b.x + 1.0f, ry,
+                                    b.w - 2.0f, ih,
+                                    accent.withAlpha(80));
+        }
+        // Selected indicator — left stripe.
+        if (idx == selIdx) {
+            ctx.renderer->drawRect(b.x + 1.0f, ry, 3.0f, ih, accent);
+        }
+
+        // Label.
+        if (ctx.textMetrics && !it.label.empty()) {
+            const float lh = ctx.textMetrics->lineHeight(fontSize);
+            const float tx = b.x + textPad;
+            const float ty = ry + (ih - lh) * 0.5f - lh * 0.15f;
+            Color col = it.enabled ? p.textPrimary : p.textDim;
+            ctx.textMetrics->drawText(*ctx.renderer, it.label, tx, ty, fontSize, col);
+        }
+    }
+
+    ctx.renderer->popClip();
+}
+
+// ─── Registration ──────────────────────────────────────────────────
+
 void registerAllFw2Painters() {
-    registerPainter(typeid(Label),    &paintLabel);
-    registerPainter(typeid(FwButton), &paintButton);
-    registerPainter(typeid(FwFader),  &paintFader);
+    registerPainter(typeid(Label),      &paintLabel);
+    registerPainter(typeid(FwButton),   &paintButton);
+    registerPainter(typeid(FwFader),    &paintFader);
+    registerPainter(typeid(FwDropDown), &paintDropDownButton);
+    // DropDown's popup is NOT a registered widget painter — it's a
+    // static hook on the class because the popup is an OverlayEntry
+    // closure, not a Widget subtree.
+    FwDropDown::setPopupPainter(&paintDropDownPopup);
     // FlexBox has no paint — it's a pure layout container; its
     // children paint themselves via Widget::render recursion.
 }

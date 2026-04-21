@@ -9,7 +9,8 @@
 // See docs/ui-v2-measure-layout.md for how epoch interacts with
 // caching.
 
-#include "ui/Theme.h"   // Color
+#include "ui/Theme.h"              // Color
+#include "ui/framework/Types.h"    // Rect (for viewport)
 
 #include <string>
 
@@ -86,6 +87,15 @@ public:
     // pointer; App owns the actual LayerStack instance. Null in unit
     // tests that don't need overlay behaviour.
     LayerStack*   layerStack   = nullptr;
+
+    // ─── Viewport ──────────────────────────────────────────────────
+    // Full window bounds in logical pixels. App updates per-frame.
+    // Widgets that position overlays (Dropdown flip, Tooltip clamp,
+    // ContextMenu edge-shift) read this to know where the edges are.
+    // Default is effectively unbounded so unit tests that don't set it
+    // get no clamping; tests that exercise clamping/flip install a
+    // realistic value.
+    ::yawn::ui::fw::Rect viewport{0.0f, 0.0f, 10000.0f, 10000.0f};
 
 private:
     int   m_epoch    = 0;

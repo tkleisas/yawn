@@ -46,6 +46,54 @@
 
 namespace yawn {
 
+// ─── SDL → fw2 event translation ────────────────────────────────────
+// Used by the SDL event pump to feed events into the fw2 LayerStack
+// before v1 dispatch sees them. Only the keys / buttons / mods that
+// fw2 widgets currently consume are mapped; unmapped keys become
+// Key::None which the LayerStack dispatch treats as "not handled".
+
+static yawn::ui::fw2::Key sdlKeyToFw2(SDL_Keycode k) {
+    using yawn::ui::fw2::Key;
+    switch (k) {
+        case SDLK_ESCAPE:     return Key::Escape;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:   return Key::Enter;
+        case SDLK_SPACE:      return Key::Space;
+        case SDLK_UP:         return Key::Up;
+        case SDLK_DOWN:       return Key::Down;
+        case SDLK_LEFT:       return Key::Left;
+        case SDLK_RIGHT:      return Key::Right;
+        case SDLK_TAB:        return Key::Tab;
+        case SDLK_HOME:       return Key::Home;
+        case SDLK_END:        return Key::End;
+        case SDLK_PAGEUP:     return Key::PageUp;
+        case SDLK_PAGEDOWN:   return Key::PageDown;
+        case SDLK_BACKSPACE:  return Key::Backspace;
+        case SDLK_DELETE:     return Key::Delete;
+        case SDLK_INSERT:     return Key::Insert;
+        default:              return Key::None;
+    }
+}
+
+static uint16_t sdlModsToFw2(SDL_Keymod m) {
+    using namespace yawn::ui::fw2::ModifierKey;
+    uint16_t out = None;
+    if (m & SDL_KMOD_SHIFT) out |= Shift;
+    if (m & SDL_KMOD_CTRL)  out |= Ctrl;
+    if (m & SDL_KMOD_ALT)   out |= Alt;
+    if (m & SDL_KMOD_GUI)   out |= Super;
+    return out;
+}
+
+static yawn::ui::fw2::MouseButton sdlBtnToFw2(int btn) {
+    using yawn::ui::fw2::MouseButton;
+    switch (btn) {
+        case SDL_BUTTON_RIGHT:  return MouseButton::Right;
+        case SDL_BUTTON_MIDDLE: return MouseButton::Middle;
+        default:                return MouseButton::Left;
+    }
+}
+
 // Factory helpers for undo — create device by name (loses parameters but restores type)
 static std::unique_ptr<instruments::Instrument> makeInstrumentByName(const std::string& n) {
     if (n == "Subtractive Synth") return std::make_unique<instruments::SubtractiveSynth>();
@@ -3984,6 +4032,17 @@ void App::processEvents() {
                 bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
                 bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
 
+                // fw2 LayerStack first — open overlays (dropdowns,
+                // dialogs, context menus) get first crack at keys.
+                {
+                    ui::fw2::KeyEvent ke{};
+                    ke.key       = sdlKeyToFw2(event.key.key);
+                    ke.modifiers = sdlModsToFw2(SDL_GetModState());
+                    ke.isRepeat  = event.key.repeat;
+                    if (ke.key != ui::fw2::Key::None &&
+                        m_fw2LayerStack.dispatchKey(ke)) break;
+                }
+
                 // Block keys when confirm dialog or about is open
                 if (m_confirmDialog->isOpen()) {
                     if (event.key.key == SDLK_ESCAPE) m_confirmDialog->dismiss();
@@ -4539,6 +4598,15 @@ void App::processEvents() {
                 m_lastMouseX = mx;
                 m_lastMouseY = my;
 
+                // fw2 LayerStack — overlays track hover before v1 sees it.
+                {
+                    ui::fw2::MouseMoveEvent me{};
+                    me.x = mx; me.y = my;
+                    me.dx = event.motion.xrel; me.dy = event.motion.yrel;
+                    me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    if (m_fw2LayerStack.dispatchMouseMove(me)) break;
+                }
+
                 // Context menu hover
                 m_contextMenu.handleMouseMove(mx, my);
 
@@ -4589,6 +4657,18 @@ void App::processEvents() {
                 float mx = event.button.x;
                 float my = event.button.y;
                 int btn = event.button.button;
+
+                // fw2 LayerStack — overlays (modal dialogs, dropdowns,
+                // tooltips, toasts) get first crack. Outside-click
+                // dismiss happens here; non-modal overlays fall
+                // through so v1 clicks keep working.
+                {
+                    ui::fw2::MouseEvent me{};
+                    me.x = mx; me.y = my;
+                    me.button = sdlBtnToFw2(btn);
+                    me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    if (m_fw2LayerStack.dispatchMouseDown(me)) break;
+                }
 
                 // Confirm dialog takes top priority (modal)
                 if (m_confirmDialog->isOpen()) {
@@ -4868,6 +4948,16 @@ void App::processEvents() {
                 float mx = event.button.x;
                 float my = event.button.y;
                 int btn = event.button.button;
+
+                // fw2 LayerStack — mirror mouse-down routing.
+                {
+                    ui::fw2::MouseEvent me{};
+                    me.x = mx; me.y = my;
+                    me.button = sdlBtnToFw2(btn);
+                    me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    if (m_fw2LayerStack.dispatchMouseUp(me)) break;
+                }
+
                 m_inputState.onMouseUp(mx, my, btn);
                 // Release mouse capture (mixer fader drag, clip drag, etc.)
                 if (ui::fw::Widget::capturedWidget()) {
@@ -4912,6 +5002,17 @@ void App::processEvents() {
             case SDL_EVENT_MOUSE_WHEEL: {
                 float dx = event.wheel.x;
                 float dy = event.wheel.y;
+
+                // fw2 LayerStack — overlay lists consume wheel first.
+                {
+                    ui::fw2::ScrollEvent se{};
+                    se.x = m_lastMouseX;
+                    se.y = m_lastMouseY;
+                    se.dx = dx; se.dy = dy;
+                    se.modifiers = sdlModsToFw2(SDL_GetModState());
+                    if (m_fw2LayerStack.dispatchScroll(se)) break;
+                }
+
                 auto sb = m_sessionPanel->bounds();
                 auto mb = m_mixerPanel->bounds();
                 auto db = m_detailPanel->bounds();
@@ -5500,6 +5601,12 @@ void App::render() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     m_renderer.beginFrame(w, h);
+
+    // Keep the v2 viewport in sync — widgets that position overlays
+    // (Dropdown flip, Tooltip clamp) read this.
+    m_fw2Context.viewport = {0.0f, 0.0f,
+                              static_cast<float>(w),
+                              static_cast<float>(h)};
 
     // Compute widget tree layout and render all panels
     computeLayout();
