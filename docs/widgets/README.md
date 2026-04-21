@@ -68,12 +68,12 @@ can think of.
 | ✓ | [text_input.md](text_input.md) | **FwTextInput** | Single-line editable text. Focus, caret, selection, clipboard. |
 | ✓ | [number_input.md](number_input.md) | **FwNumberInput** | Numeric text entry with clamping and formatting. Inline text-entry for knobs/faders. |
 | ✓ | [dropdown.md](dropdown.md) | **FwDropDown** | Select-one from a list. Primary consumer of the Overlay layer. |
-| ☐ | checkbox.md | **FwCheckbox** | Tri-state optional (off / on / indeterminate). |
-| ☐ | radio_group.md | **FwRadioGroup** | Mutually exclusive selection. Composed of FwRadioButtons. |
-| ☐ | scroll_bar.md | **FwScrollBar** | Standalone scrollbar. Used by scroll containers. |
-| ☐ | progress_bar.md | **FwProgressBar** | Determinate / indeterminate progress indicator. |
-| ☐ | tooltip.md | **Tooltip** | Hover-triggered informational bubble. Overlay-layer consumer. |
-| ☐ | context_menu.md | **ContextMenu** | Right-click popup. Overlay-layer consumer. Submenus supported. |
+| ✓ | [checkbox.md](checkbox.md) | **FwCheckbox** | Tri-state optional (off / on / indeterminate). |
+| ✓ | [radio_group.md](radio_group.md) | **FwRadioGroup** | Mutually exclusive selection. Composed of FwRadioButtons. |
+| ✓ | [scroll_bar.md](scroll_bar.md) | **FwScrollBar** | Standalone scrollbar. Used by scroll containers. |
+| ✓ | [progress_bar.md](progress_bar.md) | **FwProgressBar** | Determinate / indeterminate progress indicator. |
+| ✓ | [tooltip.md](tooltip.md) | **Tooltip** | Hover-triggered informational bubble. Overlay-layer consumer. |
+| ✓ | [context_menu.md](context_menu.md) | **ContextMenu** | Right-click popup. Overlay-layer consumer. Submenus supported. |
 
 ### Layout containers
 
