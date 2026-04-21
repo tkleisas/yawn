@@ -4,6 +4,8 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/UIContext.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -29,14 +31,52 @@ struct PresetListEntry {
     bool        isHeader = false;
 };
 
+// ─── v1 → fw2 event bridge ──────────────────────────────────────────
+// Embedding a v2 widget inside a v1 panel means translating v1's
+// EventSystem events into fw2::Widget::dispatch* calls. Keep this
+// local to the migration for now; when we migrate the second dropdown
+// we'll pull it into a shared header.
+
+namespace detail {
+
+inline uint64_t fw2NowMs() {
+    using namespace std::chrono;
+    static const auto start = steady_clock::now();
+    return static_cast<uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now() - start).count());
+}
+
+inline ::yawn::ui::fw2::MouseEvent toFw2Mouse(const MouseEvent& e, Rect widgetBounds) {
+    using ::yawn::ui::fw2::MouseButton;
+    ::yawn::ui::fw2::MouseEvent out{};
+    out.x  = e.x;
+    out.y  = e.y;
+    out.lx = e.x - widgetBounds.x;
+    out.ly = e.y - widgetBounds.y;
+    out.button = (e.button == ::yawn::ui::fw::MouseButton::Right)  ? MouseButton::Right
+               : (e.button == ::yawn::ui::fw::MouseButton::Middle) ? MouseButton::Middle
+                                                                    : MouseButton::Left;
+    using namespace ::yawn::ui::fw2::ModifierKey;
+    if (e.mods.shift) out.modifiers |= Shift;
+    if (e.mods.ctrl)  out.modifiers |= Ctrl;
+    if (e.mods.alt)   out.modifiers |= Alt;
+    out.timestampMs = fw2NowMs();
+    return out;
+}
+
+} // namespace detail
+
 class BrowserPresetsTab {
 public:
     BrowserPresetsTab() {
         m_searchInput.setPlaceholder("Search presets...");
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
-        m_filterDropdown.setItems({"All", "Instruments", "Effects"});
-        m_filterDropdown.setSelected(0);
-        m_filterDropdown.setOnChange([this](int) { refreshList(); });
+        // v2 FwDropDown — popup lives on fw2::LayerStack (App owns it),
+        // so it paints above every panel and auto-dismisses on outside
+        // click without explicit paintOverlay/hitPopup glue.
+        m_filterDropdown.setItems(std::vector<std::string>{"All", "Instruments", "Effects"});
+        m_filterDropdown.setSelectedIndex(0);
+        m_filterDropdown.setOnChange([this](int, const std::string&) { refreshList(); });
     }
 
     void setDatabase(library::LibraryDatabase* db) { m_db = db; }
@@ -66,16 +106,13 @@ public:
             return true;
         }
 
-        // Filter dropdown (check popup first)
-        if (m_filterDropdown.isOpen()) {
-            if (m_filterDropdown.hitPopup(mx, my))
-                return m_filterDropdown.handlePopupClick(mx, my);
-            m_filterDropdown.close();
-            return true;
-        }
+        // Filter dropdown (closed button only — the open popup lives
+        // on fw2::LayerStack and is handled before we see events).
         float ddX = x + w - 72, ddY = y + 4;
-        if (hitRect(mx, my, ddX, ddY, 68, 20))
-            return m_filterDropdown.onMouseDown(e);
+        if (hitRect(mx, my, ddX, ddY, 68, 20)) {
+            auto ev = detail::toFw2Mouse(e, Rect{ddX, ddY, 68, 20});
+            return m_filterDropdown.dispatchMouseDown(ev);
+        }
 
         // List area
         float listY = y + 28;
@@ -112,16 +149,18 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) {
-        if (m_filterDropdown.isOpen()) {
-            m_filterDropdown.onMouseMove(e);
-            return true;
-        }
+        // v2 popup handles its own hover via LayerStack; the closed
+        // button's hover state is paint-only, no translation needed.
         return m_searchInput.onMouseMove(e);
     }
 
     bool onMouseUp(MouseEvent& e) {
-        if (m_filterDropdown.isOpen())
-            return m_filterDropdown.onMouseUp(e);
+        // If the v2 dropdown button is in pressed state we forward so
+        // its gesture state machine fires the click → toggle open.
+        if (m_filterDropdown.isPressed()) {
+            auto ev = detail::toFw2Mouse(e, m_filterDropdown.bounds());
+            return m_filterDropdown.dispatchMouseUp(ev);
+        }
         return m_searchInput.onMouseUp(e);
     }
 
@@ -160,9 +199,11 @@ public:
         m_searchInput.layout(Rect{x + 4, y + 4, w - 80, 20}, ctx);
         m_searchInput.paint(ctx);
 
-        // Filter dropdown
-        m_filterDropdown.layout(Rect{x + w - 72, y + 4, 68, 20}, ctx);
-        m_filterDropdown.paint(ctx);
+        // Filter dropdown — v2 widget. Popup is painted later by
+        // LayerStack (App render loop), not here.
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_filterDropdown.layout(Rect{x + w - 72, y + 4, 68, 20}, v2ctx);
+        m_filterDropdown.render(v2ctx);
 
         float listY = y + 28;
         float infoH = kInfoAreaH;
@@ -258,9 +299,8 @@ public:
             }
         }
 
-        // Dropdown overlay
-        if (m_filterDropdown.isOpen())
-            m_filterDropdown.paintOverlay(ctx);
+        // NB: no paintOverlay() here — v2 LayerStack paints the
+        // dropdown popup above everything at end-of-frame (App.cpp).
     }
 
 private:
@@ -270,7 +310,7 @@ private:
     library::LibraryDatabase* m_db = nullptr;
 
     FwTextInput m_searchInput;
-    FwDropDown  m_filterDropdown;
+    ::yawn::ui::fw2::FwDropDown m_filterDropdown;
 
     std::vector<PresetListEntry> m_entries;
     bool m_searching = false;

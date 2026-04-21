@@ -237,15 +237,36 @@ void FwDropDown::open() {
     // Scroll so highlight is visible.
     clampScrollToHighlight();
 
+    // Snapshot the anchor button's global bounds so the hit-test
+    // closure below is independent of later layout churn.
+    const Rect anchorBounds = globalBounds();
+
     OverlayEntry entry;
     entry.debugName            = "FwDropDown.popup";
     entry.bounds               = m_popupBounds;
     entry.modal                = false;
     entry.dismissOnOutsideClick = true;
+    // customHitTest includes the anchor button area so clicks on the
+    // button while the popup is open route through popupOnMouseDown
+    // (which dismisses), not through outside-click fall-through that
+    // would reach the hosting panel and toggle the dropdown open
+    // again. Without this, "click button to close" flickers open.
+    entry.customHitTest = [this, anchorBounds](float sx, float sy) {
+        return m_popupBounds.contains(sx, sy) ||
+               anchorBounds.contains(sx, sy);
+    };
     entry.paint = [this](UIContext& ctx) {
         if (auto fn = popupPainterSlot()) fn(*this, ctx);
     };
-    entry.onMouseDown = [this](MouseEvent& e) { return popupOnMouseDown(e); };
+    entry.onMouseDown = [this, anchorBounds](MouseEvent& e) {
+        // Click on anchor button (not inside popup body) → close.
+        if (anchorBounds.contains(e.x, e.y) &&
+            !m_popupBounds.contains(e.x, e.y)) {
+            close();
+            return true;
+        }
+        return popupOnMouseDown(e);
+    };
     entry.onMouseMove = [this](MouseMoveEvent& e) { return popupOnMouseMove(e); };
     entry.onScroll    = [this](ScrollEvent& e) { return popupOnScroll(e); };
     entry.onKey       = [this](KeyEvent& e) { return popupOnKey(e); };

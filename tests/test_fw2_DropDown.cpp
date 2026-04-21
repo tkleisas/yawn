@@ -245,6 +245,24 @@ TEST_F(DropDownHarness, OutsideClickDismisses) {
     EXPECT_FALSE(dd.isOpen());
 }
 
+TEST_F(DropDownHarness, ClickOnAnchorButtonWhileOpenClosesWithoutFallThrough) {
+    // Regression test: clicking the anchor button while the popup is
+    // open must close the popup AND consume the click (LayerStack
+    // returns true). Otherwise a hosting v1 panel's mouseDown handler
+    // would see the click and toggle open again — flickering.
+    FwDropDown dd({"a", "b"});
+    dd.layout(Rect{10, 10, 100, 28}, ctx);
+    dd.open();
+    ASSERT_TRUE(dd.isOpen());
+
+    MouseEvent e;
+    e.x = 50;   // inside anchor button (10..110)
+    e.y = 24;   // inside anchor button (10..38)
+    const bool consumed = stack.dispatchMouseDown(e);
+    EXPECT_TRUE(consumed);        // v1 would not see this click
+    EXPECT_FALSE(dd.isOpen());    // popup closed
+}
+
 TEST_F(DropDownHarness, MouseMoveSetsHighlight) {
     FwDropDown dd({"a", "b", "c"});
     dd.layout(Rect{10, 10, 100, 28}, ctx);
