@@ -95,11 +95,13 @@ can think of.
 |---|---|---|---|
 | ✓ | [dialog.md](dialog.md) | **Dialog** | Modal dialog base. Title bar, content, drag-to-move, Escape/Enter. Consumer of the Modal layer. |
 | ✓ | [confirm_dialog.md](confirm_dialog.md) | **ConfirmDialog** | Yes/No confirmation. Subclass of Dialog. |
-| ☐ | device_widget.md | **DeviceWidget** | Composite: header + parameter grid + knob bank + visualizer. Used for every effect / instrument panel. |
-| ☐ | waveform_widget.md | **WaveformWidget** | Zoom/scroll waveform display with transient markers, warp markers, loop overlay. Heavy custom paint. |
-| ☐ | visualizer_widget.md | **VisualizerWidget** | Oscilloscope + spectrum display. Data-driven, updates every frame. |
-| ☐ | instrument_display_widget.md | **InstrumentDisplayWidget** | FM algorithm diagram, ADSR curve, oscillator waveform preview. Composable displays for instrument panels. |
-| ☐ | menu_bar.md | **MenuBar** | Application menu bar. Keyboard-navigable, mnemonics, submenus. |
+| ✓ | [device_widget.md](device_widget.md) | **DeviceWidget** | Composite: header + parameter grid + knob bank + visualizer. Used for every effect / instrument panel. |
+| ✓ | [waveform_widget.md](waveform_widget.md) | **WaveformWidget** | Zoom/scroll waveform display with transient markers, warp markers, loop overlay, **automation overlay**. Heavy custom paint. |
+| ✓ | [visualizer_widget.md](visualizer_widget.md) | **VisualizerWidget** | Oscilloscope + spectrum display. Data-driven, updates every frame. |
+| ✓ | [instrument_display_widget.md](instrument_display_widget.md) | **InstrumentDisplayWidget** | FM algorithm diagram, ADSR curve, oscillator waveform preview. Composable displays for instrument panels. |
+| ✓ | [menu_bar.md](menu_bar.md) | **MenuBar** | Application menu bar. Keyboard-navigable, mnemonics, submenus. |
+| ✓ | [session_clip_grid.md](session_clip_grid.md) | **SessionClipGrid** | Tracks × scenes clip-launching grid. Per-cell states (playing / queued / recording / importing), drag-drop, inline rename. |
+| ✓ | [arrangement_grid.md](arrangement_grid.md) | **ArrangementGrid** | Horizontal timeline with clip blocks, automation lanes, loop region, playhead, zoom/snap. The arrangement-view main widget. |
 
 ---
 
