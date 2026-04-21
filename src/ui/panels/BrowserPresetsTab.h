@@ -5,6 +5,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -52,6 +53,9 @@ public:
         m_filterDropdown.setItems(std::vector<std::string>{"All", "Instruments", "Effects"});
         m_filterDropdown.setSelectedIndex(0);
         m_filterDropdown.setOnChange([this](int, const std::string&) { refreshList(); });
+        // First v2 tooltip on a real widget — hover the button to see
+        // the bubble pop above/below.
+        ::yawn::ui::fw2::Tooltip::attach(&m_filterDropdown, "Filter presets by category");
     }
 
     void setDatabase(library::LibraryDatabase* db) { m_db = db; }

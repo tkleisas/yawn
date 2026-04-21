@@ -16,6 +16,7 @@
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Fader.h"
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/Tooltip.h"
 
 #include "ui/Renderer.h"
 #include "ui/Theme.h"
@@ -299,6 +300,35 @@ static void paintDropDownPopup(const FwDropDown& dd, UIContext& ctx) {
     ctx.renderer->popClip();
 }
 
+// ─── Tooltip ────────────────────────────────────────────────────────
+
+static void paintTooltip(const Rect& b, const std::string& text, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // Subtle drop shadow so the bubble visually detaches from the
+    // widget it's pointing at.
+    ctx.renderer->drawRoundedRect(b.x + 1.5f, b.y + 2.0f, b.w, b.h,
+                                   m.cornerRadius, p.dropShadow);
+    ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h, m.cornerRadius, p.elevated);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, m.borderWidth);
+
+    if (ctx.textMetrics && !text.empty()) {
+        const float fontSize = m.fontSizeSmall;
+        const float padX     = m.baseUnit * 2.0f;
+        const float padY     = m.baseUnit * 0.75f;
+        const float lh       = ctx.textMetrics->lineHeight(fontSize);
+        const float tx       = b.x + padX;
+        // Same baseline nudge as Label/Button so the bubble's text sits
+        // visually centred within padY..padY+lh.
+        const float ty       = b.y + padY - lh * 0.15f;
+        ctx.textMetrics->drawText(*ctx.renderer, text, tx, ty, fontSize, p.textPrimary);
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -310,6 +340,9 @@ void registerAllFw2Painters() {
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.
     FwDropDown::setPopupPainter(&paintDropDownPopup);
+    // TooltipManager uses the same pattern — the overlay entry's paint
+    // closure dispatches through this function pointer.
+    TooltipManager::setPainter(&paintTooltip);
     // FlexBox has no paint — it's a pure layout container; its
     // children paint themselves via Widget::render recursion.
 }

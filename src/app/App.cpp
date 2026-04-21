@@ -3,6 +3,7 @@
 #include "visual/LiveInputEnum.h"
 #include "ui/framework/PanelWrappers.h"
 #include "ui/framework/v2/Fw2Painters.h"
+#include "ui/framework/v2/Tooltip.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -4598,6 +4599,13 @@ void App::processEvents() {
                 m_lastMouseX = mx;
                 m_lastMouseY = my;
 
+                // Tooltip hover tracking — runs first so a tooltip
+                // cancels as soon as the pointer leaves the target
+                // widget, regardless of whether the LayerStack (or
+                // v1 tree) ends up consuming the move for something
+                // else. Cheap (hash lookup + rect tests).
+                ui::fw2::TooltipManager::instance().onPointerMoved(mx, my);
+
                 // fw2 LayerStack — overlays track hover before v1 sees it.
                 {
                     ui::fw2::MouseMoveEvent me{};
@@ -5607,6 +5615,18 @@ void App::render() {
     m_fw2Context.viewport = {0.0f, 0.0f,
                               static_cast<float>(w),
                               static_cast<float>(h)};
+
+    // Advance the tooltip show-delay timer. We measure wall-clock
+    // between frames; chrono::steady_clock is immune to NTP jumps and
+    // DST. Separate from audio callbacks — purely UI-thread timing.
+    {
+        using clk = std::chrono::steady_clock;
+        static auto lastTick = clk::now();
+        const auto now = clk::now();
+        const float dt = std::chrono::duration<float>(now - lastTick).count();
+        lastTick = now;
+        ui::fw2::TooltipManager::instance().tick(dt);
+    }
 
     // Compute widget tree layout and render all panels
     computeLayout();

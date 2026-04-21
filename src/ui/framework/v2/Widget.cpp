@@ -1,5 +1,6 @@
 #include "Widget.h"
 #include "Painter.h"
+#include "Tooltip.h"
 
 #include <algorithm>
 #include <typeinfo>
@@ -14,6 +15,11 @@ Widget* g_captured = nullptr;
 } // anon
 
 Widget::~Widget() {
+    // Remove any registered tooltip first so the tooltip manager drops
+    // the dangling pointer before we detach from the tree. No-op if the
+    // widget never had a tooltip attached.
+    TooltipManager::instance().detach(this);
+
     if (g_captured == this) g_captured = nullptr;
     // Orphan children — the framework is not RAII-owning them.
     for (auto* c : m_children) {
