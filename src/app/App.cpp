@@ -584,6 +584,7 @@ void App::buildWidgetTree() {
     m_fw2FontAdapter = std::make_unique<ui::fw2::FontAdapter>(&m_font);
     m_fw2Context.renderer    = &m_renderer;
     m_fw2Context.textMetrics = m_fw2FontAdapter.get();
+    m_fw2Context.layerStack  = &m_fw2LayerStack;
     ui::fw2::UIContext::setGlobal(&m_fw2Context);
     ui::fw2::registerAllFw2Painters();
 }
@@ -5541,6 +5542,21 @@ void App::render() {
     // Toasts draw last so they float above every dialog/panel.
     m_toastManager.render(m_renderer, m_font,
                           m_mainWindow.getWidth(), m_mainWindow.getHeight());
+
+    // v2 floating UI — modal scrim first (only when a modal is open),
+    // then all layer entries in bottom-up z-order. Empty in practice
+    // until the first v2 overlay widget lands, but the plumbing is
+    // in place so those widgets can just push into m_fw2LayerStack.
+    if (m_fw2LayerStack.hasModalActive()) {
+        ui::fw2::paintModalScrim(m_fw2Context,
+            ui::fw::Rect{0.0f, 0.0f,
+                          static_cast<float>(m_mainWindow.getWidth()),
+                          static_cast<float>(m_mainWindow.getHeight())});
+    }
+    m_fw2LayerStack.paintLayers(m_fw2Context,
+        ui::fw::Rect{0.0f, 0.0f,
+                      static_cast<float>(m_mainWindow.getWidth()),
+                      static_cast<float>(m_mainWindow.getHeight())});
 
     m_renderer.endFrame();
 

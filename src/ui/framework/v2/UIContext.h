@@ -21,6 +21,8 @@ class Renderer2D;
 
 namespace fw2 {
 
+class LayerStack;
+
 // Text-metrics abstraction so v2 doesn't pull glad/GL via v1's Font.h.
 // Production wires a FontAdapter around v1 Font; tests use nullptr
 // (widgets fall back to a predictable "8 px per char" measurement)
@@ -77,6 +79,13 @@ public:
     // predictable fallback measurements.
     Renderer2D*   renderer     = nullptr;
     TextMetrics*  textMetrics  = nullptr;
+
+    // ─── LayerStack ────────────────────────────────────────────────
+    // The scene root for floating UI (modals, dropdowns, tooltips,
+    // toasts). Widgets that need to present an overlay read from this
+    // pointer; App owns the actual LayerStack instance. Null in unit
+    // tests that don't need overlay behaviour.
+    LayerStack*   layerStack   = nullptr;
 
 private:
     int   m_epoch    = 0;

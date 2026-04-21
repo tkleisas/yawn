@@ -167,6 +167,14 @@ void registerAllFw2Painters() {
     // children paint themselves via Widget::render recursion.
 }
 
+// ─── Modal scrim ────────────────────────────────────────────────────
+
+void paintModalScrim(UIContext& ctx, Rect viewport) {
+    if (!ctx.renderer) return;
+    ctx.renderer->drawRect(viewport.x, viewport.y, viewport.w, viewport.h,
+                            theme().palette.scrim);
+}
+
 } // namespace fw2
 } // namespace ui
 } // namespace yawn
