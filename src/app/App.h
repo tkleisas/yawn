@@ -18,6 +18,8 @@
 #include "ui/framework/ExportDialog.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/FontAdapter.h"
 #include "ui/framework/ContentGrid.h"
 #include "ui/panels/MixerPanel.h"
 #include "ui/panels/SessionPanel.h"
@@ -181,6 +183,12 @@ private:
     ui::fw::ExportDialog*         m_exportDialog = nullptr;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
     ui::fw::UIContext m_uiContext;
+
+    // v2 UI framework (ui-v2 in-progress). Coexists with v1 for now —
+    // we'll migrate panels over one by one. FontAdapter bridges v1's
+    // Font to v2's TextMetrics interface.
+    ui::fw2::UIContext   m_fw2Context;
+    std::unique_ptr<ui::fw2::FontAdapter> m_fw2FontAdapter;
 
     audio::AudioEngine m_audioEngine;
     midi::MidiEngine m_midiEngine;

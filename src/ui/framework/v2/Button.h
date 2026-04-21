@@ -50,6 +50,9 @@ public:
     void setMinWidth(float w);
     void setFixedWidth(float w);
 
+    // ─── Paint-side accessors ────────────────────────────────────
+    const std::optional<Color>& accentColor() const { return m_accentOverride; }
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;

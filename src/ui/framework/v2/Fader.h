@@ -69,6 +69,10 @@ public:
     // modifiers are ignored by the Fader (useful if caller wants to
     // reserve modifiers for other purposes).
 
+    // ─── Paint-side accessors ────────────────────────────────────
+    const FaderMetrics&          visualMetrics() const { return m_metrics; }
+    const std::optional<Color>&  trackColor()    const { return m_trackColorOverride; }
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;

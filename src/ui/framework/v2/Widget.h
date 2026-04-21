@@ -221,6 +221,7 @@ public:
     void setEnabled(bool v);
     bool isFocused() const { return m_focused; }
     bool isHovered() const { return m_hovered; }
+    bool isPressed() const { return m_gesture.pressed; }
     bool isFocusable() const { return m_focusable; }
     void setFocusable(bool b) { m_focusable = b; }
 

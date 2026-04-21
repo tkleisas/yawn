@@ -1,6 +1,8 @@
 #include "Widget.h"
+#include "Painter.h"
 
 #include <algorithm>
+#include <typeinfo>
 
 namespace yawn {
 namespace ui {
@@ -193,7 +195,12 @@ Widget* Widget::capturedWidget()     { return g_captured; }
 
 void Widget::render(UIContext& ctx) {
     if (!m_visible) return;
-    paint(ctx);
+    // Painter registry lookup — main exe registers per-type paint
+    // functions at startup. If no painter is registered (e.g. in tests
+    // or for pure-container widgets like FlexBox), fall back to the
+    // virtual paint() which defaults to a no-op.
+    if (PaintFn fn = findPainter(typeid(*this))) fn(*this, ctx);
+    else paint(ctx);
     for (auto* child : m_children) {
         if (child) child->render(ctx);
     }

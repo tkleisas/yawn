@@ -9,6 +9,8 @@
 // See docs/ui-v2-measure-layout.md for how epoch interacts with
 // caching.
 
+#include "ui/Theme.h"   // Color
+
 #include <string>
 
 namespace yawn {
@@ -23,11 +25,23 @@ namespace fw2 {
 // Production wires a FontAdapter around v1 Font; tests use nullptr
 // (widgets fall back to a predictable "8 px per char" measurement)
 // or a custom mock for precise text-width tests.
+//
+// drawText() is part of the same interface so paint code can emit text
+// without the caller knowing whether it's hitting a real stbtt atlas
+// or a mock. FontAdapter wires both via v1 Font's matching methods.
 class TextMetrics {
 public:
     virtual ~TextMetrics() = default;
     virtual float textWidth(const std::string& s, float fontSize) const = 0;
     virtual float lineHeight(float fontSize) const = 0;
+
+    // Paint text at (x,y) in logical pixels. `y` is the top-left of the
+    // first glyph's ascender box (matches v1 Font's drawText origin).
+    // Renderer is passed in rather than stored so TextMetrics stays a
+    // pure metrics/paint shim — no per-frame state.
+    virtual void drawText(Renderer2D& r, const std::string& s,
+                          float x, float y, float fontSize,
+                          Color color) const = 0;
 };
 
 class UIContext {

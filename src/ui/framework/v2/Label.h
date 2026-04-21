@@ -69,6 +69,17 @@ public:
     void setMaxWidth(float w);           // forces truncation at this width
     void setMinHeight(float h);
 
+    // ─── Paint-side accessors ────────────────────────────────────
+    // Read-only views of state the main-exe painter needs. Kept here
+    // (rather than making the painter a friend) because each accessor
+    // is pure and exposing paint state is not an abuse of encapsulation.
+    const std::optional<Color>& colorOverride() const { return m_colorOverride; }
+    TextColorToken              colorToken()    const { return m_colorToken; }
+    float                       fontScale()     const { return m_fontScale; }
+    TextAlign                   hAlign()        const { return m_hAlign; }
+    VerticalAlign               vAlign()        const { return m_vAlign; }
+    Truncation                  truncation()    const { return m_truncation; }
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;

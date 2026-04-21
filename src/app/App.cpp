@@ -2,6 +2,7 @@
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
 #include "ui/framework/PanelWrappers.h"
+#include "ui/framework/v2/Fw2Painters.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -574,6 +575,17 @@ void App::buildWidgetTree() {
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
+
+    // ─── Wire v2 framework ──────────────────────────────────────────
+    // FontAdapter bridges v1 Font → fw2 TextMetrics. Register it + the
+    // renderer in fw2::UIContext, publish that as the global context
+    // for v2 widgets, then populate the painter registry so that
+    // Widget::render() can dispatch paint calls by typeid.
+    m_fw2FontAdapter = std::make_unique<ui::fw2::FontAdapter>(&m_font);
+    m_fw2Context.renderer    = &m_renderer;
+    m_fw2Context.textMetrics = m_fw2FontAdapter.get();
+    ui::fw2::UIContext::setGlobal(&m_fw2Context);
+    ui::fw2::registerAllFw2Painters();
 }
 
 void App::computeLayout() {

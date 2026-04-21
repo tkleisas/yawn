@@ -173,7 +173,8 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/VideoImporter.cpp
     # UI framework v2 — design-doc-driven rewrite; coexists with v1.
     # No GL deps in these TUs — pure layout/measure/event/cache logic.
-    # Widgets that do paint link against the renderer in the main exe.
+    # Widgets that do paint link against the renderer in the main exe
+    # (see Fw2Painters.cpp, below, added to YAWN only).
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/UIContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Theme.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Widget.cpp
@@ -181,6 +182,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/FlexBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Label.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Button.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Painter.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)
