@@ -86,15 +86,15 @@ can think of.
 | ✓ | [snap_scroll_container.md](snap_scroll_container.md) | **SnapScrollContainer** | Horizontal snap-to-page scroll viewport with nav buttons. Used by device chain. |
 | ✓ | [scroll_view.md](scroll_view.md) | **ScrollView** | Generic scrollable viewport (vertical + horizontal, free-form). New in v2. Different from SnapScrollContainer's paged behavior. |
 | ✓ | [stack.md](stack.md) | **Stack** | Z-order stacking within a single rect — children overlap, drawn in order. Useful for overlays, visual layers, composite widgets. |
-| ☐ | split_view.md | **SplitView** | Resizable panel splitter (horizontal or vertical). User-draggable divider. Used by main window layout. |
-| ☐ | tab_view.md | **TabView** | Tab strip + content area. One child visible at a time, tab header switches. |
+| ✓ | [split_view.md](split_view.md) | **SplitView** | Resizable panel splitter (horizontal or vertical). User-draggable divider. Used by main window layout. |
+| ✓ | [tab_view.md](tab_view.md) | **TabView** | Tab strip + content area. One child visible at a time, tab header switches. |
 
 ### Dialogs & higher-level composites
 
 | ✓ | Spec | Widget | Notes |
 |---|---|---|---|
-| ☐ | dialog.md | **Dialog** | Modal dialog base. Title bar, content, drag-to-move, Escape/Enter. Consumer of the Modal layer. |
-| ☐ | confirm_dialog.md | **ConfirmDialog** | Yes/No confirmation. Subclass of Dialog. |
+| ✓ | [dialog.md](dialog.md) | **Dialog** | Modal dialog base. Title bar, content, drag-to-move, Escape/Enter. Consumer of the Modal layer. |
+| ✓ | [confirm_dialog.md](confirm_dialog.md) | **ConfirmDialog** | Yes/No confirmation. Subclass of Dialog. |
 | ☐ | device_widget.md | **DeviceWidget** | Composite: header + parameter grid + knob bank + visualizer. Used for every effect / instrument panel. |
 | ☐ | waveform_widget.md | **WaveformWidget** | Zoom/scroll waveform display with transient markers, warp markers, loop overlay. Heavy custom paint. |
 | ☐ | visualizer_widget.md | **VisualizerWidget** | Oscilloscope + spectrum display. Data-driven, updates every frame. |
