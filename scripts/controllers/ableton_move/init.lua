@@ -109,7 +109,9 @@ function on_midi(data)
     local st_hi  = status - (status % 16)  -- high nibble (type)
     -- local channel = status % 16       -- low nibble (channel, unused for now)
 
-    -- Note On
+    -- Note On. The C++ binding treats velocity=0 as Note Off internally,
+    -- so both on-pad-press (vel > 0) and on-pad-release (running-status
+    -- vel=0) fall through the same call.
     if st_hi == 0x90 and #data >= 3 then
         local note = data[2]
         local vel  = data[3]
@@ -117,11 +119,8 @@ function on_midi(data)
         if idx then
             local mapped = pads.index_to_note(idx)
             if mapped then
-                if vel > 0 then
-                    yawn.send_note_to_track(mapped, vel, true)
-                else
-                    yawn.send_note_to_track(mapped, 0, false)
-                end
+                local track = yawn.get_selected_track()
+                yawn.send_note_to_track(track, mapped, vel, 0)
             end
             return
         end
@@ -131,13 +130,16 @@ function on_midi(data)
         return
     end
 
-    -- Note Off
+    -- Note Off (explicit 0x80 form)
     if st_hi == 0x80 and #data >= 3 then
         local note = data[2]
         local idx = pads.hw_note_to_index(note)
         if idx then
             local mapped = pads.index_to_note(idx)
-            if mapped then yawn.send_note_to_track(mapped, 0, false) end
+            if mapped then
+                local track = yawn.get_selected_track()
+                yawn.send_note_to_track(track, mapped, 0, 0)
+            end
         end
         return
     end

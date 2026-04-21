@@ -4,12 +4,12 @@
 local pads = {}
 
 -- ── Pad grid constants ──────────────────────────────────────────────────────
--- Ableton convention: pads send notes starting from 36, bottom-left to top-right.
--- 4 rows × 8 cols = 32 pads → notes 36..67.
--- TODO: VERIFY on hardware — run YAWN, tap the bottom-left pad, check the
--- MIDI monitor for the actual note. Adjust PAD_GRID_START if different.
-pads.PAD_GRID_START = 36
-pads.PAD_GRID_END   = 67
+-- Move sends pad notes from 68 (bottom-left) to 99 (top-right), not 36..67
+-- like Push. Verified from hardware: velocity-sensitive hits in range 68..99
+-- (variable velocity), buttons outside the grid send fixed-velocity 127.
+-- 4 rows × 8 cols = 32 pads → notes 68..99.
+pads.PAD_GRID_START = 68
+pads.PAD_GRID_END   = 99
 pads.PAD_COLS       = 8
 pads.PAD_ROWS       = 4
 

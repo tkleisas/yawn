@@ -49,7 +49,10 @@ void ControllerManager::scanScripts(const std::string& bundledPath) {
 bool ControllerManager::loadManifest(const std::string& dir, ControllerScript& out) {
     std::string manifestPath = dir + "/manifest.lua";
     std::error_code ec;
-    if (!fs::exists(manifestPath, ec)) return false;
+    if (!fs::exists(manifestPath, ec)) {
+        LOG_WARN("Controller", "No manifest.lua in %s", dir.c_str());
+        return false;
+    }
 
     // Create a temporary Lua state to execute the manifest
     lua_State* L = luaL_newstate();
@@ -58,9 +61,13 @@ bool ControllerManager::loadManifest(const std::string& dir, ControllerScript& o
     luaL_openlibs(L);
 
     bool ok = false;
-    if (luaL_dofile(L, manifestPath.c_str()) == LUA_OK) {
-        // manifest.lua should return a table
-        if (lua_istable(L, -1)) {
+    int rc = luaL_dofile(L, manifestPath.c_str());
+    if (rc == LUA_OK) {
+        // manifest.lua should return a table.
+        if (!lua_istable(L, -1)) {
+            LOG_WARN("Controller", "Manifest %s did not return a table (top type: %s)",
+                     manifestPath.c_str(), luaL_typename(L, -1));
+        } else {
             lua_getfield(L, -1, "name");
             if (lua_isstring(L, -1)) out.name = lua_tostring(L, -1);
             lua_pop(L, 1);
@@ -82,10 +89,18 @@ bool ControllerManager::loadManifest(const std::string& dir, ControllerScript& o
             lua_pop(L, 1);
 
             ok = !out.name.empty() && !out.inputPortMatch.empty();
+            if (!ok) {
+                LOG_WARN("Controller",
+                    "Manifest %s missing required fields "
+                    "(name='%s', input_port_match='%s')",
+                    manifestPath.c_str(),
+                    out.name.c_str(), out.inputPortMatch.c_str());
+            }
         }
     } else {
-        LOG_WARN("Controller", "Failed to load manifest %s: %s",
-                 manifestPath.c_str(), lua_tostring(L, -1));
+        const char* msg = lua_tostring(L, -1);
+        LOG_WARN("Controller", "Failed to load manifest %s (rc=%d): %s",
+                 manifestPath.c_str(), rc, msg ? msg : "<no error message>");
     }
 
     lua_close(L);
