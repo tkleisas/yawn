@@ -15,7 +15,9 @@
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/WaveformWidget.h"
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Theme.h"
 #include "audio/Clip.h"
 #include "audio/FollowAction.h"
@@ -144,22 +146,45 @@ public:
 
     ViewMode viewMode() const { return m_viewMode; }
 
+    // Helper — locate the v2 knob currently in edit mode, if any.
+    // Returned pointer is valid only for the duration of the call.
+    ::yawn::ui::fw2::FwKnob* editingV2Knob() {
+        if (m_gainKnob.isEditing())      return &m_gainKnob;
+        if (m_transposeKnob.isEditing()) return &m_transposeKnob;
+        if (m_detuneKnob.isEditing())    return &m_detuneKnob;
+        if (m_bpmKnob.isEditing())       return &m_bpmKnob;
+        return nullptr;
+    }
+    const ::yawn::ui::fw2::FwKnob* editingV2Knob() const {
+        if (m_gainKnob.isEditing())      return &m_gainKnob;
+        if (m_transposeKnob.isEditing()) return &m_transposeKnob;
+        if (m_detuneKnob.isEditing())    return &m_detuneKnob;
+        if (m_bpmKnob.isEditing())       return &m_bpmKnob;
+        return nullptr;
+    }
+
     // Check if any clip-property knob or device knob is in text-edit mode
     bool hasEditingKnob() const {
-        if (m_transposeKnob.isEditing() || m_detuneKnob.isEditing() || m_bpmKnob.isEditing())
-            return true;
+        if (editingV2Knob() != nullptr) return true;
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return true;
         return false;
     }
 
-    // Forward key events to the editing knob
+    // Forward key events to the editing knob. v2 knob consumes only
+    // Enter / Escape / Backspace from the key stream; digits arrive
+    // through forwardTextInput (SDL TEXT_INPUT).
     bool forwardKeyDown(int key) {
-        KeyEvent ke;
-        ke.keyCode = key;
-        if (m_transposeKnob.isEditing()) return m_transposeKnob.onKeyDown(ke);
-        if (m_detuneKnob.isEditing()) return m_detuneKnob.onKeyDown(ke);
-        if (m_bpmKnob.isEditing()) return m_bpmKnob.onKeyDown(ke);
+        if (auto* k = editingV2Knob()) {
+            ::yawn::ui::fw2::KeyEvent ke;
+            switch (key) {
+                case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
+                case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+                case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+                default:                    return false;
+            }
+            return k->dispatchKeyDown(ke);
+        }
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return dw->forwardKeyDown(key);
         return false;
@@ -167,12 +192,10 @@ public:
 
     // Forward text input to the editing knob
     bool forwardTextInput(const char* text) {
-        TextInputEvent te;
-        std::strncpy(te.text, text, sizeof(te.text) - 1);
-        te.text[sizeof(te.text) - 1] = '\0';
-        if (m_transposeKnob.isEditing()) return m_transposeKnob.onTextInput(te);
-        if (m_detuneKnob.isEditing()) return m_detuneKnob.onTextInput(te);
-        if (m_bpmKnob.isEditing()) return m_bpmKnob.onTextInput(te);
+        if (auto* k = editingV2Knob()) {
+            k->takeTextInput(text ? text : "");
+            return true;
+        }
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return dw->forwardTextInput(text);
         return false;
@@ -180,9 +203,7 @@ public:
 
     // Cancel any knob in text-edit mode (e.g., when clicking outside)
     void cancelEditingKnobs() {
-        if (m_transposeKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_transposeKnob.onKeyDown(ke); }
-        if (m_detuneKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_detuneKnob.onKeyDown(ke); }
-        if (m_bpmKnob.isEditing()) { KeyEvent ke; ke.keyCode = 27; m_bpmKnob.onKeyDown(ke); }
+        if (auto* k = editingV2Knob()) k->endEdit(/*commit*/false);
         for (auto* dw : m_deviceWidgets) dw->cancelEditingKnobs();
     }
 
@@ -221,12 +242,16 @@ public:
                     mutableClip->transients, static_cast<double>(m_clipSampleRate));
         });
 
-        // Gain knob: 0 to ~+6dB, stored as linear gain in clip
+        // Gain knob: 0 to ~+6dB, stored as linear gain in clip.
+        // v1→v2 mapping: setDefault→setDefaultValue, setFormatCallback→
+        // setValueFormatter, setSensitivity(s)→setPixelsPerFullRange(120/s).
+        // (v1's sensitivity-1.0 default = 120 px for full range.)
         m_gainKnob.setRange(0.0f, 2.0f);
-        m_gainKnob.setDefault(1.0f);
+        m_gainKnob.setDefaultValue(1.0f);
         m_gainKnob.setValue(clip->gain);
-        m_gainKnob.setLabel("");  // external label drawn in paintAudioClipView
-        m_gainKnob.setFormatCallback([](float v) -> std::string {
+        m_gainKnob.setLabel("");
+        m_gainKnob.setShowLabel(false);
+        m_gainKnob.setValueFormatter([](float v) -> std::string {
             if (v < 0.001f) return "-inf dB";
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%.1f dB", 20.0f * std::log10(v));
@@ -236,14 +261,15 @@ public:
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->gain = v;
         });
 
-        // Transpose (semitones) — knob with integer step
+        // Transpose (semitones) — integer step.
         m_transposeKnob.setRange(-48.0f, 48.0f);
-        m_transposeKnob.setDefault(0.0f);
+        m_transposeKnob.setDefaultValue(0.0f);
         m_transposeKnob.setValue(static_cast<float>(clip->transposeSemitones));
         m_transposeKnob.setStep(1.0f);
-        m_transposeKnob.setSensitivity(0.5f);
+        m_transposeKnob.setPixelsPerFullRange(240.0f);   // v1 sens 0.5
         m_transposeKnob.setLabel("");
-        m_transposeKnob.setFormatCallback([](float v) -> std::string {
+        m_transposeKnob.setShowLabel(false);
+        m_transposeKnob.setValueFormatter([](float v) -> std::string {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%+d st", static_cast<int>(v));
             return buf;
@@ -252,14 +278,15 @@ public:
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->transposeSemitones = static_cast<int>(v);
         });
 
-        // Detune (cents) — knob with integer step
+        // Detune (cents) — integer step.
         m_detuneKnob.setRange(-50.0f, 50.0f);
-        m_detuneKnob.setDefault(0.0f);
+        m_detuneKnob.setDefaultValue(0.0f);
         m_detuneKnob.setValue(static_cast<float>(clip->detuneCents));
         m_detuneKnob.setStep(1.0f);
-        m_detuneKnob.setSensitivity(0.3f);
+        m_detuneKnob.setPixelsPerFullRange(400.0f);      // v1 sens 0.3
         m_detuneKnob.setLabel("");
-        m_detuneKnob.setFormatCallback([](float v) -> std::string {
+        m_detuneKnob.setShowLabel(false);
+        m_detuneKnob.setValueFormatter([](float v) -> std::string {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%+d ct", static_cast<int>(v));
             return buf;
@@ -268,13 +295,14 @@ public:
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->detuneCents = static_cast<int>(v);
         });
 
-        // BPM — knob with continuous value
+        // BPM — continuous value.
         m_bpmKnob.setRange(20.0f, 999.0f);
-        m_bpmKnob.setDefault(120.0f);
+        m_bpmKnob.setDefaultValue(120.0f);
         m_bpmKnob.setValue(clip->originalBPM > 0 ? static_cast<float>(clip->originalBPM) : 120.0f);
-        m_bpmKnob.setSensitivity(0.5f);
+        m_bpmKnob.setPixelsPerFullRange(240.0f);         // v1 sens 0.5
         m_bpmKnob.setLabel("");
-        m_bpmKnob.setFormatCallback([](float v) -> std::string {
+        m_bpmKnob.setShowLabel(false);
+        m_bpmKnob.setValueFormatter([](float v) -> std::string {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%.1f", v);
             return buf;
@@ -359,21 +387,9 @@ public:
     void clearClipView() {
         m_viewMode = ViewMode::Devices;
         m_clipPtr = nullptr;
-        m_followActionPtr = nullptr;
         m_waveformWidget.setClip(nullptr);
     }
-
-    // Set follow action pointer for the current clip slot. The A/B
-    // action dropdowns live in BrowserPanel (this panel just holds
-    // enable button + bar count knob + crossfader).
-    void setFollowAction(FollowAction* fa) {
-        m_followActionPtr = fa;
-        if (fa) {
-            m_faEnableBtn.setLabel(fa->enabled ? "On" : "Off");
-            m_faBarCountKnob.setValue(static_cast<float>(fa->barCount));
-            m_faCrossfader.setValue(static_cast<float>(fa->chanceA));
-        }
-    }
+    // (setFollowAction removed — orphaned; FA UI lives in BrowserPanel.)
 
     // Forward playback state to the waveform widget
     void setClipPlayPosition(int64_t pos) { m_waveformWidget.setPlayPosition(pos); }
@@ -567,7 +583,6 @@ public:
         m_lastFxCount   = 0;
         m_viewMode = ViewMode::Devices;
         m_clipPtr  = nullptr;
-        m_followActionPtr = nullptr;
     }
 
     const char* title() const { return "Detail"; }
@@ -692,6 +707,14 @@ public:
             m_dragInsertIdx = best;
             return true;
         }
+        // v2 knob drag in progress — forward translated events.
+        // Handled BEFORE capturedWidget() because v2 widgets drive their
+        // own gesture SM and don't participate in v1 capture.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
         // Captured widget receives moves regardless of position
         if (Widget::capturedWidget()) {
             return Widget::capturedWidget()->onMouseMove(e);
@@ -700,10 +723,6 @@ public:
         if (m_viewMode == ViewMode::AudioClip) {
             // v2 dropdown popups get their mouseMove via LayerStack —
             // no panel-side branch needed for open-state routing.
-            // Forward to draggable number inputs (they don't capture the mouse)
-            if (m_transposeKnob.onMouseMove(e)) return true;
-            if (m_detuneKnob.onMouseMove(e)) return true;
-            if (m_bpmKnob.onMouseMove(e)) return true;
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
@@ -745,6 +764,14 @@ public:
             }
             return true;
         }
+        // v2 knob drag wrapping up — flush the release + drop v1 capture.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
         if (Widget::capturedWidget()) {
             bool handled = Widget::capturedWidget()->onMouseUp(e);
             return handled;
@@ -759,12 +786,8 @@ public:
             if (m_waveformWidget.onMouseUp(e)) return true;
             if (hitWidget(m_detectBtn, e.x, e.y))
                 return m_detectBtn.onMouseUp(e);
-            if (hitWidget(m_gainKnob, e.x, e.y))
-                return m_gainKnob.onMouseUp(e);
-            // Number inputs: always forward mouseUp (drag may leave bounds)
-            if (m_transposeKnob.onMouseUp(e)) return true;
-            if (m_detuneKnob.onMouseUp(e)) return true;
-            if (m_bpmKnob.onMouseUp(e)) return true;
+            // v2 knobs: their drag release already handled above via
+            // the m_v2Dragging path. Nothing to forward here.
             if (hitWidget(m_loopToggleBtn, e.x, e.y))
                 return m_loopToggleBtn.onMouseUp(e);
         }
@@ -1431,20 +1454,17 @@ private:
     WaveformWidget m_waveformWidget;
     ::yawn::ui::fw2::FwDropDown m_warpModeDropdown;
     FwButton m_detectBtn;
-    FwKnob m_gainKnob;
-    FwKnob m_transposeKnob;
-    FwKnob m_detuneKnob;
+    ::yawn::ui::fw2::FwKnob m_gainKnob;
+    ::yawn::ui::fw2::FwKnob m_transposeKnob;
+    ::yawn::ui::fw2::FwKnob m_detuneKnob;
     FwButton m_loopToggleBtn;
-    FwKnob m_bpmKnob;
+    ::yawn::ui::fw2::FwKnob m_bpmKnob;
+    // Tracks which v2 widget currently owns a drag — set in
+    // onMouseDown, used by onMouseMove/Up to forward translated
+    // events back to the fw2 gesture SM. Null when no v2 drag is
+    // in progress.
+    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
     float m_lastMouseX = 0, m_lastMouseY = 0;
-
-    // Follow action widgets (the real FA dropdowns live in BrowserPanel;
-    // these orphan decls were never wired up here, removed during the
-    // v2 dropdown migration sweep).
-    FollowAction* m_followActionPtr = nullptr;
-    FwButton m_faEnableBtn;
-    FwKnob m_faBarCountKnob;
-    FwCrossfader m_faCrossfader;
 
     // Automation lane editor
     ::yawn::ui::fw2::FwDropDown m_autoTargetDropdown;

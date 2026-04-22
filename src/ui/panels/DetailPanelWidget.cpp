@@ -186,18 +186,23 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         // Detect button
         if (hitWidget(m_detectBtn, mx, my))
             return m_detectBtn.onMouseDown(e);
-        // Gain knob
-        if (hitWidget(m_gainKnob, mx, my))
-            return m_gainKnob.onMouseDown(e);
-        // Transpose input
-        if (hitWidget(m_transposeKnob, mx, my))
-            return m_transposeKnob.onMouseDown(e);
-        // Detune input
-        if (hitWidget(m_detuneKnob, mx, my))
-            return m_detuneKnob.onMouseDown(e);
-        // BPM input
-        if (hitWidget(m_bpmKnob, mx, my))
-            return m_bpmKnob.onMouseDown(e);
+        // v2 knobs — drag uses the fw2 gesture SM. Forward via the
+        // v1→v2 event bridge and capture v1 mouse so subsequent moves
+        // route back here. Same pattern as BrowserPanel's FaBarCountKnob.
+        auto tryV2Knob = [&](::yawn::ui::fw2::FwKnob& k) -> bool {
+            const auto& kb = k.bounds();
+            if (mx < kb.x || mx >= kb.x + kb.w) return false;
+            if (my < kb.y || my >= kb.y + kb.h) return false;
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, kb);
+            k.dispatchMouseDown(ev);
+            m_v2Dragging = &k;
+            captureMouse();
+            return true;
+        };
+        if (tryV2Knob(m_gainKnob))      return true;
+        if (tryV2Knob(m_transposeKnob)) return true;
+        if (tryV2Knob(m_detuneKnob))    return true;
+        if (tryV2Knob(m_bpmKnob))       return true;
         // Loop toggle
         if (hitWidget(m_loopToggleBtn, mx, my))
             return m_loopToggleBtn.onMouseDown(e);
@@ -349,13 +354,15 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         m_autoEnvelopeWidget.paint(ctx);
     }
 
-    // Sync widget values from clip each frame (skip if user is editing)
+    // Sync widget values from clip each frame. v2 knob's setValue is a
+    // no-op when called with the current m_value, so unconditional
+    // re-syncing is safe even during edit (the painter reads the edit
+    // buffer, not m_value). Also safe during drag — onChange fires,
+    // writes clip, then setValue sees equal values and skips callbacks.
     m_gainKnob.setValue(clip.gain);
-    if (!m_transposeKnob.isEditing())
-        m_transposeKnob.setValue(static_cast<float>(clip.transposeSemitones));
-    if (!m_detuneKnob.isEditing())
-        m_detuneKnob.setValue(static_cast<float>(clip.detuneCents));
-    if (clip.originalBPM > 0 && !m_bpmKnob.isEditing())
+    m_transposeKnob.setValue(static_cast<float>(clip.transposeSemitones));
+    m_detuneKnob.setValue(static_cast<float>(clip.detuneCents));
+    if (clip.originalBPM > 0)
         m_bpmKnob.setValue(static_cast<float>(clip.originalBPM));
     m_loopToggleBtn.setLabel(clip.looping ? "On" : "Off");
 
@@ -377,28 +384,32 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
 
     float cx = sectionX;
 
+    // Knobs are fw2 widgets — render through the global fw2 UIContext
+    // (same pattern as the v2 dropdowns below).
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+
     // Gain knob
     font.drawText(renderer, "Gain", cx, stripY, labelScale, Theme::textDim);
-    m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
-    m_gainKnob.paint(ctx);
+    m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
+    m_gainKnob.render(v2ctx);
     cx += knobW + sectionGap;
 
     // BPM knob
     font.drawText(renderer, "BPM", cx, stripY, labelScale, Theme::textDim);
-    m_bpmKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
-    m_bpmKnob.paint(ctx);
+    m_bpmKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
+    m_bpmKnob.render(v2ctx);
     cx += knobW + sectionGap;
 
     // Transpose knob
     font.drawText(renderer, "Trans", cx, stripY, labelScale, Theme::textDim);
-    m_transposeKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
-    m_transposeKnob.paint(ctx);
+    m_transposeKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
+    m_transposeKnob.render(v2ctx);
     cx += knobW + sectionGap;
 
     // Detune knob
     font.drawText(renderer, "Detune", cx, stripY, labelScale, Theme::textDim);
-    m_detuneKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
-    m_detuneKnob.paint(ctx);
+    m_detuneKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
+    m_detuneKnob.render(v2ctx);
     cx += knobW + sectionGap;
 
     // Warp dropdown — v2 widget. Popup paints via LayerStack.
