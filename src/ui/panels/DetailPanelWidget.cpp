@@ -116,11 +116,8 @@ void DetailPanelWidget::paint(UIContext& ctx) {
 
     renderer.popClip();
 
-    // Dropdown overlay must render outside clip region
-    if (m_viewMode == ViewMode::AudioClip && m_warpModeDropdown.isOpen())
-        m_warpModeDropdown.paintOverlay(ctx);
-    if (m_viewMode == ViewMode::AudioClip && m_autoTargetDropdown.isOpen())
-        m_autoTargetDropdown.paintOverlay(ctx);
+    // v2 dropdown popups paint via LayerStack::paintLayers in App —
+    // no per-panel paintOverlay call needed.
 
     // v1 device context menu retired — fw2::ContextMenu paints via
     // LayerStack in App's render loop.
@@ -157,11 +154,8 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     // Forward to waveform widget in audio clip view
     if (m_viewMode == ViewMode::AudioClip) {
-        // When dropdown is open, forward ALL clicks to it (select item or close)
-        if (m_warpModeDropdown.isOpen())
-            return m_warpModeDropdown.onMouseDown(e);
-        if (m_autoTargetDropdown.isOpen())
-            return m_autoTargetDropdown.onMouseDown(e);
+        // v2 dropdown popups are handled by LayerStack upstream; when
+        // the popup is open we don't reach this point for clicks.
         auto& wb = m_waveformWidget.bounds();
         if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
             e.lx = mx - wb.x;
@@ -171,12 +165,24 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         // Automation envelope editor
         if (hitWidget(m_autoEnvelopeWidget, mx, my))
             return m_autoEnvelopeWidget.onMouseDown(e);
-        // Automation target dropdown
-        if (hitWidget(m_autoTargetDropdown, mx, my))
-            return m_autoTargetDropdown.onMouseDown(e);
+        // Automation target dropdown — v2 toggles directly on mouseDown
+        // (same pattern as BrowserPresetsTab; v1 App loop doesn't route
+        // mouseUp to v2 widgets so the gesture state machine can't fire).
+        {
+            const auto& b = m_autoTargetDropdown.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                if (e.button == MouseButton::Left) m_autoTargetDropdown.toggle();
+                return true;
+            }
+        }
         // Warp mode dropdown
-        if (hitWidget(m_warpModeDropdown, mx, my))
-            return m_warpModeDropdown.onMouseDown(e);
+        {
+            const auto& b = m_warpModeDropdown.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                if (e.button == MouseButton::Left) m_warpModeDropdown.toggle();
+                return true;
+            }
+        }
         // Detect button
         if (hitWidget(m_detectBtn, mx, my))
             return m_detectBtn.onMouseDown(e);
@@ -395,12 +401,15 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     m_detuneKnob.paint(ctx);
     cx += knobW + sectionGap;
 
-    // Warp dropdown
+    // Warp dropdown — v2 widget. Popup paints via LayerStack.
     float warpW = 90.0f;
-    m_warpModeDropdown.setSelected(static_cast<int>(clip.warpMode));
+    m_warpModeDropdown.setSelectedIndex(static_cast<int>(clip.warpMode));
     font.drawText(renderer, "Warp", cx, stripY, labelScale, Theme::textDim);
-    m_warpModeDropdown.layout(Rect{cx, inputCenterY, warpW, inputH}, ctx);
-    m_warpModeDropdown.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_warpModeDropdown.layout(Rect{cx, inputCenterY, warpW, inputH}, v2ctx);
+        m_warpModeDropdown.render(v2ctx);
+    }
     cx += warpW + gap;
 
     // Detect button
@@ -415,12 +424,16 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     m_loopToggleBtn.paint(ctx);
     cx += 50.0f + sectionGap;
 
-    // Automation target dropdown (inline in control strip)
+    // Automation target dropdown (inline in control strip) — v2 widget.
+    // v2 reads viewport from UIContext::global() so setScreenHeight is
+    // no longer needed.
     float autoDropW = 160.0f;
     font.drawText(renderer, "Auto", cx, stripY, labelScale, Theme::textDim);
-    m_autoTargetDropdown.setScreenHeight(m_windowHeight);
-    m_autoTargetDropdown.layout(Rect{cx, inputCenterY, autoDropW, inputH}, ctx);
-    m_autoTargetDropdown.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_autoTargetDropdown.layout(Rect{cx, inputCenterY, autoDropW, inputH}, v2ctx);
+        m_autoTargetDropdown.render(v2ctx);
+    }
 
     // ── Effects section ──
     float fxSepY = stripY + labelH + 2.0f + knobH + 6.0f;

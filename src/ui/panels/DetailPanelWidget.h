@@ -14,6 +14,8 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/WaveformWidget.h"
+#include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/UIContext.h"
 #include "ui/Theme.h"
 #include "audio/Clip.h"
 #include "audio/FollowAction.h"
@@ -197,10 +199,11 @@ public:
         m_waveformWidget.setClip(clip);
         m_waveformWidget.setSampleRate(sampleRate);
 
-        // Setup warp mode dropdown
-        m_warpModeDropdown.setItems({"Off", "Auto", "Beats", "Tones", "Texture", "Repitch"});
-        m_warpModeDropdown.setSelected(static_cast<int>(clip->warpMode));
-        m_warpModeDropdown.setOnChange([this](int idx) {
+        // Setup warp mode dropdown — migrated to fw2::FwDropDown.
+        m_warpModeDropdown.setItems(std::vector<std::string>{
+            "Off", "Auto", "Beats", "Tones", "Texture", "Repitch"});
+        m_warpModeDropdown.setSelectedIndex(static_cast<int>(clip->warpMode));
+        m_warpModeDropdown.setOnChange([this](int idx, const std::string&) {
             if (m_clipPtr) {
                 auto* mutableClip = const_cast<audio::Clip*>(m_clipPtr);
                 mutableClip->warpMode = static_cast<audio::WarpMode>(idx);
@@ -360,14 +363,14 @@ public:
         m_waveformWidget.setClip(nullptr);
     }
 
-    // Set follow action pointer for the current clip slot
+    // Set follow action pointer for the current clip slot. The A/B
+    // action dropdowns live in BrowserPanel (this panel just holds
+    // enable button + bar count knob + crossfader).
     void setFollowAction(FollowAction* fa) {
         m_followActionPtr = fa;
         if (fa) {
             m_faEnableBtn.setLabel(fa->enabled ? "On" : "Off");
             m_faBarCountKnob.setValue(static_cast<float>(fa->barCount));
-            m_faActionADropdown.setSelected(static_cast<int>(fa->actionA));
-            m_faActionBDropdown.setSelected(static_cast<int>(fa->actionB));
             m_faCrossfader.setValue(static_cast<float>(fa->chanceA));
         }
     }
@@ -387,7 +390,7 @@ public:
         m_autoTrackIndex = trackIndex;
 
         buildAutoTargetList();
-        m_autoTargetDropdown.setOnChange([this](int idx) {
+        m_autoTargetDropdown.setOnChange([this](int idx, const std::string&) {
             if (idx <= 0) {
                 m_autoSelectedLaneIdx = -1;
                 m_autoEnvelopeWidget.setPoints({});
@@ -695,15 +698,8 @@ public:
         }
         // Forward to waveform widget in audio clip view
         if (m_viewMode == ViewMode::AudioClip) {
-            // When dropdown is open, forward moves for hover highlighting
-            if (m_warpModeDropdown.isOpen()) {
-                m_warpModeDropdown.onMouseMove(e);
-                return true;
-            }
-            if (m_autoTargetDropdown.isOpen()) {
-                m_autoTargetDropdown.onMouseMove(e);
-                return true;
-            }
+            // v2 dropdown popups get their mouseMove via LayerStack —
+            // no panel-side branch needed for open-state routing.
             // Forward to draggable number inputs (they don't capture the mouse)
             if (m_transposeKnob.onMouseMove(e)) return true;
             if (m_detuneKnob.onMouseMove(e)) return true;
@@ -755,16 +751,14 @@ public:
         }
         // Forward to waveform widget
         if (m_viewMode == ViewMode::AudioClip) {
-            if (m_warpModeDropdown.isOpen())
-                return m_warpModeDropdown.onMouseUp(e);
+            // v2 dropdowns toggle on mouse-down directly — no mouseUp
+            // forwarding needed.
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
             if (m_waveformWidget.onMouseUp(e)) return true;
             if (hitWidget(m_detectBtn, e.x, e.y))
                 return m_detectBtn.onMouseUp(e);
-            if (hitWidget(m_warpModeDropdown, e.x, e.y))
-                return m_warpModeDropdown.onMouseUp(e);
             if (hitWidget(m_gainKnob, e.x, e.y))
                 return m_gainKnob.onMouseUp(e);
             // Number inputs: always forward mouseUp (drag may leave bounds)
@@ -1435,7 +1429,7 @@ private:
     const audio::Clip* m_clipPtr = nullptr;
     int m_clipSampleRate = 44100;
     WaveformWidget m_waveformWidget;
-    FwDropDown m_warpModeDropdown;
+    ::yawn::ui::fw2::FwDropDown m_warpModeDropdown;
     FwButton m_detectBtn;
     FwKnob m_gainKnob;
     FwKnob m_transposeKnob;
@@ -1444,16 +1438,16 @@ private:
     FwKnob m_bpmKnob;
     float m_lastMouseX = 0, m_lastMouseY = 0;
 
-    // Follow action widgets
+    // Follow action widgets (the real FA dropdowns live in BrowserPanel;
+    // these orphan decls were never wired up here, removed during the
+    // v2 dropdown migration sweep).
     FollowAction* m_followActionPtr = nullptr;
     FwButton m_faEnableBtn;
     FwKnob m_faBarCountKnob;
-    FwDropDown m_faActionADropdown;
-    FwDropDown m_faActionBDropdown;
     FwCrossfader m_faCrossfader;
 
     // Automation lane editor
-    FwDropDown m_autoTargetDropdown;
+    ::yawn::ui::fw2::FwDropDown m_autoTargetDropdown;
     AutomationEnvelopeWidget m_autoEnvelopeWidget;
     int m_autoSelectedLaneIdx = -1;
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
@@ -1492,7 +1486,7 @@ private:
             }
         }
         // Preserve current selection if the selected text still exists in the new list
-        std::string prevText = m_autoTargetDropdown.selectedText();
+        const std::string prevText = m_autoTargetDropdown.selectedLabel();
         m_autoTargetDropdown.setItems(items);
         int restored = 0;
         if (!prevText.empty() && prevText != "(none)") {
@@ -1500,7 +1494,7 @@ private:
                 if (items[i] == prevText) { restored = i; break; }
             }
         }
-        m_autoTargetDropdown.setSelected(restored);
+        m_autoTargetDropdown.setSelectedIndex(restored);
     }
 
     automation::AutomationTarget targetFromDropdownIndex(int idx) const {
