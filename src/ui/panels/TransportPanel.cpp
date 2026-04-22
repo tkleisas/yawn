@@ -42,35 +42,33 @@ void TransportPanel::setTransportState(bool playing, double beats, double bpm,
 }
 
 bool TransportPanel::handleKeyDown(int keycode) {
-    if (keycode == 13 || keycode == 9) { // Enter or Tab
-        if (m_bpmInput.isEditing()) {
-            m_bpmInput.commitEdit();
-            if (keycode == 9) {
-                m_tsNumInput.beginEdit();
-                return true;
-            }
-        } else if (m_tsNumInput.isEditing()) {
-            m_tsNumInput.commitEdit();
-            if (keycode == 9) {
-                m_tsDenInput.beginEdit();
-                return true;
-            }
-        } else if (m_tsDenInput.isEditing()) {
-            m_tsDenInput.commitEdit();
-        }
+    // SDL keycodes: 13 = Enter, 27 = Escape, 8 = Backspace, 9 = Tab.
+    // v2 FwNumberInput absorbs Enter/Escape/Backspace internally; Tab
+    // is panel-level policy (move focus to the next field) so we
+    // handle it here.
+    auto* editing = m_bpmInput.isEditing()   ? &m_bpmInput
+                  : m_tsNumInput.isEditing() ? &m_tsNumInput
+                  : m_tsDenInput.isEditing() ? &m_tsDenInput
+                  : nullptr;
+    if (!editing) return false;
+
+    if (keycode == 9) {
+        // Tab: commit current field, jump to the next in the chain.
+        editing->endEdit(/*commit*/true);
+        if (editing == &m_bpmInput)        m_tsNumInput.beginEdit();
+        else if (editing == &m_tsNumInput) m_tsDenInput.beginEdit();
+        // Else: already on the last field — just commit, no advance.
         return true;
     }
-    if (keycode == 27) {
-        if (m_bpmInput.isEditing()) { m_bpmInput.cancelEdit(); return true; }
-        if (m_tsNumInput.isEditing()) { m_tsNumInput.cancelEdit(); return true; }
-        if (m_tsDenInput.isEditing()) { m_tsDenInput.cancelEdit(); return true; }
-        return true;
+
+    ::yawn::ui::fw2::KeyEvent ke;
+    switch (keycode) {
+        case 27: ke.key = ::yawn::ui::fw2::Key::Escape;    break;
+        case 13: ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+        case 8:  ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+        default: return true;   // swallow other keys while editing
     }
-    if (keycode == 8) {
-        if (m_bpmInput.isEditing()) { KeyEvent e; e.keyCode = keycode; return m_bpmInput.onKeyDown(e); }
-        if (m_tsNumInput.isEditing()) { KeyEvent e; e.keyCode = keycode; return m_tsNumInput.onKeyDown(e); }
-        if (m_tsDenInput.isEditing()) { KeyEvent e; e.keyCode = keycode; return m_tsDenInput.onKeyDown(e); }
-    }
+    editing->dispatchKeyDown(ke);
     return true;
 }
 
@@ -89,10 +87,14 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
     // ── Left group: BPM + TimeSig + TAP ──
     float lx = bounds.x + 12.0f;
 
+    // All numeric inputs + the TAP/MET buttons are v2 widgets; layout
+    // them against the fw2 UIContext.
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+
     // BPM input
     float bpmW = 80.0f;
     m_bpmBoxX = lx; m_bpmBoxY = btnY; m_bpmBoxW = bpmW; m_bpmBoxH = boxH;
-    m_bpmInput.layout(Rect{lx, btnY, bpmW, boxH}, ctx);
+    m_bpmInput.layout(Rect{lx, btnY, bpmW, boxH}, v2ctx);
     lx += bpmW + 4.0f;
 
     // BPM label
@@ -106,7 +108,7 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
     // Time sig numerator
     float tsBoxW = 28.0f;
     m_tsNumBoxX = lx; m_tsNumBoxY = btnY; m_tsNumBoxW = tsBoxW; m_tsNumBoxH = boxH;
-    m_tsNumInput.layout(Rect{lx, btnY, tsBoxW, boxH}, ctx);
+    m_tsNumInput.layout(Rect{lx, btnY, tsBoxW, boxH}, v2ctx);
     lx += tsBoxW + 2.0f;
 
     // Slash
@@ -116,7 +118,7 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
 
     // Denominator
     m_tsDenBoxX = lx; m_tsDenBoxY = btnY; m_tsDenBoxW = tsBoxW; m_tsDenBoxH = boxH;
-    m_tsDenInput.layout(Rect{lx, btnY, tsBoxW, boxH}, ctx);
+    m_tsDenInput.layout(Rect{lx, btnY, tsBoxW, boxH}, v2ctx);
     lx += tsBoxW + 8.0f;
 
     // Separator
@@ -124,7 +126,6 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
     lx += 12.0f;
 
     // TAP button — v2 FwButton, layout via fw2 UIContext.
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
     float tapW = 42.0f;
     m_tapBtn.layout(Rect{lx, btnY, tapW, boxH}, v2ctx);
     lx += tapW + 8.0f;
@@ -212,8 +213,11 @@ void TransportPanel::paint(UIContext& ctx) {
                     automation::AutomationTarget::transport(TP::BPM));
     }
 
+    // v2 inputs + buttons render through the fw2 UIContext.
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+
     // Left group widgets
-    m_bpmInput.paint(ctx);
+    m_bpmInput.render(v2ctx);
     m_bpmLabel.paint(ctx);
 
     // Separator after BPM
@@ -221,9 +225,9 @@ void TransportPanel::paint(UIContext& ctx) {
     r.drawRect(sep1X, y + 8, 1, h - 16, Theme::clipSlotBorder);
 
     // Time sig
-    m_tsNumInput.paint(ctx);
+    m_tsNumInput.render(v2ctx);
     m_slashLabel.paint(ctx);
-    m_tsDenInput.paint(ctx);
+    m_tsDenInput.render(v2ctx);
 
     // Separator after time sig
     float sep2X = m_tsDenBoxX + m_tsDenBoxW + 8.0f;
@@ -231,7 +235,6 @@ void TransportPanel::paint(UIContext& ctx) {
 
     // TAP button — v2 FwButton with flash. Flash expressed via accent
     // highlight (pulse on tap). render through the fw2 UIContext.
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
     m_tapFlash = std::max(0.0f, m_tapFlash - 1.0f / 15.0f);
     if (m_tapFlash > 0.01f) {
         uint8_t fR = static_cast<uint8_t>(40 + m_tapFlash * 60);
@@ -468,19 +471,22 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         return true;
     }
 
-    // Child widgets
-    if (m_bpmInput.isEditing() || hitTestChild(m_bpmInput, mx, my)) {
-        m_bpmInput.onMouseDown(e);
+    // Numeric inputs — v2 widgets. Route through the v1→v2 bridge so
+    // the gesture SM gets down/up for drag, and double-click fires
+    // from dispatchMouseUp for inline edit mode.
+    auto routeV2Input = [&](::yawn::ui::fw2::FwNumberInput& w) -> bool {
+        const auto& b = w.bounds();
+        if (mx < b.x || mx >= b.x + b.w) return false;
+        if (my < b.y || my >= b.y + b.h) return false;
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        w.dispatchMouseDown(ev);
+        m_v2Dragging = &w;
+        captureMouse();
         return true;
-    }
-    if (m_tsNumInput.isEditing() || hitTestChild(m_tsNumInput, mx, my)) {
-        m_tsNumInput.onMouseDown(e);
-        return true;
-    }
-    if (m_tsDenInput.isEditing() || hitTestChild(m_tsDenInput, mx, my)) {
-        m_tsDenInput.onMouseDown(e);
-        return true;
-    }
+    };
+    if (routeV2Input(m_bpmInput))   return true;
+    if (routeV2Input(m_tsNumInput)) return true;
+    if (routeV2Input(m_tsDenInput)) return true;
     {
         const auto& b = m_tapBtn.bounds();
         if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
@@ -502,11 +508,11 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         }
     }
 
-    // Click anywhere dismisses edit mode
+    // Click anywhere else dismisses edit mode (commits current buffer).
     if (isEditing()) {
-        if (m_bpmInput.isEditing()) m_bpmInput.commitEdit();
-        if (m_tsNumInput.isEditing()) m_tsNumInput.commitEdit();
-        if (m_tsDenInput.isEditing()) m_tsDenInput.commitEdit();
+        if (m_bpmInput.isEditing())   m_bpmInput.endEdit(/*commit*/true);
+        if (m_tsNumInput.isEditing()) m_tsNumInput.endEdit(/*commit*/true);
+        if (m_tsDenInput.isEditing()) m_tsDenInput.endEdit(/*commit*/true);
     }
     return true;
 }
@@ -521,9 +527,7 @@ bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
         return true;
     }
 
-    m_bpmInput.onMouseMove(e);
-    m_tsNumInput.onMouseMove(e);
-    m_tsDenInput.onMouseMove(e);
+    // v2 number inputs route hover internally; no per-move forward.
 
     // Update hover state for transport buttons
     float mx = e.x, my = e.y;

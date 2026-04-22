@@ -8,6 +8,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/NumberInput.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
@@ -44,9 +45,10 @@ public:
             if (m_engine)
                 m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(v)});
         });
-        m_bpmInput.setOnDragEnd([this](float oldVal) {
+        // v2 FwNumberInput delivers (startValue, endValue) directly.
+        m_bpmInput.setOnDragEnd([this](float oldVal, float newVal) {
             if (!m_undoManager) return;
-            float newVal = m_bpmInput.value();
+            if (oldVal == newVal) return;
             m_undoManager->push({"Change BPM",
                 [this, oldVal]{ m_bpmInput.setValue(oldVal);
                     if (m_engine) m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(oldVal)}); },
@@ -64,10 +66,11 @@ public:
                 m_engine->sendCommand(
                     audio::TransportSetTimeSignatureMsg{val, m_transportDenominator});
         });
-        m_tsNumInput.setOnDragEnd([this](float oldVal) {
+        m_tsNumInput.setOnDragEnd([this](float oldVal, float newVal) {
             if (!m_undoManager) return;
             int oldNum = static_cast<int>(oldVal);
-            int newNum = static_cast<int>(m_tsNumInput.value());
+            int newNum = static_cast<int>(newVal);
+            if (oldNum == newNum) return;
             int den = m_transportDenominator;
             m_undoManager->push({"Change Time Signature",
                 [this, oldNum, den]{ m_tsNumInput.setValue(static_cast<float>(oldNum));
@@ -92,11 +95,12 @@ public:
                 m_engine->sendCommand(
                     audio::TransportSetTimeSignatureMsg{m_transportNumerator, val});
         });
-        m_tsDenInput.setOnDragEnd([this](float oldVal) {
+        m_tsDenInput.setOnDragEnd([this](float oldVal, float newVal) {
             if (!m_undoManager) return;
             int num = m_transportNumerator;
             int oldDen = static_cast<int>(oldVal);
-            int newDen = static_cast<int>(m_tsDenInput.value());
+            int newDen = static_cast<int>(newVal);
+            if (oldDen == newDen) return;
             m_undoManager->push({"Change Time Signature",
                 [this, num, oldDen]{ m_tsDenInput.setValue(static_cast<float>(oldDen));
                     if (m_engine) m_engine->sendCommand(audio::TransportSetTimeSignatureMsg{num, oldDen}); },
@@ -174,11 +178,10 @@ public:
     }
 
     bool handleTextInput(const char* text) {
-        TextInputEvent ev;
-        std::strncpy(ev.text, text, sizeof(ev.text) - 1);
-        if (m_bpmInput.isEditing()) return m_bpmInput.onTextInput(ev);
-        if (m_tsNumInput.isEditing()) return m_tsNumInput.onTextInput(ev);
-        if (m_tsDenInput.isEditing()) return m_tsDenInput.onTextInput(ev);
+        const std::string t = text ? text : "";
+        if (m_bpmInput.isEditing())   { m_bpmInput.takeTextInput(t);   return true; }
+        if (m_tsNumInput.isEditing()) { m_tsNumInput.takeTextInput(t); return true; }
+        if (m_tsDenInput.isEditing()) { m_tsDenInput.takeTextInput(t); return true; }
         return false;
     }
 
@@ -221,7 +224,8 @@ public:
 #endif
 
     bool onMouseUp(MouseEvent& e) override {
-        // v2 button/toggle release flushes via the m_v2Dragging path.
+        // All v2 widgets (button, toggle, number inputs) release
+        // through the m_v2Dragging path.
         if (m_v2Dragging) {
             auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
             m_v2Dragging->dispatchMouseUp(ev);
@@ -229,9 +233,6 @@ public:
             releaseMouse();
             return true;
         }
-        m_bpmInput.onMouseUp(e);
-        m_tsNumInput.onMouseUp(e);
-        m_tsDenInput.onMouseUp(e);
         return false;
     }
 
@@ -272,9 +273,9 @@ private:
     int    m_transportDenominator = 4;
 
     // Child widgets
-    FwNumberInput m_bpmInput;
-    FwNumberInput m_tsNumInput;
-    FwNumberInput m_tsDenInput;
+    ::yawn::ui::fw2::FwNumberInput m_bpmInput;
+    ::yawn::ui::fw2::FwNumberInput m_tsNumInput;
+    ::yawn::ui::fw2::FwNumberInput m_tsDenInput;
     ::yawn::ui::fw2::FwButton m_tapBtn;
     ::yawn::ui::fw2::FwToggle m_metroBtn;
     Label         m_posLabel;

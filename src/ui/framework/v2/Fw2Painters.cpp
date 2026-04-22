@@ -24,6 +24,7 @@
 #include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/Meter.h"
+#include "ui/framework/v2/NumberInput.h"
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/StepSelector.h"
@@ -1165,6 +1166,51 @@ static void paintMeter(Widget& w, UIContext& ctx) {
                                           : pal.textDim);
 }
 
+// ─── NumberInput ───────────────────────────────────────────────────
+
+static void paintNumberInput(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& n = static_cast<FwNumberInput&>(w);
+    const Rect& b = n.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // Background — accent-tinted while editing so the text-entry
+    // state is obviously different from the drag-to-change state.
+    Color bg = n.isEnabled() ? p.controlBg : Color{40, 40, 45, 255};
+    if (n.isEditing())        bg = p.elevated;
+    else if (n.isPressed())   bg = p.controlActive;
+    else if (n.isHovered())   bg = p.controlHover;
+    ctx.renderer->drawRect(b.x, b.y, b.w, b.h, bg);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h,
+                                   n.isEditing() ? p.accent : p.border,
+                                   n.isEditing() ? 1.5f : 1.0f);
+
+    // Text — edit buffer while typing, formatted value otherwise.
+    if (!ctx.textMetrics) return;
+    const float fs = m.fontSize;
+    const float lh = ctx.textMetrics->lineHeight(fs);
+    const bool editing = n.isEditing();
+    const std::string display =
+        editing ? n.editBuffer() : n.formattedValue();
+    const float tw = ctx.textMetrics->textWidth(display, fs);
+    const float tx = b.x + (b.w - tw) * 0.5f;
+    const float ty = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+    const Color tc = n.isEnabled() ? p.textPrimary : p.textDim;
+    ctx.textMetrics->drawText(*ctx.renderer, display, tx, ty, fs, tc);
+
+    if (editing) {
+        // Caret — thin vertical bar at end of buffer.
+        const float caretX  = tx + tw + 1.0f;
+        const float caretY0 = ty;
+        const float caretY1 = ty + lh * 0.9f;
+        ctx.renderer->drawLine(caretX, caretY0, caretX, caretY1, p.accent,
+                                1.5f);
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1180,6 +1226,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwCrossfader), &paintCrossfader);
     registerPainter(typeid(FwScrollBar), &paintScrollBar);
     registerPainter(typeid(FwMeter),    &paintMeter);
+    registerPainter(typeid(FwNumberInput), &paintNumberInput);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.
