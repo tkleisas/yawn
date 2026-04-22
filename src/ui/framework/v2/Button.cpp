@@ -11,6 +11,9 @@ FwButton::FwButton() {
     // ARE focusable via Tab.
     setFocusable(true);
     // Fixed-size policy → auto relayout boundary.
+    // No drag behaviour — any press-release pair should click, even
+    // if the user jittered the pointer a few pixels mid-hold.
+    setClickOnly(true);
 }
 
 FwButton::FwButton(std::string label) : FwButton() {

@@ -12,6 +12,8 @@ FwStepSelector::FwStepSelector() {
     setSizePolicy(SizePolicy::fixed());
     setRelayoutBoundary(true);
     setFocusable(true);
+    // Step selector fires onClick from arrow hits — no drag.
+    setClickOnly(true);
 }
 
 // ───────────────────────────────────────────────────────────────────

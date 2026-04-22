@@ -23,6 +23,9 @@ int utf8CodepointCount(const std::string& s) {
 FwToggle::FwToggle() {
     setFocusable(true);
     setRelayoutBoundary(true);   // state flips are paint-only
+    // Click-only: toggles don't drag, so any press-release pair
+    // should flip the state even with some pointer jitter.
+    setClickOnly(true);
 }
 
 FwToggle::FwToggle(std::string label) : FwToggle() {

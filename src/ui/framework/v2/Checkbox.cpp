@@ -23,6 +23,7 @@ int utf8CodepointCount(const std::string& s) {
 FwCheckbox::FwCheckbox() {
     setFocusable(true);
     setRelayoutBoundary(true);   // state flips are paint-only
+    setClickOnly(true);           // press-release always flips state
 }
 
 FwCheckbox::FwCheckbox(std::string label) : FwCheckbox() {

@@ -367,9 +367,12 @@ bool Widget::dispatchMouseMove(MouseMoveEvent& e) {
     if (onMouseMove(e) || e.consumed) return true;
 
     // Gesture: if pressed, check for drag threshold crossing.
+    // Click-only widgets (buttons, toggles) skip the drag transition
+    // entirely — any press-release pair fires onClick regardless of
+    // how much the pointer moved between them.
     if (m_gesture.pressed) {
         UIContext& ctx = UIContext::global();
-        if (!m_gesture.dragging) {
+        if (!m_gesture.dragging && !m_clickOnly) {
             float dx = (e.x - m_gesture.pressScreen.x) / ctx.dpiScale();
             float dy = (e.y - m_gesture.pressScreen.y) / ctx.dpiScale();
             float dist = std::sqrt(dx * dx + dy * dy);

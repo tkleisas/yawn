@@ -115,16 +115,22 @@ TEST_F(ButtonHarness, RightClickFires) {
     EXPECT_FLOAT_EQ(pos.y, 15.0f);
 }
 
-TEST_F(ButtonHarness, ClickNotFiredWhenDragged) {
+TEST_F(ButtonHarness, ClickFiresEvenWithJitter) {
+    // Buttons are click-only — they don't have a drag behaviour, so
+    // any press-release pair should fire onClick regardless of how
+    // far the pointer moved between mouseDown and mouseUp. Hand
+    // jitter during a press is normal; suppressing the click on
+    // mid-press motion made TAP / metronome feel broken in the real
+    // app.
     FwButton b("Save");
     b.layout(Rect{0, 0, 100, 30}, ctx);
 
     int calls = 0;
     b.setOnClick([&]() { ++calls; });
 
-    // Drag past 3px threshold → click suppressed.
+    // Drag past the 3 px click-drag threshold → click STILL fires.
     simulateDrag(b, 50, 15, 60, 15);
-    EXPECT_EQ(calls, 0);
+    EXPECT_EQ(calls, 1);
 }
 
 TEST_F(ButtonHarness, DoubleClickFires) {

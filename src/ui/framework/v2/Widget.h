@@ -225,6 +225,18 @@ public:
     bool isFocusable() const { return m_focusable; }
     void setFocusable(bool b) { m_focusable = b; }
 
+    // Click-only widgets opt OUT of the gesture SM's drag-threshold
+    // behaviour. Normally, moving the pointer more than kClickDrag
+    // ThresholdPx between mouseDown and mouseUp flips the SM into
+    // drag mode (firing onDragStart/Drag/End instead of onClick).
+    // For widgets that don't have a drag behaviour — Button, Toggle,
+    // Checkbox — that's a bug trap: hand-jitter during a press
+    // swallows the click. setClickOnly(true) makes the SM NEVER
+    // enter drag mode for this widget, so any press-release pair
+    // fires onClick regardless of how much the pointer moved.
+    bool isClickOnly() const { return m_clickOnly; }
+    void setClickOnly(bool b) { m_clickOnly = b; }
+
     // ─── Size policy ──────────────────────────────────────────────
     SizePolicy sizePolicy() const { return m_sizePolicy; }
     void setSizePolicy(SizePolicy sp);
@@ -326,6 +338,7 @@ protected:
     bool m_focused   = false;
     bool m_hovered   = false;
     bool m_focusable = false;
+    bool m_clickOnly = false;
 
     SizePolicy m_sizePolicy;
     Insets     m_padding;
