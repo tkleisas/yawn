@@ -4978,6 +4978,15 @@ void App::processEvents() {
                 m_inputState.onMouseUp(mx, my, btn);
                 // Release mouse capture (mixer fader drag, clip drag, etc.)
                 if (ui::fw::Widget::capturedWidget()) {
+                    // fw2 widgets hosted inside v1 panels can transition
+                    // into "editing" on a double-click-up (e.g. FwKnob
+                    // → beginEdit). We need to toggle SDL text input to
+                    // match so digits reach the knob's takeTextInput.
+                    const bool browserEditingBefore =
+                        m_browserPanel->hasEditingKnob();
+                    const bool detailEditingBefore =
+                        m_showDetailPanel && m_detailPanel->hasEditingKnob();
+
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
@@ -4986,6 +4995,19 @@ void App::processEvents() {
                     me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
                     me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
                     m_rootLayout->dispatchMouseUp(me);
+
+                    const bool browserEditingAfter =
+                        m_browserPanel->hasEditingKnob();
+                    const bool detailEditingAfter =
+                        m_showDetailPanel && m_detailPanel->hasEditingKnob();
+                    if (!browserEditingBefore && browserEditingAfter)
+                        SDL_StartTextInput(m_mainWindow.getHandle());
+                    else if (browserEditingBefore && !browserEditingAfter)
+                        SDL_StopTextInput(m_mainWindow.getHandle());
+                    if (!detailEditingBefore && detailEditingAfter)
+                        SDL_StartTextInput(m_mainWindow.getHandle());
+                    else if (detailEditingBefore && !detailEditingAfter)
+                        SDL_StopTextInput(m_mainWindow.getHandle());
                 }
                 // Handle completed clip drag-and-drop
                 if (m_sessionPanel->clipDragCompleted()) {
