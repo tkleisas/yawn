@@ -2264,13 +2264,14 @@ public:
     }
 
     void updateParamValue(int index, float value) override {
-        // v2 setValue is a no-op on equal values; during drag the knob
-        // fires onChange → host writes the param → we re-enter here
-        // with the same value and skip. No isDragging guard needed.
+        // Skip sync while the user is dragging / editing the knob —
+        // otherwise an async engine (or a lossy float↔int round-trip
+        // on integer params) rubber-bands the knob mid-gesture.
         for (auto& sec : m_sections)
             for (auto& ke : sec.knobs)
                 if (ke.paramIndex == index) {
-                    ke.knob->setValue(value);
+                    if (!ke.knob->isDragging() && !ke.knob->isEditing())
+                        ke.knob->setValue(value);
                     return;
                 }
     }

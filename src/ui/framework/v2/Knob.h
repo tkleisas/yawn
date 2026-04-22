@@ -158,6 +158,13 @@ public:
     // isEditing() is true. Accepts digits, ±, and one decimal point.
     void takeTextInput(const std::string& text);
 
+    // True between drag-start (threshold crossed after mouseDown) and
+    // drag-end (mouseUp while dragging). Hosts that paint-time sync
+    // their backing value to the knob must guard that sync on this
+    // being false — an async engine lagging behind the user's drag
+    // would otherwise rubber-band the knob to the stale value.
+    bool isDragging() const             { return m_dragging; }
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;
@@ -199,6 +206,7 @@ private:
 
     // Drag state
     float m_dragStartValue = 0.0f;
+    bool  m_dragging       = false;
     // When detents are present, m_rawValue tracks the un-snapped drag
     // position so crossing a detent's threshold releases cleanly. Kept
     // in sync with m_value on every setValue() / drag-start so the

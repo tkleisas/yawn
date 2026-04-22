@@ -264,8 +264,18 @@ public:
 
     void updateParamValue(int index, float value) {
         if (m_customBody) { m_customBody->updateParamValue(index, value); return; }
-        for (auto& s : m_knobs)    if (s.paramIndex == index) { s.setValue(value); return; }
-        for (auto& s : m_vizKnobs) if (s.paramIndex == index) { s.setValue(value); return; }
+        // Skip sync on knobs the user is currently dragging / editing
+        // — an async engine can rubber-band the drag position if we
+        // overwrite m_value mid-gesture. Non-knob slots (toggle /
+        // step selector) have no drag-state to corrupt, so they
+        // always sync.
+        auto shouldSkip = [](const ParamSlot& s) {
+            return s.isKnob() && (s.knob->isDragging() || s.knob->isEditing());
+        };
+        for (auto& s : m_knobs)
+            if (s.paramIndex == index) { if (!shouldSkip(s)) s.setValue(value); return; }
+        for (auto& s : m_vizKnobs)
+            if (s.paramIndex == index) { if (!shouldSkip(s)) s.setValue(value); return; }
     }
 
     // ─── Visualizer data feed ───────────────────────────────────────────

@@ -157,6 +157,7 @@ Size FwKnob::onMeasure(Constraints c, UIContext& ctx) {
 
 void FwKnob::onDragStart(const DragEvent& /*e*/) {
     m_dragStartValue = m_value;
+    m_dragging       = true;
     // Re-seed the detent-tracking "raw" position so the first delta
     // compares against the on-screen value, not a stale cache from
     // the previous gesture.
@@ -172,6 +173,7 @@ void FwKnob::onDrag(const DragEvent& e) {
 }
 
 void FwKnob::onDragEnd(const DragEvent& /*e*/) {
+    m_dragging = false;
     if (m_onDragEnd) m_onDragEnd(m_dragStartValue, m_value);
 }
 

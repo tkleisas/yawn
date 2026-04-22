@@ -649,14 +649,14 @@ private:
             return;
         }
 
-        // Sync values from data
+        // Sync values from data. Skip the knob sync while the user is
+        // mid-drag or editing — the backing int barCount is a lossy
+        // round-trip of the float knob value (5.2f → int 5 → back to
+        // 5.0f), so unconditional setValue would rubber-band the knob
+        // to a snapped integer and the drag would look jumpy.
         m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
-        // v2 knob: sync from backing data. While the user is dragging
-        // or inline-editing the knob, their input fires onChange → the
-        // backing barCount is already updated, so setValue is a clean
-        // no-op on equal values. (Edit-buffer display is decoupled
-        // from m_value, so syncing during edit is harmless.)
-        m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
+        if (!m_faBarCountKnob.isDragging() && !m_faBarCountKnob.isEditing())
+            m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
         m_faActionADropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionA));
         m_faActionBDropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionB));
         if (!m_faCrossfader.isDragging())

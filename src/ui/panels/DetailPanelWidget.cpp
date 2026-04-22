@@ -354,16 +354,20 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         m_autoEnvelopeWidget.paint(ctx);
     }
 
-    // Sync widget values from clip each frame. v2 knob's setValue is a
-    // no-op when called with the current m_value, so unconditional
-    // re-syncing is safe even during edit (the painter reads the edit
-    // buffer, not m_value). Also safe during drag — onChange fires,
-    // writes clip, then setValue sees equal values and skips callbacks.
-    m_gainKnob.setValue(clip.gain);
-    m_transposeKnob.setValue(static_cast<float>(clip.transposeSemitones));
-    m_detuneKnob.setValue(static_cast<float>(clip.detuneCents));
+    // Sync widget values from clip each frame. Skip the sync on any
+    // knob that's mid-drag — our writes are synchronous to the clip
+    // data but the knob's own m_rawValue / m_value tracking shouldn't
+    // be overwritten mid-gesture. (Also skip during edit — the buffer
+    // is shown independently of m_value, so mutating m_value would
+    // discard the user's typed text on commit.)
+    auto syncKnob = [](::yawn::ui::fw2::FwKnob& k, float v) {
+        if (!k.isDragging() && !k.isEditing()) k.setValue(v);
+    };
+    syncKnob(m_gainKnob,      clip.gain);
+    syncKnob(m_transposeKnob, static_cast<float>(clip.transposeSemitones));
+    syncKnob(m_detuneKnob,    static_cast<float>(clip.detuneCents));
     if (clip.originalBPM > 0)
-        m_bpmKnob.setValue(static_cast<float>(clip.originalBPM));
+        syncKnob(m_bpmKnob, static_cast<float>(clip.originalBPM));
     m_loopToggleBtn.setLabel(clip.looping ? "On" : "Off");
 
     // ── Horizontal control strip ──

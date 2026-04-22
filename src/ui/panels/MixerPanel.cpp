@@ -798,11 +798,14 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
             auto& knob = s.sendKnobs[d];
             const auto& send = ch.sends[d];
-            // v2 setValue is a no-op on equal values, so unconditional
-            // sync from engine state is safe. While dragging, onChange
-            // writes engine state first, then this setValue sees the
-            // same value and skips.
-            knob.setValue(send.level);
+            // Sync from engine state, BUT NOT while the user is mid-
+            // drag — the engine is async and applies send-level
+            // commands a frame or two later than we issue them, so
+            // an unconditional setValue would rubber-band the knob
+            // back to the stale engine value and the drag would look
+            // "jumpy". Same gate the v1 mixer had via isDragging().
+            if (!knob.isDragging())
+                knob.setValue(send.level);
 
             // Color feedback: off → green → yellow → red
             float v = knob.value();
