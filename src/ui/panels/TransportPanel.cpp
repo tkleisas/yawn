@@ -21,13 +21,44 @@ void TransportPanel::setTransportState(bool playing, double beats, double bpm,
     m_transportNumerator   = numerator;
     m_transportDenominator = denominator;
 
-    m_bpmInput.setValue(static_cast<float>(bpm));
-    m_tsNumInput.setValue(static_cast<float>(numerator));
-    m_tsDenInput.setValue(static_cast<float>(denominator));
+    // Sync from engine — but ONLY when the engine value CHANGED since
+    // the last frame. The tap/metronome feedback loop happens because
+    // sendCommand is async: when the UI sets BPM=180 and sends a
+    // command, the engine still reports bpm()=120 for 1-2 frames
+    // until the queue drains. If we unconditionally `setValue(120)`
+    // each frame, it (a) visually reverts the tap and (b) fires
+    // onChange → sendCommand(120), overwriting the tap at the audio
+    // thread too. Tracking `last seen engine value` means we only
+    // push engine → UI when some OTHER source moved the engine
+    // (automation, MIDI controller, MIDI Learn, scripting). Between
+    // those events the widget's own state wins.
+    //
+    // Use ::yawn::ui::fw2::ValueChangeSource::Automation belt-and-suspenders so even
+    // if a sync does fire, it doesn't feedback-send another command.
+    if (bpm != m_lastSeenEngineBpm || !m_bpmSynced) {
+        m_bpmInput.setValue(static_cast<float>(bpm), ::yawn::ui::fw2::ValueChangeSource::Automation);
+        m_lastSeenEngineBpm = bpm;
+        m_bpmSynced = true;
+    }
+    if (numerator != m_lastSeenEngineNumerator || !m_tsSynced) {
+        m_tsNumInput.setValue(static_cast<float>(numerator), ::yawn::ui::fw2::ValueChangeSource::Automation);
+        m_lastSeenEngineNumerator = numerator;
+    }
+    if (denominator != m_lastSeenEngineDenominator || !m_tsSynced) {
+        m_tsDenInput.setValue(static_cast<float>(denominator), ::yawn::ui::fw2::ValueChangeSource::Automation);
+        m_lastSeenEngineDenominator = denominator;
+    }
+    m_tsSynced = true;
 
-    // Sync metronome state from engine (may be toggled externally by controller)
-    if (m_engine)
-        m_metronomeOn = m_engine->metronome().enabled();
+    // Metronome sync — same approach.
+    if (m_engine) {
+        const bool engineMet = m_engine->metronome().enabled();
+        if (engineMet != m_lastSeenEngineMetronome || !m_metSynced) {
+            m_metronomeOn = engineMet;
+            m_lastSeenEngineMetronome = engineMet;
+            m_metSynced = true;
+        }
+    }
 
     int bpb  = std::max(1, numerator);
     int bar  = static_cast<int>(beats / bpb) + 1;

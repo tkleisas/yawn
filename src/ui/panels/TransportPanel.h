@@ -317,6 +317,20 @@ private:
     float  m_metroDotX = 0.0f;  // X position for visual metronome dots
     float  m_metroDotY = 0.0f;
 
+    // "Last seen" engine values — setTransportState syncs UI from
+    // engine ONLY when the engine value changed since the previous
+    // frame. That way a user tap (UI → sendCommand, engine queue
+    // processes later) isn't rubber-banded by the intervening frame
+    // seeing the stale engine value. The `*Synced` bools are the
+    // first-frame guards so initial state takes from the engine.
+    double m_lastSeenEngineBpm         = 0.0;
+    int    m_lastSeenEngineNumerator   = 0;
+    int    m_lastSeenEngineDenominator = 0;
+    bool   m_lastSeenEngineMetronome   = false;
+    bool   m_bpmSynced                 = false;
+    bool   m_tsSynced                  = false;
+    bool   m_metSynced                 = false;
+
     // Performance meters
     float  m_cpuLoad = 0.0f;       // smoothed CPU load (0-1)
     float  m_memoryMB = 0.0f;      // smoothed memory in MB
