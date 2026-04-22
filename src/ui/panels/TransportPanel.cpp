@@ -509,12 +509,15 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
     }
 
     // Click anywhere else dismisses edit mode (commits current buffer).
+    // Returning false lets the App continue dispatching to other panels
+    // (contentGrid / session / mixer) — this panel only consumes clicks
+    // that actually hit one of its interactive elements.
     if (isEditing()) {
         if (m_bpmInput.isEditing())   m_bpmInput.endEdit(/*commit*/true);
         if (m_tsNumInput.isEditing()) m_tsNumInput.endEdit(/*commit*/true);
         if (m_tsDenInput.isEditing()) m_tsDenInput.endEdit(/*commit*/true);
     }
-    return true;
+    return false;
 }
 
 bool TransportPanel::onMouseMove(MouseMoveEvent& e) {

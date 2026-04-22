@@ -4909,14 +4909,21 @@ void App::processEvents() {
                     }
                 }
                 // Transport panel click (tap tempo, dismiss editing, MIDI Learn right-click)
+                bool wasEditing = m_transportPanel->isEditing();
+                bool transportHandled = false;
                 {
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
-                    m_transportPanel->onMouseDown(me);
+                    transportHandled = m_transportPanel->onMouseDown(me);
                 }
-                // Stop text input if editing was cancelled by clicking elsewhere
-                bool wasEditing = m_transportPanel->isEditing();
+                // If the transport panel handled the click (e.g. clicked a v2
+                // button that captured v1 mouse for drag/up dispatch), don't
+                // also dispatch to contentGrid — otherwise contentGrid's
+                // children would overwrite the capture and the transport's
+                // mouseUp would never reach the captured v2 widget, breaking
+                // TAP / MET / numeric-input drags.
+                if (transportHandled) break;
                 // Dispatch click through content grid (handles dividers + children)
                 {
                     m_sessionPanel->clearLastClickTrack();
