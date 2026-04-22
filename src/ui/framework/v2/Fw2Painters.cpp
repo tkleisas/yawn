@@ -751,8 +751,28 @@ static void paintKnob(Widget& w, UIContext& ctx) {
     const Color accent = k.accentColor().value_or(p.accent);
 
     // Layout: knob disc centred horizontally; label + value below.
-    const float discDiameter = (k.diameter() > 0.0f) ? k.diameter()
-                                                       : (m.controlHeight * 1.6f);
+    // The requested diameter comes from setDiameter() or a theme
+    // default, but we MUST stay within the laid-out bounds — callers
+    // pack knobs into tight grids (device params, mixer sends) and
+    // the disc + label + value rows together have to fit inside `b`.
+    // Shrink the disc if needed so the label/value rows don't spill
+    // into the next cell.
+    const float fontSizeLbl = m.fontSize;
+    const float fontSizeVal = m.fontSizeSmall;
+    const float lhLbl = ctx.textMetrics ? ctx.textMetrics->lineHeight(fontSizeLbl)
+                                          : fontSizeLbl * 1.2f;
+    const float lhVal = ctx.textMetrics ? ctx.textMetrics->lineHeight(fontSizeVal)
+                                          : fontSizeVal * 1.2f;
+    const float gap   = m.baseUnit * 0.5f;
+    float belowDisc = 0.0f;
+    if (k.showLabel() && !k.label().empty()) belowDisc += gap + lhLbl;
+    if (k.showValue())                        belowDisc += gap + lhVal;
+
+    float discDiameter = (k.diameter() > 0.0f) ? k.diameter()
+                                                  : (m.controlHeight * 1.6f);
+    // Fit inside bounds: width, AND remaining height after label/value.
+    const float maxDiscH = std::max(8.0f, b.h - belowDisc);
+    discDiameter = std::min(discDiameter, std::min(b.w, maxDiscH));
     const float discR        = discDiameter * 0.5f;
     const float cx           = b.x + b.w * 0.5f;
     const float cy           = b.y + discR;

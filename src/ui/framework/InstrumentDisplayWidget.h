@@ -2314,11 +2314,14 @@ public:
             sec.x = x;
             sec.w = secW;
 
-            float knobY = y + kLabelH;
+            // Knob grid starts past the left label column so the
+            // section label (drawn at sec.x + 2) has its own lane.
+            const float knobsX = x + kLabelColW + kPadX;
+            const float knobY  = y + 2.0f;
             for (size_t i = 0; i < sec.knobs.size(); ++i) {
                 int col = static_cast<int>(i) % cols;
                 int row = static_cast<int>(i) / cols;
-                float kx = x + kPadX + col * kCellW;
+                float kx = knobsX + col * kCellW;
                 float ky = knobY + row * kRowH;
                 sec.knobs[i].knob->layout({kx, ky, kKnobW, kKnobH}, v2ctx);
             }
@@ -2336,14 +2339,17 @@ public:
         if (m_display) m_display->paint(ctx);
 
         auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        float lblScale = 8.0f / Theme::kFontSize;
+        // Section label sits a touch bigger than before since it now
+        // has its own column (doesn't need to cram between separator
+        // line and the knob grid).
+        float lblScale = 9.0f / Theme::kFontSize;
         bool first = true;
         for (auto& sec : m_sections) {
-            // Section label
+            // Section label — top-left of the section's left column.
             if (!sec.label.empty())
                 f.drawText(r, sec.label.c_str(),
-                           sec.x + kPadX, m_bounds.y + 1,
-                           lblScale, Color{120, 160, 220, 200});
+                           sec.x + 2.0f, m_bounds.y + 4.0f,
+                           lblScale, Color{120, 160, 220, 220});
 
             // Separator line (left edge, skip first)
             if (!first)
@@ -2442,7 +2448,11 @@ private:
     static constexpr float kKnobH      = 64.0f;
     static constexpr float kCellW      = 62.0f;
     static constexpr float kRowH       = 68.0f;
-    static constexpr float kLabelH     = 13.0f;
+    // Section label lives in a narrow column on the LEFT of each
+    // section (not above the knob row) so a taller v2 knob can't
+    // overlap it. Label is drawn horizontally at the top of the
+    // left column.
+    static constexpr float kLabelColW  = 22.0f;
     static constexpr float kSectionGap = 14.0f;
     static constexpr float kPadX       = 6.0f;
     static constexpr int   kMaxRows    = 2;
@@ -2468,7 +2478,8 @@ private:
         return n <= kMaxRows ? 1 : (n + kMaxRows - 1) / kMaxRows;
     }
     static float sectionWidth(const InternalSection& s) {
-        return 2 * kPadX + sectionCols(s) * kCellW;
+        // Left label column + padding + knob grid + padding.
+        return kLabelColW + 2 * kPadX + sectionCols(s) * kCellW;
     }
 };
 

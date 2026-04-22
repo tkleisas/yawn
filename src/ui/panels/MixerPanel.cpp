@@ -616,6 +616,11 @@ void MixerPanel::setupStripCallbacks(int t) {
         knob.setDiameter(20.0f);
         knob.setRange(0.0f, 1.0f);
         knob.setDefaultValue(0.0f);
+        // Small knob → lower pixelsPerFullRange so the user doesn't
+        // need a 200-pixel drag to sweep from 0 to 1 on a 20-pixel
+        // wide disc. 80 px gives a "four knob-widths" full sweep which
+        // feels right for send trims.
+        knob.setPixelsPerFullRange(80.0f);
         knob.setOnChange([this, t, d](float v) {
             if (!m_engine) return;
             m_engine->sendCommand(audio::SetSendLevelMsg{t, d, v});
