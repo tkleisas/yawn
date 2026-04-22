@@ -10,6 +10,8 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
+#include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/UIContext.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -68,8 +70,8 @@ public:
         if (fa) {
             m_faEnableBtn.setLabel(fa->enabled ? "On" : "Off");
             m_faBarCountKnob.setValue(static_cast<float>(fa->barCount));
-            m_faActionADropdown.setSelected(static_cast<int>(fa->actionA));
-            m_faActionBDropdown.setSelected(static_cast<int>(fa->actionB));
+            m_faActionADropdown.setSelectedIndex(static_cast<int>(fa->actionA));
+            m_faActionBDropdown.setSelectedIndex(static_cast<int>(fa->actionB));
             m_faCrossfader.setValue(static_cast<float>(fa->chanceA));
         }
     }
@@ -161,30 +163,41 @@ public:
             return m_presetsTab.onMouseDown(e, x, bodyY, w, bodyH, m_lastCtx);
         }
 
-        // Clip tab: follow action widgets
+        // Clip tab: follow action widgets.
+        // v2 dropdowns handle their open-state via LayerStack; when a
+        // popup is open the panel doesn't see the click at all.
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
-            if (m_faActionADropdown.isOpen())
-                return m_faActionADropdown.onMouseDown(e);
-            if (m_faActionBDropdown.isOpen())
-                return m_faActionBDropdown.onMouseDown(e);
             if (hitWidget(m_faEnableBtn, mx, my))
                 return m_faEnableBtn.onMouseDown(e);
             if (hitWidget(m_faBarCountKnob, mx, my))
                 return m_faBarCountKnob.onMouseDown(e);
-            if (hitWidget(m_faActionADropdown, mx, my))
-                return m_faActionADropdown.onMouseDown(e);
-            if (hitWidget(m_faActionBDropdown, mx, my))
-                return m_faActionBDropdown.onMouseDown(e);
+            {
+                const auto& b = m_faActionADropdown.bounds();
+                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    if (e.button == MouseButton::Left) m_faActionADropdown.toggle();
+                    return true;
+                }
+            }
+            {
+                const auto& b = m_faActionBDropdown.bounds();
+                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    if (e.button == MouseButton::Left) m_faActionBDropdown.toggle();
+                    return true;
+                }
+            }
             if (hitWidget(m_faCrossfader, mx, my))
                 return m_faCrossfader.onMouseDown(e);
         }
         // Clip envelope editor (visual clips only — presence of
         // m_clipAutoLanes gates it).
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
-            if (m_clipTargetDropdown.isOpen())
-                return m_clipTargetDropdown.onMouseDown(e);
-            if (hitWidget(m_clipTargetDropdown, mx, my))
-                return m_clipTargetDropdown.onMouseDown(e);
+            {
+                const auto& b = m_clipTargetDropdown.bounds();
+                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    if (e.button == MouseButton::Left) m_clipTargetDropdown.toggle();
+                    return true;
+                }
+            }
             if (hitWidget(m_clipEnvelope, mx, my))
                 return m_clipEnvelope.onMouseDown(e);
         }
@@ -197,15 +210,8 @@ public:
         if (m_activeTab == Tab::Presets)
             return m_presetsTab.onMouseMove(e);
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
+            // v2 dropdowns handle open-state mouseMove via LayerStack.
             MouseMoveEvent me = e;
-            if (m_faActionADropdown.isOpen()) {
-                m_faActionADropdown.onMouseMove(me);
-                return true;
-            }
-            if (m_faActionBDropdown.isOpen()) {
-                m_faActionBDropdown.onMouseMove(me);
-                return true;
-            }
             if (m_faBarCountKnob.onMouseMove(me)) return true;
             if (m_faCrossfader.onMouseMove(me)) return true;
         }
@@ -214,10 +220,6 @@ public:
         // reports a drag in progress.
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
             MouseMoveEvent me = e;
-            if (m_clipTargetDropdown.isOpen()) {
-                m_clipTargetDropdown.onMouseMove(me);
-                return true;
-            }
             if (m_clipEnvelope.dragIndex() >= 0) {
                 m_clipEnvelope.onMouseMove(me);
                 return true;
@@ -232,46 +234,27 @@ public:
         if (m_activeTab == Tab::Presets)
             return m_presetsTab.onMouseUp(e);
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
-            if (m_faActionADropdown.isOpen())
-                return m_faActionADropdown.onMouseUp(e);
-            if (m_faActionBDropdown.isOpen())
-                return m_faActionBDropdown.onMouseUp(e);
+            // v2 dropdowns toggle on mouseDown directly — no mouseUp
+            // forwarding needed for them.
             if (hitWidget(m_faEnableBtn, e.x, e.y))
                 return m_faEnableBtn.onMouseUp(e);
             if (m_faBarCountKnob.onMouseUp(e)) return true;
-            if (hitWidget(m_faActionADropdown, e.x, e.y))
-                return m_faActionADropdown.onMouseUp(e);
-            if (hitWidget(m_faActionBDropdown, e.x, e.y))
-                return m_faActionBDropdown.onMouseUp(e);
             if (m_faCrossfader.onMouseUp(e)) return true;
         }
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
-            if (m_clipTargetDropdown.isOpen())
-                return m_clipTargetDropdown.onMouseUp(e);
             if (m_clipEnvelope.onMouseUp(e)) return true;
         }
         return false;
     }
 
-    // True when any dropdown on the Clip tab is open. The App uses
-    // this to route Up/Down/Enter/Esc into the dropdown for keyboard
-    // navigation rather than intercepting them for transport /
-    // global shortcuts.
-    bool hasOpenDropdown() const {
-        return m_activeTab == Tab::Clip && (
-            m_faActionADropdown.isOpen() ||
-            m_faActionBDropdown.isOpen() ||
-            m_clipTargetDropdown.isOpen());
-    }
+    // v2 dropdowns route keyboard + scroll events through LayerStack
+    // when open, so the App doesn't need a panel-side "hasOpenDropdown"
+    // query to gate shortcut routing. Kept for API compatibility but
+    // always returns false now.
+    bool hasOpenDropdown() const { return false; }
 
-    bool onKeyDown(KeyEvent& e) override {
-        if (m_activeTab != Tab::Clip) return false;
-        if (m_faActionADropdown.isOpen())
-            return m_faActionADropdown.onKeyDown(e);
-        if (m_faActionBDropdown.isOpen())
-            return m_faActionBDropdown.onKeyDown(e);
-        if (m_clipAutoLanes && m_clipTargetDropdown.isOpen())
-            return m_clipTargetDropdown.onKeyDown(e);
+    bool onKeyDown(KeyEvent& /*e*/) override {
+        // v2 dropdowns consume keys via LayerStack before the panel.
         return false;
     }
 
@@ -280,20 +263,8 @@ public:
             return m_filesTab.onScroll(e);
         if (m_activeTab == Tab::Presets)
             return m_presetsTab.onScroll(e);
-        // Route wheel events to open dropdowns on the Clip tab so
-        // the user can scroll through long item lists (shader @range
-        // uniforms, follow-action target lists, etc).
-        if (m_activeTab == Tab::Clip) {
-            if (m_faActionADropdown.isOpen()) {
-                return m_faActionADropdown.onScroll(e);
-            }
-            if (m_faActionBDropdown.isOpen()) {
-                return m_faActionBDropdown.onScroll(e);
-            }
-            if (m_clipAutoLanes && m_clipTargetDropdown.isOpen()) {
-                return m_clipTargetDropdown.onScroll(e);
-            }
-        }
+        // v2 dropdowns route wheel events to their popup automatically
+        // when open (LayerStack dispatch). No per-panel glue needed.
         if (m_activeTab == Tab::Midi && m_midiMonitor) {
             m_midiScrollOffset += static_cast<int>(e.dy * 3);
             if (m_midiScrollOffset < 0) m_midiScrollOffset = 0;
@@ -392,14 +363,8 @@ public:
         r.popClip();
 
         // Dropdown overlays (outside clip region)
-        if (m_activeTab == Tab::Clip) {
-            if (m_faActionADropdown.isOpen())
-                m_faActionADropdown.paintOverlay(ctx);
-            if (m_faActionBDropdown.isOpen())
-                m_faActionBDropdown.paintOverlay(ctx);
-            if (m_clipAutoLanes && m_clipTargetDropdown.isOpen())
-                m_clipTargetDropdown.paintOverlay(ctx);
-        }
+        // v2 dropdown popups paint via LayerStack::paintLayers in App;
+        // no per-panel paintOverlay call needed.
     }
 
 private:
@@ -442,10 +407,10 @@ private:
     std::vector<ClipTargetEntry> m_clipTargets;
     std::vector<std::string>     m_clipShaderParamNames;
     int      m_clipSelectedTarget = 0;
-    FwDropDown               m_clipTargetDropdown;
+    ::yawn::ui::fw2::FwDropDown m_clipTargetDropdown;
     AutomationEnvelopeWidget m_clipEnvelope;
-    FwDropDown m_faActionADropdown;
-    FwDropDown m_faActionBDropdown;
+    ::yawn::ui::fw2::FwDropDown m_faActionADropdown;
+    ::yawn::ui::fw2::FwDropDown m_faActionBDropdown;
     FwCrossfader m_faCrossfader;
 
     static bool hitWidget(Widget& w, float mx, float my) {
@@ -482,7 +447,7 @@ private:
             m_clipSelectedTarget >= static_cast<int>(m_clipTargets.size())) {
             m_clipSelectedTarget = 0;
         }
-        m_clipTargetDropdown.setSelected(m_clipSelectedTarget);
+        m_clipTargetDropdown.setSelectedIndex(m_clipSelectedTarget);
     }
 
     // Find-or-create the lane for the currently-selected dropdown entry.
@@ -548,7 +513,7 @@ private:
         // run past the bottom of the browser panel. Wheel-scroll
         // inside the popup reveals the rest of the entries.
         rebuildClipTargetList();
-        m_clipTargetDropdown.setOnChange([this](int idx) {
+        m_clipTargetDropdown.setOnChange([this](int idx, const std::string&) {
             m_clipSelectedTarget = idx;
             syncClipEnvelope();
         });
@@ -603,15 +568,15 @@ private:
             "First", "Last", "Random", "Any"
         };
         m_faActionADropdown.setItems(kNames);
-        m_faActionADropdown.setSelected(0);
-        m_faActionADropdown.setOnChange([this](int idx) {
+        m_faActionADropdown.setSelectedIndex(0);
+        m_faActionADropdown.setOnChange([this](int idx, const std::string&) {
             if (m_followActionPtr)
                 m_followActionPtr->actionA = static_cast<FollowActionType>(idx);
         });
 
         m_faActionBDropdown.setItems(kNames);
-        m_faActionBDropdown.setSelected(0);
-        m_faActionBDropdown.setOnChange([this](int idx) {
+        m_faActionBDropdown.setSelectedIndex(0);
+        m_faActionBDropdown.setOnChange([this](int idx, const std::string&) {
             if (m_followActionPtr)
                 m_followActionPtr->actionB = static_cast<FollowActionType>(idx);
         });
@@ -647,8 +612,8 @@ private:
         m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
         if (!m_faBarCountKnob.isEditing())
             m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
-        m_faActionADropdown.setSelected(static_cast<int>(m_followActionPtr->actionA));
-        m_faActionBDropdown.setSelected(static_cast<int>(m_followActionPtr->actionB));
+        m_faActionADropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionA));
+        m_faActionBDropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionB));
         if (!m_faCrossfader.isDragging())
             m_faCrossfader.setValue(static_cast<float>(m_followActionPtr->chanceA));
 
@@ -680,10 +645,13 @@ private:
         f.drawText(r, "Action A", sx, rowY, labelScale, Theme::textSecondary);
         f.drawText(r, "Action B", rightX, rowY, labelScale, Theme::textSecondary);
         rowY += 20.0f;
-        m_faActionADropdown.layout(Rect{sx, rowY, halfW, inputH}, ctx);
-        m_faActionADropdown.paint(ctx);
-        m_faActionBDropdown.layout(Rect{rightX, rowY, halfW, inputH}, ctx);
-        m_faActionBDropdown.paint(ctx);
+        {
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            m_faActionADropdown.layout(Rect{sx, rowY, halfW, inputH}, v2ctx);
+            m_faActionADropdown.render(v2ctx);
+            m_faActionBDropdown.layout(Rect{rightX, rowY, halfW, inputH}, v2ctx);
+            m_faActionBDropdown.render(v2ctx);
+        }
         rowY += inputH + 10.0f;
 
         // Crossfader (A/B chance)
@@ -705,8 +673,12 @@ private:
         rowY += 28.0f;
 
         // Target dropdown — A..H plus shader @range uniforms.
-        m_clipTargetDropdown.layout(Rect{sx, rowY, sw, 20.0f}, ctx);
-        m_clipTargetDropdown.paint(ctx);
+        // v2 widget; popup paints via LayerStack.
+        {
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            m_clipTargetDropdown.layout(Rect{sx, rowY, sw, 20.0f}, v2ctx);
+            m_clipTargetDropdown.render(v2ctx);
+        }
         rowY += 24.0f;
 
         // Envelope drawing area.
