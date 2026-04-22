@@ -7,6 +7,8 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
@@ -46,26 +48,26 @@ public:
         m_mixLabel.setText("MIX");
         m_mixLabel.setColor(Theme::textDim);
 
+        // Left-margin show-toggles. v2 FwToggle (Button variant) with
+        // a soft blue accent so the "on" state reads as highlighted
+        // without being loud.
+        const Color kSoftBlue{60, 80, 110};
         m_ioToggle.setLabel("I/O");
-        m_ioToggle.setTextColor(Theme::textDim);
-        m_ioToggle.setColor(Theme::clipSlotEmpty);
-        m_ioToggle.setOnClick([this]() {
-            m_showIO = !m_showIO;
-        });
+        m_ioToggle.setAccentColor(kSoftBlue);
+        m_ioToggle.setState(m_showIO);
+        m_ioToggle.setOnChange([this](bool on) { m_showIO = on; });
 
         m_sendToggle.setLabel("S");
-        m_sendToggle.setTextColor(Theme::textDim);
-        m_sendToggle.setColor(Theme::clipSlotEmpty);
-        m_sendToggle.setOnClick([this]() {
-            m_showSends = !m_showSends;
-        });
+        m_sendToggle.setAccentColor(kSoftBlue);
+        m_sendToggle.setState(m_showSends);
+        m_sendToggle.setOnChange([this](bool on) { m_showSends = on; });
 
         m_returnToggle.setLabel("R");
-        m_returnToggle.setTextColor(Theme::textDim);
-        m_returnToggle.setColor(Theme::clipSlotEmpty);
-        m_returnToggle.setOnClick([this]() {
-            m_showReturns = !m_showReturns;
-            if (m_onReturnToggle) m_onReturnToggle(m_showReturns);
+        m_returnToggle.setAccentColor(kSoftBlue);
+        m_returnToggle.setState(m_showReturns);
+        m_returnToggle.setOnChange([this](bool on) {
+            m_showReturns = on;
+            if (m_onReturnToggle) m_onReturnToggle(on);
         });
 
         m_scrollbar.setOnScroll([this](float pos) {
@@ -182,14 +184,14 @@ public:
 
 private:
     struct TrackStrip {
-        FwButton stopBtn;
-        FwButton muteBtn;
-        FwButton soloBtn;
-        FwButton armBtn;
-        FwButton monBtn;
-        FwButton autoBtn;   // Automation mode: Off/Read/Touch/Latch
+        ::yawn::ui::fw2::FwButton stopBtn;
+        ::yawn::ui::fw2::FwToggle muteBtn;
+        ::yawn::ui::fw2::FwToggle soloBtn;
+        ::yawn::ui::fw2::FwToggle armBtn;
+        ::yawn::ui::fw2::FwButton monBtn;   // 3-state cycle Off/In/Auto
+        ::yawn::ui::fw2::FwButton autoBtn;  // 4-state cycle Off/Read/Touch/Latch
         ::yawn::ui::fw2::FwDropDown audioInputDrop;
-        FwButton monoBtn;
+        ::yawn::ui::fw2::FwToggle monoBtn;
         ::yawn::ui::fw2::FwDropDown midiInDrop;
         ::yawn::ui::fw2::FwDropDown midiInChDrop;
         ::yawn::ui::fw2::FwDropDown midiOutDrop;
@@ -264,9 +266,9 @@ private:
     TrackStrip m_strips[kMaxTracks];
     ScrollBar  m_scrollbar;
     Label      m_mixLabel;
-    FwButton   m_ioToggle;
-    FwButton   m_sendToggle;
-    FwButton   m_returnToggle;
+    ::yawn::ui::fw2::FwToggle m_ioToggle;
+    ::yawn::ui::fw2::FwToggle m_sendToggle;
+    ::yawn::ui::fw2::FwToggle m_returnToggle;
 
     int   m_selectedTrack = 0;
     float m_scrollX       = 0.0f;

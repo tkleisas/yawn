@@ -36,22 +36,23 @@ void MixerPanel::paint(UIContext& ctx) {
     float toggleX = x + 4;
     float toggleY = stripY + 22;
 
-    m_ioToggle.setColor(m_showIO ? Color{60, 80, 110} : Theme::clipSlotEmpty);
-    m_ioToggle.setTextColor(m_showIO ? Color{150, 200, 255} : Theme::textDim);
-    m_ioToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
-    m_ioToggle.paint(ctx);
+    // v2 toggles — setState drives the accent-fill visual; no per-paint
+    // colour juggling needed. Sync state from the panel's bools each
+    // paint (cheap no-op when unchanged).
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+    m_ioToggle.setState(m_showIO);
+    m_ioToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, v2ctx);
+    m_ioToggle.render(v2ctx);
 
     toggleY += toggleH + 2;
-    m_sendToggle.setColor(m_showSends ? Color{60, 80, 110} : Theme::clipSlotEmpty);
-    m_sendToggle.setTextColor(m_showSends ? Color{150, 200, 255} : Theme::textDim);
-    m_sendToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
-    m_sendToggle.paint(ctx);
+    m_sendToggle.setState(m_showSends);
+    m_sendToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, v2ctx);
+    m_sendToggle.render(v2ctx);
 
     toggleY += toggleH + 2;
-    m_returnToggle.setColor(m_showReturns ? Color{60, 80, 110} : Theme::clipSlotEmpty);
-    m_returnToggle.setTextColor(m_showReturns ? Color{150, 200, 255} : Theme::textDim);
-    m_returnToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
-    m_returnToggle.paint(ctx);
+    m_returnToggle.setState(m_showReturns);
+    m_returnToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, v2ctx);
+    m_returnToggle.render(v2ctx);
 
     float gridX = x + Theme::kSceneLabelWidth;
     float gridW = w - Theme::kSceneLabelWidth;
@@ -90,13 +91,25 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
         return m_scrollbar.onMouseDown(e);
     }
 
-    // Toggle buttons in left margin
-    if (!rightClick && hitWidget(m_ioToggle, mx, my))
-        return m_ioToggle.onMouseDown(e);
-    if (!rightClick && hitWidget(m_sendToggle, mx, my))
-        return m_sendToggle.onMouseDown(e);
-    if (!rightClick && hitWidget(m_returnToggle, mx, my))
-        return m_returnToggle.onMouseDown(e);
+    // Toggle buttons in left margin — v2 FwToggle, routed through the
+    // v1→v2 event bridge + m_v2Dragging capture (same shape the strip
+    // buttons use below).
+    {
+        auto routePanelToggle = [&](::yawn::ui::fw2::FwToggle& t) -> bool {
+            if (rightClick) return false;
+            const auto& b = t.bounds();
+            if (mx < b.x || mx >= b.x + b.w) return false;
+            if (my < b.y || my >= b.y + b.h) return false;
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+            t.dispatchMouseDown(ev);
+            m_v2Dragging = &t;
+            captureMouse();
+            return true;
+        };
+        if (routePanelToggle(m_ioToggle))     return true;
+        if (routePanelToggle(m_sendToggle))   return true;
+        if (routePanelToggle(m_returnToggle)) return true;
+    }
 
     float x = m_bounds.x, y = m_bounds.y;
     float gridX = x + Theme::kSceneLabelWidth;
@@ -114,50 +127,70 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
 
         auto& s = m_strips[t];
 
-        if (!rightClick && hitWidget(s.stopBtn, mx, my))
-            return s.stopBtn.onMouseDown(e);
-        if (!rightClick && hitWidget(s.muteBtn, mx, my))
-            return s.muteBtn.onMouseDown(e);
-        if (!rightClick && hitWidget(s.soloBtn, mx, my))
-            return s.soloBtn.onMouseDown(e);
-        if (!rightClick && hitWidget(s.armBtn, mx, my))
-            return s.armBtn.onMouseDown(e);
-        if (hitWidget(s.monBtn, mx, my)) {
-            if (rightClick) {
-                auto oldMode = m_project->track(t).monitorMode;
-                m_project->track(t).monitorMode = Track::MonitorMode::Auto;
-                m_engine->sendCommand(
-                    audio::SetTrackMonitorMsg{t,
-                        static_cast<uint8_t>(Track::MonitorMode::Auto)});
-                if (m_undoManager) {
-                    m_undoManager->push({"Reset Monitor",
-                        [this, t, oldMode]{ m_project->track(t).monitorMode = oldMode;
-                            m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(oldMode)}); },
-                        [this, t]{ m_project->track(t).monitorMode = Track::MonitorMode::Auto;
-                            m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(Track::MonitorMode::Auto)}); },
-                        ""});
+        // v2 button/toggle hit-tests — route through dispatchMouseDown +
+        // m_v2Dragging so the fw2 gesture SM gets its down/up pair via
+        // v1 capture. Uses the fw2 widget's own bounds() for hit-test.
+        auto routeV2Btn = [&](::yawn::ui::fw2::Widget& w) -> bool {
+            const auto& b = w.bounds();
+            if (mx < b.x || mx >= b.x + b.w) return false;
+            if (my < b.y || my >= b.y + b.h) return false;
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+            w.dispatchMouseDown(ev);
+            m_v2Dragging = &w;
+            captureMouse();
+            return true;
+        };
+
+        if (!rightClick && routeV2Btn(s.stopBtn))  return true;
+        if (!rightClick && routeV2Btn(s.muteBtn))  return true;
+        if (!rightClick && routeV2Btn(s.soloBtn))  return true;
+        if (!rightClick && routeV2Btn(s.armBtn))   return true;
+
+        // Monitor button — right-click resets to Auto (keep v1 undo),
+        // otherwise forward to v2 for the cycle.
+        {
+            const auto& b = s.monBtn.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                if (rightClick) {
+                    auto oldMode = m_project->track(t).monitorMode;
+                    m_project->track(t).monitorMode = Track::MonitorMode::Auto;
+                    m_engine->sendCommand(
+                        audio::SetTrackMonitorMsg{t,
+                            static_cast<uint8_t>(Track::MonitorMode::Auto)});
+                    if (m_undoManager) {
+                        m_undoManager->push({"Reset Monitor",
+                            [this, t, oldMode]{ m_project->track(t).monitorMode = oldMode;
+                                m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(oldMode)}); },
+                            [this, t]{ m_project->track(t).monitorMode = Track::MonitorMode::Auto;
+                                m_engine->sendCommand(audio::SetTrackMonitorMsg{t, static_cast<uint8_t>(Track::MonitorMode::Auto)}); },
+                            ""});
+                    }
+                    return true;
                 }
-                return true;
+                return routeV2Btn(s.monBtn);
             }
-            return s.monBtn.onMouseDown(e);
         }
 
-        if (hitWidget(s.autoBtn, mx, my)) {
-            if (rightClick) {
-                auto oldMode = m_project->track(t).autoMode;
-                m_project->track(t).autoMode = automation::AutoMode::Off;
-                m_engine->sendCommand(audio::SetAutoModeMsg{t, 0});
-                if (m_undoManager) {
-                    m_undoManager->push({"Reset Auto Mode",
-                        [this, t, oldMode]{ m_project->track(t).autoMode = oldMode;
-                            m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(oldMode)}); },
-                        [this, t]{ m_project->track(t).autoMode = automation::AutoMode::Off;
-                            m_engine->sendCommand(audio::SetAutoModeMsg{t, 0}); },
-                        ""});
+        // Auto button — right-click resets to Off, otherwise cycle.
+        {
+            const auto& b = s.autoBtn.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                if (rightClick) {
+                    auto oldMode = m_project->track(t).autoMode;
+                    m_project->track(t).autoMode = automation::AutoMode::Off;
+                    m_engine->sendCommand(audio::SetAutoModeMsg{t, 0});
+                    if (m_undoManager) {
+                        m_undoManager->push({"Reset Auto Mode",
+                            [this, t, oldMode]{ m_project->track(t).autoMode = oldMode;
+                                m_engine->sendCommand(audio::SetAutoModeMsg{t, static_cast<uint8_t>(oldMode)}); },
+                            [this, t]{ m_project->track(t).autoMode = automation::AutoMode::Off;
+                                m_engine->sendCommand(audio::SetAutoModeMsg{t, 0}); },
+                            ""});
+                    }
+                    return true;
                 }
-                return true;
+                return routeV2Btn(s.autoBtn);
             }
-            return s.autoBtn.onMouseDown(e);
         }
 
         if (m_showIO && m_project->track(t).type == Track::Type::Audio) {
@@ -170,8 +203,7 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                     return true;
                 }
             }
-            if (!rightClick && hitWidget(s.monoBtn, mx, my))
-                return s.monoBtn.onMouseDown(e);
+            if (!rightClick && routeV2Btn(s.monoBtn)) return true;
         } else if (m_showIO && m_project->track(t).type == Track::Type::Midi) {
             auto tryToggle = [&](::yawn::ui::fw2::FwDropDown& d) -> bool {
                 const auto& b = d.bounds();
@@ -325,48 +357,51 @@ void MixerPanel::setupStripCallbacks(int t) {
         m_engine->sendCommand(audio::StopMidiClipMsg{t});
     });
 
+    // Mute — v2 FwToggle. Red accent carries the muted state.
     s.muteBtn.setLabel("M");
-    s.muteBtn.setOnClick([this, t]() {
+    s.muteBtn.setAccentColor(Color{255, 80, 80});
+    s.muteBtn.setOnChange([this, t](bool on) {
         if (!m_engine) return;
-        bool cur = m_engine->mixer().trackChannel(t).muted;
-        m_engine->sendCommand(audio::SetTrackMuteMsg{t, !cur});
+        bool cur = !on;   // state before this click
+        m_engine->sendCommand(audio::SetTrackMuteMsg{t, on});
         if (m_undoManager) {
-            bool newVal = !cur;
             m_undoManager->push({"Toggle Mute",
                 [this, t, cur]{ m_engine->sendCommand(audio::SetTrackMuteMsg{t, cur}); },
-                [this, t, newVal]{ m_engine->sendCommand(audio::SetTrackMuteMsg{t, newVal}); },
+                [this, t, on]{ m_engine->sendCommand(audio::SetTrackMuteMsg{t, on}); },
                 ""});
         }
     });
 
+    // Solo — v2 FwToggle. Yellow accent carries the soloed state.
     s.soloBtn.setLabel("S");
-    s.soloBtn.setOnClick([this, t]() {
+    s.soloBtn.setAccentColor(Color{255, 200, 50});
+    s.soloBtn.setOnChange([this, t](bool on) {
         if (!m_engine) return;
-        bool cur = m_engine->mixer().trackChannel(t).soloed;
-        m_engine->sendCommand(audio::SetTrackSoloMsg{t, !cur});
+        bool cur = !on;
+        m_engine->sendCommand(audio::SetTrackSoloMsg{t, on});
         if (m_undoManager) {
-            bool newVal = !cur;
             m_undoManager->push({"Toggle Solo",
                 [this, t, cur]{ m_engine->sendCommand(audio::SetTrackSoloMsg{t, cur}); },
-                [this, t, newVal]{ m_engine->sendCommand(audio::SetTrackSoloMsg{t, newVal}); },
+                [this, t, on]{ m_engine->sendCommand(audio::SetTrackSoloMsg{t, on}); },
                 ""});
         }
     });
 
+    // Arm — v2 FwToggle. Deeper red accent carries the armed state.
     s.armBtn.setLabel("R");
-    s.armBtn.setOnClick([this, t]() {
+    s.armBtn.setAccentColor(Color{200, 40, 40});
+    s.armBtn.setOnChange([this, t](bool on) {
         if (!m_project || !m_engine) return;
-        bool cur = m_project->track(t).armed;
-        m_project->track(t).armed = !cur;
-        m_engine->sendCommand(audio::SetTrackArmedMsg{t, !cur});
-        if (m_onTrackArmed) m_onTrackArmed(t, !cur);
+        bool cur = !on;
+        m_project->track(t).armed = on;
+        m_engine->sendCommand(audio::SetTrackArmedMsg{t, on});
+        if (m_onTrackArmed) m_onTrackArmed(t, on);
         if (m_undoManager) {
-            bool newVal = !cur;
             m_undoManager->push({"Toggle Arm",
                 [this, t, cur]{ m_project->track(t).armed = cur;
                     m_engine->sendCommand(audio::SetTrackArmedMsg{t, cur}); },
-                [this, t, newVal]{ m_project->track(t).armed = newVal;
-                    m_engine->sendCommand(audio::SetTrackArmedMsg{t, newVal}); },
+                [this, t, on]{ m_project->track(t).armed = on;
+                    m_engine->sendCommand(audio::SetTrackArmedMsg{t, on}); },
                 ""});
         }
     });
@@ -456,19 +491,21 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
+    // Mono — v2 FwToggle. Green accent for the mono-on state (matches
+    // the v1 green highlight). Label is set per-paint to Mono/Stereo.
     s.monoBtn.setLabel("S");
-    s.monoBtn.setOnClick([this, t]() {
+    s.monoBtn.setAccentColor(Color{60, 100, 60});
+    s.monoBtn.setOnChange([this, t](bool on) {
         if (!m_project || !m_engine) return;
-        bool cur = m_project->track(t).mono;
-        m_project->track(t).mono = !cur;
-        m_engine->sendCommand(audio::SetTrackMonoMsg{t, !cur});
+        bool cur = !on;
+        m_project->track(t).mono = on;
+        m_engine->sendCommand(audio::SetTrackMonoMsg{t, on});
         if (m_undoManager) {
-            bool newVal = !cur;
             m_undoManager->push({"Toggle Mono",
                 [this, t, cur]{ m_project->track(t).mono = cur;
                     m_engine->sendCommand(audio::SetTrackMonoMsg{t, cur}); },
-                [this, t, newVal]{ m_project->track(t).mono = newVal;
-                    m_engine->sendCommand(audio::SetTrackMonoMsg{t, newVal}); },
+                [this, t, on]{ m_project->track(t).mono = on;
+                    m_engine->sendCommand(audio::SetTrackMonoMsg{t, on}); },
                 ""});
         }
     });
@@ -681,85 +718,90 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
     float curY = stripY + 24;
     float btnW = std::min((iw - 16) / 3.0f, kButtonWidth);
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
-    // Stop / Mute / Solo row
+    // Stop / Mute / Solo row — all v2 widgets.
+    // Stop: FwButton with a small stop-icon square overlaid on top.
     {
+        s.stopBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, v2ctx);
+        s.stopBtn.render(v2ctx);
         auto& sb = s.stopBtn.bounds();
-        s.stopBtn.setColor(Theme::clipSlotEmpty);
-        s.stopBtn.setTextColor(Theme::textSecondary);
-        s.stopBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
-        s.stopBtn.paint(ctx);
         float iconSize = 6.0f;
         float iconX = sb.x + (sb.w - iconSize) * 0.5f;
         float iconY = sb.y + (sb.h - iconSize) * 0.5f;
         r.drawRect(iconX, iconY, iconSize, iconSize, Theme::textSecondary);
     }
 
-    s.muteBtn.setColor(ch.muted ? Color{255, 80, 80} : Theme::clipSlotEmpty);
-    s.muteBtn.setTextColor(ch.muted ? Color{0, 0, 0} : Theme::textSecondary);
-    s.muteBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
-    s.muteBtn.paint(ctx);
+    // Mute: FwToggle. setState drives the red accent fill.
+    s.muteBtn.setState(ch.muted);
+    s.muteBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, v2ctx);
+    s.muteBtn.render(v2ctx);
 
-    s.soloBtn.setColor(ch.soloed ? Color{255, 200, 50} : Theme::clipSlotEmpty);
-    s.soloBtn.setTextColor(ch.soloed ? Color{0, 0, 0} : Theme::textSecondary);
-    s.soloBtn.layout(Rect{ix + 4 + (btnW + 2) * 2, curY, btnW, kButtonHeight}, ctx);
-    s.soloBtn.paint(ctx);
+    // Solo: FwToggle. setState drives the yellow accent fill.
+    s.soloBtn.setState(ch.soloed);
+    s.soloBtn.layout(Rect{ix + 4 + (btnW + 2) * 2, curY, btnW, kButtonHeight}, v2ctx);
+    s.soloBtn.render(v2ctx);
 
     // Arm + Monitor row
     curY += kButtonHeight + 2;
     bool armed = track.armed;
-    s.armBtn.setColor(armed ? Color{200, 40, 40} : Theme::clipSlotEmpty);
-    s.armBtn.setTextColor(armed ? Color{255, 255, 255} : Theme::textSecondary);
     s.armBtn.setLabel("R");
-    s.armBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
-    s.armBtn.paint(ctx);
+    s.armBtn.setState(armed);
+    s.armBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, v2ctx);
+    s.armBtn.render(v2ctx);
 
+    // Monitor — v2 FwButton, cycles Off/In/Auto. Accent color reflects
+    // current state and setHighlighted(true) shows the fill. Auto is
+    // the "no highlight" default (matches v1's clipSlotEmpty look).
     auto mode = track.monitorMode;
     const char* monLabel = "Auto";
-    Color monBg = Theme::clipSlotEmpty;
+    Color monAccent = Color{40, 80, 40};
+    bool monHL = false;
     if (mode == Track::MonitorMode::In) {
         monLabel = "In";
-        monBg = Color{40, 80, 40};
+        monAccent = Color{40, 80, 40};
+        monHL = true;
     } else if (mode == Track::MonitorMode::Off) {
         monLabel = "Off";
-        monBg = Color{50, 40, 40};
+        monAccent = Color{80, 40, 40};
+        monHL = true;
     }
     s.monBtn.setLabel(monLabel);
-    s.monBtn.setColor(monBg);
-    s.monBtn.setTextColor((mode == Track::MonitorMode::In) ? Color{120, 230, 120}
-                                                            : Theme::textSecondary);
+    s.monBtn.setAccentColor(monAccent);
+    s.monBtn.setHighlighted(monHL);
     float monX = ix + 4 + btnW + 2;
     float monW = iw - 8 - btnW - 2;          // fill remaining row width
-    s.monBtn.layout(Rect{monX, curY, monW, kButtonHeight}, ctx);
-    s.monBtn.paint(ctx);
+    s.monBtn.layout(Rect{monX, curY, monW, kButtonHeight}, v2ctx);
+    s.monBtn.render(v2ctx);
 
     curY += kButtonHeight + 2;
 
-    // Automation mode button row
+    // Automation mode — v2 FwButton, 4-state cycle Off/Read/Touch/Latch.
+    // Same pattern as monBtn: colored accent + highlight only when on.
     {
         auto am = track.autoMode;
         const char* autoLabel = "Off";
-        Color autoBg = Theme::clipSlotEmpty;
-        Color autoTxt = Theme::textDim;
+        Color autoAccent = Theme::clipSlotEmpty;
+        bool autoHL = false;
         if (am == automation::AutoMode::Read) {
             autoLabel = "Read";
-            autoBg = Color{40, 80, 40};
-            autoTxt = Color{120, 230, 120};
+            autoAccent = Color{40, 80, 40};
+            autoHL = true;
         } else if (am == automation::AutoMode::Touch) {
             autoLabel = "Touch";
-            autoBg = Color{100, 70, 20};
-            autoTxt = Color{255, 200, 80};
+            autoAccent = Color{100, 70, 20};
+            autoHL = true;
         } else if (am == automation::AutoMode::Latch) {
             autoLabel = "Latch";
-            autoBg = Color{100, 30, 30};
-            autoTxt = Color{255, 120, 120};
+            autoAccent = Color{100, 30, 30};
+            autoHL = true;
         }
         s.autoBtn.setLabel(autoLabel);
-        s.autoBtn.setColor(autoBg);
-        s.autoBtn.setTextColor(autoTxt);
+        s.autoBtn.setAccentColor(autoAccent);
+        s.autoBtn.setHighlighted(autoHL);
         float autoW = iw - 8;
-        s.autoBtn.layout(Rect{ix + 4, curY, autoW, kButtonHeight}, ctx);
-        s.autoBtn.paint(ctx);
+        s.autoBtn.layout(Rect{ix + 4, curY, autoW, kButtonHeight}, v2ctx);
+        s.autoBtn.render(v2ctx);
     }
 
     curY += kButtonHeight + 4;
@@ -926,13 +968,12 @@ void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
     s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
     s.audioInputDrop.render(v2ctx);
 
-    // Mono toggle
+    // Mono toggle — v2 FwToggle. setState drives the green accent fill.
     curY += dropH + 2;
     s.monoBtn.setLabel(track.mono ? "Mono" : "Stereo");
-    s.monoBtn.setColor(track.mono ? Color{60, 100, 60} : Theme::clipSlotEmpty);
-    s.monoBtn.setTextColor(track.mono ? Color{140, 240, 140} : Theme::textSecondary);
-    s.monoBtn.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-    s.monoBtn.paint(ctx);
+    s.monoBtn.setState(track.mono);
+    s.monoBtn.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+    s.monoBtn.render(v2ctx);
 }
 
 void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
