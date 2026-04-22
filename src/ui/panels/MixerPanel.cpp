@@ -188,11 +188,21 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             if (tryToggle(s.sidechainDrop)) return true;
         }
 
-        // Send knobs
+        // Send knobs — v2 widgets hosted inside the v1 panel. Drag
+        // uses the fw2 gesture SM, so we translate the event, capture
+        // v1 mouse so moves route back here, and stash the widget in
+        // m_v2Dragging.
         if (m_showSends) {
             for (int d = 0; d < kMaxReturnBuses; ++d) {
-                if (hitWidget(s.sendKnobs[d], mx, my))
-                    return s.sendKnobs[d].onMouseDown(e);
+                auto& kn = s.sendKnobs[d];
+                const auto& kb = kn.bounds();
+                if (mx < kb.x || mx >= kb.x + kb.w) continue;
+                if (my < kb.y || my >= kb.y + kb.h) continue;
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, kb);
+                kn.dispatchMouseDown(ev);
+                m_v2Dragging = &kn;
+                captureMouse();
+                return true;
             }
         }
 
@@ -595,13 +605,17 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    // Send knobs — one per return bus
+    // Send knobs — one per return bus. fw2 widgets; small discs with
+    // a single-letter label.
     static const char* sendLabels[] = {"A","B","C","D","E","F","G","H"};
     for (int d = 0; d < kMaxReturnBuses; ++d) {
         auto& knob = s.sendKnobs[d];
         knob.setLabel(sendLabels[d]);
+        knob.setShowLabel(true);
+        knob.setShowValue(false);                // tiny knob — no value row
+        knob.setDiameter(20.0f);
         knob.setRange(0.0f, 1.0f);
-        knob.setDefault(0.0f);
+        knob.setDefaultValue(0.0f);
         knob.setOnChange([this, t, d](float v) {
             if (!m_engine) return;
             m_engine->sendCommand(audio::SetSendLevelMsg{t, d, v});
@@ -609,28 +623,24 @@ void MixerPanel::setupStripCallbacks(int t) {
             bool shouldEnable = (v > 0.001f);
             m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, shouldEnable});
         });
-        knob.setOnTouch([this, t, d](bool touching) {
+        // Drag-end undo. v2 passes (startValue, endValue) so the old
+        // "onTouch with manually-captured sendDragStart" dance isn't
+        // needed any more.
+        knob.setOnDragEnd([this, t, d](float oldVal, float newVal) {
             if (!m_undoManager || !m_engine) return;
-            if (touching) {
-                m_strips[t].sendDragStart[d] = m_strips[t].sendKnobs[d].value();
-            } else {
-                float oldVal = m_strips[t].sendDragStart[d];
-                float newVal = m_strips[t].sendKnobs[d].value();
-                if (oldVal != newVal) {
-                    m_undoManager->push({"Change Send Level",
-                        [this, t, d, oldVal]{
-                            m_strips[t].sendKnobs[d].setValue(oldVal);
-                            m_engine->sendCommand(audio::SetSendLevelMsg{t, d, oldVal});
-                            m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, oldVal > 0.001f});
-                        },
-                        [this, t, d, newVal]{
-                            m_strips[t].sendKnobs[d].setValue(newVal);
-                            m_engine->sendCommand(audio::SetSendLevelMsg{t, d, newVal});
-                            m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, newVal > 0.001f});
-                        },
-                        "send." + std::to_string(t) + "." + std::to_string(d)});
-                }
-            }
+            if (oldVal == newVal) return;
+            m_undoManager->push({"Change Send Level",
+                [this, t, d, oldVal]{
+                    m_strips[t].sendKnobs[d].setValue(oldVal);
+                    m_engine->sendCommand(audio::SetSendLevelMsg{t, d, oldVal});
+                    m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, oldVal > 0.001f});
+                },
+                [this, t, d, newVal]{
+                    m_strips[t].sendKnobs[d].setValue(newVal);
+                    m_engine->sendCommand(audio::SetSendLevelMsg{t, d, newVal});
+                    m_engine->sendCommand(audio::SetSendEnabledMsg{t, d, newVal > 0.001f});
+                },
+                "send." + std::to_string(t) + "." + std::to_string(d)});
         });
     }
 }
@@ -783,10 +793,13 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
             auto& knob = s.sendKnobs[d];
             const auto& send = ch.sends[d];
-            if (!knob.isDragging())
-                knob.setValue(send.level);
+            // v2 setValue is a no-op on equal values, so unconditional
+            // sync from engine state is safe. While dragging, onChange
+            // writes engine state first, then this setValue sees the
+            // same value and skips.
+            knob.setValue(send.level);
 
-            // Color feedback: black → green → yellow → red
+            // Color feedback: off → green → yellow → red
             float v = knob.value();
             Color arcCol;
             if (v < 0.01f) {
@@ -806,15 +819,12 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
                     static_cast<uint8_t>(220 * (1.0f - t)),
                     0, 255};
             }
-            knob.setArcColor(arcCol);
-            knob.setArcColorActive(Color{
-                static_cast<uint8_t>(std::min(255, arcCol.r + 40)),
-                static_cast<uint8_t>(std::min(255, arcCol.g + 40)),
-                static_cast<uint8_t>(std::min(255, arcCol.b + 40)),
-                arcCol.a});
+            knob.setAccentColor(arcCol);
 
-            knob.layout(Rect{kx, ky, knobW, knobH}, ctx);
-            knob.paint(ctx);
+            // Hosted v2 widget → render through the fw2 global UIContext.
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            knob.layout(Rect{kx, ky, knobW, knobH}, v2ctx);
+            knob.render(v2ctx);
         }
         int rows = (kMaxReturnBuses + cols - 1) / cols;
         curY += rows * knobH + 2;

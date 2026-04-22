@@ -8,7 +8,9 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -131,6 +133,14 @@ public:
         // LayerStack dispatch in App::pollEvents. v2 dropdowns also
         // get their popup hover via LayerStack while open — no
         // per-strip forwarding needed.
+        // v2 knob drag in progress — forward translated events to
+        // the gesture SM. Handled BEFORE v1 capture because v2 widgets
+        // don't participate in v1's capturedWidget() mechanism.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
         }
@@ -143,6 +153,13 @@ public:
     }
 
     bool onMouseUp(MouseEvent& e) override {
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseUp(e);
         }
@@ -187,9 +204,16 @@ private:
         Label nameLabel;
         Label dbLabel;
         float panDragStart = 0.0f;  // captured on touch start for undo
-        FwKnob sendKnobs[kMaxReturnBuses];
-        float sendDragStart[kMaxReturnBuses] = {};
+        ::yawn::ui::fw2::FwKnob sendKnobs[kMaxReturnBuses];
+        // (sendDragStart retired — v2's setOnDragEnd delivers
+        // (startValue, endValue) directly, no manual capture needed.)
     };
+
+    // Tracks which v2 widget currently owns a drag. v2 widgets drive
+    // their own gesture SM and do NOT participate in v1 capturedWidget()
+    // — so the panel keeps its own pointer, sets it on mouseDown, and
+    // clears on mouseUp. Null = no v2 drag.
+    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
 
     bool hitWidget(Widget& w, float mx, float my) {
         auto& b = w.bounds();
