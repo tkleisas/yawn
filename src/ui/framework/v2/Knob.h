@@ -19,10 +19,17 @@
 // in a distinct colour so at a glance you can tell "this knob is at
 // 0.5 but being pushed to 0.7 right now".
 //
+// Modes supported by this one class (flags rather than subclasses so
+// the DeviceWidget factory can pivot behaviour without swapping types):
+//   • addDetent(value, snapRangeFrac) — rolled-in v1 FwDentedKnob. The
+//     raw drag position is snapped to the nearest detent when within
+//     snapRangeFrac × (max − min) of it. Use for default-value "home
+//     feel" on bipolar params (e.g. pan at 0).
+//   • setWrapMode(true) — rolled-in v1 FwKnob360. Arc becomes a full
+//     360° sweep starting at 12 o'clock; the drag math uses modular
+//     arithmetic so rolling past max wraps to min (phase parameters).
+//
 // Spec-matching items deferred to later:
-//   • Double-click inline text-input (needs FwNumberInput first).
-//   • Detent snap (v1 FwDentedKnob — separate variant later).
-//   • 360° wrap mode (v1 FwKnob360 — specialized variant).
 //   • Accessibility attrs (aria-valuenow etc.).
 //
 // See docs/widgets/knob.md for the full spec.
@@ -33,6 +40,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace yawn {
 namespace ui {
@@ -113,6 +121,29 @@ public:
 
     void setFineMode(bool shiftIsFine)   { m_shiftFine = shiftIsFine; }
 
+    // ─── Detents (rolled-in FwDentedKnob behaviour) ───────────────
+    // A detent is a "sticky" value the knob snaps to while the raw
+    // drag position lies within snapRangeFrac × range of it. Drag
+    // far enough past and the knob releases from the detent. Visible
+    // effect is a short pause on the value near the detent.
+    //
+    // Common pattern: bipolar pan (-1..1) gets a detent at 0 so the
+    // user can drag through "centre" with a felt bump.
+    struct Detent {
+        float value;
+        float snapRangeFrac;
+    };
+    void addDetent(float value, float snapRangeFrac = 0.03f);
+    void clearDetents()                       { m_detents.clear(); }
+    const std::vector<Detent>& detents() const { return m_detents; }
+
+    // ─── Wrap mode (rolled-in FwKnob360 behaviour) ───────────────
+    // When true: arc paints a full 360° sweep starting at 12 o'clock,
+    // and drag past either end wraps around (modular arithmetic).
+    // Use for phase-like parameters with no natural endpoints.
+    void setWrapMode(bool w);
+    bool wrapMode() const                 { return m_wrapMode; }
+
     // ─── Inline edit mode ────────────────────────────────────────
     // Double-click opens a text buffer pre-filled with the current
     // value. Host forwards text input + key events while editing;
@@ -168,6 +199,11 @@ private:
 
     // Drag state
     float m_dragStartValue = 0.0f;
+    // When detents are present, m_rawValue tracks the un-snapped drag
+    // position so crossing a detent's threshold releases cleanly. Kept
+    // in sync with m_value on every setValue() / drag-start so the
+    // snap-threshold check always starts from the on-screen value.
+    float m_rawValue       = 0.0f;
 
     // Appearance
     float                 m_diameter  = 0.0f;   // 0 = auto
@@ -186,6 +222,8 @@ private:
     // Behaviour
     float m_pixelsPerFullRange = 200.0f;
     bool  m_shiftFine          = true;
+    bool  m_wrapMode           = false;
+    std::vector<Detent> m_detents;
 
     // Callbacks
     ValueCallback      m_onChange;

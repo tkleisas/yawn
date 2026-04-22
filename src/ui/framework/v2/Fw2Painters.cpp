@@ -693,11 +693,16 @@ namespace {
 
 // Arc geometry: 300° sweep starting at 7 o'clock (angle 210° cw from
 // top) and ending at 5 o'clock (angle 510° which wraps to 150°).
+// Wrap-mode knobs use a 360° sweep starting at 12 o'clock instead
+// (see kWrap*Deg) — visually signals "this parameter wraps around"
+// and matches v1 FwKnob360's layout.
 // Angle here is "degrees clockwise from top", so:
 //   x = cx + r * sin(angle)
 //   y = cy - r * cos(angle)
 constexpr float kArcStartDeg  = 210.0f;
 constexpr float kArcSweepDeg  = 300.0f;
+constexpr float kWrapStartDeg = 0.0f;      // top (12 o'clock)
+constexpr float kWrapSweepDeg = 360.0f;
 
 inline void angleToPoint(float cx, float cy, float r, float deg,
                           float& outX, float& outY) {
@@ -758,9 +763,16 @@ static void paintKnob(Widget& w, UIContext& ctx) {
     const float outerR       = discR;
     const float innerR       = outerR - arcThickness;
 
+    // Pick arc geometry. Wrap-mode knobs use a full 360° sweep from
+    // 12 o'clock — no dead-zone gap at the bottom — so the user sees
+    // "this parameter has no endpoints".
+    const bool  wrap         = k.wrapMode();
+    const float arcStartDeg  = wrap ? kWrapStartDeg : kArcStartDeg;
+    const float arcSweepDeg  = wrap ? kWrapSweepDeg : kArcSweepDeg;
+
     // Background arc (full sweep).
     fillArc(*ctx.renderer, cx, cy, innerR, outerR,
-             kArcStartDeg, kArcStartDeg + kArcSweepDeg,
+             arcStartDeg, arcStartDeg + arcSweepDeg,
              k.isEnabled() ? p.controlBg : Color{40, 40, 45, 255});
 
     // Value → normalized t ∈ [0, 1].
@@ -768,28 +780,50 @@ static void paintKnob(Widget& w, UIContext& ctx) {
     const float t = (range > 0.0f) ? (k.value() - k.min()) / range : 0.0f;
 
     // Filled arc — from min (or centre in bipolar) to current value.
-    float fillFromDeg, fillToDeg;
-    if (k.bipolar()) {
-        const float mid = kArcStartDeg + kArcSweepDeg * 0.5f;
-        const float cur = kArcStartDeg + kArcSweepDeg * t;
-        fillFromDeg = std::min(mid, cur);
-        fillToDeg   = std::max(mid, cur);
-    } else {
-        fillFromDeg = kArcStartDeg;
-        fillToDeg   = kArcStartDeg + kArcSweepDeg * t;
+    // Wrap mode has no natural "start" — rather than shade an arbitrary
+    // slice we skip the fill and rely on the indicator line to show
+    // position. (Phase-like params read more naturally as a pointer
+    // than as a proportion.)
+    if (!wrap) {
+        float fillFromDeg, fillToDeg;
+        if (k.bipolar()) {
+            const float mid = arcStartDeg + arcSweepDeg * 0.5f;
+            const float cur = arcStartDeg + arcSweepDeg * t;
+            fillFromDeg = std::min(mid, cur);
+            fillToDeg   = std::max(mid, cur);
+        } else {
+            fillFromDeg = arcStartDeg;
+            fillToDeg   = arcStartDeg + arcSweepDeg * t;
+        }
+        const Color fillColor = k.isEnabled() ? accent : p.textDim;
+        fillArc(*ctx.renderer, cx, cy, innerR, outerR,
+                 fillFromDeg, fillToDeg, fillColor);
     }
-    const Color fillColor = k.isEnabled() ? accent : p.textDim;
-    fillArc(*ctx.renderer, cx, cy, innerR, outerR,
-             fillFromDeg, fillToDeg, fillColor);
 
     // Inner disc — elevated fill inside the arc ring.
     ctx.renderer->drawFilledCircle(cx, cy, innerR - 1.0f, p.elevated, 32);
+
+    // Detent tick marks — short notches at each detent's position on
+    // the outer edge of the ring so users can see where the snap
+    // zones are before they drag into one.
+    if (!k.detents().empty() && range > 0.0f) {
+        const Color tickCol = k.isEnabled() ? p.textSecondary : p.textDim;
+        for (const auto& d : k.detents()) {
+            float dt = (d.value - k.min()) / range;
+            if (dt < 0.0f || dt > 1.0f) continue;
+            const float dDeg = arcStartDeg + arcSweepDeg * dt;
+            float tx0, ty0, tx1, ty1;
+            angleToPoint(cx, cy, outerR,        dDeg, tx0, ty0);
+            angleToPoint(cx, cy, outerR + 3.0f, dDeg, tx1, ty1);
+            ctx.renderer->drawLine(tx0, ty0, tx1, ty1, tickCol, 1.0f);
+        }
+    }
 
     // Indicator line — from just inside the arc ring toward the
     // centre, pointing at current value.
     const float indicatorR0 = innerR * 0.35f;
     const float indicatorR1 = innerR * 0.9f;
-    const float indDeg      = kArcStartDeg + kArcSweepDeg * t;
+    const float indDeg      = arcStartDeg + arcSweepDeg * t;
     float ix0, iy0, ix1, iy1;
     angleToPoint(cx, cy, indicatorR0, indDeg, ix0, iy0);
     angleToPoint(cx, cy, indicatorR1, indDeg, ix1, iy1);
@@ -802,7 +836,7 @@ static void paintKnob(Widget& w, UIContext& ctx) {
     if (k.modulatedValue()) {
         const float modT = (range > 0.0f)
             ? (*k.modulatedValue() - k.min()) / range : 0.0f;
-        const float modDeg = kArcStartDeg + kArcSweepDeg * modT;
+        const float modDeg = arcStartDeg + arcSweepDeg * modT;
         const Color modCol = k.modulationColor().value_or(p.modulation);
 
         // Thin filled arc from primary to modulated position —

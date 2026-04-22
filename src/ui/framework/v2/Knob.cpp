@@ -32,6 +32,7 @@ void FwKnob::setRange(float mn, float mx) {
     const float clamped = clampVal(m_value, m_min, m_max);
     if (clamped != m_value) {
         m_value = clamped;
+        m_rawValue = m_value;
         fireOnChange(ValueChangeSource::Programmatic);
     }
     // Range doesn't affect measured size — paint-only.
@@ -41,7 +42,18 @@ void FwKnob::setValue(float v, ValueChangeSource src) {
     const float clamped = clampVal(v, m_min, m_max);
     if (clamped == m_value) return;
     m_value = clamped;
+    m_rawValue = m_value;
     fireOnChange(src);
+}
+
+void FwKnob::addDetent(float value, float snapRangeFrac) {
+    m_detents.push_back({clampVal(value, m_min, m_max), snapRangeFrac});
+}
+
+void FwKnob::setWrapMode(bool w) {
+    if (m_wrapMode == w) return;
+    m_wrapMode = w;
+    invalidate();   // paint changes (360° vs 300° sweep)
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -145,6 +157,10 @@ Size FwKnob::onMeasure(Constraints c, UIContext& ctx) {
 
 void FwKnob::onDragStart(const DragEvent& /*e*/) {
     m_dragStartValue = m_value;
+    // Re-seed the detent-tracking "raw" position so the first delta
+    // compares against the on-screen value, not a stale cache from
+    // the previous gesture.
+    m_rawValue       = m_value;
 }
 
 void FwKnob::onDrag(const DragEvent& e) {
@@ -173,7 +189,33 @@ void FwKnob::applyVerticalDelta(float logicalDy, uint16_t modifiers) {
     // Mouse DOWN (positive dy) → value DECREASES (natural knob feel:
     // rotating downward on the right side of a knob reduces).
     const float delta = -logicalDy * (range / m_pixelsPerFullRange) * multiplier;
-    const float newVal = clampVal(m_value + delta, m_min, m_max);
+
+    // Accumulate against the raw drag position. Snap detents and wrap
+    // mode both operate on m_rawValue → m_value; writing to m_rawValue
+    // first lets a dragger pass THROUGH a detent (the raw leaves the
+    // snap zone on the other side and m_value resumes tracking).
+    m_rawValue += delta;
+
+    // Wrap mode uses modular arithmetic; otherwise clamp.
+    if (m_wrapMode) {
+        while (m_rawValue > m_max) m_rawValue -= range;
+        while (m_rawValue < m_min) m_rawValue += range;
+    } else {
+        m_rawValue = clampVal(m_rawValue, m_min, m_max);
+    }
+
+    // Detent snap: if the raw position is within snapRangeFrac × range
+    // of any detent, the displayed value lands exactly on the detent.
+    // First match wins — overlapping detents aren't meaningful.
+    float newVal = m_rawValue;
+    for (const auto& d : m_detents) {
+        const float zone = d.snapRangeFrac * range;
+        if (std::abs(m_rawValue - d.value) < zone) {
+            newVal = d.value;
+            break;
+        }
+    }
+
     if (newVal != m_value) {
         m_value = newVal;
         fireOnChange(ValueChangeSource::User);

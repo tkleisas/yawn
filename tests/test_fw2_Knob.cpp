@@ -631,3 +631,122 @@ TEST_F(KnobHarness, DoubleClickDisabledDoesNotOpen) {
     fire(1100);
     EXPECT_FALSE(k.isEditing());
 }
+
+// ─── Detents (rolled-in FwDentedKnob behaviour) ───────────────────
+//
+// addDetent(value, snapRangeFrac) installs a "sticky" value. While the
+// raw drag position lies within snapRangeFrac × range of the detent,
+// the displayed value locks to it. Drag past the threshold and the
+// displayed value resumes tracking the raw position.
+
+TEST_F(KnobHarness, AddDetentAndClear) {
+    FwKnob k;
+    EXPECT_TRUE(k.detents().empty());
+    k.addDetent(0.5f, 0.05f);
+    k.addDetent(0.9f);
+    ASSERT_EQ(k.detents().size(), 2u);
+    EXPECT_FLOAT_EQ(k.detents()[0].value, 0.5f);
+    EXPECT_FLOAT_EQ(k.detents()[0].snapRangeFrac, 0.05f);
+    EXPECT_FLOAT_EQ(k.detents()[1].value, 0.9f);
+    k.clearDetents();
+    EXPECT_TRUE(k.detents().empty());
+}
+
+TEST_F(KnobHarness, DetentSnapsWhenWithinRange) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setPixelsPerFullRange(100);
+    k.setValue(0.3f);
+    k.addDetent(0.5f, 0.05f);   // snap zone = 0.05 × 1.0 = ±0.05
+    // Drag up 18 px → raw +0.18 → reaches 0.48. Outside the snap zone
+    // (0.45..0.55)? No — 0.48 IS inside. So value snaps to 0.5.
+    simulateVerticalDrag(k, 30, 12);
+    EXPECT_FLOAT_EQ(k.value(), 0.5f);
+}
+
+TEST_F(KnobHarness, DetentReleasesPastThreshold) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setPixelsPerFullRange(100);
+    k.setValue(0.45f);
+    k.addDetent(0.5f, 0.05f);
+    // Drag up 20 px → raw 0.65 → outside 0.45..0.55 snap zone → no snap.
+    simulateVerticalDrag(k, 30, 10);
+    EXPECT_NEAR(k.value(), 0.65f, 0.001f);
+}
+
+TEST_F(KnobHarness, DetentOnlySnapsDuringDrag) {
+    // setValue from code doesn't pass through snap logic — programmatic
+    // writes are exact. (Snap is a UX affordance; if a formatter / code
+    // path sets 0.48 on purpose, we don't want it bumped to 0.5.)
+    FwKnob k;
+    k.addDetent(0.5f, 0.05f);
+    k.setValue(0.48f);
+    EXPECT_FLOAT_EQ(k.value(), 0.48f);
+}
+
+// ─── Wrap mode (rolled-in FwKnob360 behaviour) ────────────────────
+
+TEST_F(KnobHarness, WrapModeDefaultOff) {
+    FwKnob k;
+    EXPECT_FALSE(k.wrapMode());
+}
+
+TEST_F(KnobHarness, SetWrapModeTogglesAndInvalidates) {
+    FwKnob k;
+    k.measure(Constraints::loose(200, 200), ctx);
+    const int v1 = k.measureVersion();
+    k.setWrapMode(true);
+    EXPECT_TRUE(k.wrapMode());
+    // Paint-and-geometry change → invalidate bumps measureVersion
+    // (size_policy unchanged, but paint depends on wrap mode).
+    EXPECT_GT(k.measureVersion(), v1);
+}
+
+TEST_F(KnobHarness, WrapModeWrapsPastMax) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setRange(0.0f, 1.0f);
+    k.setPixelsPerFullRange(100);
+    k.setWrapMode(true);
+    k.setValue(0.9f);
+    // Drag up 30 px → raw +0.3 → raw 1.2 → wraps to 0.2.
+    simulateVerticalDrag(k, 30, 0);
+    EXPECT_NEAR(k.value(), 0.2f, 0.001f);
+}
+
+TEST_F(KnobHarness, WrapModeWrapsPastMin) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setRange(0.0f, 1.0f);
+    k.setPixelsPerFullRange(100);
+    k.setWrapMode(true);
+    k.setValue(0.1f);
+    // Drag down 30 px → raw -0.3 → raw -0.2 → wraps to 0.8.
+    simulateVerticalDrag(k, 30, 60);
+    EXPECT_NEAR(k.value(), 0.8f, 0.001f);
+}
+
+TEST_F(KnobHarness, NoWrapModeClampsAtMax) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setRange(0.0f, 1.0f);
+    k.setPixelsPerFullRange(100);
+    k.setValue(0.9f);
+    // Same 30 px up drag without wrap → clamped at 1.0.
+    simulateVerticalDrag(k, 30, 0);
+    EXPECT_FLOAT_EQ(k.value(), 1.0f);
+}
+
+TEST_F(KnobHarness, WrapModeAndDetentsCoexist) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setRange(0.0f, 1.0f);
+    k.setPixelsPerFullRange(100);
+    k.setWrapMode(true);
+    k.addDetent(0.0f, 0.05f);   // home detent (wrap boundary)
+    k.setValue(0.95f);
+    // Drag up 6 px → raw 1.01 → wraps to 0.01 → within 0.0's snap zone → 0.0.
+    simulateVerticalDrag(k, 30, 24);
+    EXPECT_FLOAT_EQ(k.value(), 0.0f);
+}
