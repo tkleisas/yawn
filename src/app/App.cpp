@@ -677,7 +677,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     items.push_back({"Set as Audio Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Audio) return;
-        m_confirmDialog->prompt(
+        ui::fw2::ConfirmDialog::prompt(
             "Change track type? All devices will be removed.",
             [this, trackIndex]() {
                 m_audioEngine.midiEffectChain(trackIndex).clear();
@@ -693,7 +693,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     items.push_back({"Set as MIDI Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Midi) return;
-        m_confirmDialog->prompt(
+        ui::fw2::ConfirmDialog::prompt(
             "Change track type? All devices will be removed.",
             [this, trackIndex]() {
                 m_audioEngine.midiEffectChain(trackIndex).clear();
@@ -710,7 +710,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     items.push_back({"Set as Visual Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Visual) return;
-        m_confirmDialog->prompt(
+        ui::fw2::ConfirmDialog::prompt(
             "Change track type to Visual? All devices will be removed.",
             [this, trackIndex]() {
                 m_audioEngine.midiEffectChain(trackIndex).clear();
@@ -1556,7 +1556,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     // project must have a home on disk. Surface this
                     // as a user-visible prompt instead of a silent
                     // log — the menu item feels broken otherwise.
-                    m_confirmDialog->prompt(
+                    ui::fw2::ConfirmDialog::prompt(
                         "Videos are imported into <project>/media/.\n"
                         "Save the project first, then try again.",
                         [this]() { saveProjectAs(); });
@@ -5164,7 +5164,7 @@ void App::processEvents() {
                         m_project.track(targetTrack).type == Track::Type::Visual &&
                         isVideoExt(file)) {
                         if (m_projectPath.empty()) {
-                            m_confirmDialog->prompt(
+                            ui::fw2::ConfirmDialog::prompt(
                                 "Videos are imported into <project>/media/.\n"
                                 "Save the project first, then drag the video again.",
                                 [this]() { saveProjectAs(); });
@@ -5758,7 +5758,7 @@ void App::newProject() {
     };
 
     if (m_projectDirty) {
-        m_confirmDialog->prompt("Save changes before creating a new project?",
+        ui::fw2::ConfirmDialog::prompt("Save changes before creating a new project?",
             [this, doNew]() {
                 if (!m_projectPath.empty()) {
                     doSaveProject(m_projectPath);
@@ -5779,7 +5779,7 @@ void App::openProject() {
     };
 
     if (m_projectDirty) {
-        m_confirmDialog->prompt("Save changes before opening another project?",
+        ui::fw2::ConfirmDialog::prompt("Save changes before opening another project?",
             [this, doOpen]() {
                 if (!m_projectPath.empty()) {
                     doSaveProject(m_projectPath);
