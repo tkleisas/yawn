@@ -198,6 +198,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Meter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/NumberInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/TextInput.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/MenuBar.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)

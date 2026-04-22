@@ -6,7 +6,7 @@
 #include "ui/Font.h"
 #include "ui/ToastManager.h"
 #include "ui/Widget.h"
-#include "ui/MenuBar.h"
+#include "ui/framework/v2/MenuBar.h"
 #include "ui/panels/DetailPanelWidget.h"
 #include "ui/panels/PianoRollPanel.h"
 #include "ui/VirtualKeyboard.h"
@@ -160,7 +160,7 @@ private:
     ui::Renderer2D m_renderer;
     ui::Font m_font;
     ui::ToastManager m_toastManager;
-    ui::MenuBar m_menuBar;
+    ::yawn::ui::fw2::FwMenuBar m_menuBar;
     ui::VirtualKeyboard m_virtualKeyboard;
     // v1 m_contextMenu retired — replaced by fw2::ContextMenu (LayerStack).
     ui::InputState m_inputState;

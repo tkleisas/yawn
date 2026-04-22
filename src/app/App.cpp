@@ -171,21 +171,26 @@ bool App::loadFont() {
 }
 
 void App::setupMenuBar() {
+    using ::yawn::ui::fw2::MenuEntry;
+    namespace M = ::yawn::ui::fw2::Menu;
+
     // File menu
     m_menuBar.addMenu("File", {
-        {"New Project",   "Ctrl+N",       [this]() { newProject(); }},
-        {"Open Project",  "Ctrl+O",       [this]() { openProject(); }},
-        {"Save Project",  "Ctrl+S",       [this]() { saveProject(); }},
-        {"Save As...",    "Ctrl+Shift+S", [this]() { saveProjectAs(); }},
-        {"Export Audio",  "",             [this]() { openExportDialog(); }, true},
-        {"Quit",          "Ctrl+Q",       [this]() { m_running = false; }, true},
+        M::item("New Project",  [this]() { newProject(); },   "Ctrl+N"),
+        M::item("Open Project", [this]() { openProject(); },  "Ctrl+O"),
+        M::item("Save Project", [this]() { saveProject(); },  "Ctrl+S"),
+        M::item("Save As...",   [this]() { saveProjectAs(); },"Ctrl+Shift+S"),
+        M::separator(),
+        M::item("Export Audio", [this]() { openExportDialog(); }),
+        M::separator(),
+        M::item("Quit",         [this]() { m_running = false; }, "Ctrl+Q"),
     });
 
     // Edit menu
     m_menuBar.addMenu("Edit", {
-        {"Undo",        "Ctrl+Z", [this]() { if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); } }},
-        {"Redo",        "Ctrl+Y", [this]() { if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); } }},
-        {"Preferences", "",       [this]() {
+        M::item("Undo", [this]() { if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); } }, "Ctrl+Z"),
+        M::item("Redo", [this]() { if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); } }, "Ctrl+Y"),
+        M::item("Preferences", [this]() {
             ui::fw::PreferencesDialog::State state;
             state.selectedOutputDevice = m_audioEngine.config().outputDevice;
             state.selectedInputDevice = m_audioEngine.config().inputDevice;
@@ -209,159 +214,173 @@ void App::setupMenuBar() {
             state.countInBars = m_settings.countInBars;
             state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
             m_preferencesDialog->open(state, &m_audioEngine, &m_midiEngine);
-        }},
+        }),
     });
 
     // View menu
     m_menuBar.addMenu("View", {
-        {"Session View",     "Tab", [this]() { switchToView(ViewMode::Session); }},
-        {"Arrangement View", "Tab", [this]() { switchToView(ViewMode::Arrangement); }},
-        {"Toggle Mixer",    "M",   [this]() { m_showMixer = !m_showMixer; }},
-        {"Detail Panel",    "D",   [this]() {
+        M::item("Session View",     [this]() { switchToView(ViewMode::Session); },     "Tab"),
+        M::item("Arrangement View", [this]() { switchToView(ViewMode::Arrangement); }, "Tab"),
+        M::item("Toggle Mixer",     [this]() { m_showMixer = !m_showMixer; }, "M"),
+        M::item("Detail Panel",     [this]() {
             m_showDetailPanel = !m_showDetailPanel;
             if (m_showDetailPanel) m_detailPanel->setOpen(true);
-        }},
-        {"Reload Controller Scripts", "", [this]() {
+        }, "D"),
+        M::item("Reload Controller Scripts", [this]() {
             m_controllerManager.reloadScripts("");
-        }},
-        {"Visual Output Window", "", [this]() {
+        }),
+        M::item("Visual Output Window", [this]() {
             m_visualEngine.setOutputVisible(!m_visualEngine.isOutputVisible());
-        }},
-        {"Visual Output Fullscreen", "F11", [this]() {
+        }),
+        M::item("Visual Output Fullscreen", [this]() {
             // If output is hidden, show it first — fullscreen on a hidden
             // window is a no-op and confusing. Toggle on a visible window.
             if (!m_visualEngine.isOutputVisible())
                 m_visualEngine.setOutputVisible(true);
             m_visualEngine.setFullscreen(!m_visualEngine.isFullscreen());
-        }},
-        {"Post FX: Add Bloom",         "", [this]() {
+        }, "F11"),
+        M::item("Post FX: Add Bloom", [this]() {
             m_visualEngine.addPostFX("assets/shaders/post/bloom.frag");
             markDirty();
             updateDetailForSelectedTrack();
-        }},
-        {"Post FX: Add Pixelate",      "", [this]() {
+        }),
+        M::item("Post FX: Add Pixelate", [this]() {
             m_visualEngine.addPostFX("assets/shaders/post/pixelate.frag");
             markDirty();
             updateDetailForSelectedTrack();
-        }},
-        {"Post FX: Add Kaleidoscope",  "", [this]() {
+        }),
+        M::item("Post FX: Add Kaleidoscope", [this]() {
             m_visualEngine.addPostFX("assets/shaders/post/kaleidoscope.frag");
             markDirty();
             updateDetailForSelectedTrack();
-        }},
-        {"Post FX: Add Chromatic Split","", [this]() {
+        }),
+        M::item("Post FX: Add Chromatic Split", [this]() {
             m_visualEngine.addPostFX("assets/shaders/post/chroma.frag");
             markDirty();
             updateDetailForSelectedTrack();
-        }},
-        {"Post FX: Add Vignette",      "", [this]() {
+        }),
+        M::item("Post FX: Add Vignette", [this]() {
             m_visualEngine.addPostFX("assets/shaders/post/vignette.frag");
             markDirty();
             updateDetailForSelectedTrack();
-        }},
-        {"Post FX: Add Invert",        "", [this]() {
+        }),
+        M::item("Post FX: Add Invert", [this]() {
             m_visualEngine.addPostFX("assets/shaders/post/invert.frag");
             markDirty();
             updateDetailForSelectedTrack();
-        }},
-        {"Post FX: Remove Last",       "", [this]() {
+        }),
+        M::item("Post FX: Remove Last", [this]() {
             int n = m_visualEngine.numPostFX();
             if (n > 0) {
                 m_visualEngine.removePostFX(n - 1);
                 markDirty();
                 updateDetailForSelectedTrack();
             }
-        }},
-        {"Post FX: Clear All",         "", [this]() {
+        }),
+        M::item("Post FX: Clear All", [this]() {
             while (m_visualEngine.numPostFX() > 0)
                 m_visualEngine.removePostFX(0);
             markDirty();
             updateDetailForSelectedTrack();
-        }},
+        }),
     });
 
     // Track menu
-    m_menuBar.addMenu("Track", {
-        {"Add Audio Track",  "",  [this]() {
-            int idx = m_project.numTracks();
-            m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
-            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
-            m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{idx, m_project.track(idx).audioInputCh});
-            markDirty();
-            m_undoManager.push({"Add Audio Track",
-                [this]{ m_project.removeLastTrack(); markDirty(); },
-                [this]{
-                    int i = m_project.numTracks();
-                    m_project.addTrack("Audio " + std::to_string(i + 1), Track::Type::Audio);
-                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 0});
-                    m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, m_project.track(i).audioInputCh});
-                    markDirty();
-                }, ""});
-            LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
-        }},
-        {"Add MIDI Track",   "",  [this]() {
-            int idx = m_project.numTracks();
-            m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
-            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
-            m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
-            markDirty();
-            m_undoManager.push({"Add MIDI Track",
-                [this, idx]{
-                    m_audioEngine.setInstrument(idx, nullptr);
-                    m_project.removeLastTrack(); markDirty();
-                },
-                [this]{
-                    int i = m_project.numTracks();
-                    m_project.addTrack("MIDI " + std::to_string(i + 1), Track::Type::Midi);
-                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 1});
-                    m_audioEngine.setInstrument(i, std::make_unique<instruments::SubtractiveSynth>());
-                    markDirty();
-                }, ""});
-            LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
-        }},
-        {"Add Visual Track", "",  [this]() {
-            int idx = m_project.numTracks();
-            m_project.addTrack("Visual " + std::to_string(idx + 1), Track::Type::Visual);
-            // Visual tracks don't participate in audio engine processing, but
-            // keep the engine's track-type map in sync for UI consistency.
-            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 2});
-            markDirty();
-            m_undoManager.push({"Add Visual Track",
-                [this]{ m_project.removeLastTrack(); markDirty(); },
-                [this]{
-                    int i = m_project.numTracks();
-                    m_project.addTrack("Visual " + std::to_string(i + 1), Track::Type::Visual);
-                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 2});
-                    markDirty();
-                }, ""});
-            LOG_INFO("Visual", "Added Visual track %d", m_project.numTracks());
-        }},
-        {"Delete Track",     "",  nullptr, true},
-        {"Rename Track",     "",  [this]() {
-            if (m_sessionPanel->visible()) {
-                m_sessionPanel->startTrackRename(m_selectedTrack);
-            } else {
-                m_arrangementPanel->startTrackRename(m_selectedTrack);
-            }
-            SDL_StartTextInput(m_mainWindow.getHandle());
-        }},
-    });
+    {
+        auto makeDeleteTrack = []() -> MenuEntry {
+            // v1 had "Delete Track" as a disabled placeholder (nullptr
+            // action + enabled=false). v2 Menu::item can't set enabled
+            // directly; build the entry manually.
+            MenuEntry e;
+            e.label = "Delete Track";
+            e.enabled = false;
+            return e;
+        };
+        m_menuBar.addMenu("Track", {
+            M::item("Add Audio Track", [this]() {
+                int idx = m_project.numTracks();
+                m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
+                m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{idx, m_project.track(idx).audioInputCh});
+                markDirty();
+                m_undoManager.push({"Add Audio Track",
+                    [this]{ m_project.removeLastTrack(); markDirty(); },
+                    [this]{
+                        int i = m_project.numTracks();
+                        m_project.addTrack("Audio " + std::to_string(i + 1), Track::Type::Audio);
+                        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 0});
+                        m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, m_project.track(i).audioInputCh});
+                        markDirty();
+                    }, ""});
+                LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
+            }),
+            M::item("Add MIDI Track", [this]() {
+                int idx = m_project.numTracks();
+                m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
+                m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
+                markDirty();
+                m_undoManager.push({"Add MIDI Track",
+                    [this, idx]{
+                        m_audioEngine.setInstrument(idx, nullptr);
+                        m_project.removeLastTrack(); markDirty();
+                    },
+                    [this]{
+                        int i = m_project.numTracks();
+                        m_project.addTrack("MIDI " + std::to_string(i + 1), Track::Type::Midi);
+                        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 1});
+                        m_audioEngine.setInstrument(i, std::make_unique<instruments::SubtractiveSynth>());
+                        markDirty();
+                    }, ""});
+                LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
+            }),
+            M::item("Add Visual Track", [this]() {
+                int idx = m_project.numTracks();
+                m_project.addTrack("Visual " + std::to_string(idx + 1), Track::Type::Visual);
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 2});
+                markDirty();
+                m_undoManager.push({"Add Visual Track",
+                    [this]{ m_project.removeLastTrack(); markDirty(); },
+                    [this]{
+                        int i = m_project.numTracks();
+                        m_project.addTrack("Visual " + std::to_string(i + 1), Track::Type::Visual);
+                        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 2});
+                        markDirty();
+                    }, ""});
+                LOG_INFO("Visual", "Added Visual track %d", m_project.numTracks());
+            }),
+            M::separator(),
+            makeDeleteTrack(),
+            M::item("Rename Track", [this]() {
+                if (m_sessionPanel->visible()) {
+                    m_sessionPanel->startTrackRename(m_selectedTrack);
+                } else {
+                    m_arrangementPanel->startTrackRename(m_selectedTrack);
+                }
+                SDL_StartTextInput(m_mainWindow.getHandle());
+            }),
+        });
+    }
 
-    // MIDI menu
-    m_menuBar.addMenu("MIDI", {
-        {"MIDI Devices",    "",  nullptr},
-        {"MIDI Sync",       "",  nullptr},
-        {"Link Settings",   "",  nullptr, true, false},
-    });
+    // MIDI menu — all three items are currently no-op placeholders.
+    {
+        auto disabled = [](std::string label) -> MenuEntry {
+            MenuEntry e;
+            e.label = std::move(label);
+            e.enabled = false;
+            return e;
+        };
+        m_menuBar.addMenu("MIDI", {
+            M::item("MIDI Devices",  nullptr),
+            M::item("MIDI Sync",     nullptr),
+            M::separator(),
+            disabled("Link Settings"),
+        });
+    }
 
     // Help menu
     m_menuBar.addMenu("Help", {
-        {"About Y.A.W.N",     "",  []() {
-            // v2 About dialog — fires on Help → About. Content is
-            // plain text; the v1 dialog's icon-on-left layout is
-            // dropped (DialogSpec doesn't do images yet). The title
-            // carries the branding, the message body covers the
-            // rest.
+        M::item("About Y.A.W.N", []() {
             ui::fw2::DialogSpec spec;
             spec.title = "Y.A.W.N";
             spec.message =
@@ -376,11 +395,11 @@ void App::setupMenuBar() {
             ui::fw2::DialogButton ok;
             ok.label   = "OK";
             ok.primary = true;
-            ok.cancel  = true;   // Escape also closes
+            ok.cancel  = true;
             spec.buttons.push_back(std::move(ok));
             ui::fw2::Dialog::show(std::move(spec));
-        }},
-        {"Keyboard Shortcuts", "",  nullptr},
+        }),
+        M::item("Keyboard Shortcuts", nullptr),
     });
 }
 
@@ -4653,8 +4672,8 @@ void App::processEvents() {
                 if (m_showDetailPanel)
                     m_detailPanel->handleDeviceContextMenuMouseMove(mx, my);
 
-                // Menu bar hover
-                m_menuBar.handleMouseMove(mx, my);
+                // Menu bar hover — now routed through the v1 widget tree
+                // via MenuBarWrapper::onMouseMove, so no explicit call here.
 
                 // InputState hover + drag (computes dx/dy internally)
                 m_inputState.onMouseMove(mx, my);
@@ -4746,16 +4765,20 @@ void App::processEvents() {
                 // v1 context menu: retired — fw2::ContextMenu (handled
                 // by the LayerStack dispatch above) owns this slot now.
 
-                // Priority: menu bar → input state widgets → mixer → session
-                if (m_menuBar.contains(mx, my) || (my < m_menuBar.height() && !m_menuBar.isOpen())) {
-                    m_menuBar.handleClick(mx, my);
-                    break;
-                }
-
-                // Close menu if open and clicked elsewhere
-                if (m_menuBar.isOpen()) {
-                    m_menuBar.close();
-                    break;
+                // Menu bar — v2 FwMenuBar sits on LayerStack for its
+                // dropdown popup and in the v1 widget tree via
+                // MenuBarWrapper for its title strip. Title clicks are
+                // routed by the wrapper's onMouseDown; popup clicks are
+                // consumed by the LayerStack dispatch at the top of this
+                // event case. No explicit handling here.
+                if (m_menuBar.pointerInBar(mx, my)) {
+                    // Let the v1 rootLayout dispatch reach MenuBarWrapper.
+                    // It returns true if it handled the title click.
+                    ui::fw::MouseEvent mbEvent;
+                    mbEvent.x = mx; mbEvent.y = my;
+                    mbEvent.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right
+                                                                : ui::fw::MouseButton::Left;
+                    if (m_rootLayout->dispatchMouseDown(mbEvent)) break;
                 }
 
                 // InputState widgets
@@ -5689,8 +5712,10 @@ void App::render() {
     computeLayout();
     m_rootLayout->render(m_uiContext);
 
-    // Menu bar rendered last so dropdown menus appear on top of panels
-    m_menuBar.render(m_renderer, m_font, static_cast<float>(w));
+    // Menu bar — v2 FwMenuBar renders via MenuBarWrapper in the
+    // rootLayout tree above. Its dropdown popup lives on LayerStack
+    // and paints during m_fw2LayerStack.paintLayers() below, so it
+    // sits on top of panels automatically.
 
     // v1 context menu render call retired — fw2::ContextMenu paints
     // via LayerStack::paintLayers below.

@@ -23,6 +23,7 @@
 #include "ui/framework/v2/Checkbox.h"
 #include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/MenuBar.h"
 #include "ui/framework/v2/Meter.h"
 #include "ui/framework/v2/NumberInput.h"
 #include "ui/framework/v2/Pan.h"
@@ -1264,6 +1265,48 @@ static void paintTextInput(Widget& w, UIContext& ctx) {
     ctx.renderer->popClip();
 }
 
+// ─── MenuBar ────────────────────────────────────────────────────────
+
+static void paintMenuBar(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& mb = static_cast<FwMenuBar&>(w);
+    const Rect& b = mb.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const float fs = m.fontSize;
+
+    // Bar background + bottom separator.
+    ctx.renderer->drawRect(b.x, b.y, b.w, b.h, Color{38, 38, 42, 255});
+    ctx.renderer->drawRect(b.x, b.y + b.h - 1.0f, b.w, 1.0f,
+                            Color{55, 55, 60, 255});
+
+    // Per-title strips. Highlight open (accent) / hovered (soft).
+    const int openIdx  = mb.openIndex();
+    const int hoverIdx = mb.hoverIndex();
+    for (int i = 0; i < static_cast<int>(mb.titleStrips().size()); ++i) {
+        const auto& s = mb.titleStrips()[i];
+        const float tx = b.x + s.x;
+        const bool active = (i == openIdx);
+        const bool hover  = (i == hoverIdx) && !active;
+        if (active || hover) {
+            const Color bg = active ? Color{60, 60, 65, 255}
+                                    : Color{50, 50, 55, 255};
+            ctx.renderer->drawRect(tx, b.y, s.w, b.h - 1.0f, bg);
+        }
+        // Centre the label within its strip.
+        if (ctx.textMetrics) {
+            const float lh = ctx.textMetrics->lineHeight(fs);
+            const float tw = ctx.textMetrics->textWidth(s.label, fs);
+            const float cx = tx + (s.w - tw) * 0.5f;
+            const float cy = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+            ctx.textMetrics->drawText(*ctx.renderer, s.label, cx, cy, fs,
+                                       p.textPrimary);
+        }
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1281,6 +1324,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwMeter),    &paintMeter);
     registerPainter(typeid(FwNumberInput), &paintNumberInput);
     registerPainter(typeid(FwTextInput), &paintTextInput);
+    registerPainter(typeid(FwMenuBar),  &paintMenuBar);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.
