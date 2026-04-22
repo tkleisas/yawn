@@ -5,6 +5,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/TextInput.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Renderer.h"
@@ -12,6 +13,7 @@
 #include "ui/Theme.h"
 #include "library/LibraryDatabase.h"
 #include "library/LibraryScanner.h"
+#include <SDL3/SDL_keycode.h>  // SDLK_* — forwarded key ints from App.cpp
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -44,6 +46,10 @@ public:
     BrowserFilesTab() {
         m_searchInput.setPlaceholder("Search files...");
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
+        // Live search on every keystroke (v1 drove this from
+        // forwardTextInput; v2's onChange fires on every edit so we
+        // centralise it here and drop the forwardTextInput-side call).
+        m_searchInput.setOnChange([this](const std::string&) { doSearch(); });
         m_addFolderBtn.setLabel("+");
         // Click routed manually in onMouseDown below (predates v2
         // migration, kept to avoid a new m_v2Pressed pointer on the
@@ -90,9 +96,14 @@ public:
         float mx = e.x, my = e.y;
         bool rightClick = (e.button == MouseButton::Right);
 
-        // Search input
+        // Search input — v2 widget. onMouseDown enters edit mode and
+        // returns true, so dispatchMouseDown short-circuits the gesture
+        // SM (no capture needed, no paired mouseUp). No m_v2Dragging
+        // slot on this tab — parent BrowserPanel owns that.
         if (hitRect(mx, my, x + 4, y + 4, w - 30, 20)) {
-            m_searchInput.onMouseDown(e);
+            const auto& b = m_searchInput.bounds();
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+            m_searchInput.dispatchMouseDown(ev);
             return true;
         }
 
@@ -169,38 +180,51 @@ public:
         return true;
     }
 
-    bool onMouseMove(MouseMoveEvent& e) {
-        return m_searchInput.onMouseMove(e);
+    bool onMouseMove(MouseMoveEvent& /*e*/) {
+        // v2 FwTextInput doesn't drag — nothing to forward. The SM
+        // short-circuits in dispatchMouseDown so no capture is held.
+        return false;
     }
 
-    bool onMouseUp(MouseEvent& e) {
-        return m_searchInput.onMouseUp(e);
+    bool onMouseUp(MouseEvent& /*e*/) {
+        // No paired mouseUp for the text input — see onMouseDown.
+        return false;
     }
 
     bool isSearchEditing() const { return m_searchInput.isEditing(); }
     bool forwardKeyDown(int key) {
-        KeyEvent ke;
-        ke.keyCode = key;
-        if (key == 27) { // Escape — clear search
+        if (key == SDLK_ESCAPE) { // Escape — always clear search + collapse,
+                         // then let the widget cancel its edit state.
+                         // The widget's endEdit(false) would restore
+                         // the pre-edit snapshot, but we want a clean
+                         // empty search regardless, so we overwrite
+                         // after the widget's state settles.
+            m_searchInput.endEdit(/*commit*/false);
             m_searchInput.setText("");
             m_searching = false;
             flattenTree();
+            return true;
         }
-        return m_searchInput.onKeyDown(ke);
+        ::yawn::ui::fw2::KeyEvent ke;
+        switch (static_cast<SDL_Keycode>(key)) {
+            case SDLK_RETURN:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+            case SDLK_BACKSPACE: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+            case SDLK_DELETE:    ke.key = ::yawn::ui::fw2::Key::Delete;    break;
+            case SDLK_HOME:      ke.key = ::yawn::ui::fw2::Key::Home;      break;
+            case SDLK_END:       ke.key = ::yawn::ui::fw2::Key::End;       break;
+            case SDLK_LEFT:      ke.key = ::yawn::ui::fw2::Key::Left;      break;
+            case SDLK_RIGHT:     ke.key = ::yawn::ui::fw2::Key::Right;     break;
+            default: return false;
+        }
+        return m_searchInput.dispatchKeyDown(ke);
     }
     bool forwardTextInput(const char* text) {
-        TextInputEvent te;
-        std::strncpy(te.text, text, sizeof(te.text) - 1);
-        te.text[sizeof(te.text) - 1] = '\0';
-        bool handled = m_searchInput.onTextInput(te);
-        // Trigger live search on each character
-        doSearch();
-        return handled;
+        m_searchInput.takeTextInput(text ? text : "");
+        // Live-search fires via setOnChange (installed in ctor).
+        return true;
     }
     void cancelEditing() {
-        KeyEvent ke;
-        ke.keyCode = 27;
-        m_searchInput.onKeyDown(ke);
+        m_searchInput.endEdit(/*commit*/false);
     }
 
     // ── Rendering ───────────────────────────────────────────────────────
@@ -208,13 +232,13 @@ public:
     void paint(Renderer2D& r, Font& f, float x, float y, float w, float h, UIContext& ctx) {
         float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
 
-        // Search input
-        m_searchInput.layout(Rect{x + 4, y + 4, w - 30, 20}, ctx);
-        m_searchInput.paint(ctx);
+        // Search input — v2 widget, renders through fw2 UIContext.
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_searchInput.layout(Rect{x + 4, y + 4, w - 30, 20}, v2ctx);
+        m_searchInput.render(v2ctx);
 
         // Add folder button — v2 widget, renders through fw2 UIContext.
         {
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
             m_addFolderBtn.layout(Rect{x + w - 24, y + 4, 20, 20}, v2ctx);
             m_addFolderBtn.render(v2ctx);
         }
@@ -323,7 +347,7 @@ private:
     library::LibraryDatabase* m_db = nullptr;
     library::LibraryScanner*  m_scanner = nullptr;
 
-    FwTextInput m_searchInput;
+    ::yawn::ui::fw2::FwTextInput m_searchInput;
     ::yawn::ui::fw2::FwButton m_addFolderBtn;
 
     std::vector<FileTreeNode>  m_fileTree;       // root nodes

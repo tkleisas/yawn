@@ -28,6 +28,7 @@
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/StepSelector.h"
+#include "ui/framework/v2/TextInput.h"
 
 #include <cmath>
 
@@ -1211,6 +1212,58 @@ static void paintNumberInput(Widget& w, UIContext& ctx) {
     }
 }
 
+// ─── TextInput ──────────────────────────────────────────────────────
+
+static void paintTextInput(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& t = static_cast<FwTextInput&>(w);
+    const Rect& b = t.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // Background: elevated while editing, control-bg otherwise.
+    const bool  editing = t.isEditing();
+    Color bg = t.isEnabled() ? p.controlBg : Color{40, 40, 45, 255};
+    if (editing)              bg = p.elevated;
+    else if (t.isHovered())   bg = p.controlHover;
+    ctx.renderer->drawRect(b.x, b.y, b.w, b.h, bg);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h,
+                                   editing ? p.accent : p.border,
+                                   editing ? 1.5f : 1.0f);
+
+    // Text / placeholder.
+    if (!ctx.textMetrics) return;
+    const float fs     = m.fontSize;
+    const float lh     = ctx.textMetrics->lineHeight(fs);
+    const float padX   = m.baseUnit;
+    const float tx0    = b.x + padX;
+    const float ty     = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+
+    const bool showPlaceholder = !editing && t.text().empty() && !t.placeholder().empty();
+    const std::string& display = showPlaceholder ? t.placeholder() : t.text();
+    const Color tc =
+        showPlaceholder ? p.textDim :
+        (t.isEnabled() ? p.textPrimary : p.textDim);
+
+    // Clip so long text doesn't escape the box to the right.
+    ctx.renderer->pushClip(b.x + padX * 0.5f, b.y, b.w - padX, b.h);
+    ctx.textMetrics->drawText(*ctx.renderer, display, tx0, ty, fs, tc);
+
+    // Caret at cursor position while editing. Cursor is a byte offset;
+    // measure the substring-to-cursor to get its on-screen x.
+    if (editing) {
+        const std::string pre = t.text().substr(0, t.cursor());
+        const float caretX = tx0 + ctx.textMetrics->textWidth(pre, fs);
+        const float caretY0 = ty;
+        const float caretY1 = ty + lh * 0.9f;
+        ctx.renderer->drawLine(caretX, caretY0, caretX, caretY1, p.accent,
+                                1.5f);
+    }
+    ctx.renderer->popClip();
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1227,6 +1280,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwScrollBar), &paintScrollBar);
     registerPainter(typeid(FwMeter),    &paintMeter);
     registerPainter(typeid(FwNumberInput), &paintNumberInput);
+    registerPainter(typeid(FwTextInput), &paintTextInput);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

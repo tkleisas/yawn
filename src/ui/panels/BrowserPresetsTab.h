@@ -6,12 +6,15 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/TextInput.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
 #include "library/LibraryDatabase.h"
+#include <SDL3/SDL_keycode.h>  // SDLK_* — forwarded key ints from App.cpp
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -48,6 +51,9 @@ public:
     BrowserPresetsTab() {
         m_searchInput.setPlaceholder("Search presets...");
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
+        // Live search on each keystroke — v2 onChange fires on every
+        // edit; v1 drove this from forwardTextInput.
+        m_searchInput.setOnChange([this](const std::string&) { doSearch(); });
         // v2 FwDropDown — popup lives on fw2::LayerStack (App owns it),
         // so it paints above every panel and auto-dismisses on outside
         // click without explicit paintOverlay/hitPopup glue.
@@ -80,9 +86,13 @@ public:
     bool onMouseDown(MouseEvent& e, float x, float y, float w, float h, UIContext& ctx) {
         float mx = e.x, my = e.y;
 
-        // Search input
+        // Search input — v2 widget. onMouseDown returns true (enters
+        // edit mode), so dispatchMouseDown short-circuits the gesture
+        // SM: no capture, no paired mouseUp required.
         if (hitRect(mx, my, x + 4, y + 4, w - 80, 20)) {
-            m_searchInput.onMouseDown(e);
+            const auto& b = m_searchInput.bounds();
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+            m_searchInput.dispatchMouseDown(ev);
             return true;
         }
 
@@ -160,42 +170,52 @@ public:
         return true;
     }
 
-    bool onMouseMove(MouseMoveEvent& e) {
-        // v2 popup handles its own hover via LayerStack; the closed
-        // button's hover state is paint-only, no translation needed.
-        return m_searchInput.onMouseMove(e);
+    bool onMouseMove(MouseMoveEvent& /*e*/) {
+        // v2 popup handles hover via LayerStack; v2 FwTextInput doesn't
+        // drag (SM short-circuits in dispatchMouseDown) so no forward.
+        return false;
     }
 
-    bool onMouseUp(MouseEvent& e) {
+    bool onMouseUp(MouseEvent& /*e*/) {
         // v2 dropdown toggles on mouse-down directly (no gesture SM
-        // pipeline — see comment in onMouseDown) so there's nothing to
-        // forward here.
-        return m_searchInput.onMouseUp(e);
+        // pipeline — see comment in onMouseDown). FwTextInput also
+        // needs no paired mouseUp. Nothing to forward.
+        return false;
     }
 
     bool isSearchEditing() const { return m_searchInput.isEditing(); }
     bool forwardKeyDown(int key) {
-        KeyEvent ke;
-        ke.keyCode = key;
-        if (key == 27) {
+        if (key == SDLK_ESCAPE) {
+            // Match v1 behaviour: Escape always clears + refreshes the
+            // list, regardless of what the widget had buffered. Call
+            // endEdit(false) first so the widget leaves edit state
+            // cleanly, then overwrite to the empty string.
+            m_searchInput.endEdit(/*commit*/false);
             m_searchInput.setText("");
             m_searching = false;
             refreshList();
+            return true;
         }
-        return m_searchInput.onKeyDown(ke);
+        ::yawn::ui::fw2::KeyEvent ke;
+        switch (static_cast<SDL_Keycode>(key)) {
+            case SDLK_RETURN:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+            case SDLK_BACKSPACE: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+            case SDLK_DELETE:    ke.key = ::yawn::ui::fw2::Key::Delete;    break;
+            case SDLK_HOME:      ke.key = ::yawn::ui::fw2::Key::Home;      break;
+            case SDLK_END:       ke.key = ::yawn::ui::fw2::Key::End;       break;
+            case SDLK_LEFT:      ke.key = ::yawn::ui::fw2::Key::Left;      break;
+            case SDLK_RIGHT:     ke.key = ::yawn::ui::fw2::Key::Right;     break;
+            default: return false;
+        }
+        return m_searchInput.dispatchKeyDown(ke);
     }
     bool forwardTextInput(const char* text) {
-        TextInputEvent te;
-        std::strncpy(te.text, text, sizeof(te.text) - 1);
-        te.text[sizeof(te.text) - 1] = '\0';
-        bool handled = m_searchInput.onTextInput(te);
-        doSearch();
-        return handled;
+        m_searchInput.takeTextInput(text ? text : "");
+        // Live search fires via setOnChange (installed in ctor).
+        return true;
     }
     void cancelEditing() {
-        KeyEvent ke;
-        ke.keyCode = 27;
-        m_searchInput.onKeyDown(ke);
+        m_searchInput.endEdit(/*commit*/false);
     }
 
     // ── Rendering ───────────────────────────────────────────────────────
@@ -204,13 +224,13 @@ public:
         float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
         float scaleSmall = scale * 0.9f;
 
-        // Search input
-        m_searchInput.layout(Rect{x + 4, y + 4, w - 80, 20}, ctx);
-        m_searchInput.paint(ctx);
+        // Search input — v2 widget, renders through fw2 UIContext.
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_searchInput.layout(Rect{x + 4, y + 4, w - 80, 20}, v2ctx);
+        m_searchInput.render(v2ctx);
 
         // Filter dropdown — v2 widget. Popup is painted later by
         // LayerStack (App render loop), not here.
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
         m_filterDropdown.layout(Rect{x + w - 72, y + 4, 68, 20}, v2ctx);
         m_filterDropdown.render(v2ctx);
 
@@ -318,7 +338,7 @@ private:
 
     library::LibraryDatabase* m_db = nullptr;
 
-    FwTextInput m_searchInput;
+    ::yawn::ui::fw2::FwTextInput m_searchInput;
     ::yawn::ui::fw2::FwDropDown m_filterDropdown;
 
     std::vector<PresetListEntry> m_entries;
