@@ -11,6 +11,9 @@
 #include "InstrumentDisplayWidget.h"
 #include "Primitives.h"
 #include "VisualizerWidget.h"
+#include "v2/Knob.h"
+#include "v2/UIContext.h"
+#include "v2/V1EventBridge.h"
 #include "../../WidgetHint.h"
 
 #include <algorithm>
@@ -49,42 +52,75 @@ public:
     };
 
     // Type-erased wrapper around different parameter widget types.
+    // After the v2 migration all three knob variants (plain, dented,
+    // 360°/wrap) share the same fw2::FwKnob class — detents and
+    // wrap mode are flags, not subclasses. TKnob / TDentedKnob /
+    // TKnob360 stay as tags so callers can inspect which mode was
+    // requested without sniffing the widget's flags.
+    //
+    // Layout: v2 knobs can't be addChild'd to v1 FwGrid, so the
+    // DeviceWidget computes grid positions itself and applies them
+    // both to v1 children (StepSelector / Toggle) AND v2 knobs in a
+    // single pass. paramIndex is stored here because v2 widgets
+    // don't have a v1 setName() / name() string.
     struct ParamSlot {
         enum Type { TKnob, TDentedKnob, TStepSelector, TToggle, TKnob360 };
-        Widget* widget = nullptr;
+        Widget* widget = nullptr;                 // v1 widget (non-knob) OR nullptr for knobs
+        ::yawn::ui::fw2::FwKnob* knob = nullptr;  // non-null for TKnob / TDentedKnob / TKnob360
         Type type = TKnob;
+        int  paramIndex = -1;                      // copy of ParamInfo::index (used for CC labels)
+
+        bool isKnob() const {
+            return type == TKnob || type == TDentedKnob || type == TKnob360;
+        }
 
         void setValue(float v) {
+            if (isKnob()) { knob->setValue(v); return; }
             switch (type) {
-            case TKnob:         static_cast<FwKnob*>(widget)->setValue(v); break;
-            case TDentedKnob:   static_cast<FwDentedKnob*>(widget)->setValue(v); break;
             case TStepSelector: static_cast<FwStepSelector*>(widget)->setValue(static_cast<int>(v + 0.5f)); break;
             case TToggle:       static_cast<FwToggleSwitch*>(widget)->setState(v > 0.5f); break;
-            case TKnob360:      static_cast<FwKnob360*>(widget)->setValue(v); break;
+            default: break;
             }
         }
 
         float getValue() const {
+            if (isKnob()) return knob->value();
             switch (type) {
-            case TKnob:         return static_cast<FwKnob*>(widget)->value();
-            case TDentedKnob:   return static_cast<FwDentedKnob*>(widget)->value();
             case TStepSelector: return static_cast<float>(static_cast<FwStepSelector*>(widget)->value());
             case TToggle:       return static_cast<FwToggleSwitch*>(widget)->state() ? 1.0f : 0.0f;
-            case TKnob360:      return static_cast<FwKnob360*>(widget)->value();
+            default: return 0.0f;
             }
-            return 0.0f;
+        }
+
+        // Bounds accessor that hides the v1-vs-v2 split.
+        const ::yawn::ui::fw2::Rect& bounds() const {
+            if (isKnob()) return knob->bounds();
+            // v1 Rect and fw2 Rect have the same field layout; safe to
+            // reinterpret. (Both are {float x,y,w,h;}.) Keeps callers
+            // from having to switch on isKnob() just to read a box.
+            return reinterpret_cast<const ::yawn::ui::fw2::Rect&>(widget->bounds());
         }
 
         bool isEditing() const {
-            return (type == TKnob) ? static_cast<FwKnob*>(widget)->isEditing() : false;
+            return isKnob() && knob->isEditing();
         }
 
-        bool forwardKeyDown(KeyEvent& ke) const {
-            return (type == TKnob) ? static_cast<FwKnob*>(widget)->onKeyDown(ke) : false;
+        bool forwardKeyDown(int key) const {
+            if (!isEditing()) return false;
+            ::yawn::ui::fw2::KeyEvent ke;
+            switch (key) {
+                case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
+                case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+                case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+                default:                    return false;
+            }
+            return knob->dispatchKeyDown(ke);
         }
 
-        bool forwardTextInput(TextInputEvent& te) const {
-            return (type == TKnob) ? static_cast<FwKnob*>(widget)->onTextInput(te) : false;
+        bool forwardTextInput(const char* text) const {
+            if (!isEditing()) return false;
+            knob->takeTextInput(text ? text : "");
+            return true;
         }
     };
 
@@ -228,9 +264,8 @@ public:
 
     void updateParamValue(int index, float value) {
         if (m_customBody) { m_customBody->updateParamValue(index, value); return; }
-        std::string key = std::to_string(index);
-        for (auto& s : m_knobs)    if (s.widget->name() == key) { s.setValue(value); return; }
-        for (auto& s : m_vizKnobs) if (s.widget->name() == key) { s.setValue(value); return; }
+        for (auto& s : m_knobs)    if (s.paramIndex == index) { s.setValue(value); return; }
+        for (auto& s : m_vizKnobs) if (s.paramIndex == index) { s.setValue(value); return; }
     }
 
     // ─── Visualizer data feed ───────────────────────────────────────────
@@ -273,27 +308,22 @@ public:
 
     bool forwardKeyDown(int key) {
         if (m_customBody) return m_customBody->forwardKeyDown(key);
-        KeyEvent ke; ke.keyCode = key;
-        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardKeyDown(ke);
-        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardKeyDown(ke);
+        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardKeyDown(key);
+        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardKeyDown(key);
         return false;
     }
 
     bool forwardTextInput(const char* text) {
         if (m_customBody) return m_customBody->forwardTextInput(text);
-        TextInputEvent te;
-        std::strncpy(te.text, text, sizeof(te.text) - 1);
-        te.text[sizeof(te.text) - 1] = '\0';
-        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardTextInput(te);
-        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardTextInput(te);
+        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardTextInput(text);
+        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardTextInput(text);
         return false;
     }
 
     void cancelEditingKnobs() {
         if (m_customBody) { m_customBody->cancelEditingKnobs(); return; }
-        KeyEvent ke; ke.keyCode = 27;
-        for (auto& s : m_knobs)    if (s.isEditing()) s.forwardKeyDown(ke);
-        for (auto& s : m_vizKnobs) if (s.isEditing()) s.forwardKeyDown(ke);
+        for (auto& s : m_knobs)    if (s.isEditing()) s.knob->endEdit(/*commit*/false);
+        for (auto& s : m_vizKnobs) if (s.isEditing()) s.knob->endEdit(/*commit*/false);
     }
 
     // ─── Width calculation (matches DetailPanelWidget::DevicePanel::deviceWidth) ─
@@ -349,8 +379,10 @@ public:
             float vizH = bodyH - 68.0f;
             if (vizH < 0) vizH = 0;
             m_visualizer->layout({x + 4, bodyY + 2, w - 8, vizH - 4}, ctx);
-            if (m_vizKnobGrid)
+            if (m_vizKnobGrid) {
                 m_vizKnobGrid->layout({x + 8, bodyY + vizH + 2, w - 16, 64}, ctx);
+                layoutV2KnobsInGrid(m_vizKnobs, *m_vizKnobGrid, /*maxRows*/1);
+            }
         } else if (m_customBody) {
             m_customBody->layout({x + 4, bodyY + 2, w - 8, bodyH - 4}, ctx);
         } else {
@@ -361,6 +393,39 @@ public:
                 bodyH -= used;
             }
             m_knobGrid.layout({x + 8, bodyY + 4, w - 16, bodyH - 8}, ctx);
+            layoutV2KnobsInGrid(m_knobs, m_knobGrid, kMaxKnobRows);
+        }
+    }
+
+    // Apply the same grid math FwGrid uses, but to the v2 knobs living
+    // alongside the grid's v1 non-knob children. The knob index is its
+    // position in the slot vector — same order the caller passed to
+    // buildKnobs, so FwGrid and this loop land each child at the same
+    // cell even when the slot list is a mix of v1 widgets + v2 knobs.
+    void layoutV2KnobsInGrid(std::vector<ParamSlot>& slots,
+                              const FwGrid& grid, int maxRows) {
+        int n = static_cast<int>(slots.size());
+        if (n == 0) return;
+        int rows = std::min(n, maxRows);
+        int cols = static_cast<int>(std::ceil(static_cast<float>(n) / maxRows));
+        (void)rows;
+
+        const auto& gb    = grid.bounds();
+        const float pad   = 8.0f;                                // matches setPadding(8)
+        const float cellW = grid.cellWidth();
+        const float cellH = grid.cellHeight();
+        const float gapX  = 0.0f;                                // FwGrid default gap
+        const float gapY  = 0.0f;
+
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        for (int i = 0; i < n; ++i) {
+            if (!slots[i].isKnob()) continue;
+            int row = i / cols;
+            int col = i % cols;
+            float cellX = gb.x + pad + col * (cellW + gapX);
+            float cellY = gb.y + pad + row * (cellH + gapY);
+            slots[i].knob->layout(
+                ::yawn::ui::fw2::Rect{cellX, cellY, cellW, cellH}, v2ctx);
         }
     }
 
@@ -397,14 +462,22 @@ public:
             return;
         }
 
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+
+        auto renderV2Knobs = [&](std::vector<ParamSlot>& slots) {
+            for (auto& s : slots) if (s.knob) s.knob->render(v2ctx);
+        };
+
         if (m_isVisualizer && m_visualizer) {
             m_visualizer->paint(ctx);
             if (m_vizKnobGrid) m_vizKnobGrid->paint(ctx);
+            renderV2Knobs(m_vizKnobs);
         } else if (m_customBody) {
             m_customBody->paint(ctx);
         } else {
             if (m_customPanel) m_customPanel->paint(ctx);
             m_knobGrid.paint(ctx);
+            renderV2Knobs(m_knobs);
         }
 
         // Draw CC labels on mapped knobs
@@ -413,10 +486,9 @@ public:
             Color ccCol{100, 180, 255};
             auto drawLabels = [&](const std::vector<ParamSlot>& slots) {
                 for (auto& s : slots) {
-                    int pi = std::stoi(s.widget->name());
-                    auto lbl = m_ccLabelCb(pi);
+                    auto lbl = m_ccLabelCb(s.paramIndex);
                     if (!lbl.empty()) {
-                        auto& b = s.widget->bounds();
+                        const auto& b = s.bounds();
                         float tw = ctx.font->textWidth(lbl.c_str(), ccScale);
                         ctx.font->drawText(*ctx.renderer, lbl.c_str(),
                             b.x + (b.w - tw) * 0.5f, b.y + b.h - 2,
@@ -442,13 +514,18 @@ public:
 
         if (!m_expanded) return false;
 
+        auto hitSlot = [&](const ParamSlot& s) {
+            const auto& b = s.bounds();
+            return e.x >= b.x && e.x < b.x + b.w &&
+                   e.y >= b.y && e.y < b.y + b.h;
+        };
+
         // Intercept right-clicks on knobs for MIDI Learn context menu
         if (e.button == MouseButton::Right && m_onParamRightClick) {
             auto tryRightClick = [&](std::vector<ParamSlot>& slots) -> bool {
                 for (auto& s : slots) {
-                    if (s.widget->bounds().contains(e.x, e.y)) {
-                        int idx = std::stoi(s.widget->name());
-                        m_onParamRightClick(idx, e.x, e.y);
+                    if (hitSlot(s)) {
+                        m_onParamRightClick(s.paramIndex, e.x, e.y);
                         return true;
                     }
                 }
@@ -462,21 +539,30 @@ public:
             }
         }
 
+        // Dispatch left-click. v2 knobs go through the fw2 event bridge
+        // + m_v2Dragging pointer; v1 non-knob widgets (step / toggle)
+        // keep their existing widget->onMouseDown path.
+        auto dispatchSlot = [&](ParamSlot& s) -> bool {
+            if (s.isKnob()) {
+                const auto& kb = s.knob->bounds();
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, kb);
+                s.knob->dispatchMouseDown(ev);
+                m_v2Dragging = s.knob;
+                captureMouse();
+                return true;
+            }
+            return s.widget->onMouseDown(e);
+        };
+
         if (m_isVisualizer && m_vizKnobGrid) {
             if (m_vizKnobGrid->bounds().contains(e.x, e.y)) {
-                for (auto& s : m_vizKnobs) {
-                    if (s.widget->bounds().contains(e.x, e.y))
-                        return s.widget->onMouseDown(e);
-                }
+                for (auto& s : m_vizKnobs) if (hitSlot(s)) return dispatchSlot(s);
             }
         } else if (m_customBody) {
             return m_customBody->onMouseDown(e);
         } else {
             if (m_knobGrid.bounds().contains(e.x, e.y)) {
-                for (auto& s : m_knobs) {
-                    if (s.widget->bounds().contains(e.x, e.y))
-                        return s.widget->onMouseDown(e);
-                }
+                for (auto& s : m_knobs) if (hitSlot(s)) return dispatchSlot(s);
             }
         }
         return false;
@@ -488,28 +574,50 @@ public:
 
         if (!m_expanded) return false;
 
+        // v2 knob drag release — flush the up through the gesture SM,
+        // clear the pointer, drop v1 capture.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
+
+        auto hitSlot = [&](const ParamSlot& s) {
+            const auto& b = s.bounds();
+            return e.x >= b.x && e.x < b.x + b.w &&
+                   e.y >= b.y && e.y < b.y + b.h;
+        };
+
         if (m_isVisualizer) {
             for (auto& s : m_vizKnobs)
-                if (s.widget->bounds().contains(e.x, e.y)) return s.widget->onMouseUp(e);
+                if (hitSlot(s) && s.widget) return s.widget->onMouseUp(e);
         } else if (m_customBody) {
             return m_customBody->onMouseUp(e);
         } else {
             for (auto& s : m_knobs)
-                if (s.widget->bounds().contains(e.x, e.y)) return s.widget->onMouseUp(e);
+                if (hitSlot(s) && s.widget) return s.widget->onMouseUp(e);
         }
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        // Captured knobs receive moves regardless of position
+        // v2 knob drag — forward translated move to the gesture SM.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
+        // v1 non-knob widgets (step selector / toggle) still drive
+        // their own drag via capturedWidget at the App level, but we
+        // still forward moves to them here for their hover states.
         if (m_isVisualizer) {
-            for (auto& s : m_vizKnobs)
-                if (s.widget->onMouseMove(e)) return true;
+            for (auto& s : m_vizKnobs) if (s.widget && s.widget->onMouseMove(e)) return true;
         } else if (m_customBody) {
             return m_customBody->onMouseMove(e);
         } else {
-            for (auto& s : m_knobs)
-                if (s.widget->onMouseMove(e)) return true;
+            for (auto& s : m_knobs) if (s.widget && s.widget->onMouseMove(e)) return true;
         }
         return false;
     }
@@ -532,6 +640,9 @@ private:
 
     CustomDeviceBody* m_customBody = nullptr;  // owned, replaces knob grid for instruments
     float       m_cachedCellW  = 0;        // computed from label widths during layout
+    // Active v2 knob drag (one of m_knobs or m_vizKnobs entries). Non-
+    // owning; set on mouseDown, cleared on mouseUp. Null = no drag.
+    ::yawn::ui::fw2::FwKnob* m_v2Dragging = nullptr;
 
     RemoveCallback                    m_onRemove;
     ParamChangeCallback               m_onParamChange;
@@ -587,17 +698,60 @@ private:
     // ─── Knob management ────────────────────────────────────────────────
 
     void clearKnobs() {
-        for (auto& s : m_knobs)    { m_knobGrid.removeChild(s.widget); delete s.widget; }
+        for (auto& s : m_knobs) {
+            if (s.knob)   delete s.knob;
+            if (s.widget && !s.isKnob()) {
+                m_knobGrid.removeChild(s.widget);
+                delete s.widget;
+            }
+        }
         m_knobs.clear();
-        for (auto& s : m_vizKnobs) { if (m_vizKnobGrid) m_vizKnobGrid->removeChild(s.widget); delete s.widget; }
+        for (auto& s : m_vizKnobs) {
+            if (s.knob)   delete s.knob;
+            if (s.widget && !s.isKnob()) {
+                if (m_vizKnobGrid) m_vizKnobGrid->removeChild(s.widget);
+                delete s.widget;
+            }
+        }
         m_vizKnobs.clear();
+        m_v2Dragging = nullptr;
     }
 
     void buildKnobs(const std::vector<ParamInfo>& params,
                     std::vector<ParamSlot>& slots, FwGrid& grid, int maxRows) {
         grid.setMaxRows(maxRows);
+
+        // All three knob variants — plain, dented, 360° — share most
+        // of their setup. This lambda does the common config, then
+        // the switch below flips the one variant-specific flag.
+        auto makeKnob = [this](const ParamInfo& p) {
+            auto* k = new ::yawn::ui::fw2::FwKnob();
+            k->setRange(p.minVal, p.maxVal);
+            k->setDefaultValue(p.defaultVal);
+            k->setValue(p.defaultVal);
+            k->setLabel(p.name);
+            k->setValueFormatter([unit = p.unit, isBool = p.isBoolean](float v) {
+                return formatValue(v, unit, isBool);
+            });
+            const int idx = p.index;
+            k->setOnChange([this, idx](float v) {
+                if (m_onParamChange) m_onParamChange(idx, v);
+            });
+            // v1 FwKnob emitted onTouch(true) at drag-begin and
+            // onTouch(false) at drag-end. v2 collapses this to a
+            // single onDragEnd(start, end); replay as a pair so
+            // existing hosts (undo-snapshotters) see the same shape.
+            k->setOnDragEnd([this, idx](float startV, float endV) {
+                if (!m_onParamTouch) return;
+                m_onParamTouch(idx, startV, /*touching*/true);
+                m_onParamTouch(idx, endV,   /*touching*/false);
+            });
+            return k;
+        };
+
         for (const auto& p : params) {
             ParamSlot slot;
+            slot.paramIndex = p.index;
             WidgetHint hint = p.widgetHint;
 
             // Auto-resolve: booleans become toggles
@@ -606,23 +760,9 @@ private:
 
             switch (hint) {
             case WidgetHint::DentedKnob: {
-                auto* dk = new FwDentedKnob();
-                dk->setName(std::to_string(p.index));
-                dk->setRange(p.minVal, p.maxVal);
-                dk->setDefault(p.defaultVal);
-                dk->setValue(p.defaultVal);
-                dk->setLabel(p.name);
+                auto* dk = makeKnob(p);
                 dk->addDetent(p.defaultVal, 0.04f);
-                dk->setFormat([unit = p.unit](float v) {
-                    return formatValue(v, unit, false);
-                });
-                dk->setOnChange([this, idx = p.index](float v) {
-                    if (m_onParamChange) m_onParamChange(idx, v);
-                });
-                dk->setOnTouch([this, idx = p.index, dk](bool touching) {
-                    if (m_onParamTouch) m_onParamTouch(idx, dk->value(), touching);
-                });
-                slot.widget = dk;
+                slot.knob = dk;
                 slot.type = ParamSlot::TDentedKnob;
                 break;
             }
@@ -680,49 +820,26 @@ private:
                 break;
             }
             case WidgetHint::Knob360: {
-                auto* k360 = new FwKnob360();
-                k360->setName(std::to_string(p.index));
-                k360->setRange(p.minVal, p.maxVal);
-                k360->setDefault(p.defaultVal);
-                k360->setValue(p.defaultVal);
-                k360->setLabel(p.name);
-                k360->setFormat([unit = p.unit](float v) {
-                    return formatValue(v, unit, false);
-                });
-                k360->setOnChange([this, idx = p.index](float v) {
-                    if (m_onParamChange) m_onParamChange(idx, v);
-                });
-                k360->setOnTouch([this, idx = p.index, k360](bool touching) {
-                    if (m_onParamTouch) m_onParamTouch(idx, k360->value(), touching);
-                });
-                slot.widget = k360;
+                auto* k360 = makeKnob(p);
+                k360->setWrapMode(true);
+                slot.knob = k360;
                 slot.type = ParamSlot::TKnob360;
                 break;
             }
             default: /* WidgetHint::Knob */ {
-                auto* k = new FwKnob();
-                k->setName(std::to_string(p.index));
-                k->setRange(p.minVal, p.maxVal);
-                k->setDefault(p.defaultVal);
-                k->setValue(p.defaultVal);
-                k->setLabel(p.name);
-                k->setBoolean(p.isBoolean);
-                k->setFormatCallback([unit = p.unit, isBool = p.isBoolean](float v) {
-                    return formatValue(v, unit, isBool);
-                });
-                k->setOnChange([this, idx = p.index](float v) {
-                    if (m_onParamChange) m_onParamChange(idx, v);
-                });
-                k->setOnTouch([this, idx = p.index, k](bool touching) {
-                    if (m_onParamTouch) m_onParamTouch(idx, k->value(), touching);
-                });
-                slot.widget = k;
+                auto* k = makeKnob(p);
+                slot.knob = k;
                 slot.type = ParamSlot::TKnob;
                 break;
             }
             }
             slots.push_back(slot);
-            grid.addChild(slot.widget);
+            // v1 non-knob widgets still go through FwGrid for events +
+            // tree-based paint. v2 knobs are laid out + painted +
+            // event-dispatched manually by DeviceWidget (see layout /
+            // paint / onMouseDown).
+            if (slot.widget && !slot.isKnob())
+                grid.addChild(slot.widget);
         }
     }
 
