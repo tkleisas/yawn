@@ -21,6 +21,7 @@
 #include "ui/framework/v2/Dialog.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/Checkbox.h"
+#include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/StepSelector.h"
@@ -1041,6 +1042,72 @@ static void paintPan(Widget& w, UIContext& ctx) {
                                    thumbW, thumbH, pal.border, 1.0f);
 }
 
+// ─── Crossfader ────────────────────────────────────────────────────
+
+static void paintCrossfader(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& xf = static_cast<FwCrossfader&>(w);
+    const Rect& b = xf.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    const float pad    = xf.trackPadding();
+    const float trackX = b.x + pad;
+    const float trackW = std::max(1.0f, b.w - pad * 2.0f);
+
+    // End labels — "A" left, "B" right, in the track-padding area.
+    if (ctx.textMetrics) {
+        const float fs = m.fontSize;
+        const float lh = ctx.textMetrics->lineHeight(fs);
+        const float ty = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+
+        const Color aCol = xf.isEnabled() ? xf.colorA() : p.textDim;
+        const Color bCol = xf.isEnabled() ? xf.colorB() : p.textDim;
+
+        const std::string& la = xf.labelA();
+        const std::string& lb = xf.labelB();
+        if (!la.empty()) {
+            const float tw = ctx.textMetrics->textWidth(la, fs);
+            ctx.textMetrics->drawText(*ctx.renderer, la,
+                                       b.x + (pad - tw) * 0.5f, ty, fs, aCol);
+        }
+        if (!lb.empty()) {
+            const float tw = ctx.textMetrics->textWidth(lb, fs);
+            ctx.textMetrics->drawText(*ctx.renderer, lb,
+                                       b.x + b.w - pad + (pad - tw) * 0.5f,
+                                       ty, fs, bCol);
+        }
+    }
+
+    // Track.
+    const float trackH = std::min(b.h, 6.0f);
+    const float trackY = b.y + (b.h - trackH) * 0.5f;
+    ctx.renderer->drawRect(trackX, trackY, trackW, trackH, p.controlBg);
+
+    // Filled halves. frac = 1.0 (all A) at left → handle at trackX.
+    const float frac = xf.value() / 100.0f;           // 1 = full A
+    const float handleX = trackX + (1.0f - frac) * trackW;
+    const Color colA = xf.isEnabled() ? xf.colorA() : p.textDim;
+    const Color colB = xf.isEnabled() ? xf.colorB() : p.textDim;
+    // Left half — A side
+    ctx.renderer->drawRect(trackX, trackY, handleX - trackX, trackH, colA);
+    // Right half — B side
+    ctx.renderer->drawRect(handleX, trackY,
+                            trackX + trackW - handleX, trackH, colB);
+
+    // Handle — small vertical bar at the current position.
+    const float handleW = 6.0f;
+    const float handleH = std::min(b.h - 2.0f, 16.0f);
+    ctx.renderer->drawRect(handleX - handleW * 0.5f,
+                            b.y + (b.h - handleH) * 0.5f,
+                            handleW, handleH, p.textPrimary);
+    ctx.renderer->drawRectOutline(handleX - handleW * 0.5f,
+                                   b.y + (b.h - handleH) * 0.5f,
+                                   handleW, handleH, p.border, 1.0f);
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1053,6 +1120,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwKnob),     &paintKnob);
     registerPainter(typeid(FwStepSelector), &paintStepSelector);
     registerPainter(typeid(FwPan),      &paintPan);
+    registerPainter(typeid(FwCrossfader), &paintCrossfader);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

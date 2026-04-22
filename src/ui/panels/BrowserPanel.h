@@ -11,6 +11,7 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
 #include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
@@ -211,8 +212,17 @@ public:
                     return true;
                 }
             }
-            if (hitWidget(m_faCrossfader, mx, my))
-                return m_faCrossfader.onMouseDown(e);
+            // Crossfader — v2 widget, route through the gesture SM.
+            {
+                const auto& b = m_faCrossfader.bounds();
+                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+                    m_faCrossfader.dispatchMouseDown(ev);
+                    m_v2Dragging = &m_faCrossfader;
+                    captureMouse();
+                    return true;
+                }
+            }
         }
         // Clip envelope editor (visual clips only — presence of
         // m_clipAutoLanes gates it).
@@ -241,11 +251,8 @@ public:
             m_v2Dragging->dispatchMouseMove(ev);
             return true;
         }
-        if (m_activeTab == Tab::Clip && m_followActionPtr) {
-            // v2 dropdowns handle open-state mouseMove via LayerStack.
-            MouseMoveEvent me = e;
-            if (m_faCrossfader.onMouseMove(me)) return true;
-        }
+        // v2 dropdowns handle open-state mouseMove via LayerStack;
+        // v2 crossfader routes its own moves through m_v2Dragging above.
         // Clip envelope drag (point move): the envelope widget
         // captures on mouse-down, so we route moves to it while it
         // reports a drag in progress.
@@ -272,12 +279,8 @@ public:
             releaseMouse();
             return true;
         }
-        if (m_activeTab == Tab::Clip && m_followActionPtr) {
-            // v2 dropdowns toggle on mouseDown directly — no mouseUp
-            // forwarding needed for them. v2 FwButton releases via
-            // the m_v2Dragging path above.
-            if (m_faCrossfader.onMouseUp(e)) return true;
-        }
+        // v2 dropdowns / buttons / crossfader all release through
+        // the m_v2Dragging path above — nothing to forward here.
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
             if (m_clipEnvelope.onMouseUp(e)) return true;
         }
@@ -464,7 +467,7 @@ private:
     AutomationEnvelopeWidget m_clipEnvelope;
     ::yawn::ui::fw2::FwDropDown m_faActionADropdown;
     ::yawn::ui::fw2::FwDropDown m_faActionBDropdown;
-    FwCrossfader m_faCrossfader;
+    ::yawn::ui::fw2::FwCrossfader m_faCrossfader;
 
     static bool hitWidget(Widget& w, float mx, float my) {
         auto& b = w.bounds();
@@ -645,7 +648,7 @@ private:
         });
 
         m_faCrossfader.setLabels("A", "B");
-        m_faCrossfader.setDefault(100.0f);
+        m_faCrossfader.setDefaultValue(100.0f);
         m_faCrossfader.setValue(100.0f);
         m_faCrossfader.setOnChange([this](float v) {
             if (m_followActionPtr)
@@ -726,9 +729,12 @@ private:
         }
         rowY += inputH + 10.0f;
 
-        // Crossfader (A/B chance)
-        m_faCrossfader.layout(Rect{sx, rowY, sw, 28.0f}, ctx);
-        m_faCrossfader.paint(ctx);
+        // Crossfader (A/B chance) — v2 widget.
+        {
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            m_faCrossfader.layout(Rect{sx, rowY, sw, 28.0f}, v2ctx);
+            m_faCrossfader.render(v2ctx);
+        }
         rowY += 28.0f + 14.0f;
 
         // ── Clip envelope editor ──────────────────────────────────
