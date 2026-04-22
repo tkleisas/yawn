@@ -21,6 +21,9 @@
 #include "ui/framework/v2/Dialog.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/Checkbox.h"
+#include "ui/framework/v2/Knob.h"
+
+#include <cmath>
 
 #include "ui/Renderer.h"
 #include "ui/Theme.h"
@@ -684,6 +687,161 @@ static void paintCheckbox(Widget& w, UIContext& ctx) {
     }
 }
 
+// ─── Knob ───────────────────────────────────────────────────────────
+
+namespace {
+
+// Arc geometry: 300° sweep starting at 7 o'clock (angle 210° cw from
+// top) and ending at 5 o'clock (angle 510° which wraps to 150°).
+// Angle here is "degrees clockwise from top", so:
+//   x = cx + r * sin(angle)
+//   y = cy - r * cos(angle)
+constexpr float kArcStartDeg  = 210.0f;
+constexpr float kArcSweepDeg  = 300.0f;
+
+inline void angleToPoint(float cx, float cy, float r, float deg,
+                          float& outX, float& outY) {
+    const float rad = deg * 3.14159265358979f / 180.0f;
+    outX = cx + r * std::sin(rad);
+    outY = cy - r * std::cos(rad);
+}
+
+// Stroke an arc as a series of wedge-quad triangles between the inner
+// and outer radius, from degFrom to degTo. Segments ~10° each.
+void fillArc(Renderer2D& r, float cx, float cy,
+              float innerR, float outerR,
+              float degFrom, float degTo,
+              Color color) {
+    if (outerR <= 0.0f || innerR >= outerR) return;
+    if (degFrom == degTo) return;
+    const float step = (degTo > degFrom) ? 4.0f : -4.0f;
+    const int   nSegs = static_cast<int>(std::ceil(std::abs(degTo - degFrom) / 4.0f));
+    if (nSegs <= 0) return;
+
+    float prevIx, prevIy, prevOx, prevOy;
+    angleToPoint(cx, cy, innerR, degFrom, prevIx, prevIy);
+    angleToPoint(cx, cy, outerR, degFrom, prevOx, prevOy);
+    for (int i = 1; i <= nSegs; ++i) {
+        const float a = degFrom + step * static_cast<float>(i);
+        float ix, iy, ox, oy;
+        angleToPoint(cx, cy, innerR, a, ix, iy);
+        angleToPoint(cx, cy, outerR, a, ox, oy);
+        r.drawTriangle(prevIx, prevIy, prevOx, prevOy, ox, oy, color);
+        r.drawTriangle(prevIx, prevIy, ox,     oy,     ix, iy, color);
+        prevIx = ix; prevIy = iy;
+        prevOx = ox; prevOy = oy;
+    }
+}
+
+} // anon
+
+static void paintKnob(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& k = static_cast<FwKnob&>(w);
+    const Rect& b = k.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const Color accent = k.accentColor().value_or(p.accent);
+
+    // Layout: knob disc centred horizontally; label + value below.
+    const float discDiameter = (k.diameter() > 0.0f) ? k.diameter()
+                                                       : (m.controlHeight * 1.6f);
+    const float discR        = discDiameter * 0.5f;
+    const float cx           = b.x + b.w * 0.5f;
+    const float cy           = b.y + discR;
+
+    // Arc thickness scales with diameter but floors at a sensible
+    // minimum so tiny compact knobs don't disappear.
+    const float arcThickness = std::max(2.0f, discDiameter * 0.08f);
+    const float outerR       = discR;
+    const float innerR       = outerR - arcThickness;
+
+    // Background arc (full sweep).
+    fillArc(*ctx.renderer, cx, cy, innerR, outerR,
+             kArcStartDeg, kArcStartDeg + kArcSweepDeg,
+             k.isEnabled() ? p.controlBg : Color{40, 40, 45, 255});
+
+    // Value → normalized t ∈ [0, 1].
+    const float range = k.max() - k.min();
+    const float t = (range > 0.0f) ? (k.value() - k.min()) / range : 0.0f;
+
+    // Filled arc — from min (or centre in bipolar) to current value.
+    float fillFromDeg, fillToDeg;
+    if (k.bipolar()) {
+        const float mid = kArcStartDeg + kArcSweepDeg * 0.5f;
+        const float cur = kArcStartDeg + kArcSweepDeg * t;
+        fillFromDeg = std::min(mid, cur);
+        fillToDeg   = std::max(mid, cur);
+    } else {
+        fillFromDeg = kArcStartDeg;
+        fillToDeg   = kArcStartDeg + kArcSweepDeg * t;
+    }
+    const Color fillColor = k.isEnabled() ? accent : p.textDim;
+    fillArc(*ctx.renderer, cx, cy, innerR, outerR,
+             fillFromDeg, fillToDeg, fillColor);
+
+    // Inner disc — elevated fill inside the arc ring.
+    ctx.renderer->drawFilledCircle(cx, cy, innerR - 1.0f, p.elevated, 32);
+
+    // Indicator line — from just inside the arc ring toward the
+    // centre, pointing at current value.
+    const float indicatorR0 = innerR * 0.35f;
+    const float indicatorR1 = innerR * 0.9f;
+    const float indDeg      = kArcStartDeg + kArcSweepDeg * t;
+    float ix0, iy0, ix1, iy1;
+    angleToPoint(cx, cy, indicatorR0, indDeg, ix0, iy0);
+    angleToPoint(cx, cy, indicatorR1, indDeg, ix1, iy1);
+    const Color indCol = k.isEnabled() ? p.textPrimary : p.textDim;
+    ctx.renderer->drawLine(ix0, iy0, ix1, iy1, indCol,
+                            std::max(1.5f, arcThickness * 0.4f));
+
+    // Modulation overlay — thin secondary indicator at the modulated
+    // value, drawn inside the ring.
+    if (k.modulatedValue()) {
+        const float modT = (range > 0.0f)
+            ? (*k.modulatedValue() - k.min()) / range : 0.0f;
+        const float modDeg = kArcStartDeg + kArcSweepDeg * modT;
+        const Color modCol = k.modulationColor().value_or(p.modulation);
+
+        // Thin filled arc from primary to modulated position —
+        // visualizes the "excursion" the modulator is adding.
+        fillArc(*ctx.renderer, cx, cy,
+                 outerR + 1.0f, outerR + 1.0f + arcThickness * 0.6f,
+                 indDeg, modDeg, modCol);
+
+        // Small dot marker at the modulated position.
+        float dotX, dotY;
+        angleToPoint(cx, cy, outerR + arcThickness * 0.4f + 1.0f, modDeg,
+                      dotX, dotY);
+        ctx.renderer->drawFilledCircle(dotX, dotY, arcThickness * 0.5f, modCol, 12);
+    }
+
+    // Label + value text below the disc.
+    float textY = b.y + discDiameter + m.baseUnit * 0.5f;
+    if (k.showLabel() && !k.label().empty() && ctx.textMetrics) {
+        const float fontSize = m.fontSize;
+        const float lh       = ctx.textMetrics->lineHeight(fontSize);
+        const float tw       = ctx.textMetrics->textWidth(k.label(), fontSize);
+        const float tx       = b.x + (b.w - tw) * 0.5f;
+        const Color tc = k.isEnabled() ? p.textPrimary : p.textDim;
+        ctx.textMetrics->drawText(*ctx.renderer, k.label(), tx,
+                                   textY - lh * 0.15f, fontSize, tc);
+        textY += lh + m.baseUnit * 0.25f;
+    }
+    if (k.showValue() && ctx.textMetrics) {
+        const float fontSize = m.fontSizeSmall;
+        const float lh       = ctx.textMetrics->lineHeight(fontSize);
+        const std::string vs = k.formattedValue();
+        const float tw       = ctx.textMetrics->textWidth(vs, fontSize);
+        const float tx       = b.x + (b.w - tw) * 0.5f;
+        const Color tc = k.isEnabled() ? p.textSecondary : p.textDim;
+        ctx.textMetrics->drawText(*ctx.renderer, vs, tx,
+                                   textY - lh * 0.15f, fontSize, tc);
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -693,6 +851,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwDropDown), &paintDropDownButton);
     registerPainter(typeid(FwToggle),   &paintToggle);
     registerPainter(typeid(FwCheckbox), &paintCheckbox);
+    registerPainter(typeid(FwKnob),     &paintKnob);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

@@ -190,6 +190,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Dialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Toggle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Checkbox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Knob.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)
