@@ -5,6 +5,7 @@
 #include "ui/framework/v2/Fw2Painters.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
+#include "ui/framework/v2/Dialog.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -989,11 +990,17 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     }
 #endif
 
-    // Delete track (with confirmation)
+    // Delete track (with confirmation) — migrated to v2 ConfirmDialog:
+    // rides OverlayLayer::Modal so the scrim + event blocking are
+    // handled uniformly by LayerStack instead of the v1 paintOverlay
+    // + hand-rolled escape/click dispatch.
     bool canDelete = m_project.numTracks() > 1;
     items.push_back({"Delete Track", [this, trackIndex]() {
-        m_confirmDialog->prompt(
+        ui::fw2::ConfirmDialog::promptCustom(
+            "Delete Track",
             "This will stop playback and delete the track. Continue?",
+            "Delete",
+            "Cancel",
             [this, trackIndex]() {
                 // Stop transport and all clips (visual layers clear
                 // via the stop-counter poll in update()).
@@ -1022,7 +1029,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 
                 m_detailPanel->clear();
                 markDirty();
-            });
+            });   // promptCustom
     }, true, canDelete});
 
     m_contextMenu.open(mx, my, std::move(items));

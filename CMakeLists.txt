@@ -187,6 +187,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/DropDown.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Tooltip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/ContextMenu.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Dialog.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)

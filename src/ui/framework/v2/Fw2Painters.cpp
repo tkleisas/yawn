@@ -18,6 +18,7 @@
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
+#include "ui/framework/v2/Dialog.h"
 
 #include "ui/Renderer.h"
 #include "ui/Theme.h"
@@ -442,6 +443,91 @@ static void paintContextMenuLevels(
     }
 }
 
+// ─── Dialog ─────────────────────────────────────────────────────────
+
+static void paintDialog(const DialogManager::State& s, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    const Rect& b = s.bounds;
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // Drop shadow + body.
+    ctx.renderer->drawRoundedRect(b.x + 2.0f, b.y + 4.0f, b.w, b.h,
+                                   m.cornerRadius, p.dropShadow);
+    ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h,
+                                   m.cornerRadius, p.surface);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, m.borderWidth);
+
+    // Clip text to body interior.
+    ctx.renderer->pushClip(b.x, b.y, b.w, b.h);
+
+    const float padX     = m.baseUnit * 4.0f;
+    const float padY     = m.baseUnit * 3.0f;
+    const float rowGap   = m.baseUnit * 2.0f;
+    const float fontSize = m.fontSize;
+    const float titleSz  = m.fontSizeLarge;
+
+    float y = b.y + padY;
+
+    // Title bar.
+    if (!s.spec.title.empty() && ctx.textMetrics) {
+        const float lh = ctx.textMetrics->lineHeight(titleSz);
+        ctx.textMetrics->drawText(*ctx.renderer, s.spec.title,
+                                   b.x + padX, y - lh * 0.15f,
+                                   titleSz, p.textPrimary);
+        y += lh + rowGap;
+    }
+
+    // Message — one line per '\n'.
+    if (!s.spec.message.empty() && ctx.textMetrics) {
+        const float lh = ctx.textMetrics->lineHeight(fontSize);
+        std::string line;
+        for (size_t i = 0; i <= s.spec.message.size(); ++i) {
+            const bool eol = (i == s.spec.message.size() || s.spec.message[i] == '\n');
+            if (!eol) { line.push_back(s.spec.message[i]); continue; }
+            ctx.textMetrics->drawText(*ctx.renderer, line,
+                                       b.x + padX, y - lh * 0.15f,
+                                       fontSize, p.textSecondary);
+            y += lh;
+            line.clear();
+        }
+    }
+
+    // Buttons — rects already computed by layoutBody.
+    for (size_t i = 0; i < s.spec.buttons.size(); ++i) {
+        const DialogButton& btn = s.spec.buttons[i];
+        const Rect& r = s.buttonRects[i];
+        const bool hovered = (static_cast<int>(i) == s.hoveredButton);
+        const bool pressed = (static_cast<int>(i) == s.pressedButton);
+
+        Color bg = p.controlBg;
+        if (btn.primary) {
+            bg = p.accent;
+            if (pressed)      bg = p.accentActive;
+            else if (hovered) bg = p.accentHover;
+        } else {
+            if (pressed)      bg = p.controlActive;
+            else if (hovered) bg = p.controlHover;
+        }
+
+        ctx.renderer->drawRoundedRect(r.x, r.y, r.w, r.h, m.cornerRadius, bg);
+        ctx.renderer->drawRectOutline(r.x, r.y, r.w, r.h, p.border, m.borderWidth);
+
+        if (ctx.textMetrics && !btn.label.empty()) {
+            const float lh = ctx.textMetrics->lineHeight(fontSize);
+            const float tw = ctx.textMetrics->textWidth(btn.label, fontSize);
+            const float tx = r.x + (r.w - tw) * 0.5f;
+            const float ty = r.y + (r.h - lh) * 0.5f - lh * 0.15f;
+            const Color tc = btn.primary ? p.textOnAccent : p.textPrimary;
+            ctx.textMetrics->drawText(*ctx.renderer, btn.label, tx, ty, fontSize, tc);
+        }
+    }
+
+    ctx.renderer->popClip();
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -459,6 +545,9 @@ void registerAllFw2Painters() {
     // ContextMenuManager: same pattern — one function paints all open
     // levels (root + submenus).
     ContextMenuManager::setPainter(&paintContextMenuLevels);
+    // DialogManager: paints the modal body (scrim is already drawn by
+    // App via paintModalScrim when hasModalActive()).
+    DialogManager::setPainter(&paintDialog);
     // FlexBox has no paint — it's a pure layout container; its
     // children paint themselves via Widget::render recursion.
 }
