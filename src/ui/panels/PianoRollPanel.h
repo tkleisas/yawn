@@ -8,6 +8,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
@@ -788,7 +789,7 @@ private:
     // to this pointer before falling through to v1 capture handling.
     ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
     Label     m_clipNameLabel;
-    ScrollBar m_scrollbar;
+    ::yawn::ui::fw2::FwScrollBar m_scrollbar;
 
     // Clip ops button Y positions
     float m_clipOpsBtnY[6] = {};

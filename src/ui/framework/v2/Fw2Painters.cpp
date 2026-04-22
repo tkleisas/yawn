@@ -24,6 +24,7 @@
 #include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/Pan.h"
+#include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/StepSelector.h"
 
 #include <cmath>
@@ -1108,6 +1109,34 @@ static void paintCrossfader(Widget& w, UIContext& ctx) {
                                    handleW, handleH, p.border, 1.0f);
 }
 
+// ─── ScrollBar ─────────────────────────────────────────────────────
+
+static void paintScrollBar(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& sb = static_cast<FwScrollBar&>(w);
+    const Rect& b = sb.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+
+    // Track.
+    ctx.renderer->drawRect(b.x, b.y, b.w, b.h, p.controlBg);
+
+    // Thumb. Hidden when contentSize <= viewport (nothing to scroll).
+    const float tw = sb.thumbWidth();
+    if (tw <= 0.0f) return;
+    const float tx = sb.thumbX();
+
+    Color thumbCol = p.controlActive;
+    if (!sb.isEnabled())   thumbCol = p.textDim;
+    else if (sb.isDragging()) thumbCol = p.accent;
+    else if (sb.isHovered())  thumbCol = p.controlHover;
+
+    // Small vertical inset so the thumb doesn't touch the track edges.
+    const float inset = 1.0f;
+    ctx.renderer->drawRect(tx, b.y + inset, tw, b.h - inset * 2.0f, thumbCol);
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1121,6 +1150,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwStepSelector), &paintStepSelector);
     registerPainter(typeid(FwPan),      &paintPan);
     registerPainter(typeid(FwCrossfader), &paintCrossfader);
+    registerPainter(typeid(FwScrollBar), &paintScrollBar);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

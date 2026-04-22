@@ -194,6 +194,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Pan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/StepSelector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Crossfader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/ScrollBar.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)

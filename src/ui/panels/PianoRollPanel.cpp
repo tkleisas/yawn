@@ -141,7 +141,13 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
         float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
         float sbY = m_gy + m_gh + velH;
         if (my >= sbY && my < sbY + kScrollbarH && mx >= m_gx && mx < m_gx + m_gw) {
-            return m_scrollbar.onMouseDown(e);
+            // v2 scrollbar — route through the gesture SM.
+            const auto& sb = m_scrollbar.bounds();
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
+            m_scrollbar.dispatchMouseDown(ev);
+            m_v2Dragging = &m_scrollbar;
+            captureMouse();
+            return true;
         }
     }
 
@@ -909,8 +915,11 @@ void PianoRollPanel::renderScrollbar(UIContext& ctx) {
     float contentW = maxBeats() * m_pxBeat;
     m_scrollbar.setContentSize(contentW);
     m_scrollbar.setScrollPos(m_scrollX);
-    m_scrollbar.layout(Rect{m_gx, sbY, m_gw, kScrollbarH}, ctx);
-    m_scrollbar.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_scrollbar.layout(Rect{m_gx, sbY, m_gw, kScrollbarH}, v2ctx);
+        m_scrollbar.render(v2ctx);
+    }
 }
 
 } // namespace fw

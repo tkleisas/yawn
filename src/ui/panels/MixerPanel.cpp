@@ -72,8 +72,11 @@ void MixerPanel::paint(UIContext& ctx) {
     float contentW = m_project->numTracks() * Theme::kTrackWidth;
     m_scrollbar.setContentSize(contentW);
     m_scrollbar.setScrollPos(m_scrollX);
-    m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, ctx);
-    m_scrollbar.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, v2ctx);
+        m_scrollbar.render(v2ctx);
+    }
 
     // v1 context menu retired — fw2::ContextMenu paints via LayerStack
     // in App's render loop.
@@ -87,8 +90,16 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
     // v1 context menu retired — LayerStack dispatch in App::pollEvents
     // intercepts clicks while the fw2 menu is open.
 
-    if (hitWidget(m_scrollbar, mx, my)) {
-        return m_scrollbar.onMouseDown(e);
+    // v2 scrollbar — route through the gesture SM for drag + release.
+    {
+        const auto& sb = m_scrollbar.bounds();
+        if (mx >= sb.x && mx < sb.x + sb.w && my >= sb.y && my < sb.y + sb.h) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
+            m_scrollbar.dispatchMouseDown(ev);
+            m_v2Dragging = &m_scrollbar;
+            captureMouse();
+            return true;
+        }
     }
 
     // Toggle buttons in left margin — v2 FwToggle, routed through the

@@ -13,6 +13,7 @@
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/Pan.h"
+#include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
@@ -149,10 +150,8 @@ public:
             return cap->onMouseMove(e);
         }
 
-        float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
-        if (e.y >= sbY && e.y < sbY + kScrollbarH) {
-            m_scrollbar.onMouseMove(e);
-        }
+        // v2 scrollbar tracks hover via its own painter state; no
+        // per-move forward needed. Drag routes through m_v2Dragging.
         return false;
     }
 
@@ -265,7 +264,7 @@ private:
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
     TrackStrip m_strips[kMaxTracks];
-    ScrollBar  m_scrollbar;
+    ::yawn::ui::fw2::FwScrollBar m_scrollbar;
     Label      m_mixLabel;
     ::yawn::ui::fw2::FwToggle m_ioToggle;
     ::yawn::ui::fw2::FwToggle m_sendToggle;
