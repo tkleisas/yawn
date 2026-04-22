@@ -57,8 +57,16 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
 
             auto& rs = m_returnStrips[b];
 
-            if (!rightClick && hitWidget(rs.muteBtn, mx, my)) {
-                return rs.muteBtn.onMouseDown(e);
+            if (!rightClick) {
+                const auto& mb = rs.muteBtn.bounds();
+                if (mx >= mb.x && mx <= mb.x + mb.w &&
+                    my >= mb.y && my <= mb.y + mb.h) {
+                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, mb);
+                    rs.muteBtn.dispatchMouseDown(ev);
+                    m_v2Dragging = &rs.muteBtn;
+                    captureMouse();
+                    return true;
+                }
             }
             if (hitWidget(rs.pan, mx, my)) {
                 if (rightClick) {
@@ -104,8 +112,16 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
     float masterX = curX;
 
     if (mx >= masterX && mx < masterX + kRetStripW) {
-        if (!rightClick && hitWidget(m_stopAllBtn, mx, my)) {
-            return m_stopAllBtn.onMouseDown(e);
+        if (!rightClick) {
+            const auto& sb = m_stopAllBtn.bounds();
+            if (mx >= sb.x && mx <= sb.x + sb.w &&
+                my >= sb.y && my <= sb.y + sb.h) {
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
+                m_stopAllBtn.dispatchMouseDown(ev);
+                m_v2Dragging = &m_stopAllBtn;
+                captureMouse();
+                return true;
+            }
         }
         if (hitWidget(m_masterStrip.fader, mx, my)) {
             if (rightClick) {
@@ -154,11 +170,13 @@ void ReturnMasterPanel::paintStripCommon(UIContext& ctx, StripWidgets& sw,
 
     float curY = y + 26;
 
-    if (&sw.muteBtn != nullptr) {
-        sw.muteBtn.setColor(muted ? Color{255, 80, 80} : Theme::clipSlotEmpty);
-        sw.muteBtn.setTextColor(muted ? Color{0, 0, 0} : Theme::textSecondary);
-        sw.muteBtn.layout(Rect{x + 4, curY, kButtonWidth, kButtonHeight}, ctx);
-        sw.muteBtn.paint(ctx);
+    // Mute button — v2 FwToggle. setState drives the accent-fill-on
+    // appearance; accent color was configured at construction.
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        sw.muteBtn.setState(muted);
+        sw.muteBtn.layout(Rect{x + 4, curY, kButtonWidth, kButtonHeight}, v2ctx);
+        sw.muteBtn.render(v2ctx);
     }
 
     curY += kButtonHeight + 6;
@@ -236,10 +254,12 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
     m_masterStrip.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
     m_masterStrip.nameLabel.paint(ctx);
 
-    m_stopAllBtn.setColor(Theme::clipSlotEmpty);
-    m_stopAllBtn.setTextColor(Theme::textSecondary);
-    m_stopAllBtn.layout(Rect{x + 4, y + 22, w - 8, kButtonHeight}, ctx);
-    m_stopAllBtn.paint(ctx);
+    // Stop-all button — v2 FwButton with an overlaid stop-icon square.
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_stopAllBtn.layout(Rect{x + 4, y + 22, w - 8, kButtonHeight}, v2ctx);
+        m_stopAllBtn.render(v2ctx);
+    }
     {
         auto& sb = m_stopAllBtn.bounds();
         float iconSize = 8.0f;

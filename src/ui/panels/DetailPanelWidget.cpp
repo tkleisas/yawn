@@ -183,9 +183,18 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
                 return true;
             }
         }
-        // Detect button
-        if (hitWidget(m_detectBtn, mx, my))
-            return m_detectBtn.onMouseDown(e);
+        // Detect button — v2 FwButton. Route through the gesture SM so
+        // release visual + cancel-on-pointer-out behave correctly.
+        {
+            const auto& b = m_detectBtn.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+                m_detectBtn.dispatchMouseDown(ev);
+                m_v2Dragging = &m_detectBtn;
+                captureMouse();
+                return true;
+            }
+        }
         // v2 knobs — drag uses the fw2 gesture SM. Forward via the
         // v1→v2 event bridge and capture v1 mouse so subsequent moves
         // route back here. Same pattern as BrowserPanel's FaBarCountKnob.
@@ -203,9 +212,17 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
         if (tryV2Knob(m_transposeKnob)) return true;
         if (tryV2Knob(m_detuneKnob))    return true;
         if (tryV2Knob(m_bpmKnob))       return true;
-        // Loop toggle
-        if (hitWidget(m_loopToggleBtn, mx, my))
-            return m_loopToggleBtn.onMouseDown(e);
+        // Loop toggle — v2 FwToggle, same dispatch pattern.
+        {
+            const auto& b = m_loopToggleBtn.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+                m_loopToggleBtn.dispatchMouseDown(ev);
+                m_v2Dragging = &m_loopToggleBtn;
+                captureMouse();
+                return true;
+            }
+        }
     }
 
     if (m_deviceWidgets.empty()) return false;
@@ -368,7 +385,10 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     syncKnob(m_detuneKnob,    static_cast<float>(clip.detuneCents));
     if (clip.originalBPM > 0)
         syncKnob(m_bpmKnob, static_cast<float>(clip.originalBPM));
+    // Keep loop toggle's visible state in sync with the clip. setState
+    // uses the Programmatic source so this doesn't fire onChange.
     m_loopToggleBtn.setLabel(clip.looping ? "On" : "Off");
+    m_loopToggleBtn.setState(clip.looping);
 
     // ── Horizontal control strip ──
     float stripY = waveY + waveH + kClipSectionGap;
@@ -427,16 +447,16 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     }
     cx += warpW + gap;
 
-    // Detect button
+    // Detect button — v2 FwButton, render via fw2 UIContext.
     float detectW = 70.0f;
-    m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, ctx);
-    m_detectBtn.paint(ctx);
+    m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, v2ctx);
+    m_detectBtn.render(v2ctx);
     cx += detectW + sectionGap;
 
-    // Loop toggle
+    // Loop toggle — v2 FwToggle, render via fw2 UIContext.
     font.drawText(renderer, "Loop", cx, stripY, labelScale, Theme::textDim);
-    m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
-    m_loopToggleBtn.paint(ctx);
+    m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, v2ctx);
+    m_loopToggleBtn.render(v2ctx);
     cx += 50.0f + sectionGap;
 
     // Automation target dropdown (inline in control strip) — v2 widget.

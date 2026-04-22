@@ -6,6 +6,10 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Toggle.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -58,15 +62,17 @@ public:
             rs.nameLabel.setColor(Theme::textPrimary);
 
             rs.muteBtn.setLabel("M");
-            rs.muteBtn.setOnClick([this, b]() {
+            // Red accent carries the muted state (v2 FwToggle fills the
+            // body with accent when on). Matches the v1 red-on-mute look.
+            rs.muteBtn.setAccentColor(Color{255, 80, 80});
+            rs.muteBtn.setOnChange([this, b](bool on) {
                 if (!m_engine) return;
-                bool cur = m_engine->mixer().returnBus(b).muted;
-                bool next = !cur;
-                m_engine->sendCommand(audio::SetReturnMuteMsg{b, next});
+                bool cur = !on;   // state before this click
+                m_engine->sendCommand(audio::SetReturnMuteMsg{b, on});
                 if (m_undoManager) {
                     m_undoManager->push({"Toggle Return Mute",
                         [this, b, cur]{ m_engine->sendCommand(audio::SetReturnMuteMsg{b, cur}); },
-                        [this, b, next]{ m_engine->sendCommand(audio::SetReturnMuteMsg{b, next}); },
+                        [this, b, on]{ m_engine->sendCommand(audio::SetReturnMuteMsg{b, on}); },
                         ""});
                 }
             });
@@ -189,6 +195,12 @@ public:
 
     bool onMouseMove(MouseMoveEvent& e) override {
         // v1 context menu retired — fw2 handles hover via LayerStack.
+        // v2 button/toggle drag — forward translated events.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
         }
@@ -196,6 +208,14 @@ public:
     }
 
     bool onMouseUp(MouseEvent& e) override {
+        // v2 button/toggle release flushes via the m_v2Dragging path.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseUp(e);
         }
@@ -204,7 +224,7 @@ public:
 
 private:
     struct StripWidgets {
-        FwButton   muteBtn;
+        ::yawn::ui::fw2::FwToggle muteBtn;
         PanWidget  pan;
         FwFader    fader;
         MeterWidget meter;
@@ -259,7 +279,12 @@ private:
 
     StripWidgets m_returnStrips[kMaxReturnBuses];
     StripWidgets m_masterStrip;
-    FwButton     m_stopAllBtn;
+    ::yawn::ui::fw2::FwButton m_stopAllBtn;
+
+    // Tracks which v2 widget currently owns a drag — set in
+    // onMouseDown, used by onMouseMove/Up to forward translated
+    // events back to the fw2 gesture SM. Null when no v2 drag.
+    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
 
     bool m_showReturns = true;
     midi::MidiLearnManager* m_learnManager = nullptr;

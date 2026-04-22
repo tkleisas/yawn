@@ -7,6 +7,10 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Toggle.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -107,8 +111,8 @@ public:
         m_bpmLabel.setAlign(TextAlign::Left);
 
         m_metroBtn.setLabel("MET");
-        m_metroBtn.setOnClick([this]() {
-            m_metronomeOn = !m_metronomeOn;
+        m_metroBtn.setOnChange([this](bool on) {
+            m_metronomeOn = on;
             if (m_engine)
                 m_engine->sendCommand(audio::MetronomeToggleMsg{m_metronomeOn});
         });
@@ -217,8 +221,14 @@ public:
 #endif
 
     bool onMouseUp(MouseEvent& e) override {
-        m_tapBtn.onMouseUp(e);
-        m_metroBtn.onMouseUp(e);
+        // v2 button/toggle release flushes via the m_v2Dragging path.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
         m_bpmInput.onMouseUp(e);
         m_tsNumInput.onMouseUp(e);
         m_tsDenInput.onMouseUp(e);
@@ -265,12 +275,17 @@ private:
     FwNumberInput m_bpmInput;
     FwNumberInput m_tsNumInput;
     FwNumberInput m_tsDenInput;
-    FwButton      m_tapBtn;
-    FwButton      m_metroBtn;
+    ::yawn::ui::fw2::FwButton m_tapBtn;
+    ::yawn::ui::fw2::FwToggle m_metroBtn;
     Label         m_posLabel;
     Label         m_countInLabel;
     Label         m_bpmLabel;
     Label         m_slashLabel;
+
+    // Tracks which v2 widget currently owns a drag — set in
+    // onMouseDown, used by onMouseMove/Up to forward translated
+    // events back to the fw2 gesture SM. Null when no v2 drag.
+    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
 
     // Centered transport button positions
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;

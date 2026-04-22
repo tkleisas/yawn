@@ -14,8 +14,10 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/WaveformWidget.h"
+#include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Theme.h"
@@ -311,13 +313,15 @@ public:
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->originalBPM = static_cast<double>(v);
         });
 
-        // Loop toggle button
+        // Loop toggle button — v2 FwToggle. Keep dynamic "On"/"Off" label
+        // (accent fill also reflects state).
         m_loopToggleBtn.setLabel(clip->looping ? "On" : "Off");
-        m_loopToggleBtn.setOnClick([this]() {
+        m_loopToggleBtn.setState(clip->looping);
+        m_loopToggleBtn.setOnChange([this](bool on) {
             if (m_clipPtr) {
                 auto* mc = const_cast<audio::Clip*>(m_clipPtr);
-                mc->looping = !mc->looping;
-                m_loopToggleBtn.setLabel(mc->looping ? "On" : "Off");
+                mc->looping = on;
+                m_loopToggleBtn.setLabel(on ? "On" : "Off");
             }
         });
 
@@ -779,17 +783,12 @@ public:
         // Forward to waveform widget
         if (m_viewMode == ViewMode::AudioClip) {
             // v2 dropdowns toggle on mouse-down directly — no mouseUp
-            // forwarding needed.
+            // forwarding needed. v2 button + toggle release via the
+            // m_v2Dragging path above. v2 knobs likewise.
             auto& wb = m_waveformWidget.bounds();
             e.lx = e.x - wb.x;
             e.ly = e.y - wb.y;
             if (m_waveformWidget.onMouseUp(e)) return true;
-            if (hitWidget(m_detectBtn, e.x, e.y))
-                return m_detectBtn.onMouseUp(e);
-            // v2 knobs: their drag release already handled above via
-            // the m_v2Dragging path. Nothing to forward here.
-            if (hitWidget(m_loopToggleBtn, e.x, e.y))
-                return m_loopToggleBtn.onMouseUp(e);
         }
         for (auto* dw : m_deviceWidgets) {
             auto& db = dw->bounds();
@@ -1453,11 +1452,11 @@ private:
     int m_clipSampleRate = 44100;
     WaveformWidget m_waveformWidget;
     ::yawn::ui::fw2::FwDropDown m_warpModeDropdown;
-    FwButton m_detectBtn;
+    ::yawn::ui::fw2::FwButton m_detectBtn;
     ::yawn::ui::fw2::FwKnob m_gainKnob;
     ::yawn::ui::fw2::FwKnob m_transposeKnob;
     ::yawn::ui::fw2::FwKnob m_detuneKnob;
-    FwButton m_loopToggleBtn;
+    ::yawn::ui::fw2::FwToggle m_loopToggleBtn;
     ::yawn::ui::fw2::FwKnob m_bpmKnob;
     // Tracks which v2 widget currently owns a drag — set in
     // onMouseDown, used by onMouseMove/Up to forward translated

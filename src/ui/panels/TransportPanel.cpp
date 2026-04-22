@@ -123,14 +123,15 @@ void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
     float sep2X = lx;
     lx += 12.0f;
 
-    // TAP button
+    // TAP button — v2 FwButton, layout via fw2 UIContext.
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
     float tapW = 42.0f;
-    m_tapBtn.layout(Rect{lx, btnY, tapW, boxH}, ctx);
+    m_tapBtn.layout(Rect{lx, btnY, tapW, boxH}, v2ctx);
     lx += tapW + 8.0f;
 
-    // Metronome toggle (wider when count-in is set)
+    // Metronome toggle — v2 FwToggle.
     float metW = (m_countInBars > 0) ? 62.0f : 42.0f;
-    m_metroBtn.layout(Rect{lx, btnY, metW, boxH}, ctx);
+    m_metroBtn.layout(Rect{lx, btnY, metW, boxH}, v2ctx);
     m_metroDotX = lx + metW + 6.0f;
     m_metroDotY = btnY + boxH * 0.5f;
 
@@ -228,14 +229,21 @@ void TransportPanel::paint(UIContext& ctx) {
     float sep2X = m_tsDenBoxX + m_tsDenBoxW + 8.0f;
     r.drawRect(sep2X, y + 8, 1, h - 16, Theme::clipSlotBorder);
 
-    // TAP button with flash
+    // TAP button — v2 FwButton with flash. Flash expressed via accent
+    // highlight (pulse on tap). render through the fw2 UIContext.
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
     m_tapFlash = std::max(0.0f, m_tapFlash - 1.0f / 15.0f);
-    uint8_t fR = static_cast<uint8_t>(40 + m_tapFlash * 60);
-    uint8_t fG = static_cast<uint8_t>(40 + m_tapFlash * 80);
-    m_tapBtn.setColor(Color{fR, fG, 50});
-    m_tapBtn.paint(ctx);
+    if (m_tapFlash > 0.01f) {
+        uint8_t fR = static_cast<uint8_t>(40 + m_tapFlash * 60);
+        uint8_t fG = static_cast<uint8_t>(40 + m_tapFlash * 80);
+        m_tapBtn.setAccentColor(Color{fR, fG, 50});
+        m_tapBtn.setHighlighted(true);
+    } else {
+        m_tapBtn.setHighlighted(false);
+    }
+    m_tapBtn.render(v2ctx);
 
-    // Metronome button — include count-in in label
+    // Metronome toggle — v2 FwToggle. Label includes count-in count.
     if (m_countInBars > 0) {
         char metLabel[16];
         std::snprintf(metLabel, sizeof(metLabel), "MET %d", m_countInBars);
@@ -243,9 +251,9 @@ void TransportPanel::paint(UIContext& ctx) {
     } else {
         m_metroBtn.setLabel("MET");
     }
-    Color metroBg = m_metronomeOn ? Color{60, 90, 140} : Color{45, 45, 50};
-    m_metroBtn.setColor(metroBg);
-    m_metroBtn.paint(ctx);
+    m_metroBtn.setAccentColor(Color{60, 90, 140});
+    m_metroBtn.setState(m_metronomeOn);
+    m_metroBtn.render(v2ctx);
 
     // Visual metronome next to MET button
     if (m_metronomeOn && (m_transportPlaying || m_countingIn)) {
@@ -473,13 +481,25 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         m_tsDenInput.onMouseDown(e);
         return true;
     }
-    if (hitTestChild(m_tapBtn, mx, my)) {
-        m_tapBtn.onMouseDown(e);
-        return true;
+    {
+        const auto& b = m_tapBtn.bounds();
+        if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+            m_tapBtn.dispatchMouseDown(ev);
+            m_v2Dragging = &m_tapBtn;
+            captureMouse();
+            return true;
+        }
     }
-    if (hitTestChild(m_metroBtn, mx, my)) {
-        m_metroBtn.onMouseDown(e);
-        return true;
+    {
+        const auto& b = m_metroBtn.bounds();
+        if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+            m_metroBtn.dispatchMouseDown(ev);
+            m_v2Dragging = &m_metroBtn;
+            captureMouse();
+            return true;
+        }
     }
 
     // Click anywhere dismisses edit mode
@@ -493,6 +513,13 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
 
 bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
     // v1 context menu retired — fw2 handles hover via LayerStack.
+
+    // v2 button/toggle drag in progress — forward translated events.
+    if (m_v2Dragging) {
+        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+        m_v2Dragging->dispatchMouseMove(ev);
+        return true;
+    }
 
     m_bpmInput.onMouseMove(e);
     m_tsNumInput.onMouseMove(e);

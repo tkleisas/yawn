@@ -10,6 +10,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
+#include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
@@ -70,7 +71,7 @@ public:
     void setFollowAction(FollowAction* fa) {
         m_followActionPtr = fa;
         if (fa) {
-            m_faEnableBtn.setLabel(fa->enabled ? "On" : "Off");
+            syncFaEnableButton();
             m_faBarCountKnob.setValue(static_cast<float>(fa->barCount));
             m_faActionADropdown.setSelectedIndex(static_cast<int>(fa->actionA));
             m_faActionBDropdown.setSelectedIndex(static_cast<int>(fa->actionB));
@@ -169,8 +170,20 @@ public:
         // v2 dropdowns handle their open-state via LayerStack; when a
         // popup is open the panel doesn't see the click at all.
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
-            if (hitWidget(m_faEnableBtn, mx, my))
-                return m_faEnableBtn.onMouseDown(e);
+            // v2 FwButton — route press through the gesture SM so we
+            // get the press visual state + cancel-on-pointer-out.
+            // Same m_v2Dragging pattern the knob uses; one "active
+            // v2 widget" pointer serves both.
+            {
+                const auto& b = m_faEnableBtn.bounds();
+                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+                    m_faEnableBtn.dispatchMouseDown(ev);
+                    m_v2Dragging = &m_faEnableBtn;
+                    captureMouse();
+                    return true;
+                }
+            }
             // v2 knob — drag needs the gesture SM. Forward via v1→v2
             // event bridge and capture v1 mouse so subsequent moves
             // route back here for forwarding.
@@ -261,9 +274,8 @@ public:
         }
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             // v2 dropdowns toggle on mouseDown directly — no mouseUp
-            // forwarding needed for them.
-            if (hitWidget(m_faEnableBtn, e.x, e.y))
-                return m_faEnableBtn.onMouseUp(e);
+            // forwarding needed for them. v2 FwButton releases via
+            // the m_v2Dragging path above.
             if (m_faCrossfader.onMouseUp(e)) return true;
         }
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
@@ -427,7 +439,7 @@ private:
 
     // Follow action state
     FollowAction* m_followActionPtr = nullptr;
-    FwButton   m_faEnableBtn;
+    ::yawn::ui::fw2::FwButton m_faEnableBtn;
     ::yawn::ui::fw2::FwKnob   m_faBarCountKnob;
     // Tracks which v2 widget currently owns a drag — set in
     // onMouseDown, used by onMouseMove/Up to forward translated
@@ -579,12 +591,22 @@ private:
         });
     }
 
+    // Sync the Enable button's visible state from the backing data.
+    // Text reads "On"/"Off"; the v2 Button's setHighlighted flag
+    // fills the disc with accent so the state is readable at a
+    // glance without parsing the label.
+    void syncFaEnableButton() {
+        const bool on = m_followActionPtr && m_followActionPtr->enabled;
+        m_faEnableBtn.setLabel(on ? "On" : "Off");
+        m_faEnableBtn.setHighlighted(on);
+    }
+
     void initFollowActionWidgets() {
         m_faEnableBtn.setLabel("Off");
         m_faEnableBtn.setOnClick([this]() {
             if (m_followActionPtr) {
                 m_followActionPtr->enabled = !m_followActionPtr->enabled;
-                m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
+                syncFaEnableButton();
             }
         });
 
@@ -654,7 +676,7 @@ private:
         // round-trip of the float knob value (5.2f → int 5 → back to
         // 5.0f), so unconditional setValue would rubber-band the knob
         // to a snapped integer and the drag would look jumpy.
-        m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
+        syncFaEnableButton();
         if (!m_faBarCountKnob.isDragging() && !m_faBarCountKnob.isEditing())
             m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
         m_faActionADropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionA));
@@ -669,10 +691,13 @@ private:
         float labelCol = 60.0f;
         float inputX = sx + labelCol;
 
-        // Enable
+        // Enable — v2 FwButton, renders through fw2 UIContext.
         f.drawText(r, "Enable", sx, rowY + 3.0f, labelScale, Theme::textDim);
-        m_faEnableBtn.layout(Rect{inputX, rowY, 40.0f, inputH}, ctx);
-        m_faEnableBtn.paint(ctx);
+        {
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            m_faEnableBtn.layout(Rect{inputX, rowY, 40.0f, inputH}, v2ctx);
+            m_faEnableBtn.render(v2ctx);
+        }
         rowY += inputH + 12.0f;
 
         // Bars — v2 knob, render through fw2 UIContext.

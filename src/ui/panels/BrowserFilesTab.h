@@ -4,6 +4,9 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -42,7 +45,9 @@ public:
         m_searchInput.setPlaceholder("Search files...");
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
         m_addFolderBtn.setLabel("+");
-        m_addFolderBtn.setDrawOutline(true);
+        // Click routed manually in onMouseDown below (predates v2
+        // migration, kept to avoid a new m_v2Pressed pointer on the
+        // tab just for a single glyph-width button).
     }
 
     void setDatabase(library::LibraryDatabase* db) { m_db = db; }
@@ -207,9 +212,12 @@ public:
         m_searchInput.layout(Rect{x + 4, y + 4, w - 30, 20}, ctx);
         m_searchInput.paint(ctx);
 
-        // Add folder button
-        m_addFolderBtn.layout(Rect{x + w - 24, y + 4, 20, 20}, ctx);
-        m_addFolderBtn.paint(ctx);
+        // Add folder button — v2 widget, renders through fw2 UIContext.
+        {
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            m_addFolderBtn.layout(Rect{x + w - 24, y + 4, 20, 20}, v2ctx);
+            m_addFolderBtn.render(v2ctx);
+        }
 
         // Scanning indicator
         if (m_scanner && m_scanner->isScanning()) {
@@ -316,7 +324,7 @@ private:
     library::LibraryScanner*  m_scanner = nullptr;
 
     FwTextInput m_searchInput;
-    FwButton    m_addFolderBtn;
+    ::yawn::ui::fw2::FwButton m_addFolderBtn;
 
     std::vector<FileTreeNode>  m_fileTree;       // root nodes
     std::vector<FileTreeNode*> m_flatList;        // flattened visible nodes
