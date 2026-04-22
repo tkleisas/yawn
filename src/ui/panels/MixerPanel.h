@@ -8,6 +8,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Fader.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
@@ -201,7 +202,7 @@ private:
         Label midiTxLabel;
         Label sidechainLabel;
         PanWidget pan;
-        FwFader fader;
+        ::yawn::ui::fw2::FwFader fader;
         MeterWidget meter;
         Label nameLabel;
         Label dbLabel;

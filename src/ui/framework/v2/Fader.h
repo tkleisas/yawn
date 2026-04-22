@@ -73,6 +73,13 @@ public:
     const FaderMetrics&          visualMetrics() const { return m_metrics; }
     const std::optional<Color>&  trackColor()    const { return m_trackColorOverride; }
 
+    // True between drag-start (3-px threshold crossed after mouseDown)
+    // and drag-end. Hosts that paint-time-sync their backing value to
+    // the fader must guard that sync on this being false — an async
+    // engine lagging behind the user's drag would otherwise rubber-
+    // band the fader to the stale value. Mirrors FwKnob::isDragging().
+    bool isDragging() const              { return m_dragging; }
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;
@@ -111,6 +118,7 @@ private:
 
     // Drag state
     float m_dragStartValue = 0.0f;
+    bool  m_dragging       = false;
 
     // Appearance
     FaderMetrics m_metrics;

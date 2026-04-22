@@ -262,28 +262,38 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             return s.pan.onMouseDown(e);
         }
 
-        // Fader: right-click opens MIDI Learn context menu
-        if (hitWidget(s.fader, mx, my)) {
-            if (rightClick) {
-                openMidiLearnMenu(mx, my,
-                    automation::AutomationTarget::mixer(t, automation::MixerParam::Volume),
-                    0.0f, 2.0f,
-                    [this, t]() {
-                        float oldVal = m_strips[t].fader.value();
-                        m_strips[t].fader.setValue(1.0f);
-                        m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
-                        if (m_undoManager) {
-                            m_undoManager->push({"Reset Volume",
-                                [this, t, oldVal]{ m_strips[t].fader.setValue(oldVal);
-                                    m_engine->sendCommand(audio::SetTrackVolumeMsg{t, oldVal}); },
-                                [this, t]{ m_strips[t].fader.setValue(1.0f);
-                                    m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f}); },
-                                ""});
-                        }
-                    });
+        // Fader — v2 FwFader, same v1→v2 event bridge pattern as knobs
+        // and buttons. Right-click opens the MIDI Learn context menu
+        // (handled separately from the drag dispatch).
+        {
+            const auto& fb = s.fader.bounds();
+            if (mx >= fb.x && mx < fb.x + fb.w &&
+                my >= fb.y && my < fb.y + fb.h) {
+                if (rightClick) {
+                    openMidiLearnMenu(mx, my,
+                        automation::AutomationTarget::mixer(t, automation::MixerParam::Volume),
+                        0.0f, 2.0f,
+                        [this, t]() {
+                            float oldVal = m_strips[t].fader.value();
+                            m_strips[t].fader.setValue(1.0f);
+                            m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f});
+                            if (m_undoManager) {
+                                m_undoManager->push({"Reset Volume",
+                                    [this, t, oldVal]{ m_strips[t].fader.setValue(oldVal);
+                                        m_engine->sendCommand(audio::SetTrackVolumeMsg{t, oldVal}); },
+                                    [this, t]{ m_strips[t].fader.setValue(1.0f);
+                                        m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f}); },
+                                    ""});
+                            }
+                        });
+                    return true;
+                }
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, fb);
+                s.fader.dispatchMouseDown(ev);
+                m_v2Dragging = &s.fader;
+                captureMouse();
                 return true;
             }
-            return s.fader.onMouseDown(e);
         }
 
         // Click on strip background → select this track
@@ -629,9 +639,10 @@ void MixerPanel::setupStripCallbacks(int t) {
         if (!m_engine) return;
         m_engine->sendCommand(audio::SetTrackVolumeMsg{t, v});
     });
-    s.fader.setOnDragEnd([this, t](float dragStartVal) {
+    // v2 FwFader's setOnDragEnd delivers both start and end values —
+    // no need to re-read fader.value() after release.
+    s.fader.setOnDragEnd([this, t](float dragStartVal, float newVal) {
         if (!m_undoManager || !m_engine) return;
-        float newVal = m_strips[t].fader.value();
         if (dragStartVal != newVal) {
             m_undoManager->push({"Change Volume",
                 [this, t, dragStartVal]{ m_strips[t].fader.setValue(dragStartVal);
@@ -885,10 +896,17 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     float faderBottom = stripY + stripH - 22;
     float faderH = std::max(20.0f, faderBottom - curY);
 
-    s.fader.setValue(ch.volume);
+    // v2 fader — skip sync while user is mid-drag so the engine's
+    // (async) volume echo can't rubber-band the knob. Same gate the
+    // mixer send knobs use.
+    if (!s.fader.isDragging())
+        s.fader.setValue(ch.volume);
     s.fader.setTrackColor(col);
-    s.fader.layout(Rect{ix + 4, curY, kFaderWidth, faderH}, ctx);
-    s.fader.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        s.fader.layout(Rect{ix + 4, curY, kFaderWidth, faderH}, v2ctx);
+        s.fader.render(v2ctx);
+    }
 
     float meterX = ix + 4 + kFaderWidth + 3;
     s.meter.setPeak(m_trackMeters[idx].peakL, m_trackMeters[idx].peakR);

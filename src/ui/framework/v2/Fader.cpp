@@ -63,6 +63,7 @@ void FwFader::onLayout(Rect b, UIContext& /*ctx*/) {
 
 void FwFader::onDragStart(const DragEvent& /*e*/) {
     m_dragStartValue = m_value;
+    m_dragging       = true;
 }
 
 void FwFader::onDrag(const DragEvent& e) {
@@ -73,6 +74,7 @@ void FwFader::onDrag(const DragEvent& e) {
 }
 
 void FwFader::onDragEnd(const DragEvent& /*e*/) {
+    m_dragging = false;
     if (m_onDragEnd) m_onDragEnd(m_dragStartValue, m_value);
 }
 

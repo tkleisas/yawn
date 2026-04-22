@@ -81,17 +81,27 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                 }
                 return rs.pan.onMouseDown(e);
             }
-            if (hitWidget(rs.fader, mx, my)) {
-                if (rightClick) {
-                    openMidiLearnMenu(mx, my,
-                        automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Volume),
-                        0.0f, 2.0f,
-                        [this, b]() {
-                            m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
-                        });
+            // Return fader — v2 FwFader. Right-click still opens MIDI
+            // Learn menu; left-click drags via the gesture SM.
+            {
+                const auto& fb = rs.fader.bounds();
+                if (mx >= fb.x && mx < fb.x + fb.w &&
+                    my >= fb.y && my < fb.y + fb.h) {
+                    if (rightClick) {
+                        openMidiLearnMenu(mx, my,
+                            automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Volume),
+                            0.0f, 2.0f,
+                            [this, b]() {
+                                m_engine->sendCommand(audio::SetReturnVolumeMsg{b, 1.0f});
+                            });
+                        return true;
+                    }
+                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, fb);
+                    rs.fader.dispatchMouseDown(ev);
+                    m_v2Dragging = &rs.fader;
+                    captureMouse();
                     return true;
                 }
-                return rs.fader.onMouseDown(e);
             }
 
             // Right-click on strip background → show "Add Effect" context menu
@@ -123,17 +133,26 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                 return true;
             }
         }
-        if (hitWidget(m_masterStrip.fader, mx, my)) {
-            if (rightClick) {
-                openMidiLearnMenu(mx, my,
-                    automation::AutomationTarget::mixer(-1, automation::MixerParam::Volume),
-                    0.0f, 2.0f,
-                    [this]() {
-                        m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
-                    });
+        // Master fader — v2 FwFader.
+        {
+            const auto& fb = m_masterStrip.fader.bounds();
+            if (mx >= fb.x && mx < fb.x + fb.w &&
+                my >= fb.y && my < fb.y + fb.h) {
+                if (rightClick) {
+                    openMidiLearnMenu(mx, my,
+                        automation::AutomationTarget::mixer(-1, automation::MixerParam::Volume),
+                        0.0f, 2.0f,
+                        [this]() {
+                            m_engine->sendCommand(audio::SetMasterVolumeMsg{1.0f});
+                        });
+                    return true;
+                }
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, fb);
+                m_masterStrip.fader.dispatchMouseDown(ev);
+                m_v2Dragging = &m_masterStrip.fader;
+                captureMouse();
                 return true;
             }
-            return m_masterStrip.fader.onMouseDown(e);
         }
 
         // Right-click on master strip background → show "Add Effect" context menu
@@ -187,9 +206,14 @@ void ReturnMasterPanel::paintStripCommon(UIContext& ctx, StripWidgets& sw,
     float faderBottom = y + h - 22;
     float faderH = std::max(20.0f, faderBottom - curY);
 
-    sw.fader.setValue(volume);
-    sw.fader.layout(Rect{x + 4, curY, kFaderWidth, faderH}, ctx);
-    sw.fader.paint(ctx);
+    // v2 FwFader — skip sync during drag to avoid engine rubber-banding.
+    if (!sw.fader.isDragging())
+        sw.fader.setValue(volume);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        sw.fader.layout(Rect{x + 4, curY, kFaderWidth, faderH}, v2ctx);
+        sw.fader.render(v2ctx);
+    }
 
     sw.meter.setPeak(peakL, peakR);
     sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
@@ -249,7 +273,8 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
     r.drawRect(x, y, w, h, Color{35, 35, 40});
     r.drawRect(x, y, w, 3, masterCol);
 
-    m_masterStrip.fader.setValue(master.volume);
+    if (!m_masterStrip.fader.isDragging())
+        m_masterStrip.fader.setValue(master.volume);
 
     m_masterStrip.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
     m_masterStrip.nameLabel.paint(ctx);
@@ -272,8 +297,11 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
     float faderBottom = y + h - 22;
     float faderH = std::max(20.0f, faderBottom - curY);
 
-    m_masterStrip.fader.layout(Rect{x + 4, curY, kFaderWidth + 2, faderH}, ctx);
-    m_masterStrip.fader.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_masterStrip.fader.layout(Rect{x + 4, curY, kFaderWidth + 2, faderH}, v2ctx);
+        m_masterStrip.fader.render(v2ctx);
+    }
 
     m_masterStrip.meter.setPeak(m_masterMeter.peakL, m_masterMeter.peakR);
     m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,

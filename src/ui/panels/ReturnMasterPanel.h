@@ -7,6 +7,7 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Fader.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
@@ -104,9 +105,9 @@ public:
                 if (!m_engine) return;
                 m_engine->sendCommand(audio::SetReturnVolumeMsg{b, v});
             });
-            rs.fader.setOnDragEnd([this, b](float oldVal) {
+            // v2 FwFader's setOnDragEnd delivers both start + end.
+            rs.fader.setOnDragEnd([this, b](float oldVal, float newVal) {
                 if (!m_undoManager) return;
-                float newVal = m_returnStrips[b].fader.value();
                 m_undoManager->push({"Change Return Volume",
                     [this, b, oldVal]{ m_returnStrips[b].fader.setValue(oldVal);
                         if (m_engine) m_engine->sendCommand(audio::SetReturnVolumeMsg{b, oldVal}); },
@@ -125,9 +126,8 @@ public:
             if (!m_engine) return;
             m_engine->sendCommand(audio::SetMasterVolumeMsg{v});
         });
-        m_masterStrip.fader.setOnDragEnd([this](float oldVal) {
+        m_masterStrip.fader.setOnDragEnd([this](float oldVal, float newVal) {
             if (!m_undoManager) return;
-            float newVal = m_masterStrip.fader.value();
             m_undoManager->push({"Change Master Volume",
                 [this, oldVal]{ m_masterStrip.fader.setValue(oldVal);
                     if (m_engine) m_engine->sendCommand(audio::SetMasterVolumeMsg{oldVal}); },
@@ -226,7 +226,7 @@ private:
     struct StripWidgets {
         ::yawn::ui::fw2::FwToggle muteBtn;
         PanWidget  pan;
-        FwFader    fader;
+        ::yawn::ui::fw2::FwFader fader;
         MeterWidget meter;
         Label      nameLabel;
         Label      dbLabel;
