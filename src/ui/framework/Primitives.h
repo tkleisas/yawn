@@ -713,8 +713,17 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DropDown
+// DropDown — RETIRED. All call sites migrated to
+// yawn::ui::fw2::FwDropDown (src/ui/framework/v2/DropDown.h) which
+// paints on LayerStack::Overlay with drop shadow, flip-upward,
+// hover-edge auto-scroll, and scroll indicators. The v1 class
+// below is preserved temporarily behind a YAWN_KEEP_V1_DROPDOWN
+// guard so out-of-tree forks have a window to catch up; none of
+// YAWN's own code references it. Slated for deletion after the
+// next minor release.
 // ═══════════════════════════════════════════════════════════════════════════
+
+#ifdef YAWN_KEEP_V1_DROPDOWN
 
 class FwDropDown : public Widget {
 public:
@@ -917,6 +926,8 @@ private:
     int   m_maxVisibleOverride = 0;  // 0 = use kMaxVisible default
     IndexCallback m_onChange;
 };
+
+#endif // YAWN_KEEP_V1_DROPDOWN
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MeterWidget (stereo VU meter, display-only)

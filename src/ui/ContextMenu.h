@@ -1,7 +1,14 @@
 #pragma once
 
-// ContextMenu — floating popup menu triggered by right-click.
-// Reuses MenuItem structure from MenuBar.
+// ContextMenu — RETIRED.
+// All YAWN panels now route right-click menus through
+// yawn::ui::fw2::ContextMenu (src/ui/framework/v2/ContextMenu.h) on
+// LayerStack::Overlay. The class below is preserved for its
+// `Item` struct, which is still used by V1MenuBridge.h (the
+// inline adapter that converts existing v1 item-builder code to
+// fw2::MenuEntry). When all 10 bridge call sites graduate to
+// building fw2::MenuEntry directly, this file and the bridge
+// header can be deleted together.
 
 #include "ui/Widget.h"
 #include "ui/Theme.h"

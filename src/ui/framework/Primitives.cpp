@@ -286,8 +286,11 @@ void FwNumberInput::paint(UIContext& ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FwDropDown
+// FwDropDown — RETIRED. See comment in Primitives.h — this impl is
+// gated behind the same YAWN_KEEP_V1_DROPDOWN guard.
 // ═══════════════════════════════════════════════════════════════════════════
+
+#ifdef YAWN_KEEP_V1_DROPDOWN
 
 void FwDropDown::paint(UIContext& ctx) {
     if (!ctx.renderer || !ctx.font) return;
@@ -426,6 +429,8 @@ void FwDropDown::paintOverlay(UIContext& ctx) {
     float sepY = m_popupAbove ? (listY + listH - 1) : listY;
     ctx.renderer->drawRect(listX, sepY, popW, 1, Color{90, 140, 200, 255});
 }
+
+#endif // YAWN_KEEP_V1_DROPDOWN
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MeterWidget

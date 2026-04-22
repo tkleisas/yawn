@@ -515,46 +515,9 @@ TEST(FwNumberInputTest, ValueClamped) {
 // DropDown tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST(FwDropDownTest, SelectItem) {
-    FwDropDown dd;
-    UIContext ctx;
-    dd.measure(Constraints::loose(200, 200), ctx);
-    dd.layout(Rect{0, 0, 100, 24}, ctx);
-    dd.setItems({"Sine", "Saw", "Square"});
-    dd.setSelected(0);
-
-    int sel = -1;
-    dd.setOnChange([&](int i) { sel = i; });
-
-    // Click to open
-    MouseEvent open;
-    open.x = 50; open.y = 12;
-    open.button = MouseButton::Left;
-    dd.onMouseDown(open);
-    EXPECT_TRUE(dd.isOpen());
-
-    // Click item 1 (items start at y=24, item 1 is at y=48..72, click mid)
-    MouseEvent select;
-    select.x = 50; select.y = 60;
-    select.button = MouseButton::Left;
-    dd.onMouseDown(select);
-    EXPECT_EQ(sel, 1);
-    EXPECT_FALSE(dd.isOpen());
-}
-
-TEST(FwDropDownTest, SelectedText) {
-    FwDropDown dd;
-    dd.setItems({"A", "B", "C"});
-    dd.setSelected(1);
-    EXPECT_EQ(dd.selectedText(), "B");
-}
-
-TEST(FwDropDownTest, DefaultSelection) {
-    FwDropDown dd;
-    dd.setItems({"X", "Y"});
-    EXPECT_EQ(dd.selected(), 0);
-    EXPECT_EQ(dd.selectedText(), "X");
-}
+// FwDropDown tests retired — v1 FwDropDown is gated behind
+// YAWN_KEEP_V1_DROPDOWN. fw2::FwDropDown has its own exhaustive
+// coverage in tests/test_fw2_DropDown.cpp (35 tests).
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Hover animation tests

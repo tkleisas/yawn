@@ -12,7 +12,8 @@
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
 #include "ui/framework/AboutDialog.h"
-#include "ui/framework/ConfirmDialogWidget.h"
+// v1 ConfirmDialogWidget retired — fw2::ConfirmDialog lives on
+// LayerStack::Modal (include "ui/framework/v2/Dialog.h" to use it).
 #include "ui/framework/TextInputDialogWidget.h"
 #include "ui/panels/PreferencesDialog.h"
 #include "ui/framework/ExportDialog.h"
@@ -178,7 +179,7 @@ private:
     ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
     ui::fw::VisualParamsPanel*   m_visualParamsPanel = nullptr;
     ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
-    ui::fw::ConfirmDialogWidget*  m_confirmDialog = nullptr;
+    // v1 m_confirmDialog retired — use fw2::ConfirmDialog.
     ui::fw::TextInputDialogWidget* m_textInputDialog = nullptr;
     ui::fw::PreferencesDialog*    m_preferencesDialog = nullptr;
     ui::fw::ExportDialog*         m_exportDialog = nullptr;

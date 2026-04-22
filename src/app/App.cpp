@@ -379,7 +379,8 @@ void App::buildWidgetTree() {
     auto visualPP   = std::make_unique<VisualParamsPanel>();
     auto pianoP     = std::make_unique<PianoRollPanel>();
     auto aboutDlg   = std::make_unique<AboutDialog>();
-    auto confirmDlg = std::make_unique<ConfirmDialogWidget>();
+    // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog handles
+    // confirm prompts on the Modal layer (LayerStack).
     auto textInputDlg = std::make_unique<TextInputDialogWidget>();
     auto prefsDlg   = std::make_unique<PreferencesDialog>();
     auto exportDlg  = std::make_unique<ExportDialog>();
@@ -400,7 +401,6 @@ void App::buildWidgetTree() {
     m_visualParamsPanel = visualPP.get();
     m_pianoRoll         = pianoP.get();
     m_aboutDialog       = aboutDlg.get();
-    m_confirmDialog     = confirmDlg.get();
     m_textInputDialog   = textInputDlg.get();
     m_preferencesDialog = prefsDlg.get();
     m_exportDialog      = exportDlg.get();
@@ -621,7 +621,6 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(visualPP));
     m_wrappers.push_back(std::move(pianoP));
     m_wrappers.push_back(std::move(aboutDlg));
-    m_wrappers.push_back(std::move(confirmDlg));
     m_wrappers.push_back(std::move(textInputDlg));
     m_wrappers.push_back(std::move(prefsDlg));
     m_wrappers.push_back(std::move(exportDlg));
@@ -4060,15 +4059,9 @@ void App::processEvents() {
                         m_fw2LayerStack.dispatchKey(ke)) break;
                 }
 
-                // Block keys when confirm dialog or about is open
-                if (m_confirmDialog->isOpen()) {
-                    if (event.key.key == SDLK_ESCAPE) m_confirmDialog->dismiss();
-                    if (event.key.key == SDLK_RETURN) {
-                        ui::fw::KeyEvent ke; ke.keyCode = 13;
-                        m_confirmDialog->onKeyDown(ke);
-                    }
-                    break;
-                }
+                // v1 confirm dialog retired — fw2::Dialog on the
+                // Modal layer handles Escape/Enter through LayerStack.
+
                 if (m_textInputDialog->isOpen()) {
                     ui::fw::KeyEvent ke;
                     ke.keyCode = static_cast<int>(event.key.key);
@@ -4689,14 +4682,9 @@ void App::processEvents() {
                     if (m_fw2LayerStack.dispatchMouseDown(me)) break;
                 }
 
-                // Confirm dialog takes top priority (modal)
-                if (m_confirmDialog->isOpen()) {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = ui::fw::MouseButton::Left;
-                    m_confirmDialog->onMouseDown(me);
-                    break;
-                }
+                // v1 confirm dialog retired — fw2::Dialog on the
+                // Modal layer handles mouse dispatch through
+                // LayerStack.
 
                 // Text input dialog (modal)
                 if (m_textInputDialog->isOpen()) {
@@ -5661,10 +5649,8 @@ void App::render() {
         float sh = static_cast<float>(h);
         ui::fw::Rect screenBounds{0, 0, sw, sh};
 
-        if (m_confirmDialog->isOpen()) {
-            m_confirmDialog->layout(screenBounds, m_uiContext);
-            m_confirmDialog->paint(m_uiContext);
-        }
+        // v1 confirm dialog retired — fw2::Dialog paints via
+        // LayerStack::paintLayers in the block below.
         if (m_textInputDialog->isOpen()) {
             m_textInputDialog->layout(screenBounds, m_uiContext);
             m_textInputDialog->paint(m_uiContext);
