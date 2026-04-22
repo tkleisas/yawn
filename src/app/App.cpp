@@ -2959,7 +2959,15 @@ bool App::init() {
 
     // Query display DPI scale for HiDPI support
     float displayScale = SDL_GetWindowDisplayScale(m_mainWindow.getHandle());
-    if (displayScale > 0.0f) ui::Theme::scaleFactor = displayScale;
+    if (displayScale > 0.0f) {
+        ui::Theme::scaleFactor = displayScale;
+        // fw2 context needs the same scale — its dispatchMouseMove
+        // divides raw event deltas by dpiScale to produce the
+        // "logical" deltas widgets base drag math on. Without this,
+        // HiDPI knobs would feel stiffer than their v1 counterparts
+        // (or too fast, depending on which units SDL emits).
+        m_fw2Context.setDpiScale(displayScale);
+    }
 
     if (!m_renderer.init()) {
         LOG_ERROR("UI", "Failed to initialize 2D renderer");
@@ -5028,7 +5036,9 @@ void App::processEvents() {
 
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                 if (event.window.windowID == SDL_GetWindowID(m_mainWindow.getHandle())) {
-                    ui::Theme::scaleFactor = SDL_GetWindowDisplayScale(m_mainWindow.getHandle());
+                    float s = SDL_GetWindowDisplayScale(m_mainWindow.getHandle());
+                    ui::Theme::scaleFactor = s;
+                    m_fw2Context.setDpiScale(s);
                 }
                 break;
 
