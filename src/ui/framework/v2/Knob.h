@@ -113,6 +113,20 @@ public:
 
     void setFineMode(bool shiftIsFine)   { m_shiftFine = shiftIsFine; }
 
+    // ─── Inline edit mode ────────────────────────────────────────
+    // Double-click opens a text buffer pre-filled with the current
+    // value. Host forwards text input + key events while editing;
+    // Enter commits (parses float, clamps, fires onChange with
+    // ValueChangeSource::User), Escape cancels. While editing, the
+    // painter shows the buffer instead of the formatted value.
+    void beginEdit();
+    void endEdit(bool commit);
+    bool isEditing() const              { return m_editing; }
+    const std::string& editBuffer() const { return m_editBuffer; }
+    // Host feeds text input (SDL_EVENT_TEXT_INPUT → this) while
+    // isEditing() is true. Accepts digits, ±, and one decimal point.
+    void takeTextInput(const std::string& text);
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;
@@ -121,11 +135,15 @@ protected:
     void onDragStart(const DragEvent&) override;
     void onDrag(const DragEvent&)      override;
     void onDragEnd(const DragEvent&)   override;
-    void onClick(const ClickEvent&)    override;
+    void onClick(const ClickEvent&)      override;
+    void onDoubleClick(const ClickEvent&) override;
     void onRightClick(const ClickEvent&) override;
 
     // Raw callback for wheel.
     bool onScroll(ScrollEvent& e)      override;
+
+    // Keyboard — Enter/Escape/Backspace while editing.
+    bool onKeyDown(KeyEvent& e)        override;
 
 private:
     // Apply a logical-pixel vertical delta to the value. Positive dy
@@ -175,6 +193,10 @@ private:
     ClickCallback      m_onClick;
     RightClickCallback m_onRightClick;
     ValueFormatter     m_valueFormatter;
+
+    // Inline edit state
+    bool        m_editing = false;
+    std::string m_editBuffer;
 };
 
 } // namespace fw2

@@ -833,12 +833,43 @@ static void paintKnob(Widget& w, UIContext& ctx) {
     if (k.showValue() && ctx.textMetrics) {
         const float fontSize = m.fontSizeSmall;
         const float lh       = ctx.textMetrics->lineHeight(fontSize);
-        const std::string vs = k.formattedValue();
+        // When editing, show the live buffer (possibly empty) so the
+        // user sees their typed characters; otherwise the formatted
+        // value. An editing knob also gets an accent-coloured rect
+        // behind the text so it's obviously a text field now.
+        const bool editing   = k.isEditing();
+        const std::string vs = editing ? k.editBuffer() : k.formattedValue();
         const float tw       = ctx.textMetrics->textWidth(vs, fontSize);
         const float tx       = b.x + (b.w - tw) * 0.5f;
-        const Color tc = k.isEnabled() ? p.textSecondary : p.textDim;
-        ctx.textMetrics->drawText(*ctx.renderer, vs, tx,
-                                   textY - lh * 0.15f, fontSize, tc);
+        const float ty       = textY - lh * 0.15f;
+        if (editing) {
+            // Subtle outlined field, accent-coloured. Gives users a
+            // visual confirmation that the knob has become editable.
+            const float padX = m.baseUnit * 0.75f;
+            const float padY = m.baseUnit * 0.1f;
+            const float fieldW = std::max(tw, discDiameter * 0.6f) + padX * 2.0f;
+            const float fieldX = b.x + (b.w - fieldW) * 0.5f;
+            const float fieldY = ty - padY;
+            const float fieldH = lh + padY * 2.0f;
+            ctx.renderer->drawRect(fieldX, fieldY, fieldW, fieldH, p.elevated);
+            ctx.renderer->drawRectOutline(fieldX, fieldY, fieldW, fieldH, accent,
+                                           1.0f);
+        }
+        const Color tc = editing
+            ? p.textPrimary
+            : (k.isEnabled() ? p.textSecondary : p.textDim);
+        ctx.textMetrics->drawText(*ctx.renderer, vs, tx, ty, fontSize, tc);
+
+        if (editing) {
+            // Caret — a 1px vertical bar at the end of the buffer.
+            // Static (no blink) for simplicity; users see it as "the
+            // typing cursor" regardless.
+            const float caretX = tx + tw + 1.0f;
+            const float caretY0 = ty;
+            const float caretY1 = ty + lh * 0.9f;
+            ctx.renderer->drawLine(caretX, caretY0, caretX, caretY1, accent,
+                                    1.5f);
+        }
     }
 }
 

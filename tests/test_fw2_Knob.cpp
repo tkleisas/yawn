@@ -373,3 +373,261 @@ TEST_F(KnobHarness, IsRelayoutBoundary) {
     FwKnob k;
     EXPECT_TRUE(k.isRelayoutBoundary());
 }
+
+// ─── Inline edit mode ─────────────────────────────────────────────
+//
+// Double-click opens an edit buffer seeded with the current formatted
+// value. Digits / ± / '.' feed the buffer (via takeTextInput — this is
+// what the host wires from SDL_EVENT_TEXT_INPUT). Enter commits (parse
+// float, clamp, setValue as User), Escape / endEdit(false) cancels,
+// Backspace pops one char.
+
+TEST_F(KnobHarness, BeginEditSeedsBufferWithFormattedValue) {
+    FwKnob k;
+    k.setValue(0.75f);
+    EXPECT_FALSE(k.isEditing());
+    k.beginEdit();
+    EXPECT_TRUE(k.isEditing());
+    EXPECT_EQ(k.editBuffer(), "0.75");
+}
+
+TEST_F(KnobHarness, BeginEditIdempotent) {
+    FwKnob k;
+    k.setValue(0.25f);
+    k.beginEdit();
+    EXPECT_EQ(k.editBuffer(), "0.25");
+    // Second call must not reseed the buffer (user's partial typing
+    // would be clobbered if it did).
+    k.takeTextInput("9");
+    k.beginEdit();
+    EXPECT_EQ(k.editBuffer(), "0.259");
+}
+
+TEST_F(KnobHarness, EndEditCommitParsesBuffer) {
+    FwKnob k;
+    k.setRange(0.0f, 10.0f);
+    k.setValue(1.0f);
+    int fires = 0;
+    k.setOnChange([&](float) { ++fires; });
+    k.beginEdit();
+    // Replace the buffer contents by clearing and feeding fresh text.
+    // The simplest way from the public API is endEdit(false) + begin
+    // again, but that wouldn't exercise typed input — so we use
+    // Backspace-style pops via the test's editBuffer semantics: feed
+    // a new buffer in one shot.
+    // (The knob's own onKeyDown path exercises Backspace; here we
+    //  just prove the commit parser works.)
+    // Reset the buffer by sending backspace via onKeyDown until empty,
+    // then type a new value.
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("7.5");
+    k.endEdit(/*commit*/true);
+    EXPECT_FALSE(k.isEditing());
+    EXPECT_FLOAT_EQ(k.value(), 7.5f);
+    EXPECT_EQ(fires, 1);
+}
+
+TEST_F(KnobHarness, EndEditCancelLeavesValueUnchanged) {
+    FwKnob k;
+    k.setValue(0.5f);
+    k.beginEdit();
+    k.takeTextInput("9");
+    int fires = 0;
+    k.setOnChange([&](float) { ++fires; });
+    k.endEdit(/*commit*/false);
+    EXPECT_FALSE(k.isEditing());
+    EXPECT_FLOAT_EQ(k.value(), 0.5f);
+    EXPECT_EQ(fires, 0);
+    EXPECT_TRUE(k.editBuffer().empty());
+}
+
+TEST_F(KnobHarness, EndEditEmptyBufferIsNoCommit) {
+    FwKnob k;
+    k.setValue(0.5f);
+    k.beginEdit();
+    // Drop every seeded character.
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.endEdit(/*commit*/true);
+    EXPECT_FLOAT_EQ(k.value(), 0.5f);  // unchanged — no parseable value
+}
+
+TEST_F(KnobHarness, EndEditCommitClampsToRange) {
+    FwKnob k;
+    k.setRange(0.0f, 1.0f);
+    k.setValue(0.5f);
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("42");
+    k.endEdit(true);
+    EXPECT_FLOAT_EQ(k.value(), 1.0f);
+}
+
+TEST_F(KnobHarness, TakeTextInputFiltersNonDigits) {
+    FwKnob k;
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("a1b2c3!");
+    EXPECT_EQ(k.editBuffer(), "123");
+}
+
+TEST_F(KnobHarness, TakeTextInputAllowsLeadingMinus) {
+    FwKnob k;
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("-");
+    k.takeTextInput("4");
+    k.takeTextInput("2");
+    EXPECT_EQ(k.editBuffer(), "-42");
+}
+
+TEST_F(KnobHarness, TakeTextInputRejectsMinusAfterDigit) {
+    FwKnob k;
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("5");
+    k.takeTextInput("-");
+    EXPECT_EQ(k.editBuffer(), "5");
+}
+
+TEST_F(KnobHarness, TakeTextInputAllowsSingleDecimalPoint) {
+    FwKnob k;
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("1.5");
+    k.takeTextInput(".");   // second '.' — rejected
+    k.takeTextInput("3");
+    EXPECT_EQ(k.editBuffer(), "1.53");
+}
+
+TEST_F(KnobHarness, TakeTextInputIgnoredWhenNotEditing) {
+    FwKnob k;
+    EXPECT_FALSE(k.isEditing());
+    k.takeTextInput("123");
+    EXPECT_EQ(k.editBuffer(), "");
+}
+
+TEST_F(KnobHarness, OnKeyDownEnterCommits) {
+    FwKnob k;
+    k.setRange(0.0f, 10.0f);
+    k.setValue(1.0f);
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    k.takeTextInput("5");
+    KeyEvent enter;
+    enter.key = Key::Enter;
+    EXPECT_TRUE(k.dispatchKeyDown(enter));
+    EXPECT_FALSE(k.isEditing());
+    EXPECT_FLOAT_EQ(k.value(), 5.0f);
+}
+
+TEST_F(KnobHarness, OnKeyDownEscapeCancels) {
+    FwKnob k;
+    k.setValue(0.5f);
+    k.beginEdit();
+    k.takeTextInput("9");
+    KeyEvent esc;
+    esc.key = Key::Escape;
+    EXPECT_TRUE(k.dispatchKeyDown(esc));
+    EXPECT_FALSE(k.isEditing());
+    EXPECT_FLOAT_EQ(k.value(), 0.5f);
+}
+
+TEST_F(KnobHarness, OnKeyDownBackspacePopsChar) {
+    FwKnob k;
+    k.setValue(0.5f);
+    k.beginEdit();
+    EXPECT_EQ(k.editBuffer(), "0.50");
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    EXPECT_TRUE(k.dispatchKeyDown(bs));
+    EXPECT_EQ(k.editBuffer(), "0.5");
+    EXPECT_TRUE(k.dispatchKeyDown(bs));
+    EXPECT_EQ(k.editBuffer(), "0.");
+}
+
+TEST_F(KnobHarness, OnKeyDownBackspaceOnEmptyIsNoop) {
+    FwKnob k;
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    EXPECT_TRUE(k.dispatchKeyDown(bs));
+    EXPECT_EQ(k.editBuffer(), "");
+}
+
+TEST_F(KnobHarness, OnKeyDownDigitFallback) {
+    // Hosts that don't fire SDL_EVENT_TEXT_INPUT still get digit entry
+    // via the Num0..Num9 key fallback.
+    FwKnob k;
+    k.beginEdit();
+    KeyEvent bs;
+    bs.key = Key::Backspace;
+    while (!k.editBuffer().empty()) k.dispatchKeyDown(bs);
+    KeyEvent d;
+    d.key = Key::Num7;
+    EXPECT_TRUE(k.dispatchKeyDown(d));
+    EXPECT_EQ(k.editBuffer(), "7");
+}
+
+TEST_F(KnobHarness, OnKeyDownNotEditingReturnsFalse) {
+    FwKnob k;
+    KeyEvent enter;
+    enter.key = Key::Enter;
+    EXPECT_FALSE(k.dispatchKeyDown(enter));
+}
+
+TEST_F(KnobHarness, DoubleClickOpensEdit) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setValue(0.5f);
+    // Synthesize a double-click by down/up/down/up with a short gap
+    // on the same spot.
+    auto fire = [&](uint64_t t) {
+        MouseEvent d{};
+        d.x = 20; d.y = 20; d.lx = 20; d.ly = 20;
+        d.button = MouseButton::Left;
+        d.timestampMs = t;
+        k.dispatchMouseDown(d);
+        MouseEvent u = d;
+        u.timestampMs = t + 5;
+        k.dispatchMouseUp(u);
+    };
+    fire(1000);
+    fire(1100);
+    EXPECT_TRUE(k.isEditing());
+}
+
+TEST_F(KnobHarness, DoubleClickDisabledDoesNotOpen) {
+    FwKnob k;
+    k.layout(Rect{0, 0, 40, 60}, ctx);
+    k.setEnabled(false);
+    auto fire = [&](uint64_t t) {
+        MouseEvent d{};
+        d.x = 20; d.y = 20; d.lx = 20; d.ly = 20;
+        d.button = MouseButton::Left;
+        d.timestampMs = t;
+        k.dispatchMouseDown(d);
+        MouseEvent u = d;
+        u.timestampMs = t + 5;
+        k.dispatchMouseUp(u);
+    };
+    fire(1000);
+    fire(1100);
+    EXPECT_FALSE(k.isEditing());
+}

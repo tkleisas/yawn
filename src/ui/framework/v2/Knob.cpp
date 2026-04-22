@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>   // std::strtof
 
 namespace yawn {
 namespace ui {
@@ -188,6 +189,13 @@ void FwKnob::onClick(const ClickEvent& /*e*/) {
     if (m_onClick) m_onClick();
 }
 
+void FwKnob::onDoubleClick(const ClickEvent& /*e*/) {
+    // Double-click opens inline edit. Skip if the knob is disabled
+    // or already editing (stray gesture SM double-fire).
+    if (!m_enabled || m_editing) return;
+    beginEdit();
+}
+
 void FwKnob::onRightClick(const ClickEvent& e) {
     if (!m_enabled) return;
     // Right-click resets to default if one is set. Also fires the
@@ -217,6 +225,83 @@ bool FwKnob::onScroll(ScrollEvent& e) {
         fireOnChange(ValueChangeSource::User);
     }
     return true;
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Inline edit mode
+// ───────────────────────────────────────────────────────────────────
+
+void FwKnob::beginEdit() {
+    if (m_editing) return;
+    m_editing = true;
+    // Seed buffer with the current value rendered without trailing
+    // zeros — users typing to replace don't want to wade through
+    // "0.500000". Use formatter for consistency with the paint path
+    // so what they see is what they'd clear.
+    m_editBuffer = formattedValue();
+}
+
+void FwKnob::endEdit(bool commit) {
+    if (!m_editing) return;
+    m_editing = false;
+    if (!commit) { m_editBuffer.clear(); return; }
+    if (m_editBuffer.empty()) return;
+    // strtof accepts "1e3", "-0.5", etc. Anything unparseable → no
+    // commit; same as Escape. Compare `end` against the original
+    // c_str() BEFORE clearing — post-clear c_str() is a freshly
+    // allocated/reset pointer and the comparison would be a lie.
+    const char* src = m_editBuffer.c_str();
+    char* end = nullptr;
+    const float parsed = std::strtof(src, &end);
+    const bool parsedAnything = (end != nullptr && end != src);
+    m_editBuffer.clear();
+    if (!parsedAnything) return;
+    setValue(parsed, ValueChangeSource::User);
+}
+
+void FwKnob::takeTextInput(const std::string& text) {
+    if (!m_editing) return;
+    for (char c : text) {
+        // Accept digits, minus (only as first char), and one decimal
+        // point. Everything else silently ignored.
+        if (c >= '0' && c <= '9') {
+            m_editBuffer.push_back(c);
+        } else if (c == '-' && m_editBuffer.empty()) {
+            m_editBuffer.push_back(c);
+        } else if (c == '.' && m_editBuffer.find('.') == std::string::npos) {
+            m_editBuffer.push_back(c);
+        }
+    }
+}
+
+bool FwKnob::onKeyDown(KeyEvent& e) {
+    if (!m_editing) return false;
+    switch (e.key) {
+        case Key::Enter:
+            endEdit(/*commit*/true);
+            return true;
+        case Key::Escape:
+            endEdit(/*commit*/false);
+            return true;
+        case Key::Backspace:
+            if (!m_editBuffer.empty()) m_editBuffer.pop_back();
+            return true;
+        // Digit keys — host SDL routing typically fires TEXT_INPUT
+        // for these, but keys can also fire when the host is not
+        // set up for text input. Accept them as a fallback.
+        case Key::Num0: takeTextInput("0"); return true;
+        case Key::Num1: takeTextInput("1"); return true;
+        case Key::Num2: takeTextInput("2"); return true;
+        case Key::Num3: takeTextInput("3"); return true;
+        case Key::Num4: takeTextInput("4"); return true;
+        case Key::Num5: takeTextInput("5"); return true;
+        case Key::Num6: takeTextInput("6"); return true;
+        case Key::Num7: takeTextInput("7"); return true;
+        case Key::Num8: takeTextInput("8"); return true;
+        case Key::Num9: takeTextInput("9"); return true;
+        default:
+            return false;
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────

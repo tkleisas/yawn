@@ -11,7 +11,9 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -169,8 +171,19 @@ public:
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             if (hitWidget(m_faEnableBtn, mx, my))
                 return m_faEnableBtn.onMouseDown(e);
-            if (hitWidget(m_faBarCountKnob, mx, my))
-                return m_faBarCountKnob.onMouseDown(e);
+            // v2 knob — drag needs the gesture SM. Forward via v1→v2
+            // event bridge and capture v1 mouse so subsequent moves
+            // route back here for forwarding.
+            {
+                const auto& b = m_faBarCountKnob.bounds();
+                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+                    m_faBarCountKnob.dispatchMouseDown(ev);
+                    m_v2Dragging = &m_faBarCountKnob;
+                    captureMouse();
+                    return true;
+                }
+            }
             {
                 const auto& b = m_faActionADropdown.bounds();
                 if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
@@ -209,10 +222,15 @@ public:
             return m_filesTab.onMouseMove(e);
         if (m_activeTab == Tab::Presets)
             return m_presetsTab.onMouseMove(e);
+        // v2 knob drag in progress — forward translated events.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             // v2 dropdowns handle open-state mouseMove via LayerStack.
             MouseMoveEvent me = e;
-            if (m_faBarCountKnob.onMouseMove(me)) return true;
             if (m_faCrossfader.onMouseMove(me)) return true;
         }
         // Clip envelope drag (point move): the envelope widget
@@ -233,12 +251,19 @@ public:
             return m_filesTab.onMouseUp(e);
         if (m_activeTab == Tab::Presets)
             return m_presetsTab.onMouseUp(e);
+        // v2 knob drag wrapping up — flush the release + drop v1 capture.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
             // v2 dropdowns toggle on mouseDown directly — no mouseUp
             // forwarding needed for them.
             if (hitWidget(m_faEnableBtn, e.x, e.y))
                 return m_faEnableBtn.onMouseUp(e);
-            if (m_faBarCountKnob.onMouseUp(e)) return true;
             if (m_faCrossfader.onMouseUp(e)) return true;
         }
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
@@ -274,36 +299,48 @@ public:
         return false;
     }
 
-    // Text editing support (knobs + search inputs)
+    // Text editing support — v1 search inputs + v2 FwKnob inline
+    // edit mode (double-click opens a text buffer; Enter commits,
+    // Escape cancels, digits/±/. feed the buffer).
     bool hasEditingWidget() const {
-        return m_faBarCountKnob.isEditing()
-            || m_filesTab.isSearchEditing() || m_presetsTab.isSearchEditing();
+        return m_faBarCountKnob.isEditing() ||
+               m_filesTab.isSearchEditing() ||
+               m_presetsTab.isSearchEditing();
     }
     // Keep old name for backward compat with App.cpp
     bool hasEditingKnob() const { return hasEditingWidget(); }
     bool forwardKeyDown(int key) {
+        // v2 knob grabs Enter / Escape / Backspace while editing.
+        // Digits arrive via forwardTextInput (SDL TEXT_INPUT), so we
+        // don't translate them here. The knob ignores other keys.
+        if (m_faBarCountKnob.isEditing()) {
+            ::yawn::ui::fw2::KeyEvent ke;
+            switch (key) {
+                case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
+                case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+                case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+                default:                    return false;
+            }
+            return m_faBarCountKnob.dispatchKeyDown(ke);
+        }
         if (m_filesTab.isSearchEditing()) return m_filesTab.forwardKeyDown(key);
         if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardKeyDown(key);
-        KeyEvent ke;
-        ke.keyCode = key;
-        if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onKeyDown(ke);
         return false;
     }
     bool forwardTextInput(const char* text) {
+        if (m_faBarCountKnob.isEditing()) {
+            m_faBarCountKnob.takeTextInput(text ? text : "");
+            return true;
+        }
         if (m_filesTab.isSearchEditing()) return m_filesTab.forwardTextInput(text);
         if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardTextInput(text);
-        TextInputEvent te;
-        std::strncpy(te.text, text, sizeof(te.text) - 1);
-        te.text[sizeof(te.text) - 1] = '\0';
-        if (m_faBarCountKnob.isEditing()) return m_faBarCountKnob.onTextInput(te);
         return false;
     }
     void cancelEditingKnobs() {
+        if (m_faBarCountKnob.isEditing())
+            m_faBarCountKnob.endEdit(/*commit*/false);
         m_filesTab.cancelEditing();
         m_presetsTab.cancelEditing();
-        KeyEvent ke;
-        ke.keyCode = 27; // Escape
-        if (m_faBarCountKnob.isEditing()) m_faBarCountKnob.onKeyDown(ke);
     }
 
     void paint(UIContext& ctx) override {
@@ -391,7 +428,11 @@ private:
     // Follow action state
     FollowAction* m_followActionPtr = nullptr;
     FwButton   m_faEnableBtn;
-    FwKnob     m_faBarCountKnob;
+    ::yawn::ui::fw2::FwKnob   m_faBarCountKnob;
+    // Tracks which v2 widget currently owns a drag — set in
+    // onMouseDown, used by onMouseMove/Up to forward translated
+    // events. Null when no v2 drag is in progress.
+    ::yawn::ui::fw2::Widget*  m_v2Dragging = nullptr;
 
     // Clip-envelope editor state (visual clips only for now).
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
@@ -547,13 +588,13 @@ private:
             }
         });
 
+        // v2 FwKnob — integer 1..64 bars. No label, value shown as int.
         m_faBarCountKnob.setRange(1.0f, 64.0f);
-        m_faBarCountKnob.setDefault(1.0f);
+        m_faBarCountKnob.setDefaultValue(1.0f);
         m_faBarCountKnob.setValue(1.0f);
         m_faBarCountKnob.setStep(1.0f);
-        m_faBarCountKnob.setSensitivity(0.3f);
-        m_faBarCountKnob.setLabel("");
-        m_faBarCountKnob.setFormatCallback([](float v) -> std::string {
+        m_faBarCountKnob.setShowLabel(false);
+        m_faBarCountKnob.setValueFormatter([](float v) -> std::string {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(v));
             return buf;
@@ -610,8 +651,12 @@ private:
 
         // Sync values from data
         m_faEnableBtn.setLabel(m_followActionPtr->enabled ? "On" : "Off");
-        if (!m_faBarCountKnob.isEditing())
-            m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
+        // v2 knob: sync from backing data. While the user is dragging
+        // or inline-editing the knob, their input fires onChange → the
+        // backing barCount is already updated, so setValue is a clean
+        // no-op on equal values. (Edit-buffer display is decoupled
+        // from m_value, so syncing during edit is harmless.)
+        m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
         m_faActionADropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionA));
         m_faActionBDropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionB));
         if (!m_faCrossfader.isDragging())
@@ -630,11 +675,13 @@ private:
         m_faEnableBtn.paint(ctx);
         rowY += inputH + 12.0f;
 
-        // Bars
+        // Bars — v2 knob, render through fw2 UIContext.
         f.drawText(r, "Bars", sx, rowY + 16.0f, labelScale, Theme::textDim);
-        m_faBarCountKnob.setLabel("");
-        m_faBarCountKnob.layout(Rect{inputX, rowY, 44.0f, 44.0f}, ctx);
-        m_faBarCountKnob.paint(ctx);
+        {
+            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+            m_faBarCountKnob.layout(Rect{inputX, rowY, 44.0f, 44.0f}, v2ctx);
+            m_faBarCountKnob.render(v2ctx);
+        }
         rowY += 50.0f;
 
         // Action A / Action B — labels then dropdowns side by side
