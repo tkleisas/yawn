@@ -1,12 +1,17 @@
 #pragma once
-// MixerPanel — Framework widget replacement for MixerView.
+// MixerPanel — UI v2 mixer view.
 //
-// Uses framework widgets (FwButton, FwFader, MeterWidget, PanWidget,
-// ScrollBar, Label, FwDropDown) for all controls. I/O routing section
-// shows audio input + mono for Audio tracks, MIDI in/out for MIDI tracks.
+// Migrated from v1 fw::Widget to fw2::Widget. All child controls are
+// native fw2 widgets (FwButton, FwToggle, FwDropDown, FwKnob, FwFader,
+// FwPan, FwMeter, FwScrollBar) so they dispatch directly through the
+// fw2 gesture SM — no V1EventBridge / m_v2Dragging tracking. Labels
+// are painted inline via `ctx.textMetrics->drawText`.
+//
+// Integration into the v1 ContentGrid is via `fw::MixerPanelWrapper`
+// (see PanelWrappers.h) which bridges v1 mouse events to fw2's
+// dispatchMouse* API.
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Fader.h"
 #include "ui/framework/v2/Toggle.h"
@@ -16,7 +21,6 @@
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -30,7 +34,7 @@
 #include "util/UndoManager.h"
 
 namespace yawn { namespace audio { class AudioEngine; } }
-namespace yawn { namespace midi { class MidiEngine; } }
+namespace yawn { namespace midi  { class MidiEngine; } }
 #include "core/Constants.h"
 #include <cstdio>
 #include <cmath>
@@ -39,7 +43,7 @@ namespace yawn { namespace midi { class MidiEngine; } }
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 struct MixerMeter {
     float peakL = 0.0f;
@@ -49,13 +53,10 @@ struct MixerMeter {
 class MixerPanel : public Widget {
 public:
     MixerPanel() {
-        m_mixLabel.setText("MIX");
-        m_mixLabel.setColor(Theme::textDim);
-
         // Left-margin show-toggles. v2 FwToggle (Button variant) with
-        // a soft blue accent so the "on" state reads as highlighted
-        // without being loud.
-        const Color kSoftBlue{60, 80, 110};
+        // a soft blue accent so "on" reads as highlighted without
+        // being loud.
+        const Color kSoftBlue{60, 80, 110, 255};
         m_ioToggle.setLabel("I/O");
         m_ioToggle.setAccentColor(kSoftBlue);
         m_ioToggle.setState(m_showIO);
@@ -82,6 +83,9 @@ public:
         for (int t = 0; t < kMaxTracks; ++t) {
             setupStripCallbacks(t);
         }
+
+        setFocusable(false);
+        setRelayoutBoundary(true);
     }
 
     void init(Project* project, audio::AudioEngine* engine,
@@ -114,114 +118,88 @@ public:
     void setOnTrackSelected(std::function<void(int)> cb) { m_onTrackSelected = std::move(cb); }
     bool showReturns() const { return m_showReturns; }
 
-    Size measure(const Constraints& c, const UIContext&) override {
+    // Panel constants — used internally + by the wrapper.
+    static constexpr float kMixerHeight  = 420.0f;
+
+protected:
+    // ─── fw2 Widget overrides ───────────────────────────────────────
+    Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({c.maxW, kMixerHeight});
     }
 
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
-    }
+    void onLayout(Rect, UIContext&) override {}
 
 #ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
-#else
-    void paint(UIContext& ctx) override;
-#endif
-
-#ifdef YAWN_TEST_BUILD
-    bool onMouseDown(MouseEvent&) override { return false; }
+    bool onMouseDown(MouseEvent&)     override { return false; }
+    bool onMouseMove(MouseMoveEvent&) override { return false; }
+    bool onMouseUp(MouseEvent&)       override { return false; }
+    bool onScroll(ScrollEvent&)       override { return false; }
 #else
     bool onMouseDown(MouseEvent& e) override;
-#endif
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        // v1 context menu retired — fw2 handles its own hover via
-        // LayerStack dispatch in App::pollEvents. v2 dropdowns also
-        // get their popup hover via LayerStack while open — no
-        // per-strip forwarding needed.
-        // v2 knob drag in progress — forward translated events to
-        // the gesture SM. Handled BEFORE v1 capture because v2 widgets
-        // don't participate in v1's capturedWidget() mechanism.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseMove(ev);
+        if (Widget* cap = Widget::capturedWidget()) {
+            const auto& b = cap->bounds();
+            MouseMoveEvent ev = e;
+            ev.lx = e.x - b.x;
+            ev.ly = e.y - b.y;
+            cap->dispatchMouseMove(ev);
             return true;
         }
-        if (auto* cap = Widget::capturedWidget()) {
-            return cap->onMouseMove(e);
-        }
-
-        // v2 scrollbar tracks hover via its own painter state; no
-        // per-move forward needed. Drag routes through m_v2Dragging.
         return false;
     }
 
     bool onMouseUp(MouseEvent& e) override {
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseUp(ev);
-            m_v2Dragging = nullptr;
-            releaseMouse();
+        if (Widget* cap = Widget::capturedWidget()) {
+            const auto& b = cap->bounds();
+            MouseEvent ev = e;
+            ev.lx = e.x - b.x;
+            ev.ly = e.y - b.y;
+            cap->dispatchMouseUp(ev);
             return true;
-        }
-        if (auto* cap = Widget::capturedWidget()) {
-            return cap->onMouseUp(e);
         }
         return false;
     }
 
     bool onScroll(ScrollEvent& e) override {
         if (!m_project) return false;
-        // v2 dropdown popups handle their own wheel-scroll via
-        // LayerStack. Panel-level scroll just pans the horizontal
-        // track view.
-        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-        float contentW = m_project->numTracks() * Theme::kTrackWidth;
-        float maxScroll = std::max(0.0f, contentW - gridW);
+        const float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
+        const float contentW = m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth;
+        const float maxScroll = std::max(0.0f, contentW - gridW);
         m_scrollX = std::clamp(m_scrollX - e.dx * 30.0f, 0.0f, maxScroll);
         m_scrollbar.setScrollPos(m_scrollX);
         if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
         return true;
     }
+#endif
+
+public:
+#ifdef YAWN_TEST_BUILD
+    void render(UIContext&) override {}
+#else
+    void render(UIContext& ctx) override;
+#endif
 
 private:
     struct TrackStrip {
-        ::yawn::ui::fw2::FwButton stopBtn;
-        ::yawn::ui::fw2::FwToggle muteBtn;
-        ::yawn::ui::fw2::FwToggle soloBtn;
-        ::yawn::ui::fw2::FwToggle armBtn;
-        ::yawn::ui::fw2::FwButton monBtn;   // 3-state cycle Off/In/Auto
-        ::yawn::ui::fw2::FwButton autoBtn;  // 4-state cycle Off/Read/Touch/Latch
-        ::yawn::ui::fw2::FwDropDown audioInputDrop;
-        ::yawn::ui::fw2::FwToggle monoBtn;
-        ::yawn::ui::fw2::FwDropDown midiInDrop;
-        ::yawn::ui::fw2::FwDropDown midiInChDrop;
-        ::yawn::ui::fw2::FwDropDown midiOutDrop;
-        ::yawn::ui::fw2::FwDropDown midiOutChDrop;
-        ::yawn::ui::fw2::FwDropDown sidechainDrop;
-        Label midiRxLabel;
-        Label midiTxLabel;
-        Label sidechainLabel;
-        ::yawn::ui::fw2::FwPan pan;
-        ::yawn::ui::fw2::FwFader fader;
-        ::yawn::ui::fw2::FwMeter meter;
-        Label nameLabel;
-        Label dbLabel;
-        ::yawn::ui::fw2::FwKnob sendKnobs[kMaxReturnBuses];
-        // (sendDragStart retired — v2's setOnDragEnd delivers
-        // (startValue, endValue) directly, no manual capture needed.)
+        FwButton  stopBtn;
+        FwToggle  muteBtn;
+        FwToggle  soloBtn;
+        FwToggle  armBtn;
+        FwButton  monBtn;   // 3-state cycle Off/In/Auto
+        FwButton  autoBtn;  // 4-state cycle Off/Read/Touch/Latch
+        FwDropDown audioInputDrop;
+        FwToggle  monoBtn;
+        FwDropDown midiInDrop;
+        FwDropDown midiInChDrop;
+        FwDropDown midiOutDrop;
+        FwDropDown midiOutChDrop;
+        FwDropDown sidechainDrop;
+        FwPan     pan;
+        FwFader   fader;
+        FwMeter   meter;
+        FwKnob    sendKnobs[kMaxReturnBuses];
     };
-
-    // Tracks which v2 widget currently owns a drag. v2 widgets drive
-    // their own gesture SM and do NOT participate in v1 capturedWidget()
-    // — so the panel keeps its own pointer, sets it on mouseDown, and
-    // clears on mouseUp. Null = no v2 drag.
-    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
-
-    bool hitWidget(Widget& w, float mx, float my) {
-        auto& b = w.bounds();
-        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
-    }
 
     void openMidiLearnMenu(float mx, float my,
                            const automation::AutomationTarget& target,
@@ -242,21 +220,22 @@ private:
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void paintAudioIO(UIContext&, TrackStrip&, const Track&, int, float, float, float, float) {}
+    void paintAudioIO(UIContext&, TrackStrip&, const Track&, int,
+                       float, float, float, float) {}
 #else
     void paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
                        int idx, float ioX, float ioW, float ioY, float ioH);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void paintMidiIO(UIContext&, TrackStrip&, const Track&, int, float, float, float, float) {}
+    void paintMidiIO(UIContext&, TrackStrip&, const Track&, int,
+                      float, float, float, float) {}
 #else
     void paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
                       int idx, float ioX, float ioW, float ioY, float ioH);
 #endif
 
-    // ─── Data ───────────────────────────────────────────────────────────
-
+    // ─── Data ───────────────────────────────────────────────────────
     Project*            m_project    = nullptr;
     audio::AudioEngine* m_engine     = nullptr;
     midi::MidiEngine*   m_midiEngine = nullptr;
@@ -265,11 +244,10 @@ private:
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
     TrackStrip m_strips[kMaxTracks];
-    ::yawn::ui::fw2::FwScrollBar m_scrollbar;
-    Label      m_mixLabel;
-    ::yawn::ui::fw2::FwToggle m_ioToggle;
-    ::yawn::ui::fw2::FwToggle m_sendToggle;
-    ::yawn::ui::fw2::FwToggle m_returnToggle;
+    FwScrollBar m_scrollbar;
+    FwToggle    m_ioToggle;
+    FwToggle    m_sendToggle;
+    FwToggle    m_returnToggle;
 
     int   m_selectedTrack = 0;
     float m_scrollX       = 0.0f;
@@ -277,7 +255,6 @@ private:
     bool  m_showSends     = false;
     bool  m_showReturns   = true;
 
-    static constexpr float kMixerHeight  = 420.0f;
     static constexpr float kMeterWidth   = 6.0f;
     static constexpr float kFaderWidth   = 20.0f;
     static constexpr float kButtonHeight = 20.0f;
@@ -291,6 +268,6 @@ private:
     std::function<void(int)>          m_onTrackSelected;
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

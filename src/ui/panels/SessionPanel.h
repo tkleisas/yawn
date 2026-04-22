@@ -1,12 +1,15 @@
 #pragma once
-// SessionPanel — Framework widget replacement for SessionView.
+// SessionPanel — UI v2 session grid panel.
 //
-// fw::Widget that renders the session grid (transport bar, track headers,
-// scene labels, clip slots) and handles click events.  Text input, key
-// events and scroll are still forwarded directly from App.cpp because
-// the widget tree doesn't dispatch those yet.
+// Migrated from v1 fw::Widget to fw2::Widget. All paint is
+// immediate-mode (no fw2 child widgets), all events are inline
+// hit-tests. Double-click detection is handled via an explicit
+// onMouseDownWithClicks(e, clickCount) entry point threaded from App
+// (the fw2 MouseEvent has no clickCount field; that information lives
+// in the fw2 gesture SM but is hidden from raw onMouseDown).
 
-#include "ui/framework/Widget.h"
+#include "ui/framework/v2/Widget.h"
+#include "ui/framework/v2/UIContext.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -28,7 +31,7 @@ namespace yawn { namespace audio { class AudioEngine; class Clip; } }
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 struct ClipSlotUIState {
     bool    playing      = false;
@@ -83,28 +86,31 @@ public:
     // Auto-scroll so the selected clip slot is visible in the grid viewport
     void ensureSelectionVisible() {
         if (!m_project) return;
-        float gridX = m_bounds.x + Theme::kSceneLabelWidth;
-        float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
-        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-        float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
+        float gridX = m_bounds.x + ::yawn::ui::Theme::kSceneLabelWidth;
+        float gridY = m_bounds.y + ::yawn::ui::Theme::kTrackHeaderHeight;
+        float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
+        float gridH = m_bounds.h - ::yawn::ui::Theme::kTrackHeaderHeight - kScrollbarH;
+        (void)gridX; (void)gridY;
 
-        float slotX = m_selectedTrack * Theme::kTrackWidth;
-        float slotY = m_selectedScene * Theme::kClipSlotHeight;
+        float slotX = m_selectedTrack * ::yawn::ui::Theme::kTrackWidth;
+        float slotY = m_selectedScene * ::yawn::ui::Theme::kClipSlotHeight;
 
         // Horizontal
         if (slotX < m_scrollX)
             m_scrollX = slotX;
-        else if (slotX + Theme::kTrackWidth > m_scrollX + gridW)
-            m_scrollX = slotX + Theme::kTrackWidth - gridW;
+        else if (slotX + ::yawn::ui::Theme::kTrackWidth > m_scrollX + gridW)
+            m_scrollX = slotX + ::yawn::ui::Theme::kTrackWidth - gridW;
 
         // Vertical
         if (slotY < m_scrollY)
             m_scrollY = slotY;
-        else if (slotY + Theme::kClipSlotHeight > m_scrollY + gridH)
-            m_scrollY = slotY + Theme::kClipSlotHeight - gridH;
+        else if (slotY + ::yawn::ui::Theme::kClipSlotHeight > m_scrollY + gridH)
+            m_scrollY = slotY + ::yawn::ui::Theme::kClipSlotHeight - gridH;
 
-        float maxScrollX = std::max(0.0f, m_project->numTracks() * Theme::kTrackWidth - gridW);
-        float maxScrollY = std::max(0.0f, m_project->numScenes() * Theme::kClipSlotHeight - gridH);
+        float maxScrollX = std::max(0.0f,
+            m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth - gridW);
+        float maxScrollY = std::max(0.0f,
+            m_project->numScenes() * ::yawn::ui::Theme::kClipSlotHeight - gridH);
         m_scrollX = std::clamp(m_scrollX, 0.0f, maxScrollX);
         m_scrollY = std::clamp(m_scrollY, 0.0f, maxScrollY);
         if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
@@ -145,8 +151,8 @@ public:
     float preferredHeight() const {
         int scenes = m_project
             ? std::min(m_project->numScenes(), kVisibleScenes) : kVisibleScenes;
-        return Theme::kTrackHeaderHeight
-             + scenes * Theme::kClipSlotHeight;
+        return ::yawn::ui::Theme::kTrackHeaderHeight
+             + scenes * ::yawn::ui::Theme::kClipSlotHeight;
     }
 
     // ─── Scroll callback ───────────────────────────────────────────────
@@ -217,13 +223,13 @@ public:
         if (keyCode == 0x0D || keyCode == 0x4000009C) { commitRename(); return true; }
         if (keyCode == 0x1B) { cancelTrackRename(); return true; }
         if (keyCode == 0x08 && m_renameCursor > 0) {
-            int len = ui::utf8PrevCharOffset(m_renameText, m_renameCursor);
+            int len = ::yawn::ui::utf8PrevCharOffset(m_renameText, m_renameCursor);
             m_renameText.erase(m_renameCursor - len, len);
             m_renameCursor -= len;
             return true;
         }
         if (keyCode == 0x7F && m_renameCursor < static_cast<int>(m_renameText.size())) {
-            int len = ui::utf8CharLen(&m_renameText[m_renameCursor]);
+            int len = ::yawn::ui::utf8CharLen(&m_renameText[m_renameCursor]);
             m_renameText.erase(m_renameCursor, len);
             return true;
         }
@@ -241,13 +247,13 @@ public:
 
     bool getSlotAt(float mx, float my, int& trackOut, int& sceneOut) const {
         if (!m_project) return false;
-        float gridX = m_bounds.x + Theme::kSceneLabelWidth;
-        float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
+        float gridX = m_bounds.x + ::yawn::ui::Theme::kSceneLabelWidth;
+        float gridY = m_bounds.y + ::yawn::ui::Theme::kTrackHeaderHeight;
         if (mx < gridX || my < gridY) return false;
         float cmx = mx + m_scrollX;
         float cmy = my + m_scrollY;
-        int track = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
-        int scene = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
+        int track = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
+        int scene = static_cast<int>((cmy - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
         if (track < 0 || track >= m_project->numTracks()) return false;
         if (scene < 0 || scene >= m_project->numScenes()) return false;
         trackOut = track;
@@ -278,13 +284,13 @@ public:
 
     void handleScroll(float dx, float dy) {
         if (!m_project) return;
-        float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
-        float contentH = m_project->numScenes() * Theme::kClipSlotHeight;
+        float gridH = m_bounds.h - ::yawn::ui::Theme::kTrackHeaderHeight - kScrollbarH;
+        float contentH = m_project->numScenes() * ::yawn::ui::Theme::kClipSlotHeight;
         float maxY = std::max(0.0f, contentH - gridH);
         m_scrollY = std::clamp(m_scrollY - dy * 30.0f, 0.0f, maxY);
 
-        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-        float contentW = m_project->numTracks() * Theme::kTrackWidth;
+        float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
+        float contentW = m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth;
         float maxX = std::max(0.0f, contentW - gridW);
         m_scrollX = std::clamp(m_scrollX - dx * 30.0f, 0.0f, maxX);
         if (m_onScrollChanged) m_onScrollChanged(m_scrollX);
@@ -292,28 +298,37 @@ public:
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
-    Size measure(const Constraints& c, const UIContext&) override {
+    Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({c.maxW, preferredHeight()});
     }
 
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
+    void onLayout(Rect, UIContext&) override {
+        // Widget::layout() stores m_bounds for us before calling this.
     }
 
     // ─── Rendering ──────────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
+    void render(UIContext&) override {}
 #else
-    void paint(UIContext& ctx) override;
+    void render(UIContext& ctx) override;
 #endif
 
     // ─── Mouse events ───────────────────────────────────────────────────
+    //
+    // fw2 MouseEvent has no clickCount field (the gesture SM tracks
+    // double-clicks internally and surfaces them via onDoubleClick).
+    // SessionPanel's click flow is too tangled (drag-start pending,
+    // right-click, scrollbar hit, scene-label launch, …) to split into
+    // onClick/onDoubleClick overrides cleanly, so App threads the v1
+    // click count through onMouseDownWithClicks.
 
 #ifdef YAWN_TEST_BUILD
     bool onMouseDown(MouseEvent&) override { return false; }
+    bool onMouseDownWithClicks(MouseEvent&, int) { return false; }
 #else
-    bool onMouseDown(MouseEvent& e) override;
+    bool onMouseDown(MouseEvent& e) override { return onMouseDownWithClicks(e, 1); }
+    bool onMouseDownWithClicks(MouseEvent& e, int clickCount);
 #endif
 
     // Track selected by last click (for App to sync selection)
@@ -343,8 +358,8 @@ public:
     bool onMouseMove(MouseMoveEvent& e) override {
         float mx = e.x, my = e.y;
         if (m_hsbDragging && m_project) {
-            float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-            float contentW = m_project->numTracks() * Theme::kTrackWidth;
+            float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
+            float contentW = m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth;
             float maxScroll = std::max(0.0f, contentW - gridW);
             float delta = mx - m_hsbDragStartX;
             float scrollDelta = delta * (contentW / std::max(1.0f, gridW));
@@ -364,13 +379,13 @@ public:
         if (m_clipDragging && m_project) {
             m_dragCurrentX = mx;
             m_dragCurrentY = my;
-            m_clipDragIsCopy = e.mods.ctrl;
-            float gridX = m_bounds.x + Theme::kSceneLabelWidth;
-            float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
+            m_clipDragIsCopy = (e.modifiers & ::yawn::ui::fw2::ModifierKey::Ctrl) != 0;
+            float gridX = m_bounds.x + ::yawn::ui::Theme::kSceneLabelWidth;
+            float gridY = m_bounds.y + ::yawn::ui::Theme::kTrackHeaderHeight;
             float cmx = mx + m_scrollX;
             float cmy = my + m_scrollY;
-            int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
-            int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
+            int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
+            int si = static_cast<int>((cmy - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
             if (ti >= 0 && ti < m_project->numTracks() &&
                 si >= 0 && si < m_project->numScenes()) {
                 m_dragTargetTrack = ti;
@@ -383,25 +398,25 @@ public:
         }
 
         // Track scrollbar hover
-        float gridX = m_bounds.x + Theme::kSceneLabelWidth;
-        float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-        float gridY = m_bounds.y + Theme::kTrackHeaderHeight;
-        float gridH = m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH;
+        float gridX = m_bounds.x + ::yawn::ui::Theme::kSceneLabelWidth;
+        float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
+        float gridY = m_bounds.y + ::yawn::ui::Theme::kTrackHeaderHeight;
+        float gridH = m_bounds.h - ::yawn::ui::Theme::kTrackHeaderHeight - kScrollbarH;
         float sbY = gridY + gridH;
         m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW);
 
         // Track hover over clip slot icon zone
-        if (my >= gridY && my < gridY + gridH && mx >= gridX) {
+        if (m_project && my >= gridY && my < gridY + gridH && mx >= gridX) {
             float cmx = mx + m_scrollX;
             float cmy = my + m_scrollY;
-            int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
-            int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
-            float slotLocalX = cmx - gridX - ti * Theme::kTrackWidth;
+            int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
+            int si = static_cast<int>((cmy - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
+            float slotLocalX = cmx - gridX - ti * ::yawn::ui::Theme::kTrackWidth;
             if (ti >= 0 && ti < m_project->numTracks() &&
                 si >= 0 && si < m_project->numScenes()) {
                 m_hoveredTrack = ti;
                 m_hoveredScene = si;
-                m_hoveredIcon = (slotLocalX < kIconZoneW + Theme::kSlotPadding);
+                m_hoveredIcon = (slotLocalX < kIconZoneW + ::yawn::ui::Theme::kSlotPadding);
             } else {
                 m_hoveredTrack = -1;
                 m_hoveredScene = -1;
@@ -424,7 +439,7 @@ public:
         }
         if (m_clipDragging) {
             // Finalize drag — compute final target
-            m_clipDragIsCopy = e.mods.ctrl;
+            m_clipDragIsCopy = (e.modifiers & ::yawn::ui::fw2::ModifierKey::Ctrl) != 0;
             if (m_dragTargetTrack >= 0 && m_dragTargetScene >= 0 &&
                 !(m_dragTargetTrack == m_dragSourceTrack &&
                   m_dragTargetScene == m_dragSourceScene)) {
@@ -445,44 +460,28 @@ public:
     }
 
 private:
-    // ─── Text helper ────────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    void drawText(Renderer2D&, Font&, const char*, float, float, float, Color) {}
-#else
-    void drawText(Renderer2D& r, Font& f, const char* text,
-                  float x, float y, float scale, Color color);
-#endif
-
-#ifdef YAWN_TEST_BUILD
-    float drawTextRet(Renderer2D&, Font&, const char*, float x, float, float, Color) { return x; }
-#else
-    float drawTextRet(Renderer2D& r, Font& f, const char* text,
-                      float x, float y, float scale, Color color);
-#endif
-
     // ─── Track Headers ──────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    void paintTrackHeaders(Renderer2D&, Font&, float, float, float) {}
+    void paintTrackHeaders(Renderer2D&, TextMetrics&, float, float, float) {}
 #else
-    void paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, float w);
+    void paintTrackHeaders(Renderer2D& r, TextMetrics& tm, float x, float y, float w);
 #endif
 
     // ─── Scene Labels ───────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    void paintSceneLabels(Renderer2D&, Font&, float, float, float) {}
+    void paintSceneLabels(Renderer2D&, TextMetrics&, float, float, float) {}
 #else
-    void paintSceneLabels(Renderer2D& r, Font& f, float x, float y, float h);
+    void paintSceneLabels(Renderer2D& r, TextMetrics& tm, float x, float y, float h);
 #endif
 
     // ─── Clip Grid ──────────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    void paintClipGrid(Renderer2D&, Font&, float, float, float, float) {}
+    void paintClipGrid(Renderer2D&, TextMetrics&, float, float, float, float) {}
 #else
-    void paintClipGrid(Renderer2D& r, Font& f, float x, float y, float w, float h);
+    void paintClipGrid(Renderer2D& r, TextMetrics& tm, float x, float y, float w, float h);
 #endif
 
 #ifdef YAWN_TEST_BUILD
@@ -494,9 +493,9 @@ private:
     static constexpr float kIconZoneW = 18.0f;
 
 #ifdef YAWN_TEST_BUILD
-    void paintClipSlot(Renderer2D&, Font&, int, int, float, float, float, float) {}
+    void paintClipSlot(Renderer2D&, TextMetrics&, int, int, float, float, float, float) {}
 #else
-    void paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
+    void paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
                        float x, float y, float w, float h);
 #endif
 
@@ -596,6 +595,6 @@ private:
     static constexpr int kVisibleScenes  = 8;
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

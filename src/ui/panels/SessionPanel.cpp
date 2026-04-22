@@ -1,4 +1,4 @@
-// SessionPanel.cpp — rendering and event implementations.
+// SessionPanel.cpp — UI v2 rendering + event implementations.
 // Split from SessionPanel.h to keep rendering code out of the header.
 // This file is only compiled in the main exe build (not test builds).
 
@@ -7,51 +7,54 @@
 #include "audio/Clip.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "ui/framework/v2/Theme.h"
 
 #include "stb_image.h"
 #include <glad/gl.h>
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
-void SessionPanel::paint(UIContext& ctx) {
+void SessionPanel::render(UIContext& ctx) {
     if (!m_project || !m_engine) return;
-    auto& r = *ctx.renderer;
-    auto& f = *ctx.font;
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
     float x = m_bounds.x, y = m_bounds.y;
     float w = m_bounds.w,  h = m_bounds.h;
 
-    r.drawRect(x, y, w, h, Theme::background);
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::background);
 
     float headerY = y;
-    float gridY   = headerY + Theme::kTrackHeaderHeight;
-    float gridH   = h - Theme::kTrackHeaderHeight - kScrollbarH;
-    float gridX   = x + Theme::kSceneLabelWidth;
-    float gridW   = w - Theme::kSceneLabelWidth;
+    float gridY   = headerY + ::yawn::ui::Theme::kTrackHeaderHeight;
+    float gridH   = h - ::yawn::ui::Theme::kTrackHeaderHeight - kScrollbarH;
+    float gridX   = x + ::yawn::ui::Theme::kSceneLabelWidth;
+    float gridW   = w - ::yawn::ui::Theme::kSceneLabelWidth;
 
-    paintTrackHeaders(r, f, gridX, headerY, gridW);
-    paintSceneLabels(r, f, x, gridY, gridH);
-    paintClipGrid(r, f, gridX, gridY, gridW, gridH);
+    paintTrackHeaders(r, tm, gridX, headerY, gridW);
+    paintSceneLabels(r, tm, x, gridY, gridH);
+    paintClipGrid(r, tm, gridX, gridY, gridW, gridH);
     paintHScrollbar(r, gridX, gridY + gridH, gridW);
 }
 
-bool SessionPanel::onMouseDown(MouseEvent& e) {
+bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
     if (!m_project || !m_engine) return false;
 
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
+    const bool shift = (e.modifiers & ::yawn::ui::fw2::ModifierKey::Shift) != 0;
     float x = m_bounds.x, y = m_bounds.y;
-    float gridX   = x + Theme::kSceneLabelWidth;
+    float gridX   = x + ::yawn::ui::Theme::kSceneLabelWidth;
     float headerY = y;
-    float gridY   = headerY + Theme::kTrackHeaderHeight;
+    float gridY   = headerY + ::yawn::ui::Theme::kTrackHeaderHeight;
 
     // Horizontal scrollbar
-    float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-    float sbY = gridY + (m_bounds.h - Theme::kTrackHeaderHeight - kScrollbarH);
+    float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
+    float sbY = gridY + (m_bounds.h - ::yawn::ui::Theme::kTrackHeaderHeight - kScrollbarH);
     if (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW) {
-        float contentW = m_project->numTracks() * Theme::kTrackWidth;
+        float contentW = m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth;
         float maxScroll = std::max(0.0f, contentW - gridW);
         if (maxScroll <= 0) return true;
         float thumbW = std::max(20.0f, gridW * (gridW / std::max(1.0f, contentW)));
@@ -73,11 +76,11 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
     // Track header click — select track (or double-click to rename)
     if (my >= headerY && my < gridY && mx >= gridX) {
         float cmx = mx + m_scrollX;
-        int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
+        int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
         if (ti >= 0 && ti < m_project->numTracks()) {
             m_selectedTrack = ti;
             m_lastClickTrack = ti;
-            if (e.isDoubleClick()) {
+            if (clickCount >= 2) {
                 startTrackRename(ti);
             }
             return true;
@@ -91,7 +94,7 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
 
     // Scene label click — launch scene (left) or context menu (right)
     if (mx >= x && mx < gridX) {
-        int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
+        int si = static_cast<int>((cmy - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
         if (si >= 0 && si < m_project->numScenes()) {
             if (rightClick) {
                 m_rightClickSceneLabel = si;
@@ -133,8 +136,8 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
 
     // Clip grid click
     if (mx >= gridX) {
-        int ti = static_cast<int>((cmx - gridX) / Theme::kTrackWidth);
-        int si = static_cast<int>((cmy - gridY) / Theme::kClipSlotHeight);
+        int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
+        int si = static_cast<int>((cmy - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
         if (ti >= 0 && ti < m_project->numTracks() &&
             si >= 0 && si < m_project->numScenes()) {
             m_lastClickScene = si;
@@ -145,7 +148,7 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
             bool trackArmed = m_project->track(ti).armed;
 
             // Compute slot-local position
-            float slotLocalX = cmx - gridX - ti * Theme::kTrackWidth;
+            float slotLocalX = cmx - gridX - ti * ::yawn::ui::Theme::kTrackWidth;
 
             bool isSlotRecording = m_trackStates[ti].recording
                                && m_trackStates[ti].recordingScene == si;
@@ -164,7 +167,7 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                 m_lastRightClickScene = si;
                 m_selectedTrack  = ti;
                 m_lastClickTrack = ti;
-            } else if (slotLocalX < kIconZoneW + Theme::kSlotPadding) {
+            } else if (slotLocalX < kIconZoneW + ::yawn::ui::Theme::kSlotPadding) {
                 if (isPlaying) {
                     if (slot->audioClip)
                         m_engine->sendCommand(audio::StopClipMsg{ti});
@@ -207,9 +210,9 @@ bool SessionPanel::onMouseDown(MouseEvent& e) {
                 } else if (trackArmed) {
                     int rlb = m_project->track(ti).recordLengthBars;
                     if (trackType == Track::Type::Midi)
-                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !e.mods.shift, rlb});
+                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !shift, rlb});
                     else if (trackType == Track::Type::Audio)
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !e.mods.shift, rlb});
+                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !shift, rlb});
                 }
             }
             return true;
@@ -328,96 +331,78 @@ void SessionPanel::launchScene(int scene) {
     m_activeScene = scene;
 }
 
-void SessionPanel::drawText(Renderer2D& r, Font& f, const char* text,
-              float x, float y, float scale, Color color) {
-    if (!f.isLoaded()) return;
-    float tx = x;
-    const char* p = text;
-    while (*p) {
-        uint32_t cp = ui::decodeUtf8(p);
-        auto g = f.getGlyph(cp, tx, y, scale);
-        r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                           g.u0, g.v0, g.u1, g.v1, color, f.textureId());
-        tx += g.xAdvance;
-    }
-}
-
-float SessionPanel::drawTextRet(Renderer2D& r, Font& f, const char* text,
-                  float x, float y, float scale, Color color) {
-    if (!f.isLoaded()) return x;
-    float tx = x;
-    const char* p = text;
-    while (*p) {
-        uint32_t cp = ui::decodeUtf8(p);
-        auto g = f.getGlyph(cp, tx, y, scale);
-        r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                           g.u0, g.v0, g.u1, g.v1, color, f.textureId());
-        tx += g.xAdvance;
-    }
-    return tx;
-}
-
-void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, float w) {
+void SessionPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm, float x, float y, float w) {
     if (!m_project) return;
-    float h = Theme::kTrackHeaderHeight;
-    r.drawRect(x, y, w, h, Theme::trackHeaderBg);
-    r.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
+    float h = ::yawn::ui::Theme::kTrackHeaderHeight;
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::trackHeaderBg);
+    r.drawRect(x, y + h - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
 
     r.pushClip(x, y, w, h);
-    float scale = Theme::kSmallFontSize / f.pixelHeight();
+    const float labelSize = theme().metrics.fontSizeSmall;
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
-        float tx = x + t * Theme::kTrackWidth - m_scrollX;
-        float tw = Theme::kTrackWidth;
+        float tx = x + t * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+        float tw = ::yawn::ui::Theme::kTrackWidth;
         if (tx + tw < x || tx > x + w) continue;
 
         if (t == m_selectedTrack)
-            r.drawRect(tx + 1, y + 1, tw - 2, h - 2, Color{50, 55, 65, 255});
+            r.drawRect(tx + 1, y + 1, tw - 2, h - 2, ::yawn::ui::Color{50, 55, 65, 255});
 
-        Color col = Theme::trackColors[m_project->track(t).colorIndex % Theme::kNumTrackColors];
+        ::yawn::ui::Color col = ::yawn::ui::Theme::trackColors[
+            m_project->track(t).colorIndex % ::yawn::ui::Theme::kNumTrackColors];
         r.drawRect(tx + 2, y + 2, tw - 4, 3, col);
 
-        if (f.isLoaded()) {
-            if (t == m_renameTrack) {
-                // Inline rename text box — wraps around text at (tx+18, y+8)
-                float textX = tx + 18, textY = y + 8;
-                float boxX = tx + 14, boxY = y + 6;
-                float boxW = tw - 18, boxH = 24;
-                r.drawRect(boxX, boxY, boxW, boxH, Color{20, 22, 28, 255});
-                r.drawRectOutline(boxX, boxY, boxW, boxH, Theme::transportAccent);
-                float cx = textX;
-                if (m_renameCursor == 0)
-                    r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
-                {
-                    const char* rp = m_renameText.c_str();
-                    int bytePos = 0;
-                    while (*rp) {
-                        const char* prev = rp;
-                        uint32_t cp = ui::decodeUtf8(rp);
-                        int charBytes = static_cast<int>(rp - prev);
-                        auto g = f.getGlyph(cp, cx, textY, scale);
-                        if (cx + g.xAdvance > boxX + boxW - 4) break;
-                        r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                           g.u0, g.v0, g.u1, g.v1,
-                                           Theme::textPrimary, f.textureId());
-                        cx += g.xAdvance;
-                        bytePos += charBytes;
-                        if (bytePos == m_renameCursor)
-                            r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
-                    }
-                }
-            } else {
-                float textX = tx + 18, textY = y + 8;
-                const char* np = m_project->track(t).name.c_str();
-                while (*np) {
-                    uint32_t cp = ui::decodeUtf8(np);
-                    auto g = f.getGlyph(cp, textX, textY, scale);
-                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                       g.u0, g.v0, g.u1, g.v1,
-                                       Theme::textPrimary, f.textureId());
-                    textX += g.xAdvance;
-                    if (textX > tx + tw - 42) break;
-                }
+        if (t == m_renameTrack) {
+            // Inline rename text box — wraps around text at (tx+18, y+8)
+            float textX = tx + 18, textY = y + 8;
+            float boxX = tx + 14, boxY = y + 6;
+            float boxW = tw - 18, boxH = 24;
+            r.drawRect(boxX, boxY, boxW, boxH, ::yawn::ui::Color{20, 22, 28, 255});
+            r.drawRectOutline(boxX, boxY, boxW, boxH, ::yawn::ui::Theme::transportAccent);
+
+            // Compute the substring that fits in the box and cursor x.
+            const std::string& text = m_renameText;
+            const int bytes = static_cast<int>(text.size());
+            int fitEnd = bytes;
+            const float maxW = boxW - 4 - (textX - boxX);
+            while (fitEnd > 0 &&
+                   tm.textWidth(text.substr(0, fitEnd), labelSize) > maxW) {
+                // Step back one UTF-8 code point.
+                int step = 1;
+                while (step < fitEnd &&
+                       (static_cast<unsigned char>(text[fitEnd - step]) & 0xC0) == 0x80)
+                    ++step;
+                fitEnd -= step;
+            }
+            std::string visible = text.substr(0, fitEnd);
+            if (!visible.empty()) {
+                tm.drawText(r, visible, textX, textY, labelSize,
+                             ::yawn::ui::Theme::textPrimary);
+            }
+
+            int cursorClamped = std::min(m_renameCursor, fitEnd);
+            float cursorX = textX +
+                tm.textWidth(text.substr(0, cursorClamped), labelSize);
+            r.drawRect(cursorX, boxY + 2, 1, boxH - 4,
+                        ::yawn::ui::Theme::transportAccent);
+        } else {
+            float textX = tx + 18, textY = y + 8;
+            // Clip the name to the visible width so it doesn't spill over
+            // the track-type icon on the next strip.
+            const std::string& name = m_project->track(t).name;
+            const float maxW = (tx + tw - 42) - textX;
+            int fitEnd = static_cast<int>(name.size());
+            while (fitEnd > 0 &&
+                   tm.textWidth(name.substr(0, fitEnd), labelSize) > maxW) {
+                int step = 1;
+                while (step < fitEnd &&
+                       (static_cast<unsigned char>(name[fitEnd - step]) & 0xC0) == 0x80)
+                    ++step;
+                fitEnd -= step;
+            }
+            if (fitEnd > 0) {
+                tm.drawText(r, name.substr(0, fitEnd), textX, textY, labelSize,
+                             ::yawn::ui::Theme::textPrimary);
             }
         }
 
@@ -428,19 +413,19 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
             float ix = tx + 6;
             float iy = y + 7;  // above the track name
             if (trackType == Track::Type::Midi) {
-                Color iconCol{180,130,255,200};
+                ::yawn::ui::Color iconCol{180,130,255,200};
                 // MIDI DIN connector: circle with 3 dots inside
                 float cr = iconSize * 0.5f;
                 float ccx = ix + cr, ccy = iy + cr;
                 r.drawFilledCircle(ccx, ccy, cr, iconCol, 16);
-                Color dot{30, 30, 35, 255};
+                ::yawn::ui::Color dot{30, 30, 35, 255};
                 float dotR = 1.0f;
                 r.drawFilledCircle(ccx - 2.5f, ccy, dotR, dot, 8);
                 r.drawFilledCircle(ccx,        ccy, dotR, dot, 8);
                 r.drawFilledCircle(ccx + 2.5f, ccy, dotR, dot, 8);
             } else if (trackType == Track::Type::Visual) {
                 // Little monitor/frame glyph for visual tracks.
-                Color iconCol{110,200,230,220};
+                ::yawn::ui::Color iconCol{110,200,230,220};
                 r.drawRect(ix,              iy,              iconSize, 1.5f, iconCol);
                 r.drawRect(ix,              iy + iconSize-1.5f, iconSize, 1.5f, iconCol);
                 r.drawRect(ix,              iy,              1.5f, iconSize, iconCol);
@@ -448,7 +433,7 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
                 r.drawFilledCircle(ix + iconSize*0.5f, iy + iconSize*0.5f,
                                     1.8f, iconCol, 10);
             } else {
-                Color iconCol{130,200,130,200};
+                ::yawn::ui::Color iconCol{130,200,130,200};
                 // Audio waveform icon: 5 vertical bars of varying height
                 float barW = 1.5f, gap = 1.0f;
                 float heights[] = {3, 7, 10, 6, 4};
@@ -460,112 +445,114 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, f
             }
         }
 
-        r.drawRect(tx + tw - 1, y, 1, h, Theme::clipSlotBorder);
+        r.drawRect(tx + tw - 1, y, 1, h, ::yawn::ui::Theme::clipSlotBorder);
     }
     r.popClip();
 }
 
-void SessionPanel::paintSceneLabels(Renderer2D& r, Font& f, float x, float y, float h) {
+void SessionPanel::paintSceneLabels(Renderer2D& r, TextMetrics& tm, float x, float y, float h) {
     if (!m_project) return;
-    float w = Theme::kSceneLabelWidth;
-    r.drawRect(x, y, w, h, Theme::sceneLabelBg);
+    float w = ::yawn::ui::Theme::kSceneLabelWidth;
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::sceneLabelBg);
 
     r.pushClip(x, y, w, h);
-    float scale = Theme::kSmallFontSize / f.pixelHeight();
+    const float labelSize = theme().metrics.fontSizeSmall;
+    const float lh = tm.lineHeight(labelSize);
 
     for (int s = 0; s < m_project->numScenes(); ++s) {
-        float sy = y + s * Theme::kClipSlotHeight - m_scrollY;
-        float sh = Theme::kClipSlotHeight;
+        float sy = y + s * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
+        float sh = ::yawn::ui::Theme::kClipSlotHeight;
         if (sy + sh < y || sy > y + h) continue;
 
-        r.drawRect(x + 2, sy + 2, w - 4, sh - 4, Theme::clipSlotEmpty);
+        r.drawRect(x + 2, sy + 2, w - 4, sh - 4, ::yawn::ui::Theme::clipSlotEmpty);
 
-        if (f.isLoaded()) {
+        const std::string& name = m_project->scene(s).name;
+        if (!name.empty()) {
             float textX = x + 8;
-            float textY = sy + sh * 0.5f - Theme::kSmallFontSize * 0.5f;
-            const char* lp = m_project->scene(s).name.c_str();
-            while (*lp) {
-                uint32_t cp = ui::decodeUtf8(lp);
-                auto g = f.getGlyph(cp, textX, textY, scale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Theme::textSecondary, f.textureId());
-                textX += g.xAdvance;
-            }
+            float textY = sy + sh * 0.5f - lh * 0.5f;
+            tm.drawText(r, name, textX, textY, labelSize,
+                         ::yawn::ui::Theme::textSecondary);
         }
-        r.drawRect(x, sy + sh - 1, w, 1, Theme::clipSlotBorder);
+        r.drawRect(x, sy + sh - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
     }
     r.popClip();
 }
 
-void SessionPanel::paintClipGrid(Renderer2D& r, Font& f, float x, float y, float w, float h) {
+void SessionPanel::paintClipGrid(Renderer2D& r, TextMetrics& tm, float x, float y, float w, float h) {
     if (!m_project) return;
     r.pushClip(x, y, w, h);
     for (int t = 0; t < m_project->numTracks(); ++t) {
         for (int s = 0; s < m_project->numScenes(); ++s) {
-            float sx = x + t * Theme::kTrackWidth - m_scrollX;
-            float sy = y + s * Theme::kClipSlotHeight - m_scrollY;
-            float sw = Theme::kTrackWidth;
-            float sh = Theme::kClipSlotHeight;
+            float sx = x + t * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+            float sy = y + s * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
+            float sw = ::yawn::ui::Theme::kTrackWidth;
+            float sh = ::yawn::ui::Theme::kClipSlotHeight;
             if (sx + sw < x || sx > x + w) continue;
             if (sy + sh < y || sy > y + h) continue;
-            paintClipSlot(r, f, t, s, sx, sy, sw, sh);
+            paintClipSlot(r, tm, t, s, sx, sy, sw, sh);
         }
     }
 
     // Controller grid region overlay
     if (m_showGridRegion) {
-        float rx = x + m_gridOriginTrack * Theme::kTrackWidth - m_scrollX;
-        float ry = y + m_gridOriginScene * Theme::kClipSlotHeight - m_scrollY;
-        float rw = m_gridCols * Theme::kTrackWidth;
-        float rh = m_gridRows * Theme::kClipSlotHeight;
-        r.drawRect(rx, ry, rw, rh, Color{255, 80, 80, 25});
-        r.drawRectOutline(rx, ry, rw, rh, Color{255, 80, 80, 160}, 2.0f);
+        float rx = x + m_gridOriginTrack * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+        float ry = y + m_gridOriginScene * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
+        float rw = m_gridCols * ::yawn::ui::Theme::kTrackWidth;
+        float rh = m_gridRows * ::yawn::ui::Theme::kClipSlotHeight;
+        r.drawRect(rx, ry, rw, rh, ::yawn::ui::Color{255, 80, 80, 25});
+        r.drawRectOutline(rx, ry, rw, rh, ::yawn::ui::Color{255, 80, 80, 160}, 2.0f);
     }
 
     // Clip drag visual feedback
     if (m_clipDragging && m_dragSourceTrack >= 0) {
         // Dim the source slot
-        float srcX = x + m_dragSourceTrack * Theme::kTrackWidth - m_scrollX;
-        float srcY = y + m_dragSourceScene * Theme::kClipSlotHeight - m_scrollY;
-        r.drawRect(srcX, srcY, Theme::kTrackWidth, Theme::kClipSlotHeight,
-                   Color{0, 0, 0, m_clipDragIsCopy ? (uint8_t)60 : (uint8_t)120});
+        float srcX = x + m_dragSourceTrack * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+        float srcY = y + m_dragSourceScene * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
+        r.drawRect(srcX, srcY, ::yawn::ui::Theme::kTrackWidth, ::yawn::ui::Theme::kClipSlotHeight,
+                   ::yawn::ui::Color{0, 0, 0, m_clipDragIsCopy ? (uint8_t)60 : (uint8_t)120});
 
         // Highlight the target slot
         if (m_dragTargetTrack >= 0 && m_dragTargetScene >= 0 &&
             !(m_dragTargetTrack == m_dragSourceTrack &&
               m_dragTargetScene == m_dragSourceScene)) {
-            float dstX = x + m_dragTargetTrack * Theme::kTrackWidth - m_scrollX;
-            float dstY = y + m_dragTargetScene * Theme::kClipSlotHeight - m_scrollY;
-            Color highlight = m_clipDragIsCopy ? Color{80, 180, 255, 60} : Color{80, 255, 80, 60};
-            r.drawRect(dstX, dstY, Theme::kTrackWidth, Theme::kClipSlotHeight, highlight);
-            Color border = m_clipDragIsCopy ? Color{80, 180, 255, 200} : Color{80, 255, 80, 200};
-            r.drawRectOutline(dstX, dstY, Theme::kTrackWidth, Theme::kClipSlotHeight, border, 2.0f);
+            float dstX = x + m_dragTargetTrack * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+            float dstY = y + m_dragTargetScene * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
+            ::yawn::ui::Color highlight = m_clipDragIsCopy
+                ? ::yawn::ui::Color{80, 180, 255, 60}
+                : ::yawn::ui::Color{80, 255, 80, 60};
+            r.drawRect(dstX, dstY, ::yawn::ui::Theme::kTrackWidth, ::yawn::ui::Theme::kClipSlotHeight, highlight);
+            ::yawn::ui::Color border = m_clipDragIsCopy
+                ? ::yawn::ui::Color{80, 180, 255, 200}
+                : ::yawn::ui::Color{80, 255, 80, 200};
+            r.drawRectOutline(dstX, dstY, ::yawn::ui::Theme::kTrackWidth, ::yawn::ui::Theme::kClipSlotHeight, border, 2.0f);
 
             // "+" indicator for copy mode
             if (m_clipDragIsCopy) {
-                float cx = dstX + Theme::kTrackWidth - 14.0f;
+                float cx = dstX + ::yawn::ui::Theme::kTrackWidth - 14.0f;
                 float cy = dstY + 4.0f;
-                r.drawRect(cx, cy, 10, 10, Color{80, 180, 255, 220});
-                r.drawRect(cx + 4, cy + 2, 2, 6, Color{255, 255, 255, 255});
-                r.drawRect(cx + 2, cy + 4, 6, 2, Color{255, 255, 255, 255});
+                r.drawRect(cx, cy, 10, 10, ::yawn::ui::Color{80, 180, 255, 220});
+                r.drawRect(cx + 4, cy + 2, 2, 6, ::yawn::ui::Color{255, 255, 255, 255});
+                r.drawRect(cx + 2, cy + 4, 6, 2, ::yawn::ui::Color{255, 255, 255, 255});
             }
         }
     }
 
     r.popClip();
+    (void)tm;
 }
 
 void SessionPanel::paintHScrollbar(Renderer2D& r, float x, float y, float w) {
-    r.drawRect(m_bounds.x, y, m_bounds.w, kScrollbarH, Color{40, 40, 45});
+    r.drawRect(m_bounds.x, y, m_bounds.w, kScrollbarH, ::yawn::ui::Color{40, 40, 45});
     if (!m_project) return;
-    float contentW = m_project->numTracks() * Theme::kTrackWidth;
+    float contentW = m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth;
     if (contentW <= w) return;
     float thumbW = std::max(20.0f, w * (w / std::max(1.0f, contentW)));
     float maxScroll = contentW - w;
     float scrollFrac = m_scrollX / std::max(1.0f, maxScroll);
     float thumbX = x + scrollFrac * (w - thumbW);
-    Color thumbCol = (m_hsbDragging || m_hsbHovered) ? Color{120, 120, 130} : Color{90, 90, 100};
+    ::yawn::ui::Color thumbCol = (m_hsbDragging || m_hsbHovered)
+        ? ::yawn::ui::Color{120, 120, 130}
+        : ::yawn::ui::Color{90, 90, 100};
     r.drawRect(thumbX, y, thumbW, kScrollbarH, thumbCol);
 }
 
@@ -597,9 +584,9 @@ unsigned SessionPanel::getThumbnailTexture(const std::string& path) const {
     return tex;
 }
 
-void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
+void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
                    float x, float y, float w, float h) {
-    float pad = Theme::kSlotPadding;
+    float pad = ::yawn::ui::Theme::kSlotPadding;
     float ix = x + pad, iy = y + pad;
     float iw = w - pad * 2, ih = h - pad * 2;
 
@@ -617,7 +604,9 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     bool isHovered = (m_hoveredTrack == ti && m_hoveredScene == si);
     bool iconHovered = isHovered && m_hoveredIcon;
 
-    Color bgCol = hasClip ? Theme::panelBg : Theme::clipSlotEmpty;
+    ::yawn::ui::Color bgCol = hasClip
+        ? ::yawn::ui::Theme::panelBg
+        : ::yawn::ui::Theme::clipSlotEmpty;
     r.drawRect(ix, iy, iw, ih, bgCol);
 
     // Video thumbnail behind the clip content, dimmed so the clip name
@@ -629,61 +618,64 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
             float contentW = iw - kIconZoneW;
             r.drawTexturedQuad(contentX, iy, contentW, ih,
                                 0.0f, 0.0f, 1.0f, 1.0f,
-                                Color{255, 255, 255, 160}, tex);
+                                ::yawn::ui::Color{255, 255, 255, 160}, tex);
         }
     }
+
+    const float smallSize = theme().metrics.fontSizeSmall;
 
     // "Importing…" overlay — shown while a background video transcode is
     // in progress for this slot.
     if (isSlotImporting(ti, si)) {
-        r.drawRect(ix, iy, iw, ih, Color{30, 50, 80, 220});
-        float scale = Theme::kSmallFontSize / f.pixelHeight();
+        r.drawRect(ix, iy, iw, ih, ::yawn::ui::Color{30, 50, 80, 220});
         float pct   = std::clamp(slotImportProgress(ti, si), 0.0f, 1.0f);
         char label[48];
         if (pct > 0.0f) std::snprintf(label, sizeof(label), "importing… %d%%",
                                         static_cast<int>(pct * 100.0f));
         else            std::snprintf(label, sizeof(label), "importing…");
-        if (f.isLoaded()) {
-            f.drawText(r, label, ix + 6, iy + ih * 0.5f, scale,
-                        Color{200, 220, 255, 255});
-        }
+        tm.drawText(r, label, ix + 6, iy + ih * 0.5f, smallSize,
+                     ::yawn::ui::Color{200, 220, 255, 255});
         // Thin progress bar hugging the bottom of the slot.
         float barH = 3.0f;
-        r.drawRect(ix, iy + ih - barH, iw, barH, Color{20, 30, 50, 255});
-        r.drawRect(ix, iy + ih - barH, iw * pct, barH, Color{120, 200, 255, 255});
+        r.drawRect(ix, iy + ih - barH, iw, barH, ::yawn::ui::Color{20, 30, 50, 255});
+        r.drawRect(ix, iy + ih - barH, iw * pct, barH, ::yawn::ui::Color{120, 200, 255, 255});
         return;
     }
 
     // Icon zone (left side)
     float iconCX = ix + kIconZoneW * 0.5f;
     float iconCY = iy + ih * 0.5f;
-    Color iconBg = iconHovered ? Color{45, 45, 50, 255} : Color{30, 30, 33, 255};
+    ::yawn::ui::Color iconBg = iconHovered
+        ? ::yawn::ui::Color{45, 45, 50, 255}
+        : ::yawn::ui::Color{30, 30, 33, 255};
     r.drawRect(ix, iy, kIconZoneW, ih, iconBg);
 
     if (isRecording) {
         // Pulsing record circle
         float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
         uint8_t a = static_cast<uint8_t>(150 + static_cast<int>(pulse * 105));
-        Color recCol = Color{220, 40, 40, a};
+        ::yawn::ui::Color recCol = ::yawn::ui::Color{220, 40, 40, a};
         r.drawFilledCircle(iconCX, iconCY, 5.0f, recCol, 16);
     } else if (isPlaying) {
         // Stop square (green)
-        Color stopCol = iconHovered ? Color{100, 255, 100} : Theme::playing;
+        ::yawn::ui::Color stopCol = iconHovered
+            ? ::yawn::ui::Color{100, 255, 100}
+            : ::yawn::ui::Theme::playing;
         float half = 4.5f;
         r.drawRect(iconCX - half, iconCY - half, half * 2, half * 2, stopCol);
     } else if (hasClip) {
         // Play triangle
-        Color trkCol = Theme::trackColors[
-            m_project->track(ti).colorIndex % Theme::kNumTrackColors];
-        Color triCol = iconHovered ? trkCol : trkCol.withAlpha(180);
+        ::yawn::ui::Color trkCol = ::yawn::ui::Theme::trackColors[
+            m_project->track(ti).colorIndex % ::yawn::ui::Theme::kNumTrackColors];
+        ::yawn::ui::Color triCol = iconHovered ? trkCol : trkCol.withAlpha(180);
         r.drawTriangle(iconCX - 3.0f, iconCY - 5.5f,
                         iconCX - 3.0f, iconCY + 5.5f,
                         iconCX + 5.0f, iconCY, triCol);
     } else if (recReady) {
         // Record-ready circle
-        Color recCol = recFullyArmed
-            ? (iconHovered ? Color{230, 50, 50} : Color{200, 40, 40})
-            : (iconHovered ? Color{170, 60, 60} : Color{140, 50, 50});
+        ::yawn::ui::Color recCol = recFullyArmed
+            ? (iconHovered ? ::yawn::ui::Color{230, 50, 50} : ::yawn::ui::Color{200, 40, 40})
+            : (iconHovered ? ::yawn::ui::Color{170, 60, 60} : ::yawn::ui::Color{140, 50, 50});
         r.drawFilledCircle(iconCX, iconCY, 4.5f, recCol, 16);
     }
 
@@ -692,34 +684,42 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     float contentW = iw - kIconZoneW;
 
     if (hasClip) {
-        Color trkCol = Theme::trackColors[
-            m_project->track(ti).colorIndex % Theme::kNumTrackColors];
+        ::yawn::ui::Color trkCol = ::yawn::ui::Theme::trackColors[
+            m_project->track(ti).colorIndex % ::yawn::ui::Theme::kNumTrackColors];
         r.drawRect(contentX, iy, 2, ih, trkCol);
 
         // Clip name
         const std::string& name = aClip ? aClip->name
             : (mClip ? mClip->name()
             : (vClip ? vClip->name : std::string()));
-        float scale = Theme::kSmallFontSize / f.pixelHeight();
-        if (f.isLoaded() && !name.empty()) {
-            float tx2 = contentX + 5, ty2 = iy + 2;
-            const char* np2 = name.c_str();
-            while (*np2) {
-                uint32_t cpt = ui::decodeUtf8(np2);
-                if (cpt == '/' || cpt == '\\') { tx2 = contentX + 5; continue; }
-                auto g = f.getGlyph(cpt, tx2, ty2, scale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1-g.x0, g.y1-g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Theme::textPrimary, f.textureId());
-                tx2 += g.xAdvance;
-                if (tx2 > ix + iw - 4) break;
+        if (!name.empty()) {
+            // Strip leading path components (everything up to + including
+            // the last '/' or '\\') so only the file/clip stem shows.
+            size_t cut = name.find_last_of("/\\");
+            std::string display = (cut == std::string::npos)
+                ? name : name.substr(cut + 1);
+
+            const float maxW = (ix + iw - 4) - (contentX + 5);
+            int fitEnd = static_cast<int>(display.size());
+            while (fitEnd > 0 &&
+                   tm.textWidth(display.substr(0, fitEnd), smallSize) > maxW) {
+                int step = 1;
+                while (step < fitEnd &&
+                       (static_cast<unsigned char>(display[fitEnd - step]) & 0xC0) == 0x80)
+                    ++step;
+                fitEnd -= step;
+            }
+            if (fitEnd > 0) {
+                tm.drawText(r, display.substr(0, fitEnd),
+                             contentX + 5, iy + 2, smallSize,
+                             ::yawn::ui::Theme::textPrimary);
             }
         }
 
         // Audio waveform
         if (aClip && aClip->buffer && aClip->buffer->numFrames() > 0) {
             float wfY = iy + 18, wfH = ih - 22;
-            Color wfCol = trkCol.withAlpha(160);
+            ::yawn::ui::Color wfCol = trkCol.withAlpha(160);
             int nch = aClip->buffer->numChannels();
             if (nch >= 2) {
                 r.drawWaveformStereo(aClip->buffer->channelData(0),
@@ -735,14 +735,15 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
                 int64_t pos = m_trackStates[ti].playPosition;
                 float frac = std::fmod(
                     static_cast<float>(pos) / aClip->buffer->numFrames(), 1.0f);
-                r.drawRect(contentX + 4 + frac * (contentW - 8), wfY, 2, wfH, Theme::playing);
+                r.drawRect(contentX + 4 + frac * (contentW - 8), wfY, 2, wfH,
+                            ::yawn::ui::Theme::playing);
             }
         }
 
         // MIDI notes
         if (mClip && mClip->noteCount() > 0) {
             float nY = iy + 18, nH = ih - 22;
-            Color noteCol = trkCol.withAlpha(180);
+            ::yawn::ui::Color noteCol = trkCol.withAlpha(180);
             int minP = 127, maxP = 0;
             for (int i = 0; i < mClip->noteCount(); ++i) {
                 int p = mClip->note(i).pitch;
@@ -766,14 +767,14 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
             if (isPlaying && m_trackStates[ti].isMidiPlaying) {
                 float frac = m_trackStates[ti].midiPlayFrac;
                 float phX = contentX + 4 + frac * (contentW - 8);
-                r.drawRect(phX, nY, 2, nH, Theme::playing);
+                r.drawRect(phX, nY, 2, nH, ::yawn::ui::Theme::playing);
             }
         }
 
         // Playing border pulse
         if (isPlaying) {
             float pulse = (std::sin(m_animTimer * 6.0f) + 1.0f) * 0.5f;
-            Color bc = Theme::playing.withAlpha(
+            ::yawn::ui::Color bc = ::yawn::ui::Theme::playing.withAlpha(
                 static_cast<uint8_t>(150 + pulse * 105));
             r.drawRectOutline(ix, iy, iw, ih, bc, 2.0f);
         }
@@ -782,7 +783,7 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     // Recording border pulse (outside hasClip block for armed empty slots too)
     if (isRecording) {
         float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
-        Color recCol = Color{220, 40, 40}.withAlpha(
+        ::yawn::ui::Color recCol = ::yawn::ui::Color{220, 40, 40}.withAlpha(
             static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
         r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
     }
@@ -790,10 +791,11 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     // Selection highlight (shown when not playing/recording to avoid visual clash)
     bool isSelected = (ti == m_selectedTrack && si == m_selectedScene);
     if (isSelected && !isPlaying && !isRecording) {
-        r.drawRectOutline(ix, iy, iw, ih, Color{255, 255, 255, 200}, 2.0f);
+        r.drawRectOutline(ix, iy, iw, ih, ::yawn::ui::Color{255, 255, 255, 200}, 2.0f);
     } else if (isSelected) {
         // Subtle inner highlight when playing/recording already draws an outline
-        r.drawRectOutline(ix + 2, iy + 2, iw - 4, ih - 4, Color{255, 255, 255, 80}, 1.0f);
+        r.drawRectOutline(ix + 2, iy + 2, iw - 4, ih - 4,
+                           ::yawn::ui::Color{255, 255, 255, 80}, 1.0f);
     }
 
     // Live-input status pip — top-right of the content area. Shown only
@@ -803,29 +805,31 @@ void SessionPanel::paintClipSlot(Renderer2D& r, Font& f, int ti, int si,
     if (vClip && vClip->liveInput && !vClip->liveUrl.empty()) {
         int state = -1;
         if (m_onQueryLiveState) state = m_onQueryLiveState(ti, si);
-        Color pipCol;
+        ::yawn::ui::Color pipCol;
         switch (state) {
             case 1: {  // Connecting — pulse
                 float pulse = (std::sin(m_animTimer * 6.0f) + 1.0f) * 0.5f;
                 uint8_t a = static_cast<uint8_t>(140 + pulse * 115);
-                pipCol = Color{230, 190, 50, a};
+                pipCol = ::yawn::ui::Color{230, 190, 50, a};
                 break;
             }
-            case 2: pipCol = Color{80, 220, 100, 255}; break;  // Connected
-            case 3: pipCol = Color{220, 60, 60, 255};  break;  // Failed
+            case 2: pipCol = ::yawn::ui::Color{80, 220, 100, 255}; break;  // Connected
+            case 3: pipCol = ::yawn::ui::Color{220, 60, 60, 255};  break;  // Failed
             case 0: // Stopped
-            default: pipCol = Color{130, 130, 130, 220}; break;
+            default: pipCol = ::yawn::ui::Color{130, 130, 130, 220}; break;
         }
         float pipCX = ix + iw - 9.0f;
         float pipCY = iy + 9.0f;
-        r.drawFilledCircle(pipCX, pipCY, 5.0f, Color{0, 0, 0, 180}, 16);
+        r.drawFilledCircle(pipCX, pipCY, 5.0f, ::yawn::ui::Color{0, 0, 0, 180}, 16);
         r.drawFilledCircle(pipCX, pipCY, 4.0f, pipCol, 16);
     }
 
-    r.drawRect(x + w - 1, y, 1, h, Theme::clipSlotBorder);
-    r.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
+    r.drawRect(x + w - 1, y, 1, h, ::yawn::ui::Theme::clipSlotBorder);
+    r.drawRect(x, y + h - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
+
+    (void)isHovered;
 }
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

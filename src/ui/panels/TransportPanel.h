@@ -1,17 +1,21 @@
 #pragma once
-// TransportPanel — Standalone transport bar widget.
+// TransportPanel — standalone transport bar widget (UI v2 version).
 //
-// Ableton-style layout: BPM + TimeSig + TAP left, centered Stop|Play|Record,
-// Metronome toggle, position display right-aligned.
-// Uses proper triangle/circle renderer primitives for button icons.
+// Ableton-style layout: BPM + TimeSig + TAP left, centered
+// Stop|Play|Record, Metronome toggle, position display right-aligned.
+//
+// Migrated from v1 fw::Widget to fw2::Widget. Now a proper fw2 widget
+// whose children (FwNumberInput, FwButton, FwToggle) use the fw2
+// gesture SM directly — no V1EventBridge / m_v2Dragging tracking
+// required. Integration into the v1 rootLayout is via
+// `fw::TransportPanelWrapper` (see PanelWrappers.h), which bridges
+// v1 mouse events into fw2's dispatchMouse* API.
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/NumberInput.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -30,7 +34,7 @@ namespace yawn { class Project; }
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 class TransportPanel : public Widget {
 public:
@@ -45,7 +49,6 @@ public:
             if (m_engine)
                 m_engine->sendCommand(audio::TransportSetBPMMsg{static_cast<double>(v)});
         });
-        // v2 FwNumberInput delivers (startValue, endValue) directly.
         m_bpmInput.setOnDragEnd([this](float oldVal, float newVal) {
             if (!m_undoManager) return;
             if (oldVal == newVal) return;
@@ -109,17 +112,18 @@ public:
                 ""});
         });
 
-        m_posLabel.setAlign(TextAlign::Right);
-        m_countInLabel.setAlign(TextAlign::Right);
-        m_bpmLabel.setText("BPM");
-        m_bpmLabel.setAlign(TextAlign::Left);
-
         m_metroBtn.setLabel("MET");
         m_metroBtn.setOnChange([this](bool on) {
             m_metronomeOn = on;
             if (m_engine)
                 m_engine->sendCommand(audio::MetronomeToggleMsg{m_metronomeOn});
         });
+
+        // Panel is a container — it doesn't capture gestures itself,
+        // its children do. Keep it non-click-only so child dispatch
+        // can do its own gesture handling.
+        setFocusable(false);
+        setRelayoutBoundary(true);
     }
 
     void init(Project* project, audio::AudioEngine* engine,
@@ -130,8 +134,7 @@ public:
         if (engine) m_metronomeOn = engine->metronome().enabled();
     }
 
-    // ─── State updates (called from App) ────────────────────────────────
-
+    // ─── State updates (called from App) ────────────────────────────
 #ifdef YAWN_TEST_BUILD
     void setTransportState(bool, double, double, int = 4, int = 4) {}
 #else
@@ -156,8 +159,10 @@ public:
         return m_bpmInput.isEditing() || m_tsNumInput.isEditing() || m_tsDenInput.isEditing();
     }
 
-    // ─── Double-click to edit BPM / time signature ──────────────────────
+    // ─── External commands (App dispatches these from raw SDL) ──────
 
+    // Double-click on BPM / time-sig boxes enters inline edit mode.
+    // Called by App's MOUSE_BUTTON_DOWN handler when clicks == 2.
     bool handleDoubleClick(float mx, float my) {
         if (mx >= m_bpmBoxX && mx <= m_bpmBoxX + m_bpmBoxW &&
             my >= m_bpmBoxY && my <= m_bpmBoxY + m_bpmBoxH) {
@@ -191,65 +196,48 @@ public:
     bool handleKeyDown(int keycode);
 #endif
 
-    // ─── Measure / Layout ───────────────────────────────────────────────
-
-    float preferredHeight() const { return Theme::kTransportBarHeight; }
-
-    Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, Theme::kTransportBarHeight});
-    }
-
-#ifdef YAWN_TEST_BUILD
-    void layout(const Rect& bounds, const UIContext&) override { m_bounds = bounds; }
-#else
-    void layout(const Rect& bounds, const UIContext& ctx) override;
-#endif
-
-    // ─── Rendering ──────────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
-#else
-    void paint(UIContext& ctx) override;
-#endif
-
-    // ─── Mouse events ───────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    bool onMouseDown(MouseEvent&) override { return false; }
-    bool onMouseMove(MouseMoveEvent&) override { return false; }
-#else
-    bool onMouseDown(MouseEvent& e) override;
-    bool onMouseMove(MouseMoveEvent& e) override;
-#endif
-
-    bool onMouseUp(MouseEvent& e) override {
-        // All v2 widgets (button, toggle, number inputs) release
-        // through the m_v2Dragging path.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseUp(ev);
-            m_v2Dragging = nullptr;
-            releaseMouse();
-            return true;
-        }
-        return false;
-    }
-
-    // Tap tempo — callable from controller scripts
+    // Tap tempo — callable from controller scripts.
 #ifdef YAWN_TEST_BUILD
     void tapTempo() {}
 #else
     void tapTempo();
 #endif
 
-private:
-    bool hitTestChild(Widget& child, float mx, float my) {
-        auto& b = child.bounds();
-        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+    float preferredHeight() const { return ::yawn::ui::Theme::kTransportBarHeight; }
+
+protected:
+    // ─── fw2 Widget overrides ───────────────────────────────────────
+    Size onMeasure(Constraints c, UIContext&) override {
+        return c.constrain({c.maxW, ::yawn::ui::Theme::kTransportBarHeight});
     }
 
-    bool hitBtn(float bx, float by, float bw, float bh, float mx, float my) {
+#ifdef YAWN_TEST_BUILD
+    void onLayout(Rect, UIContext&) override {}
+#else
+    void onLayout(Rect bounds, UIContext& ctx) override;
+#endif
+
+#ifdef YAWN_TEST_BUILD
+    bool onMouseDown(MouseEvent&)     override { return false; }
+    bool onMouseMove(MouseMoveEvent&) override { return false; }
+#else
+    bool onMouseDown(MouseEvent& e)     override;
+    bool onMouseMove(MouseMoveEvent& e) override;
+#endif
+
+public:
+    // Public render override: paints chrome + delegates to child
+    // widgets. Overrides default Widget::render so we can paint the
+    // panel background, transport buttons, meters, etc. BEFORE child
+    // widgets, then recurse into children at the end.
+#ifdef YAWN_TEST_BUILD
+    void render(UIContext&) override {}
+#else
+    void render(UIContext& ctx) override;
+#endif
+
+private:
+    bool hitBtn(float bx, float by, float bw, float bh, float mx, float my) const {
         return mx >= bx && mx <= bx + bw && my >= by && my <= by + bh;
     }
 
@@ -259,8 +247,12 @@ private:
     void paintTransportButtons(Renderer2D& r);
 #endif
 
-    // ─── Data ───────────────────────────────────────────────────────────
+    void openTransportLearnMenu(float mx, float my,
+                                const automation::AutomationTarget& target,
+                                float paramMin, float paramMax,
+                                std::function<void()> resetAction);
 
+    // ─── Data ───────────────────────────────────────────────────────
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
@@ -272,33 +264,28 @@ private:
     int    m_transportNumerator   = 4;
     int    m_transportDenominator = 4;
 
-    // Child widgets
-    ::yawn::ui::fw2::FwNumberInput m_bpmInput;
-    ::yawn::ui::fw2::FwNumberInput m_tsNumInput;
-    ::yawn::ui::fw2::FwNumberInput m_tsDenInput;
-    ::yawn::ui::fw2::FwButton m_tapBtn;
-    ::yawn::ui::fw2::FwToggle m_metroBtn;
-    Label         m_posLabel;
-    Label         m_countInLabel;
-    Label         m_bpmLabel;
-    Label         m_slashLabel;
+    // Child widgets (value-typed). All fw2, no bridging required.
+    FwNumberInput m_bpmInput;
+    FwNumberInput m_tsNumInput;
+    FwNumberInput m_tsDenInput;
+    FwButton      m_tapBtn;
+    FwToggle      m_metroBtn;
 
-    // Tracks which v2 widget currently owns a drag — set in
-    // onMouseDown, used by onMouseMove/Up to forward translated
-    // events back to the fw2 gesture SM. Null when no v2 drag.
-    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
+    // Cached label text (generated per-frame).
+    std::string m_posText;
 
-    // Centered transport button positions
+    // Centered transport button positions.
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;
     float m_playBtnX = 0, m_playBtnY = 0, m_playBtnW = 0, m_playBtnH = 0;
     float m_recBtnX  = 0, m_recBtnY  = 0, m_recBtnW  = 0, m_recBtnH  = 0;
 
-    // Widget box positions (for double-click detection)
+    // BPM/TimeSig box positions — used by handleDoubleClick + MIDI-Learn
+    // right-click hit-testing.
     float m_bpmBoxX = 0, m_bpmBoxY = 0, m_bpmBoxW = 0, m_bpmBoxH = 0;
     float m_tsNumBoxX = 0, m_tsNumBoxY = 0, m_tsNumBoxW = 0, m_tsNumBoxH = 0;
     float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
 
-    // Hover state
+    // Hover state (transport buttons).
     int m_hoveredBtn = -1;  // 0=stop, 1=play, 2=record, -1=none
 
     static constexpr int kTapHistorySize = 4;
@@ -314,15 +301,11 @@ private:
     float  m_recPulse = 0.0f;
     bool   m_metronomeOn = false;
     int    m_metroVisualStyle = 0; // 0=Dots, 1=Beat Number
-    float  m_metroDotX = 0.0f;  // X position for visual metronome dots
+    float  m_metroDotX = 0.0f;
     float  m_metroDotY = 0.0f;
 
-    // "Last seen" engine values — setTransportState syncs UI from
-    // engine ONLY when the engine value changed since the previous
-    // frame. That way a user tap (UI → sendCommand, engine queue
-    // processes later) isn't rubber-banded by the intervening frame
-    // seeing the stale engine value. The `*Synced` bools are the
-    // first-frame guards so initial state takes from the engine.
+    // "Last seen" engine values — see setTransportState's comment for
+    // the rubber-banding rationale.
     double m_lastSeenEngineBpm         = 0.0;
     int    m_lastSeenEngineNumerator   = 0;
     int    m_lastSeenEngineDenominator = 0;
@@ -331,20 +314,14 @@ private:
     bool   m_tsSynced                  = false;
     bool   m_metSynced                 = false;
 
-    // Performance meters
-    float  m_cpuLoad = 0.0f;       // smoothed CPU load (0-1)
-    float  m_memoryMB = 0.0f;      // smoothed memory in MB
+    // Performance meters (smoothed).
+    float  m_cpuLoad = 0.0f;
+    float  m_memoryMB = 0.0f;
     int    m_meterUpdateCounter = 0;
 
-    // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;
-
-    void openTransportLearnMenu(float mx, float my,
-                                const automation::AutomationTarget& target,
-                                float paramMin, float paramMax,
-                                std::function<void()> resetAction);
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

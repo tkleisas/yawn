@@ -1,17 +1,17 @@
-// TransportPanel.cpp — rendering and event implementations.
-// Ableton-style layout: BPM+TimeSig left, centered Stop|Play|Record, position right.
+// TransportPanel.cpp — UI v2 rendering + event implementations.
 
 #include "TransportPanel.h"
 #include "app/Project.h"
 #include "../Renderer.h"
 #include "../Font.h"
 #include "ui/framework/v2/V1MenuBridge.h"
+#include "ui/framework/v2/Theme.h"
 #include "util/SystemInfo.h"
 #include <SDL3/SDL.h>
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 void TransportPanel::setTransportState(bool playing, double beats, double bpm,
                                        int numerator, int denominator) {
@@ -22,35 +22,24 @@ void TransportPanel::setTransportState(bool playing, double beats, double bpm,
     m_transportDenominator = denominator;
 
     // Sync from engine — but ONLY when the engine value CHANGED since
-    // the last frame. The tap/metronome feedback loop happens because
-    // sendCommand is async: when the UI sets BPM=180 and sends a
-    // command, the engine still reports bpm()=120 for 1-2 frames
-    // until the queue drains. If we unconditionally `setValue(120)`
-    // each frame, it (a) visually reverts the tap and (b) fires
-    // onChange → sendCommand(120), overwriting the tap at the audio
-    // thread too. Tracking `last seen engine value` means we only
-    // push engine → UI when some OTHER source moved the engine
-    // (automation, MIDI controller, MIDI Learn, scripting). Between
-    // those events the widget's own state wins.
-    //
-    // Use ::yawn::ui::fw2::ValueChangeSource::Automation belt-and-suspenders so even
-    // if a sync does fire, it doesn't feedback-send another command.
+    // the last frame. See TransportPanel's header comment + the
+    // "last seen" state block for the rubber-banding rationale that
+    // made this necessary.
     if (bpm != m_lastSeenEngineBpm || !m_bpmSynced) {
-        m_bpmInput.setValue(static_cast<float>(bpm), ::yawn::ui::fw2::ValueChangeSource::Automation);
+        m_bpmInput.setValue(static_cast<float>(bpm), ValueChangeSource::Automation);
         m_lastSeenEngineBpm = bpm;
         m_bpmSynced = true;
     }
     if (numerator != m_lastSeenEngineNumerator || !m_tsSynced) {
-        m_tsNumInput.setValue(static_cast<float>(numerator), ::yawn::ui::fw2::ValueChangeSource::Automation);
+        m_tsNumInput.setValue(static_cast<float>(numerator), ValueChangeSource::Automation);
         m_lastSeenEngineNumerator = numerator;
     }
     if (denominator != m_lastSeenEngineDenominator || !m_tsSynced) {
-        m_tsDenInput.setValue(static_cast<float>(denominator), ::yawn::ui::fw2::ValueChangeSource::Automation);
+        m_tsDenInput.setValue(static_cast<float>(denominator), ValueChangeSource::Automation);
         m_lastSeenEngineDenominator = denominator;
     }
     m_tsSynced = true;
 
-    // Metronome sync — same approach.
     if (m_engine) {
         const bool engineMet = m_engine->metronome().enabled();
         if (engineMet != m_lastSeenEngineMetronome || !m_metSynced) {
@@ -67,16 +56,11 @@ void TransportPanel::setTransportState(bool playing, double beats, double bpm,
     int sub  = static_cast<int>((beatInBar - std::floor(beatInBar)) * 100.0) % 100;
     char posBuf[32];
     std::snprintf(posBuf, sizeof(posBuf), "%d . %d . %02d", bar, beat, sub);
-    m_posLabel.setText(posBuf);
-
-    m_countInLabel.setText("");
+    m_posText = posBuf;
 }
 
 bool TransportPanel::handleKeyDown(int keycode) {
     // SDL keycodes: 13 = Enter, 27 = Escape, 8 = Backspace, 9 = Tab.
-    // v2 FwNumberInput absorbs Enter/Escape/Backspace internally; Tab
-    // is panel-level policy (move focus to the next field) so we
-    // handle it here.
     auto* editing = m_bpmInput.isEditing()   ? &m_bpmInput
                   : m_tsNumInput.isEditing() ? &m_tsNumInput
                   : m_tsDenInput.isEditing() ? &m_tsDenInput
@@ -84,155 +68,126 @@ bool TransportPanel::handleKeyDown(int keycode) {
     if (!editing) return false;
 
     if (keycode == 9) {
-        // Tab: commit current field, jump to the next in the chain.
         editing->endEdit(/*commit*/true);
         if (editing == &m_bpmInput)        m_tsNumInput.beginEdit();
         else if (editing == &m_tsNumInput) m_tsDenInput.beginEdit();
-        // Else: already on the last field — just commit, no advance.
         return true;
     }
 
-    ::yawn::ui::fw2::KeyEvent ke;
+    KeyEvent ke{};
     switch (keycode) {
-        case 27: ke.key = ::yawn::ui::fw2::Key::Escape;    break;
-        case 13: ke.key = ::yawn::ui::fw2::Key::Enter;     break;
-        case 8:  ke.key = ::yawn::ui::fw2::Key::Backspace; break;
-        default: return true;   // swallow other keys while editing
+        case 27: ke.key = Key::Escape;    break;
+        case 13: ke.key = Key::Enter;     break;
+        case 8:  ke.key = Key::Backspace; break;
+        default: return true;
     }
     editing->dispatchKeyDown(ke);
     return true;
 }
 
-// ─── Layout ─────────────────────────────────────────────────────────────────
+// ─── Layout ───────────────────────────────────────────────────────
 
-void TransportPanel::layout(const Rect& bounds, const UIContext& ctx) {
-    m_bounds = bounds;
-
+void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     constexpr float btnSize = 36.0f;
     constexpr float btnGap  = 4.0f;
-    float y = bounds.y;
-    float h = Theme::kTransportBarHeight;
-    float btnY = y + (h - btnSize) * 0.5f;
-    float boxH = btnSize;
+    const float y = bounds.y;
+    const float h = ::yawn::ui::Theme::kTransportBarHeight;
+    const float btnY = y + (h - btnSize) * 0.5f;
+    const float boxH = btnSize;
 
     // ── Left group: BPM + TimeSig + TAP ──
     float lx = bounds.x + 12.0f;
 
-    // All numeric inputs + the TAP/MET buttons are v2 widgets; layout
-    // them against the fw2 UIContext.
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-
     // BPM input
-    float bpmW = 80.0f;
+    const float bpmW = 80.0f;
     m_bpmBoxX = lx; m_bpmBoxY = btnY; m_bpmBoxW = bpmW; m_bpmBoxH = boxH;
-    m_bpmInput.layout(Rect{lx, btnY, bpmW, boxH}, v2ctx);
+    m_bpmInput.measure(Constraints::tight(bpmW, boxH), ctx);
+    m_bpmInput.layout(Rect{lx, btnY, bpmW, boxH}, ctx);
     lx += bpmW + 4.0f;
 
-    // BPM label
-    m_bpmLabel.layout(Rect{lx, btnY, 32, boxH}, ctx);
-    lx += 32 + 8.0f;
+    // BPM label ("BPM" static text — painted inline in render())
+    lx += 32.0f + 8.0f;
 
     // Separator
-    float sep1X = lx;
     lx += 12.0f;
 
     // Time sig numerator
-    float tsBoxW = 28.0f;
+    const float tsBoxW = 28.0f;
     m_tsNumBoxX = lx; m_tsNumBoxY = btnY; m_tsNumBoxW = tsBoxW; m_tsNumBoxH = boxH;
-    m_tsNumInput.layout(Rect{lx, btnY, tsBoxW, boxH}, v2ctx);
+    m_tsNumInput.measure(Constraints::tight(tsBoxW, boxH), ctx);
+    m_tsNumInput.layout(Rect{lx, btnY, tsBoxW, boxH}, ctx);
     lx += tsBoxW + 2.0f;
 
-    // Slash
-    m_slashLabel.setText("/");
-    m_slashLabel.layout(Rect{lx, btnY, 10, boxH}, ctx);
-    lx += 10 + 2.0f;
+    // "/" separator (painted inline)
+    lx += 10.0f + 2.0f;
 
     // Denominator
     m_tsDenBoxX = lx; m_tsDenBoxY = btnY; m_tsDenBoxW = tsBoxW; m_tsDenBoxH = boxH;
-    m_tsDenInput.layout(Rect{lx, btnY, tsBoxW, boxH}, v2ctx);
+    m_tsDenInput.measure(Constraints::tight(tsBoxW, boxH), ctx);
+    m_tsDenInput.layout(Rect{lx, btnY, tsBoxW, boxH}, ctx);
     lx += tsBoxW + 8.0f;
 
     // Separator
-    float sep2X = lx;
     lx += 12.0f;
 
-    // TAP button — v2 FwButton, layout via fw2 UIContext.
-    float tapW = 42.0f;
-    m_tapBtn.layout(Rect{lx, btnY, tapW, boxH}, v2ctx);
+    // TAP button
+    const float tapW = 42.0f;
+    m_tapBtn.measure(Constraints::tight(tapW, boxH), ctx);
+    m_tapBtn.layout(Rect{lx, btnY, tapW, boxH}, ctx);
     lx += tapW + 8.0f;
 
-    // Metronome toggle — v2 FwToggle.
-    float metW = (m_countInBars > 0) ? 62.0f : 42.0f;
-    m_metroBtn.layout(Rect{lx, btnY, metW, boxH}, v2ctx);
+    // Metronome toggle
+    const float metW = (m_countInBars > 0) ? 62.0f : 42.0f;
+    m_metroBtn.measure(Constraints::tight(metW, boxH), ctx);
+    m_metroBtn.layout(Rect{lx, btnY, metW, boxH}, ctx);
     m_metroDotX = lx + metW + 6.0f;
     m_metroDotY = btnY + boxH * 0.5f;
 
-    // ── Center group: Stop | Play | Record (centered in full width) ──
-    float totalBtnW = 3 * btnSize + 2 * btnGap;
-    float centerX = bounds.x + (bounds.w - totalBtnW) * 0.5f;
+    // ── Center group: Stop | Play | Record ──
+    const float totalBtnW = 3 * btnSize + 2 * btnGap;
+    const float centerX = bounds.x + (bounds.w - totalBtnW) * 0.5f;
 
-    m_stopBtnX = centerX;
-    m_stopBtnY = btnY;
-    m_stopBtnW = btnSize;
-    m_stopBtnH = btnSize;
-
-    m_playBtnX = centerX + btnSize + btnGap;
-    m_playBtnY = btnY;
-    m_playBtnW = btnSize;
-    m_playBtnH = btnSize;
-
-    m_recBtnX = centerX + 2 * (btnSize + btnGap);
-    m_recBtnY = btnY;
-    m_recBtnW = btnSize;
-    m_recBtnH = btnSize;
-
-    // ── Right group: Position display ──
-    float posW = 160.0f;
-    float posX = bounds.x + bounds.w - posW - 12.0f;
-    m_posLabel.layout(Rect{posX, btnY, posW, boxH}, ctx);
-    m_posLabel.setColor(Theme::transportAccent);
-    m_posLabel.setFontScale(0);
-
-    // Count-in indicator
-    m_countInLabel.layout(Rect{posX - 60, btnY, 54, boxH}, ctx);
-    m_countInLabel.setColor(Theme::textDim);
-    m_countInLabel.setFontScale(0);
+    m_stopBtnX = centerX;                         m_stopBtnY = btnY;
+    m_stopBtnW = btnSize;                          m_stopBtnH = btnSize;
+    m_playBtnX = centerX + btnSize + btnGap;       m_playBtnY = btnY;
+    m_playBtnW = btnSize;                          m_playBtnH = btnSize;
+    m_recBtnX  = centerX + 2 * (btnSize + btnGap); m_recBtnY  = btnY;
+    m_recBtnW  = btnSize;                          m_recBtnH  = btnSize;
 }
 
-// ─── Paint ──────────────────────────────────────────────────────────────────
+// ─── Render ────────────────────────────────────────────────────────
 
-void TransportPanel::paint(UIContext& ctx) {
+void TransportPanel::render(UIContext& ctx) {
+    if (!m_visible) return;
+    if (!ctx.renderer || !ctx.textMetrics) return;
     if (!m_engine) return;
-    auto& r = *ctx.renderer;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
-    float x = m_bounds.x, y = m_bounds.y;
-    float w = m_bounds.w;
-    float h = Theme::kTransportBarHeight;
+    const float x = m_bounds.x, y = m_bounds.y;
+    const float w = m_bounds.w;
+    const float h = ::yawn::ui::Theme::kTransportBarHeight;
 
     // Background
-    r.drawRect(x, y, w, h, Theme::transportBg);
-    r.drawRect(x, y + h - 1, w, 1, Theme::clipSlotBorder);
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::transportBg);
+    r.drawRect(x, y + h - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
 
     // Transport buttons (center)
     paintTransportButtons(r);
 
     // CC labels for mapped transport controls
     if (m_learnManager) {
-        auto& font = *ctx.font;
-        float ccScale = 7.0f / Theme::kFontSize;
-        Color ccCol{100, 180, 255};
-
+        const float ccSize = 7.0f;
+        const Color ccCol{100, 180, 255, 255};
         auto drawCCLabel = [&](float bx, float by, float bw, float bh,
                                const automation::AutomationTarget& target) {
             auto* mapping = m_learnManager->findByTarget(target);
-            if (mapping) {
-                auto lbl = mapping->label();
-                float tw = font.textWidth(lbl.c_str(), ccScale);
-                float labelH = Theme::kFontSize * ccScale;
-                font.drawText(r, lbl.c_str(), bx + (bw - tw) * 0.5f, by - labelH - 1, ccScale, ccCol);
-            }
+            if (!mapping) return;
+            auto lbl = mapping->label();
+            const float tw = tm.textWidth(lbl, ccSize);
+            const float lh = tm.lineHeight(ccSize);
+            tm.drawText(r, lbl, bx + (bw - tw) * 0.5f, by - lh - 1, ccSize, ccCol);
         };
-
         using TP = automation::TransportParam;
         drawCCLabel(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH,
                     automation::AutomationTarget::transport(TP::Stop));
@@ -244,28 +199,51 @@ void TransportPanel::paint(UIContext& ctx) {
                     automation::AutomationTarget::transport(TP::BPM));
     }
 
-    // v2 inputs + buttons render through the fw2 UIContext.
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+    // Inline text sizes pulled from the fw2 theme so they track the
+    // UI font-scale setting (Preferences → Theme) like everything
+    // else.
+    const ThemeMetrics& tmet = theme().metrics;
+    const float textScale = tmet.fontSizeSmall;
+    const Color textCol = ::yawn::ui::Theme::textPrimary;
+    const Color dimCol  = ::yawn::ui::Theme::clipSlotBorder;
 
-    // Left group widgets
-    m_bpmInput.render(v2ctx);
-    m_bpmLabel.paint(ctx);
+    // Left-group widgets.
+    m_bpmInput.render(ctx);
 
-    // Separator after BPM
-    float sep1X = m_bpmBoxX + m_bpmBoxW + 36.0f;
-    r.drawRect(sep1X, y + 8, 1, h - 16, Theme::clipSlotBorder);
+    // "BPM" static label next to the input.
+    {
+        const float lh = tm.lineHeight(textScale);
+        tm.drawText(r, "BPM",
+                    m_bpmBoxX + m_bpmBoxW + 4.0f,
+                    m_bpmBoxY + (m_bpmBoxH - lh) * 0.5f,
+                    textScale, textCol);
+    }
 
-    // Time sig
-    m_tsNumInput.render(v2ctx);
-    m_slashLabel.paint(ctx);
-    m_tsDenInput.render(v2ctx);
+    // Separator after BPM block.
+    {
+        const float sepX = m_bpmBoxX + m_bpmBoxW + 36.0f;
+        r.drawRect(sepX, y + 8, 1, h - 16, dimCol);
+    }
 
-    // Separator after time sig
-    float sep2X = m_tsDenBoxX + m_tsDenBoxW + 8.0f;
-    r.drawRect(sep2X, y + 8, 1, h - 16, Theme::clipSlotBorder);
+    // Time sig inputs + slash.
+    m_tsNumInput.render(ctx);
+    {
+        const float slashSize = tmet.fontSize;
+        const float lh = tm.lineHeight(slashSize);
+        tm.drawText(r, "/",
+                    m_tsNumBoxX + m_tsNumBoxW + 4.0f,
+                    m_tsNumBoxY + (m_tsNumBoxH - lh) * 0.5f,
+                    slashSize, textCol);
+    }
+    m_tsDenInput.render(ctx);
 
-    // TAP button — v2 FwButton with flash. Flash expressed via accent
-    // highlight (pulse on tap). render through the fw2 UIContext.
+    // Separator after time sig.
+    {
+        const float sepX = m_tsDenBoxX + m_tsDenBoxW + 8.0f;
+        r.drawRect(sepX, y + 8, 1, h - 16, dimCol);
+    }
+
+    // TAP button with flash effect.
     m_tapFlash = std::max(0.0f, m_tapFlash - 1.0f / 15.0f);
     if (m_tapFlash > 0.01f) {
         uint8_t fR = static_cast<uint8_t>(40 + m_tapFlash * 60);
@@ -275,9 +253,9 @@ void TransportPanel::paint(UIContext& ctx) {
     } else {
         m_tapBtn.setHighlighted(false);
     }
-    m_tapBtn.render(v2ctx);
+    m_tapBtn.render(ctx);
 
-    // Metronome toggle — v2 FwToggle. Label includes count-in count.
+    // Metronome toggle (label + state).
     if (m_countInBars > 0) {
         char metLabel[16];
         std::snprintf(metLabel, sizeof(metLabel), "MET %d", m_countInBars);
@@ -285,172 +263,170 @@ void TransportPanel::paint(UIContext& ctx) {
     } else {
         m_metroBtn.setLabel("MET");
     }
-    m_metroBtn.setAccentColor(Color{60, 90, 140});
+    m_metroBtn.setAccentColor(Color{60, 90, 140, 255});
     m_metroBtn.setState(m_metronomeOn);
-    m_metroBtn.render(v2ctx);
+    m_metroBtn.render(ctx);
 
-    // Visual metronome next to MET button
+    // Visual metronome dots / number next to MET.
     if (m_metronomeOn && (m_transportPlaying || m_countingIn)) {
-        int bpb = std::max(1, m_transportNumerator);
-        double beats = m_countingIn ? m_countInBeats : m_transportBeats;
-        int currentBeat = static_cast<int>(std::fmod(beats, static_cast<double>(bpb)));
-        double beatFrac = std::fmod(beats, 1.0);
-        float flash = std::max(0.0f, 1.0f - static_cast<float>(beatFrac) * 4.0f);
+        const int bpb = std::max(1, m_transportNumerator);
+        const double beats = m_countingIn ? m_countInBeats : m_transportBeats;
+        const int currentBeat = static_cast<int>(std::fmod(beats, static_cast<double>(bpb)));
+        const double beatFrac = std::fmod(beats, 1.0);
+        const float flash = std::max(0.0f, 1.0f - static_cast<float>(beatFrac) * 4.0f);
 
         if (m_metroVisualStyle == 1) {
-            // Big beat number display
             char numBuf[4];
             std::snprintf(numBuf, sizeof(numBuf), "%d", currentBeat + 1);
-            float numScale = 22.0f / Theme::kFontSize;
-            float numW = ctx.font->textWidth(numBuf, numScale);
-            float numH = ctx.font->lineHeight(numScale);
-            float nx = m_metroDotX + 2;
-            float ny = m_metroDotY - numH * 0.5f;
-            uint8_t bright = static_cast<uint8_t>(140 + flash * 115);
-            Color numCol = (currentBeat == 0)
-                ? Color{bright, static_cast<uint8_t>(bright / 2), 50}
-                : Color{80, static_cast<uint8_t>(bright), bright};
-            ctx.font->drawText(r, numBuf, nx, ny, numScale, numCol);
+            const float numSize = 22.0f;
+            const float numW = tm.textWidth(numBuf, numSize);
+            (void)numW;
+            const float numH = tm.lineHeight(numSize);
+            const float nx = m_metroDotX + 2;
+            const float ny = m_metroDotY - numH * 0.5f;
+            const uint8_t bright = static_cast<uint8_t>(140 + flash * 115);
+            const Color numCol = (currentBeat == 0)
+                ? Color{bright, static_cast<uint8_t>(bright / 2), 50, 255}
+                : Color{80, static_cast<uint8_t>(bright), bright, 255};
+            tm.drawText(r, numBuf, nx, ny, numSize, numCol);
         } else {
-            // Dots style
-            float dotR = 4.0f;
-            float dotGap = 12.0f;
+            const float dotR = 4.0f;
+            const float dotGap = 12.0f;
             for (int i = 0; i < bpb && i < 16; ++i) {
-                float dx = m_metroDotX + i * dotGap;
-                float dy = m_metroDotY;
+                const float dx = m_metroDotX + i * dotGap;
+                const float dy = m_metroDotY;
                 if (i == currentBeat) {
                     uint8_t bright = static_cast<uint8_t>(120 + flash * 135);
                     Color col = (i == 0)
-                        ? Color{bright, static_cast<uint8_t>(bright / 2), 50}
-                        : Color{80, static_cast<uint8_t>(bright), bright};
+                        ? Color{bright, static_cast<uint8_t>(bright / 2), 50, 255}
+                        : Color{80, static_cast<uint8_t>(bright), bright, 255};
                     r.drawFilledCircle(dx, dy, dotR + flash * 2.0f, col, 12);
                 } else {
-                    Color dim = (i == 0) ? Color{80, 50, 30} : Color{50, 60, 65};
+                    Color dim = (i == 0) ? Color{80, 50, 30, 255} : Color{50, 60, 65, 255};
                     r.drawFilledCircle(dx, dy, dotR, dim, 12);
                 }
             }
         }
     }
 
-    // Right group
-    m_posLabel.paint(ctx);
+    // Right-aligned position display.
+    if (!m_posText.empty()) {
+        const float posSize = tmet.fontSizeLarge;
+        const float tw = tm.textWidth(m_posText, posSize);
+        const float lh = tm.lineHeight(posSize);
+        const float posX = m_bounds.x + m_bounds.w - 160.0f - 12.0f + (160.0f - tw);
+        tm.drawText(r, m_posText, posX, y + (h - lh) * 0.5f,
+                    posSize, ::yawn::ui::Theme::transportAccent);
+    }
 
-    // ── Performance meters (CPU / MEM) ──
+    // Performance meters (CPU / MEM).
     {
-        // Update readings every ~30 frames to avoid per-frame system calls
         if (++m_meterUpdateCounter >= 30) {
             m_meterUpdateCounter = 0;
-            float rawCpu = static_cast<float>(m_engine->cpuLoad());
-            float rawMem = util::processMemoryMB();
-            // Smooth with exponential moving average
+            const float rawCpu = static_cast<float>(m_engine->cpuLoad());
+            const float rawMem = util::processMemoryMB();
             m_cpuLoad  = m_cpuLoad  * 0.7f + rawCpu * 0.3f;
             m_memoryMB = m_memoryMB * 0.7f + rawMem * 0.3f;
         }
 
-        float meterScale = 9.0f / Theme::kFontSize;
-        float lineH = ctx.font->lineHeight(meterScale);
-        float rightEdge = m_bounds.x + m_bounds.w - 160.0f - 12.0f;  // posLabel X
+        const float meterSize = tmet.fontSizeSmall;
+        const float lineH = tm.lineHeight(meterSize);
+        const float rightEdge = m_bounds.x + m_bounds.w - 160.0f - 12.0f;
 
-        // CPU meter
         char cpuBuf[16];
-        int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
+        const int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
         std::snprintf(cpuBuf, sizeof(cpuBuf), "CPU %d%%", cpuPct);
-        Color cpuCol = (cpuPct > 80) ? Color{255, 80, 60, 255}
-                     : (cpuPct > 50) ? Color{255, 200, 60, 255}
-                     :                 Color{120, 130, 140, 255};
-        float cpuW = ctx.font->textWidth(cpuBuf, meterScale);
-        float meterX = rightEdge - cpuW - 16.0f;
-        float meterY = y + (h - lineH * 2 - 2) * 0.5f;
-        ctx.font->drawText(r, cpuBuf, meterX, meterY, meterScale, cpuCol);
+        const Color cpuCol = (cpuPct > 80) ? Color{255, 80, 60, 255}
+                           : (cpuPct > 50) ? Color{255, 200, 60, 255}
+                           :                 Color{120, 130, 140, 255};
+        const float cpuW = tm.textWidth(cpuBuf, meterSize);
+        const float meterX = rightEdge - cpuW - 16.0f;
+        const float meterY = y + (h - lineH * 2 - 2) * 0.5f;
+        tm.drawText(r, cpuBuf, meterX, meterY, meterSize, cpuCol);
 
-        // Memory meter
         char memBuf[24];
         if (m_memoryMB >= 1024.0f)
             std::snprintf(memBuf, sizeof(memBuf), "MEM %.1fG", m_memoryMB / 1024.0f);
         else
             std::snprintf(memBuf, sizeof(memBuf), "MEM %.0fM", m_memoryMB);
-        float memW = ctx.font->textWidth(memBuf, meterScale);
-        float memX = meterX + (cpuW - memW) * 0.5f;
-        ctx.font->drawText(r, memBuf, memX, meterY + lineH + 2, meterScale,
-                           Color{120, 130, 140, 255});
+        const float memW = tm.textWidth(memBuf, meterSize);
+        const float memX = meterX + (cpuW - memW) * 0.5f;
+        tm.drawText(r, memBuf, memX, meterY + lineH + 2, meterSize,
+                    Color{120, 130, 140, 255});
     }
-
-    // v1 context menu retired — fw2::ContextMenu paints via LayerStack.
 }
 
-// ─── Transport Buttons ──────────────────────────────────────────────────────
+// ─── Transport Buttons (immediate-mode) ────────────────────────────
 
 void TransportPanel::paintTransportButtons(Renderer2D& r) {
     constexpr float cornerR = 4.0f;
 
-    // ── Stop button ──
+    // Stop
     {
-        bool hovered = (m_hoveredBtn == 0);
-        Color bg = m_transportPlaying
-            ? (hovered ? Color{48,48,52} : Color{38,38,41})
-            : (hovered ? Color{60,60,65} : Color{50,50,55});
+        const bool hovered = (m_hoveredBtn == 0);
+        const Color bg = m_transportPlaying
+            ? (hovered ? Color{48,48,52,255} : Color{38,38,41,255})
+            : (hovered ? Color{60,60,65,255} : Color{50,50,55,255});
         r.drawRoundedRect(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, cornerR, bg);
-        Color ic = m_transportPlaying ? Color{140,140,140} : Color{255,255,255};
-        float cx = m_stopBtnX + m_stopBtnW * 0.5f;
-        float cy = m_stopBtnY + m_stopBtnH * 0.5f;
-        float half = 5.0f;
+        const Color ic = m_transportPlaying ? Color{140,140,140,255}
+                                             : Color{255,255,255,255};
+        const float cx = m_stopBtnX + m_stopBtnW * 0.5f;
+        const float cy = m_stopBtnY + m_stopBtnH * 0.5f;
+        const float half = 5.0f;
         r.drawRect(cx - half, cy - half, half * 2, half * 2, ic);
     }
 
-    // ── Play button ──
+    // Play
     {
-        bool hovered = (m_hoveredBtn == 1);
-        Color bg = m_transportPlaying
-            ? (hovered ? Color{35,75,35} : Color{30,60,30})
-            : (hovered ? Color{48,48,52} : Color{38,38,41});
+        const bool hovered = (m_hoveredBtn == 1);
+        const Color bg = m_transportPlaying
+            ? (hovered ? Color{35,75,35,255} : Color{30,60,30,255})
+            : (hovered ? Color{48,48,52,255} : Color{38,38,41,255});
         r.drawRoundedRect(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH, cornerR, bg);
-        Color ic = m_transportPlaying ? Color{80,230,80} : Color{160,160,160};
-        float cx = m_playBtnX + m_playBtnW * 0.5f;
-        float cy = m_playBtnY + m_playBtnH * 0.5f;
-        float triH = 12.0f;
-        float triW = 10.0f;
+        const Color ic = m_transportPlaying ? Color{80,230,80,255}
+                                             : Color{160,160,160,255};
+        const float cx = m_playBtnX + m_playBtnW * 0.5f;
+        const float cy = m_playBtnY + m_playBtnH * 0.5f;
+        const float triH = 12.0f, triW = 10.0f;
         r.drawTriangle(cx - triW * 0.4f, cy - triH * 0.5f,
                         cx - triW * 0.4f, cy + triH * 0.5f,
                         cx + triW * 0.6f, cy, ic);
     }
 
-    // ── Record button ──
+    // Record
     {
-        bool hovered = (m_hoveredBtn == 2);
+        const bool hovered = (m_hoveredBtn == 2);
         Color bg;
         if (m_countingIn) {
             m_recPulse += 0.1f;
-            float pulse = (std::sin(m_recPulse * 6.0f) + 1.0f) * 0.5f;
-            bg = Color{static_cast<uint8_t>(120 + static_cast<int>(pulse * 80)), 30, 30};
+            const float pulse = (std::sin(m_recPulse * 6.0f) + 1.0f) * 0.5f;
+            bg = Color{static_cast<uint8_t>(120 + static_cast<int>(pulse * 80)), 30, 30, 255};
         } else if (m_recording) {
-            bg = hovered ? Color{220,50,50} : Color{200,40,40};
+            bg = hovered ? Color{220,50,50,255} : Color{200,40,40,255};
         } else {
-            bg = hovered ? Color{75,35,35} : Color{60,30,30};
+            bg = hovered ? Color{75,35,35,255} : Color{60,30,30,255};
         }
         r.drawRoundedRect(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH, cornerR, bg);
-
-        Color dc = m_recording ? Color{255,100,100} : Color{200,60,60};
-        float cx = m_recBtnX + m_recBtnW * 0.5f;
-        float cy = m_recBtnY + m_recBtnH * 0.5f;
+        const Color dc = m_recording ? Color{255,100,100,255} : Color{200,60,60,255};
+        const float cx = m_recBtnX + m_recBtnW * 0.5f;
+        const float cy = m_recBtnY + m_recBtnH * 0.5f;
         r.drawFilledCircle(cx, cy, 6.0f, dc, 20);
-
         if (m_countingIn) {
-            float progW = m_recBtnW * static_cast<float>(m_countInProgress);
-            r.drawRect(m_recBtnX, m_recBtnY + m_recBtnH - 3, progW, 3, Color{255,100,100});
+            const float progW = m_recBtnW * static_cast<float>(m_countInProgress);
+            r.drawRect(m_recBtnX, m_recBtnY + m_recBtnH - 3, progW, 3,
+                        Color{255,100,100,255});
         }
     }
 }
 
-// ─── Mouse events ───────────────────────────────────────────────────────────
+// ─── Mouse events ──────────────────────────────────────────────────
 
 bool TransportPanel::onMouseDown(MouseEvent& e) {
     if (!m_engine) return false;
-    float mx = e.x, my = e.y;
-    bool rightClick = (e.button == MouseButton::Right);
+    const float mx = e.x, my = e.y;
+    const bool rightClick = (e.button == MouseButton::Right);
 
-    // v1 context menu retired — LayerStack intercepts upstream.
-
-    // Right-click on transport buttons opens MIDI Learn menu
+    // Right-click on transport buttons → MIDI Learn menu.
     if (rightClick && m_learnManager) {
         using namespace automation;
         if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) {
@@ -476,17 +452,14 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         }
     }
 
-    // Left-click only below this point
     if (rightClick) return false;
 
-    // Stop
+    // Transport buttons.
     if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) {
         m_engine->sendCommand(audio::TransportStopMsg{});
         m_engine->sendCommand(audio::TransportSetPositionMsg{0});
         return true;
     }
-
-    // Play
     if (hitBtn(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH, mx, my)) {
         if (m_transportPlaying)
             m_engine->sendCommand(audio::TransportStopMsg{});
@@ -494,55 +467,31 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
             m_engine->sendCommand(audio::TransportPlayMsg{});
         return true;
     }
-
-    // Record
     if (hitBtn(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH, mx, my)) {
-        bool newState = !m_recording;
+        const bool newState = !m_recording;
         m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
         return true;
     }
 
-    // Numeric inputs — v2 widgets. Route through the v1→v2 bridge so
-    // the gesture SM gets down/up for drag, and double-click fires
-    // from dispatchMouseUp for inline edit mode.
-    auto routeV2Input = [&](::yawn::ui::fw2::FwNumberInput& w) -> bool {
+    // Route clicks on v2 children directly to them — they own gesture
+    // state (capture + drag), we just find the right one and hand off.
+    auto tryChild = [&](Widget& w) -> bool {
         const auto& b = w.bounds();
         if (mx < b.x || mx >= b.x + b.w) return false;
         if (my < b.y || my >= b.y + b.h) return false;
-        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        MouseEvent ev = e;
+        ev.lx = mx - b.x;
+        ev.ly = my - b.y;
         w.dispatchMouseDown(ev);
-        m_v2Dragging = &w;
-        captureMouse();
         return true;
     };
-    if (routeV2Input(m_bpmInput))   return true;
-    if (routeV2Input(m_tsNumInput)) return true;
-    if (routeV2Input(m_tsDenInput)) return true;
-    {
-        const auto& b = m_tapBtn.bounds();
-        if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-            m_tapBtn.dispatchMouseDown(ev);
-            m_v2Dragging = &m_tapBtn;
-            captureMouse();
-            return true;
-        }
-    }
-    {
-        const auto& b = m_metroBtn.bounds();
-        if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-            m_metroBtn.dispatchMouseDown(ev);
-            m_v2Dragging = &m_metroBtn;
-            captureMouse();
-            return true;
-        }
-    }
+    if (tryChild(m_bpmInput))   return true;
+    if (tryChild(m_tsNumInput)) return true;
+    if (tryChild(m_tsDenInput)) return true;
+    if (tryChild(m_tapBtn))     return true;
+    if (tryChild(m_metroBtn))   return true;
 
-    // Click anywhere else dismisses edit mode (commits current buffer).
-    // Returning false lets the App continue dispatching to other panels
-    // (contentGrid / session / mixer) — this panel only consumes clicks
-    // that actually hit one of its interactive elements.
+    // Click anywhere else — commit any active edit.
     if (isEditing()) {
         if (m_bpmInput.isEditing())   m_bpmInput.endEdit(/*commit*/true);
         if (m_tsNumInput.isEditing()) m_tsNumInput.endEdit(/*commit*/true);
@@ -552,45 +501,44 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
 }
 
 bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
-    // v1 context menu retired — fw2 handles hover via LayerStack.
-
-    // v2 button/toggle drag in progress — forward translated events.
-    if (m_v2Dragging) {
-        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-        m_v2Dragging->dispatchMouseMove(ev);
+    // If a v2 child has captured the mouse, route all moves there.
+    if (Widget* cap = Widget::capturedWidget()) {
+        const auto& b = cap->bounds();
+        MouseMoveEvent ev = e;
+        ev.lx = e.x - b.x;
+        ev.ly = e.y - b.y;
+        cap->dispatchMouseMove(ev);
         return true;
     }
 
-    // v2 number inputs route hover internally; no per-move forward.
-
-    // Update hover state for transport buttons
-    float mx = e.x, my = e.y;
-    int prev = m_hoveredBtn;
+    // Update hover state for transport buttons.
+    const float mx = e.x, my = e.y;
+    const int prev = m_hoveredBtn;
     m_hoveredBtn = -1;
-    if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) m_hoveredBtn = 0;
+    if      (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) m_hoveredBtn = 0;
     else if (hitBtn(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH, mx, my)) m_hoveredBtn = 1;
-    else if (hitBtn(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH, mx, my)) m_hoveredBtn = 2;
+    else if (hitBtn(m_recBtnX,  m_recBtnY,  m_recBtnW,  m_recBtnH,  mx, my)) m_hoveredBtn = 2;
     return (m_hoveredBtn != prev);
 }
 
 void TransportPanel::tapTempo() {
-    double now = static_cast<double>(SDL_GetTicksNS()) / 1e9;
+    const double now = static_cast<double>(SDL_GetTicksNS()) / 1e9;
     m_tapFlash = 1.0f;
     if (m_tapCount > 0) {
-        double last = m_tapTimes[(m_tapCount - 1) % kTapHistorySize];
+        const double last = m_tapTimes[(m_tapCount - 1) % kTapHistorySize];
         if (now - last > 2.0) m_tapCount = 0;
     }
     m_tapTimes[m_tapCount % kTapHistorySize] = now;
     m_tapCount++;
     if (m_tapCount >= 2) {
-        int n = std::min(m_tapCount - 1, kTapHistorySize - 1);
-        int si = m_tapCount - n - 1;
-        double total = m_tapTimes[(m_tapCount - 1) % kTapHistorySize]
-                     - m_tapTimes[si % kTapHistorySize];
-        double avg = total / n;
-        double bpm = std::clamp(std::round(60.0 / avg * 100.0) / 100.0, 20.0, 999.0);
-        float oldBpm = m_bpmInput.value();
-        float newBpm = static_cast<float>(bpm);
+        const int n = std::min(m_tapCount - 1, kTapHistorySize - 1);
+        const int si = m_tapCount - n - 1;
+        const double total = m_tapTimes[(m_tapCount - 1) % kTapHistorySize]
+                           - m_tapTimes[si % kTapHistorySize];
+        const double avg = total / n;
+        const double bpm = std::clamp(std::round(60.0 / avg * 100.0) / 100.0, 20.0, 999.0);
+        const float oldBpm = m_bpmInput.value();
+        const float newBpm = static_cast<float>(bpm);
         if (m_engine)
             m_engine->sendCommand(audio::TransportSetBPMMsg{bpm});
         m_bpmInput.setValue(newBpm);
@@ -612,9 +560,9 @@ void TransportPanel::openTransportLearnMenu(float mx, float my,
     using Item = ui::ContextMenu::Item;
     std::vector<Item> items;
 
-    bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
-    bool isLearning = m_learnManager && m_learnManager->isLearning() &&
-                      m_learnManager->learnTarget() == target;
+    const bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
+    const bool isLearning = m_learnManager && m_learnManager->isLearning() &&
+                             m_learnManager->learnTarget() == target;
 
     if (isLearning) {
         Item cancelItem;
@@ -654,11 +602,10 @@ void TransportPanel::openTransportLearnMenu(float mx, float my,
         items.push_back(std::move(resetItem));
     }
 
-    ::yawn::ui::fw2::ContextMenu::show(
-        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
-        Point{mx, my});
+    ContextMenu::show(v1ItemsToFw2(std::move(items)),
+                      Point{mx, my});
 }
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

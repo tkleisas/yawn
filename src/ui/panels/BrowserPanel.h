@@ -6,16 +6,25 @@
 // The "Clip" tab shows follow action controls for the currently selected
 // clip slot, giving them dedicated screen real-estate.
 // The "MIDI" tab shows a real-time MIDI monitor for debugging.
+//
+// Migrated from v1 fw::Widget to fw2::Widget. All direct fw2 children
+// (FwButton, FwKnob, FwDropDown, FwCrossfader) use the fw2 gesture SM
+// directly — no V1EventBridge / m_v2Dragging tracking required. The
+// Files / Presets sub-tabs and the AutomationEnvelopeWidget are still
+// v1 widgets; events routed to them are converted at the boundary via
+// toFw1Mouse / toFw1MouseMove. Integration into the v1 rootLayout goes
+// through `fw::BrowserPanelWrapper` in PanelWrappers.h (owned by App).
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
-#include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
+#include "ui/framework/Widget.h"                 // v1 Widget (for AutomationEnvelopeWidget member)
+#include "ui/framework/UIContext.h"              // v1 UIContext (for v1 sub-tab paint)
+#include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -31,7 +40,7 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 class BrowserPanel : public Widget {
 public:
@@ -40,15 +49,16 @@ public:
     BrowserPanel() {
         initFollowActionWidgets();
         initClipEnvelopeWidgets();
+        setFocusable(false);
+        setRelayoutBoundary(true);
     }
 
-    Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, c.maxH});
-    }
-
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
-    }
+    // App wires this once at startup so the v1 sub-tabs
+    // (BrowserFilesTab / BrowserPresetsTab / AutomationEnvelopeWidget)
+    // have a proper UIContext for their paint / hit-test needs. Stored
+    // as a pointer so the App's UIContext remains the single source of
+    // truth for font, renderer, animator, scale.
+    void setV1Context(::yawn::ui::fw::UIContext* ctx) { m_v1Ctx = ctx; }
 
     // ── Follow action API ──
     // Set which visual clip's automation lanes the "Clip" tab edits.
@@ -83,8 +93,8 @@ public:
     FollowAction* followActionPtr() const { return m_followActionPtr; }
 
     // ── Files & Presets tabs ──
-    BrowserFilesTab& filesTab() { return m_filesTab; }
-    BrowserPresetsTab& presetsTab() { return m_presetsTab; }
+    ::yawn::ui::fw::BrowserFilesTab&   filesTab()   { return m_filesTab; }
+    ::yawn::ui::fw::BrowserPresetsTab& presetsTab() { return m_presetsTab; }
     void setLibraryDatabase(library::LibraryDatabase* db) {
         m_filesTab.setDatabase(db);
         m_presetsTab.setDatabase(db);
@@ -100,7 +110,64 @@ public:
     using PortNameFn = std::function<std::string(int)>;
     void setPortNameFn(PortNameFn fn) { m_portNameFn = std::move(fn); }
 
-    // ── Events ──
+    // v2 dropdowns route keyboard + scroll events through LayerStack
+    // when open, so the App doesn't need a panel-side "hasOpenDropdown"
+    // query to gate shortcut routing. Kept for API compatibility but
+    // always returns false now.
+    bool hasOpenDropdown() const { return false; }
+
+    // Text editing support — v1 search inputs + v2 FwKnob inline
+    // edit mode (double-click opens a text buffer; Enter commits,
+    // Escape cancels, digits/±/. feed the buffer).
+    bool hasEditingWidget() const {
+        return m_faBarCountKnob.isEditing() ||
+               m_filesTab.isSearchEditing() ||
+               m_presetsTab.isSearchEditing();
+    }
+    // Keep old name for backward compat with App.cpp
+    bool hasEditingKnob() const { return hasEditingWidget(); }
+    bool forwardKeyDown(int key) {
+        // v2 knob grabs Enter / Escape / Backspace while editing.
+        // Digits arrive via forwardTextInput (SDL TEXT_INPUT), so we
+        // don't translate them here. The knob ignores other keys.
+        if (m_faBarCountKnob.isEditing()) {
+            KeyEvent ke;
+            switch (key) {
+                case 27 /*SDLK_ESCAPE*/:    ke.key = Key::Escape;    break;
+                case 13 /*SDLK_RETURN*/:    ke.key = Key::Enter;     break;
+                case 8  /*SDLK_BACKSPACE*/: ke.key = Key::Backspace; break;
+                default:                    return false;
+            }
+            return m_faBarCountKnob.dispatchKeyDown(ke);
+        }
+        if (m_filesTab.isSearchEditing()) return m_filesTab.forwardKeyDown(key);
+        if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardKeyDown(key);
+        return false;
+    }
+    bool forwardTextInput(const char* text) {
+        if (m_faBarCountKnob.isEditing()) {
+            m_faBarCountKnob.takeTextInput(text ? text : "");
+            return true;
+        }
+        if (m_filesTab.isSearchEditing()) return m_filesTab.forwardTextInput(text);
+        if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardTextInput(text);
+        return false;
+    }
+    void cancelEditingKnobs() {
+        if (m_faBarCountKnob.isEditing())
+            m_faBarCountKnob.endEdit(/*commit*/false);
+        m_filesTab.cancelEditing();
+        m_presetsTab.cancelEditing();
+    }
+
+protected:
+    // ─── fw2 Widget overrides ───────────────────────────────────────
+    Size onMeasure(Constraints c, UIContext&) override {
+        return c.constrain({c.maxW, c.maxH});
+    }
+
+    void onLayout(Rect, UIContext&) override {}
+
     bool onMouseDown(MouseEvent& e) override {
         float mx = e.x, my = e.y;
         float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w;
@@ -153,51 +220,43 @@ public:
             }
         }
 
-        // Files tab
+        // Files tab — v1 sub-widget, convert event at boundary.
         if (m_activeTab == Tab::Files) {
             float bodyY = y + kTabH;
             float bodyH = m_bounds.h - kTabH;
-            return m_filesTab.onMouseDown(e, x, bodyY, w, bodyH, m_lastCtx);
+            if (!m_v1Ctx) return false;
+            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
+            return m_filesTab.onMouseDown(v1e, x, bodyY, w, bodyH, *m_v1Ctx);
         }
 
-        // Presets tab
+        // Presets tab — v1 sub-widget, convert event at boundary.
         if (m_activeTab == Tab::Presets) {
             float bodyY = y + kTabH;
             float bodyH = m_bounds.h - kTabH;
-            return m_presetsTab.onMouseDown(e, x, bodyY, w, bodyH, m_lastCtx);
+            if (!m_v1Ctx) return false;
+            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
+            return m_presetsTab.onMouseDown(v1e, x, bodyY, w, bodyH, *m_v1Ctx);
         }
 
         // Clip tab: follow action widgets.
         // v2 dropdowns handle their open-state via LayerStack; when a
         // popup is open the panel doesn't see the click at all.
+        // All direct fw2 children route through their own gesture SM;
+        // just translate to widget-local and dispatch.
+        auto hitChild = [&](Widget& wgt) -> bool {
+            const auto& b = wgt.bounds();
+            if (mx < b.x || mx >= b.x + b.w) return false;
+            if (my < b.y || my >= b.y + b.h) return false;
+            MouseEvent ev = e;
+            ev.lx = mx - b.x;
+            ev.ly = my - b.y;
+            wgt.dispatchMouseDown(ev);
+            return true;
+        };
+
         if (m_activeTab == Tab::Clip && m_followActionPtr) {
-            // v2 FwButton — route press through the gesture SM so we
-            // get the press visual state + cancel-on-pointer-out.
-            // Same m_v2Dragging pattern the knob uses; one "active
-            // v2 widget" pointer serves both.
-            {
-                const auto& b = m_faEnableBtn.bounds();
-                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-                    m_faEnableBtn.dispatchMouseDown(ev);
-                    m_v2Dragging = &m_faEnableBtn;
-                    captureMouse();
-                    return true;
-                }
-            }
-            // v2 knob — drag needs the gesture SM. Forward via v1→v2
-            // event bridge and capture v1 mouse so subsequent moves
-            // route back here for forwarding.
-            {
-                const auto& b = m_faBarCountKnob.bounds();
-                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-                    m_faBarCountKnob.dispatchMouseDown(ev);
-                    m_v2Dragging = &m_faBarCountKnob;
-                    captureMouse();
-                    return true;
-                }
-            }
+            if (hitChild(m_faEnableBtn))     return true;
+            if (hitChild(m_faBarCountKnob))  return true;
             {
                 const auto& b = m_faActionADropdown.bounds();
                 if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
@@ -212,20 +271,11 @@ public:
                     return true;
                 }
             }
-            // Crossfader — v2 widget, route through the gesture SM.
-            {
-                const auto& b = m_faCrossfader.bounds();
-                if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-                    m_faCrossfader.dispatchMouseDown(ev);
-                    m_v2Dragging = &m_faCrossfader;
-                    captureMouse();
-                    return true;
-                }
-            }
+            if (hitChild(m_faCrossfader)) return true;
         }
         // Clip envelope editor (visual clips only — presence of
-        // m_clipAutoLanes gates it).
+        // m_clipAutoLanes gates it). The envelope is still a v1 widget,
+        // so events cross the v1 boundary via toFw1Mouse.
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
             {
                 const auto& b = m_clipTargetDropdown.bounds();
@@ -234,32 +284,42 @@ public:
                     return true;
                 }
             }
-            if (hitWidget(m_clipEnvelope, mx, my))
-                return m_clipEnvelope.onMouseDown(e);
+            if (hitWidgetV1(m_clipEnvelope, mx, my)) {
+                auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
+                return m_clipEnvelope.onMouseDown(v1e);
+            }
         }
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (m_activeTab == Tab::Files)
-            return m_filesTab.onMouseMove(e);
-        if (m_activeTab == Tab::Presets)
-            return m_presetsTab.onMouseMove(e);
-        // v2 knob drag in progress — forward translated events.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseMove(ev);
+        if (m_activeTab == Tab::Files) {
+            auto v1e = ::yawn::ui::fw2::toFw1MouseMove(e);
+            return m_filesTab.onMouseMove(v1e);
+        }
+        if (m_activeTab == Tab::Presets) {
+            auto v1e = ::yawn::ui::fw2::toFw1MouseMove(e);
+            return m_presetsTab.onMouseMove(v1e);
+        }
+        // fw2 drag in progress — forward translated events to the
+        // captured widget via its local coordinates.
+        if (Widget* cap = Widget::capturedWidget()) {
+            const auto& b = cap->bounds();
+            MouseMoveEvent ev = e;
+            ev.lx = e.x - b.x;
+            ev.ly = e.y - b.y;
+            cap->dispatchMouseMove(ev);
             return true;
         }
         // v2 dropdowns handle open-state mouseMove via LayerStack;
-        // v2 crossfader routes its own moves through m_v2Dragging above.
+        // v2 crossfader routes moves through capturedWidget above.
         // Clip envelope drag (point move): the envelope widget
-        // captures on mouse-down, so we route moves to it while it
-        // reports a drag in progress.
+        // captures on mouse-down (v1), so we route moves to it while
+        // it reports a drag in progress.
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
-            MouseMoveEvent me = e;
             if (m_clipEnvelope.dragIndex() >= 0) {
-                m_clipEnvelope.onMouseMove(me);
+                auto v1e = ::yawn::ui::fw2::toFw1MouseMove(e);
+                m_clipEnvelope.onMouseMove(v1e);
                 return true;
             }
         }
@@ -267,31 +327,30 @@ public:
     }
 
     bool onMouseUp(MouseEvent& e) override {
-        if (m_activeTab == Tab::Files)
-            return m_filesTab.onMouseUp(e);
-        if (m_activeTab == Tab::Presets)
-            return m_presetsTab.onMouseUp(e);
-        // v2 knob drag wrapping up — flush the release + drop v1 capture.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseUp(ev);
-            m_v2Dragging = nullptr;
-            releaseMouse();
+        if (m_activeTab == Tab::Files) {
+            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
+            return m_filesTab.onMouseUp(v1e);
+        }
+        if (m_activeTab == Tab::Presets) {
+            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
+            return m_presetsTab.onMouseUp(v1e);
+        }
+        // fw2 drag release — dispatch to captured widget; its own
+        // gesture SM releases capture internally.
+        if (Widget* cap = Widget::capturedWidget()) {
+            const auto& b = cap->bounds();
+            MouseEvent ev = e;
+            ev.lx = e.x - b.x;
+            ev.ly = e.y - b.y;
+            cap->dispatchMouseUp(ev);
             return true;
         }
-        // v2 dropdowns / buttons / crossfader all release through
-        // the m_v2Dragging path above — nothing to forward here.
         if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
-            if (m_clipEnvelope.onMouseUp(e)) return true;
+            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
+            if (m_clipEnvelope.onMouseUp(v1e)) return true;
         }
         return false;
     }
-
-    // v2 dropdowns route keyboard + scroll events through LayerStack
-    // when open, so the App doesn't need a panel-side "hasOpenDropdown"
-    // query to gate shortcut routing. Kept for API compatibility but
-    // always returns false now.
-    bool hasOpenDropdown() const { return false; }
 
     bool onKeyDown(KeyEvent& /*e*/) override {
         // v2 dropdowns consume keys via LayerStack before the panel.
@@ -299,10 +358,24 @@ public:
     }
 
     bool onScroll(ScrollEvent& e) override {
-        if (m_activeTab == Tab::Files)
-            return m_filesTab.onScroll(e);
-        if (m_activeTab == Tab::Presets)
-            return m_presetsTab.onScroll(e);
+        if (m_activeTab == Tab::Files) {
+            // BrowserFilesTab::onScroll takes a v1 ScrollEvent; build
+            // one inline (no dedicated bridge helper yet).
+            ::yawn::ui::fw::ScrollEvent v1e;
+            v1e.x  = e.x;
+            v1e.y  = e.y;
+            v1e.dx = e.dx;
+            v1e.dy = e.dy;
+            return m_filesTab.onScroll(v1e);
+        }
+        if (m_activeTab == Tab::Presets) {
+            ::yawn::ui::fw::ScrollEvent v1e;
+            v1e.x  = e.x;
+            v1e.y  = e.y;
+            v1e.dx = e.dx;
+            v1e.dy = e.dy;
+            return m_presetsTab.onScroll(v1e);
+        }
         // v2 dropdowns route wheel events to their popup automatically
         // when open (LayerStack dispatch). No per-panel glue needed.
         if (m_activeTab == Tab::Midi && m_midiMonitor) {
@@ -314,54 +387,12 @@ public:
         return false;
     }
 
-    // Text editing support — v1 search inputs + v2 FwKnob inline
-    // edit mode (double-click opens a text buffer; Enter commits,
-    // Escape cancels, digits/±/. feed the buffer).
-    bool hasEditingWidget() const {
-        return m_faBarCountKnob.isEditing() ||
-               m_filesTab.isSearchEditing() ||
-               m_presetsTab.isSearchEditing();
-    }
-    // Keep old name for backward compat with App.cpp
-    bool hasEditingKnob() const { return hasEditingWidget(); }
-    bool forwardKeyDown(int key) {
-        // v2 knob grabs Enter / Escape / Backspace while editing.
-        // Digits arrive via forwardTextInput (SDL TEXT_INPUT), so we
-        // don't translate them here. The knob ignores other keys.
-        if (m_faBarCountKnob.isEditing()) {
-            ::yawn::ui::fw2::KeyEvent ke;
-            switch (key) {
-                case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
-                case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
-                case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
-                default:                    return false;
-            }
-            return m_faBarCountKnob.dispatchKeyDown(ke);
-        }
-        if (m_filesTab.isSearchEditing()) return m_filesTab.forwardKeyDown(key);
-        if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardKeyDown(key);
-        return false;
-    }
-    bool forwardTextInput(const char* text) {
-        if (m_faBarCountKnob.isEditing()) {
-            m_faBarCountKnob.takeTextInput(text ? text : "");
-            return true;
-        }
-        if (m_filesTab.isSearchEditing()) return m_filesTab.forwardTextInput(text);
-        if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardTextInput(text);
-        return false;
-    }
-    void cancelEditingKnobs() {
-        if (m_faBarCountKnob.isEditing())
-            m_faBarCountKnob.endEdit(/*commit*/false);
-        m_filesTab.cancelEditing();
-        m_presetsTab.cancelEditing();
-    }
-
-    void paint(UIContext& ctx) override {
-        m_lastCtx = ctx;
-        auto& r = *ctx.renderer;
-        auto& f = *ctx.font;
+public:
+    void render(UIContext& ctx) override {
+        if (!m_visible) return;
+        if (!ctx.renderer || !ctx.textMetrics) return;
+        auto& r  = *ctx.renderer;
+        auto& tm = *ctx.textMetrics;
 
         float x = m_bounds.x, y = m_bounds.y;
         float w = m_bounds.w, h = m_bounds.h;
@@ -370,24 +401,25 @@ public:
 
         // ── Tab bar ──
         r.drawRect(x, y, w, kTabH, Color{38, 38, 42});
-        r.drawRect(x, y + kTabH - 1, w, 1, Theme::clipSlotBorder);
+        r.drawRect(x, y + kTabH - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
 
-        if (f.isLoaded()) {
-            float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.85f;
-            static const char* tabNames[] = {"Files", "Presets", "Clip", "MIDI"};
-            // Compute tab widths from text
-            for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i)
-                m_tabWidths[i] = f.textWidth(tabNames[i], scale) + kTabPad;
-            float tx = x + 2.0f;
-            for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i) {
-                float tw = m_tabWidths[i];
-                bool active = (static_cast<Tab>(i) == m_activeTab);
-                if (active)
-                    r.drawRect(tx, y + 2, tw, kTabH - 3, Color{50, 50, 56});
-                f.drawText(r, tabNames[i], tx + kTabPad * 0.5f, y + 5, scale,
-                           active ? Theme::textPrimary : Theme::textDim);
-                tx += tw;
-            }
+        // Tab font — use theme metrics so it tracks the UI font-scale
+        // preference like the rest of the v2 chrome.
+        const float tabFontSize = theme().metrics.fontSize;
+        static const char* tabNames[] = {"Files", "Presets", "Clip", "MIDI"};
+        // Compute tab widths from text
+        for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i)
+            m_tabWidths[i] = tm.textWidth(tabNames[i], tabFontSize) + kTabPad;
+        float tx = x + 2.0f;
+        for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i) {
+            float tw = m_tabWidths[i];
+            bool active = (static_cast<Tab>(i) == m_activeTab);
+            if (active)
+                r.drawRect(tx, y + 2, tw, kTabH - 3, Color{50, 50, 56});
+            tm.drawText(r, tabNames[i], tx + kTabPad * 0.5f, y + 5, tabFontSize,
+                       active ? ::yawn::ui::Theme::textPrimary
+                              : ::yawn::ui::Theme::textDim);
+            tx += tw;
         }
 
         // ── Tab content ──
@@ -397,16 +429,18 @@ public:
 
         switch (m_activeTab) {
         case Tab::Files:
-            m_filesTab.paint(r, f, x, bodyY, w, bodyH, ctx);
+            if (m_v1Ctx && m_v1Ctx->font)
+                m_filesTab.paint(r, *m_v1Ctx->font, x, bodyY, w, bodyH, *m_v1Ctx);
             break;
         case Tab::Presets:
-            m_presetsTab.paint(r, f, x, bodyY, w, bodyH, ctx);
+            if (m_v1Ctx && m_v1Ctx->font)
+                m_presetsTab.paint(r, *m_v1Ctx->font, x, bodyY, w, bodyH, *m_v1Ctx);
             break;
         case Tab::Clip:
-            paintClipTab(r, f, x, bodyY, w, bodyH, ctx);
+            paintClipTab(ctx, x, bodyY, w, bodyH);
             break;
         case Tab::Midi:
-            paintMidiTab(r, f, x, bodyY, w, bodyH);
+            paintMidiTab(r, tm, x, bodyY, w, bodyH);
             break;
         default:
             break;
@@ -424,12 +458,12 @@ private:
     static constexpr float kTabPad = 16.0f; // horizontal padding per tab
 
     Tab m_activeTab = Tab::Files;
-    UIContext m_lastCtx{};
-    float m_tabWidths[4] = {55, 55, 55, 55}; // computed in paint
+    ::yawn::ui::fw::UIContext* m_v1Ctx = nullptr;
+    float m_tabWidths[4] = {55, 55, 55, 55}; // computed in render
 
-    // Files and Presets tabs
-    BrowserFilesTab   m_filesTab;
-    BrowserPresetsTab m_presetsTab;
+    // Files and Presets tabs — still v1 widgets internally.
+    ::yawn::ui::fw::BrowserFilesTab   m_filesTab;
+    ::yawn::ui::fw::BrowserPresetsTab m_presetsTab;
 
     // MIDI monitor state
     midi::MidiMonitorBuffer* m_midiMonitor = nullptr;
@@ -440,14 +474,12 @@ private:
     bool m_midiShowSysEx = true;
     bool m_midiShowRealtime = true;  // Start/Stop/Continue
 
-    // Follow action state
+    // Follow action state — all fw2 children; gestures go through
+    // their own dispatchMouse* + Widget::capturedWidget() in this
+    // panel's onMouseMove/Up overrides.
     FollowAction* m_followActionPtr = nullptr;
-    ::yawn::ui::fw2::FwButton m_faEnableBtn;
-    ::yawn::ui::fw2::FwKnob   m_faBarCountKnob;
-    // Tracks which v2 widget currently owns a drag — set in
-    // onMouseDown, used by onMouseMove/Up to forward translated
-    // events. Null when no v2 drag is in progress.
-    ::yawn::ui::fw2::Widget*  m_v2Dragging = nullptr;
+    FwButton m_faEnableBtn;
+    FwKnob   m_faBarCountKnob;
 
     // Clip-envelope editor state (visual clips only for now).
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
@@ -463,13 +495,13 @@ private:
     std::vector<ClipTargetEntry> m_clipTargets;
     std::vector<std::string>     m_clipShaderParamNames;
     int      m_clipSelectedTarget = 0;
-    ::yawn::ui::fw2::FwDropDown m_clipTargetDropdown;
-    AutomationEnvelopeWidget m_clipEnvelope;
-    ::yawn::ui::fw2::FwDropDown m_faActionADropdown;
-    ::yawn::ui::fw2::FwDropDown m_faActionBDropdown;
-    ::yawn::ui::fw2::FwCrossfader m_faCrossfader;
+    FwDropDown                       m_clipTargetDropdown;
+    ::yawn::ui::fw::AutomationEnvelopeWidget m_clipEnvelope;
+    FwDropDown                       m_faActionADropdown;
+    FwDropDown                       m_faActionBDropdown;
+    FwCrossfader                     m_faCrossfader;
 
-    static bool hitWidget(Widget& w, float mx, float my) {
+    static bool hitWidgetV1(::yawn::ui::fw::Widget& w, float mx, float my) {
         auto& b = w.bounds();
         return mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h;
     }
@@ -656,21 +688,26 @@ private:
         });
     }
 
-    void paintClipTab(Renderer2D& r, Font& f, float x, float y,
-                      float w, float /*h*/, UIContext& ctx) {
+    void paintClipTab(UIContext& ctx, float x, float y, float w, float /*h*/) {
+        auto& r  = *ctx.renderer;
+        auto& tm = *ctx.textMetrics;
+
         float pad = 10.0f;
         float sx = x + pad;
         float sw = w - pad * 2;
-        float labelScale = 10.0f / Theme::kFontSize;
+        // Theme-driven label size so the Clip-tab section labels
+        // track the font-scale preference.
+        const float labelSize = theme().metrics.fontSizeSmall;
 
         // Section header
         r.drawRect(sx, y + 4, sw, 1.0f, Color{50, 50, 55, 255});
         float headerY = y + 8.0f;
-        f.drawText(r, "Follow Actions", sx, headerY, labelScale, Theme::textPrimary);
+        tm.drawText(r, "Follow Actions", sx, headerY, labelSize,
+                     ::yawn::ui::Theme::textPrimary);
 
         if (!m_followActionPtr) {
-            f.drawText(r, "Select a clip slot", sx, headerY + 20.0f,
-                       labelScale, Theme::textDim);
+            tm.drawText(r, "Select a clip slot", sx, headerY + 20.0f,
+                         labelSize, ::yawn::ui::Theme::textDim);
             return;
         }
 
@@ -678,37 +715,42 @@ private:
         // mid-drag or editing — the backing int barCount is a lossy
         // round-trip of the float knob value (5.2f → int 5 → back to
         // 5.0f), so unconditional setValue would rubber-band the knob
-        // to a snapped integer and the drag would look jumpy.
+        // to a snapped integer and the drag would look jumpy. Use
+        // ValueChangeSource::Automation so the sync write doesn't
+        // re-fire our onChange (which pushes back to m_followActionPtr).
         syncFaEnableButton();
-        if (!m_faBarCountKnob.isDragging() && !m_faBarCountKnob.isEditing())
-            m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount));
+        if (!m_faBarCountKnob.isDragging() && !m_faBarCountKnob.isEditing()) {
+            m_faBarCountKnob.setValue(static_cast<float>(m_followActionPtr->barCount),
+                                       ValueChangeSource::Automation);
+        }
         m_faActionADropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionA));
         m_faActionBDropdown.setSelectedIndex(static_cast<int>(m_followActionPtr->actionB));
-        if (!m_faCrossfader.isDragging())
-            m_faCrossfader.setValue(static_cast<float>(m_followActionPtr->chanceA));
+        if (!m_faCrossfader.isDragging()) {
+            m_faCrossfader.setValue(static_cast<float>(m_followActionPtr->chanceA),
+                                     ValueChangeSource::Automation);
+        }
 
         // Layout widgets — vertical stack for narrow panel
         float rowY = headerY + 18.0f;
         float inputH = 20.0f;
-        float rowGap = 4.0f;
         float labelCol = 60.0f;
         float inputX = sx + labelCol;
 
-        // Enable — v2 FwButton, renders through fw2 UIContext.
-        f.drawText(r, "Enable", sx, rowY + 3.0f, labelScale, Theme::textDim);
+        // Enable — v2 FwButton.
+        tm.drawText(r, "Enable", sx, rowY + 3.0f, labelSize,
+                     ::yawn::ui::Theme::textDim);
         {
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-            m_faEnableBtn.layout(Rect{inputX, rowY, 40.0f, inputH}, v2ctx);
-            m_faEnableBtn.render(v2ctx);
+            m_faEnableBtn.layout(Rect{inputX, rowY, 40.0f, inputH}, ctx);
+            m_faEnableBtn.render(ctx);
         }
         rowY += inputH + 12.0f;
 
-        // Bars — v2 knob, render through fw2 UIContext.
-        f.drawText(r, "Bars", sx, rowY + 16.0f, labelScale, Theme::textDim);
+        // Bars — v2 knob.
+        tm.drawText(r, "Bars", sx, rowY + 16.0f, labelSize,
+                     ::yawn::ui::Theme::textDim);
         {
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-            m_faBarCountKnob.layout(Rect{inputX, rowY, 44.0f, 44.0f}, v2ctx);
-            m_faBarCountKnob.render(v2ctx);
+            m_faBarCountKnob.layout(Rect{inputX, rowY, 44.0f, 44.0f}, ctx);
+            m_faBarCountKnob.render(ctx);
         }
         rowY += 50.0f;
 
@@ -717,25 +759,43 @@ private:
         float halfW = (sw - gap) * 0.5f;
         float rightX = sx + halfW + gap;
 
-        f.drawText(r, "Action A", sx, rowY, labelScale, Theme::textSecondary);
-        f.drawText(r, "Action B", rightX, rowY, labelScale, Theme::textSecondary);
+        tm.drawText(r, "Action A", sx, rowY, labelSize,
+                     ::yawn::ui::Theme::textSecondary);
+        tm.drawText(r, "Action B", rightX, rowY, labelSize,
+                     ::yawn::ui::Theme::textSecondary);
         rowY += 20.0f;
         {
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-            m_faActionADropdown.layout(Rect{sx, rowY, halfW, inputH}, v2ctx);
-            m_faActionADropdown.render(v2ctx);
-            m_faActionBDropdown.layout(Rect{rightX, rowY, halfW, inputH}, v2ctx);
-            m_faActionBDropdown.render(v2ctx);
+            m_faActionADropdown.layout(Rect{sx, rowY, halfW, inputH}, ctx);
+            m_faActionADropdown.render(ctx);
+            m_faActionBDropdown.layout(Rect{rightX, rowY, halfW, inputH}, ctx);
+            m_faActionBDropdown.render(ctx);
         }
         rowY += inputH + 10.0f;
 
-        // Crossfader (A/B chance) — v2 widget.
+        // Crossfader (A/B chance) — v2 widget. Shows A / B percent
+        // readouts underneath so the user can see the exact split
+        // without reading the thumb position.
         {
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-            m_faCrossfader.layout(Rect{sx, rowY, sw, 28.0f}, v2ctx);
-            m_faCrossfader.render(v2ctx);
+            m_faCrossfader.layout(Rect{sx, rowY, sw, 28.0f}, ctx);
+            m_faCrossfader.render(ctx);
         }
-        rowY += 28.0f + 14.0f;
+        rowY += 28.0f + 4.0f;
+        {
+            const float chanceA =
+                std::clamp(static_cast<float>(m_followActionPtr->chanceA),
+                            0.0f, 100.0f);
+            char bufA[16], bufB[16];
+            std::snprintf(bufA, sizeof(bufA), "A %.0f%%", chanceA);
+            std::snprintf(bufB, sizeof(bufB), "B %.0f%%", 100.0f - chanceA);
+            const float twA = tm.textWidth(bufA, labelSize);
+            const float twB = tm.textWidth(bufB, labelSize);
+            tm.drawText(r, bufA, sx, rowY, labelSize,
+                         ::yawn::ui::Theme::textSecondary);
+            tm.drawText(r, bufB, sx + sw - twB, rowY, labelSize,
+                         ::yawn::ui::Theme::textSecondary);
+            (void)twA;   // left-aligned; width unused but kept for symmetry
+        }
+        rowY += tm.lineHeight(labelSize) + 10.0f;
 
         // ── Clip envelope editor ──────────────────────────────────
         // Only meaningful when the slot has a visual clip (lanes
@@ -744,8 +804,8 @@ private:
         if (!m_clipAutoLanes) return;
 
         r.drawRect(sx, rowY, sw, 1.0f, Color{50, 50, 55, 255});
-        f.drawText(r, "Clip Envelope", sx, rowY + 8.0f, labelScale,
-                    Theme::textPrimary);
+        tm.drawText(r, "Clip Envelope", sx, rowY + 8.0f, labelSize,
+                     ::yawn::ui::Theme::textPrimary);
         // Larger gap between the section header and the button row
         // so the label text isn't cropped by the button outlines.
         rowY += 28.0f;
@@ -753,28 +813,31 @@ private:
         // Target dropdown — A..H plus shader @range uniforms.
         // v2 widget; popup paints via LayerStack.
         {
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-            m_clipTargetDropdown.layout(Rect{sx, rowY, sw, 20.0f}, v2ctx);
-            m_clipTargetDropdown.render(v2ctx);
+            m_clipTargetDropdown.layout(Rect{sx, rowY, sw, 20.0f}, ctx);
+            m_clipTargetDropdown.render(ctx);
         }
         rowY += 24.0f;
 
-        // Envelope drawing area.
-        m_clipEnvelope.setTimeRange(0.0, m_clipAutoLength);
-        m_clipEnvelope.setValueRange(0.0f, 1.0f);
-        m_clipEnvelope.layout(Rect{sx, rowY, sw, 80.0f}, ctx);
-        m_clipEnvelope.paint(ctx);
+        // Envelope drawing area — still a v1 widget; hand it the v1
+        // UIContext the App wired to us via setV1Context.
+        if (m_v1Ctx) {
+            m_clipEnvelope.setTimeRange(0.0, m_clipAutoLength);
+            m_clipEnvelope.setValueRange(0.0f, 1.0f);
+            ::yawn::ui::fw::Rect envRect{sx, rowY, sw, 80.0f};
+            m_clipEnvelope.layout(envRect, *m_v1Ctx);
+            m_clipEnvelope.paint(*m_v1Ctx);
+        }
     }
 
-    void paintMidiTab(Renderer2D& r, Font& f, float x, float y,
+    void paintMidiTab(Renderer2D& r, TextMetrics& tm, float x, float y,
                       float w, float bodyH) {
-        if (!f.isLoaded() || !m_midiMonitor) {
-            return;
-        }
+        if (!m_midiMonitor) return;
 
-        float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
-        float textH = f.pixelHeight() * scale;
-        float rowH = textH + 4.0f;
+        // MIDI monitor row text — theme small so it scales with the
+        // font-scale preference.
+        const float scale = theme().metrics.fontSizeSmall;
+        const float textH = tm.lineHeight(scale);
+        const float rowH  = textH + 4.0f;
 
         // ── Toolbar: [Clear] [Auto▼] ──
         float toolY = y + 2.0f;
@@ -786,16 +849,20 @@ private:
         Color autoCol = m_midiAutoScroll ? Color{60, 130, 80} : Color{50, 50, 56};
         r.drawRect(bx, toolY, btnW, toolH, autoCol);
         {
-            float tw = f.textWidth("Auto", scale);
-            f.drawText(r, "Auto", bx + (btnW - tw) * 0.5f, toolY + (toolH - textH) * 0.5f, scale, Theme::textPrimary);
+            float tw = tm.textWidth("Auto", scale);
+            tm.drawText(r, "Auto", bx + (btnW - tw) * 0.5f,
+                         toolY + (toolH - textH) * 0.5f, scale,
+                         ::yawn::ui::Theme::textPrimary);
         }
 
         // Clear button — centered text
         bx -= btnW + 4.0f;
         r.drawRect(bx, toolY, btnW, toolH, Color{50, 50, 56});
         {
-            float tw = f.textWidth("Clear", scale);
-            f.drawText(r, "Clear", bx + (btnW - tw) * 0.5f, toolY + (toolH - textH) * 0.5f, scale, Theme::textPrimary);
+            float tw = tm.textWidth("Clear", scale);
+            tm.drawText(r, "Clear", bx + (btnW - tw) * 0.5f,
+                         toolY + (toolH - textH) * 0.5f, scale,
+                         ::yawn::ui::Theme::textPrimary);
         }
 
         // Status: message count
@@ -803,7 +870,9 @@ private:
             char countBuf[32];
             std::snprintf(countBuf, sizeof(countBuf), "%zu msgs",
                           m_midiMonitor->count());
-            f.drawText(r, countBuf, x + 4, toolY + (toolH - textH) * 0.5f, scale, Theme::textDim);
+            tm.drawText(r, countBuf, x + 4,
+                         toolY + (toolH - textH) * 0.5f, scale,
+                         ::yawn::ui::Theme::textDim);
         }
 
         // ── Filter checkboxes row ──
@@ -820,8 +889,10 @@ private:
             if (checked) {
                 r.drawRect(cbx + 2, cy + 2, cbSize - 4, cbSize - 4, Color{100, 180, 120});
             }
-            f.drawText(r, label, cbx + cbTextOff, fy + (filterH - textH * 0.9f) * 0.5f, fScale,
-                       checked ? Theme::textPrimary : Theme::textDim);
+            tm.drawText(r, label, cbx + cbTextOff,
+                         fy + (filterH - textH * 0.9f) * 0.5f, fScale,
+                         checked ? ::yawn::ui::Theme::textPrimary
+                                 : ::yawn::ui::Theme::textDim);
         };
 
         float fx = x + 4;
@@ -841,11 +912,11 @@ private:
         float hScale = scale * 0.9f;
         float cx = x + 4;
         float hTextY = listY + (headerH - textH * 0.9f) * 0.5f;
-        f.drawText(r, "Time",  cx, hTextY, hScale, Theme::textDim);  cx += 76;
-        f.drawText(r, "Port",  cx, hTextY, hScale, Theme::textDim);  cx += 36;
-        f.drawText(r, "Ch",    cx, hTextY, hScale, Theme::textDim);  cx += 24;
-        f.drawText(r, "Type",  cx, hTextY, hScale, Theme::textDim);  cx += 52;
-        f.drawText(r, "Data",  cx, hTextY, hScale, Theme::textDim);
+        tm.drawText(r, "Time",  cx, hTextY, hScale, ::yawn::ui::Theme::textDim);  cx += 76;
+        tm.drawText(r, "Port",  cx, hTextY, hScale, ::yawn::ui::Theme::textDim);  cx += 36;
+        tm.drawText(r, "Ch",    cx, hTextY, hScale, ::yawn::ui::Theme::textDim);  cx += 24;
+        tm.drawText(r, "Type",  cx, hTextY, hScale, ::yawn::ui::Theme::textDim);  cx += 52;
+        tm.drawText(r, "Data",  cx, hTextY, hScale, ::yawn::ui::Theme::textDim);
 
         listY += headerH;
         listH -= headerH;
@@ -903,7 +974,7 @@ private:
                 r.drawRect(x, ry, w, rowH, Color{36, 36, 40});
 
             // Type-based color coding
-            Color typeCol = Theme::textPrimary;
+            Color typeCol = ::yawn::ui::Theme::textPrimary;
             switch (e.type) {
             case ET::NoteOn:          typeCol = Color{100, 200, 120}; break;
             case ET::NoteOff:         typeCol = Color{80, 150, 100};  break;
@@ -917,7 +988,7 @@ private:
             case ET::Stop:
             case ET::Continue:        typeCol = Color{140, 140, 160}; break;
             case ET::SysEx:           typeCol = Color{200, 100, 100}; break;
-            default:                  typeCol = Theme::textDim;       break;
+            default:                  typeCol = ::yawn::ui::Theme::textDim; break;
             }
 
             char buf[64];
@@ -929,17 +1000,17 @@ private:
             uint32_t sec = ms / 1000;
             uint32_t min = sec / 60;
             std::snprintf(buf, sizeof(buf), "%02u:%02u.%03u", min, sec % 60, ms % 1000);
-            f.drawText(r, buf, cx, textY, scale, Theme::textDim);
+            tm.drawText(r, buf, cx, textY, scale, ::yawn::ui::Theme::textDim);
             cx += 76;
 
             // Port
             std::snprintf(buf, sizeof(buf), "%d", e.portIndex + 1);
-            f.drawText(r, buf, cx, textY, scale, Color{140, 140, 150});
+            tm.drawText(r, buf, cx, textY, scale, Color{140, 140, 150});
             cx += 36;
 
             // Channel (1-based)
             std::snprintf(buf, sizeof(buf), "%2d", e.channel + 1);
-            f.drawText(r, buf, cx, textY, scale, Theme::textPrimary);
+            tm.drawText(r, buf, cx, textY, scale, ::yawn::ui::Theme::textPrimary);
             cx += 24;
 
             // Type + Data
@@ -997,10 +1068,11 @@ private:
             default: typeName = "???"; break;
             }
 
-            f.drawText(r, typeName, cx, textY, scale, typeCol);
+            tm.drawText(r, typeName, cx, textY, scale, typeCol);
             cx += 52;
             if (dataBuf[0])
-                f.drawText(r, dataBuf, cx, textY, scale, Theme::textPrimary);
+                tm.drawText(r, dataBuf, cx, textY, scale,
+                             ::yawn::ui::Theme::textPrimary);
 
             ++rowsDrawn;
         }
@@ -1033,6 +1105,6 @@ private:
 
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

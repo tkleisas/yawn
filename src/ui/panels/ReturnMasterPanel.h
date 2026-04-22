@@ -1,18 +1,19 @@
 #pragma once
-// ReturnMasterPanel — Returns + Master channel strip panel.
+// ReturnMasterPanel — Returns + Master channel strip panel (UI v2).
 //
-// Uses framework widgets (FwButton, FwFader, MeterWidget, PanWidget, Label)
-// for all controls.  Only the separator and strip backgrounds remain manual.
+// Migrated from v1 fw::Widget to fw2::Widget. All children are native
+// fw2 widgets (FwToggle, FwPan, FwFader, FwMeter, FwButton) and the
+// strip name / dB labels are painted inline. Integration into the v1
+// ContentGrid is via `fw::ReturnMasterPanelWrapper` in
+// PanelWrappers.h, which bridges v1 mouse events to fw2's dispatch.
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Fader.h"
 #include "ui/framework/v2/Meter.h"
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -30,10 +31,11 @@
 #include <cmath>
 #include <algorithm>
 #include <functional>
+#include <string>
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 struct ReturnMeter {
     float peakL = 0.0f;
@@ -46,12 +48,12 @@ public:
         static const char* retNames[] = {
             "Ret A","Ret B","Ret C","Ret D","Ret E","Ret F","Ret G","Ret H"};
 
-        Color busCol{100, 180, 255};
-        Color masterCol = Theme::transportAccent;
+        const Color busCol{100, 180, 255, 255};
+        const Color masterCol = ::yawn::ui::Theme::transportAccent;
 
         m_stopAllBtn.setOnClick([this]() {
             if (!m_engine) return;
-            int numTracks = m_project ? m_project->numTracks() : kMaxTracks;
+            const int numTracks = m_project ? m_project->numTracks() : kMaxTracks;
             for (int t = 0; t < numTracks; ++t) {
                 m_engine->sendCommand(audio::StopClipMsg{t});
                 m_engine->sendCommand(audio::StopMidiClipMsg{t});
@@ -60,17 +62,13 @@ public:
 
         for (int b = 0; b < kMaxReturnBuses; ++b) {
             auto& rs = m_returnStrips[b];
-
-            rs.nameLabel.setText(retNames[b]);
-            rs.nameLabel.setColor(Theme::textPrimary);
+            m_returnNames[b] = retNames[b];
 
             rs.muteBtn.setLabel("M");
-            // Red accent carries the muted state (v2 FwToggle fills the
-            // body with accent when on). Matches the v1 red-on-mute look.
-            rs.muteBtn.setAccentColor(Color{255, 80, 80});
+            rs.muteBtn.setAccentColor(Color{255, 80, 80, 255});
             rs.muteBtn.setOnChange([this, b](bool on) {
                 if (!m_engine) return;
-                bool cur = !on;   // state before this click
+                const bool cur = !on;
                 m_engine->sendCommand(audio::SetReturnMuteMsg{b, on});
                 if (m_undoManager) {
                     m_undoManager->push({"Toggle Return Mute",
@@ -85,7 +83,6 @@ public:
                 if (!m_engine) return;
                 m_engine->sendCommand(audio::SetReturnPanMsg{b, v});
             });
-            // v2 FwPan delivers (startValue, endValue) in one callback.
             rs.pan.setOnDragEnd([this, b](float oldV, float newV) {
                 if (!m_undoManager) return;
                 if (oldV == newV) return;
@@ -103,7 +100,6 @@ public:
                 if (!m_engine) return;
                 m_engine->sendCommand(audio::SetReturnVolumeMsg{b, v});
             });
-            // v2 FwFader's setOnDragEnd delivers both start + end.
             rs.fader.setOnDragEnd([this, b](float oldVal, float newVal) {
                 if (!m_undoManager) return;
                 m_undoManager->push({"Change Return Volume",
@@ -114,9 +110,6 @@ public:
                     "return.vol." + std::to_string(b)});
             });
         }
-
-        m_masterStrip.nameLabel.setText("MASTER");
-        m_masterStrip.nameLabel.setColor(Theme::textPrimary);
 
         m_masterStrip.fader.setRange(0.0f, 2.0f);
         m_masterStrip.fader.setTrackColor(masterCol);
@@ -133,6 +126,9 @@ public:
                     if (m_engine) m_engine->sendCommand(audio::SetMasterVolumeMsg{newVal}); },
                 "master.volume"});
         });
+
+        setFocusable(false);
+        setRelayoutBoundary(true);
     }
 
     void init(Project* project, audio::AudioEngine* engine,
@@ -146,7 +142,7 @@ public:
         if (trackIndex == -1) {
             m_masterMeter = {peakL, peakR};
         } else if (trackIndex >= -5 && trackIndex <= -2) {
-            int busIdx = -(trackIndex + 2);
+            const int busIdx = -(trackIndex + 2);
             m_returnMeters[busIdx] = {peakL, peakR};
         }
     }
@@ -155,85 +151,70 @@ public:
 
     void setLearnManager(midi::MidiLearnManager* mgr) { m_learnManager = mgr; }
 
-    // Callbacks for opening detail panel on strip click
     void setOnReturnClick(std::function<void(int)> cb) { m_onReturnClick = std::move(cb); }
     void setOnMasterClick(std::function<void()> cb)    { m_onMasterClick = std::move(cb); }
-
-    // Right-click callbacks for showing "Add Effect" context menu
-    void setOnReturnRightClick(std::function<void(int, float, float)> cb) { m_onReturnRightClick = std::move(cb); }
-    void setOnMasterRightClick(std::function<void(float, float)> cb)     { m_onMasterRightClick = std::move(cb); }
-
+    void setOnReturnRightClick(std::function<void(int, float, float)> cb) {
+        m_onReturnRightClick = std::move(cb);
+    }
+    void setOnMasterRightClick(std::function<void(float, float)> cb) {
+        m_onMasterRightClick = std::move(cb);
+    }
     void setShowReturns(bool show) { m_showReturns = show; }
 
-    // ─── Measure / Layout ───────────────────────────────────────────────
-
-    Size measure(const Constraints& c, const UIContext&) override {
+protected:
+    // ─── fw2 Widget overrides ───────────────────────────────────────
+    Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({c.maxW, c.maxH});
     }
 
-    void layout(const Rect& bounds, const UIContext&) override {
-        m_bounds = bounds;
-    }
-
-    // ─── Rendering ──────────────────────────────────────────────────────
+    void onLayout(Rect, UIContext&) override {}
 
 #ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
-#else
-    void paint(UIContext& ctx) override;
-#endif
-
-    // ─── Mouse events ───────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    bool onMouseDown(MouseEvent&) override { return false; }
+    bool onMouseDown(MouseEvent&)     override { return false; }
+    bool onMouseMove(MouseMoveEvent&) override { return false; }
+    bool onMouseUp(MouseEvent&)       override { return false; }
 #else
     bool onMouseDown(MouseEvent& e) override;
-#endif
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        // v1 context menu retired — fw2 handles hover via LayerStack.
-        // v2 button/toggle drag — forward translated events.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseMove(ev);
+        if (Widget* cap = Widget::capturedWidget()) {
+            const auto& b = cap->bounds();
+            MouseMoveEvent ev = e;
+            ev.lx = e.x - b.x;
+            ev.ly = e.y - b.y;
+            cap->dispatchMouseMove(ev);
             return true;
-        }
-        if (auto* cap = Widget::capturedWidget()) {
-            return cap->onMouseMove(e);
         }
         return false;
     }
 
     bool onMouseUp(MouseEvent& e) override {
-        // v2 button/toggle release flushes via the m_v2Dragging path.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseUp(ev);
-            m_v2Dragging = nullptr;
-            releaseMouse();
+        if (Widget* cap = Widget::capturedWidget()) {
+            const auto& b = cap->bounds();
+            MouseEvent ev = e;
+            ev.lx = e.x - b.x;
+            ev.ly = e.y - b.y;
+            cap->dispatchMouseUp(ev);
             return true;
-        }
-        if (auto* cap = Widget::capturedWidget()) {
-            return cap->onMouseUp(e);
         }
         return false;
     }
+#endif
+
+public:
+#ifdef YAWN_TEST_BUILD
+    void render(UIContext&) override {}
+#else
+    void render(UIContext& ctx) override;
+#endif
 
 private:
     struct StripWidgets {
-        ::yawn::ui::fw2::FwToggle muteBtn;
-        ::yawn::ui::fw2::FwPan pan;
-        ::yawn::ui::fw2::FwFader fader;
-        ::yawn::ui::fw2::FwMeter meter;
-        Label      nameLabel;
-        Label      dbLabel;
+        FwToggle muteBtn;
+        FwPan    pan;
+        FwFader  fader;
+        FwMeter  meter;
     };
-
-    bool hitWidget(Widget& w, float mx, float my) {
-        auto& b = w.bounds();
-        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
-    }
 
 #ifdef YAWN_TEST_BUILD
     void paintStripCommon(UIContext&, StripWidgets&,
@@ -265,8 +246,14 @@ private:
                            float w, float h);
 #endif
 
-    // ─── Data ───────────────────────────────────────────────────────────
+#ifndef YAWN_TEST_BUILD
+    void openMidiLearnMenu(float mx, float my,
+                           const automation::AutomationTarget& target,
+                           float paramMin, float paramMax,
+                           std::function<void()> resetAction);
+#endif
 
+    // ─── Data ───────────────────────────────────────────────────────
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
@@ -276,12 +263,9 @@ private:
 
     StripWidgets m_returnStrips[kMaxReturnBuses];
     StripWidgets m_masterStrip;
-    ::yawn::ui::fw2::FwButton m_stopAllBtn;
+    FwButton     m_stopAllBtn;
 
-    // Tracks which v2 widget currently owns a drag — set in
-    // onMouseDown, used by onMouseMove/Up to forward translated
-    // events back to the fw2 gesture SM. Null when no v2 drag.
-    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
+    std::string  m_returnNames[kMaxReturnBuses];
 
     bool m_showReturns = true;
     midi::MidiLearnManager* m_learnManager = nullptr;
@@ -289,13 +273,6 @@ private:
     std::function<void()>    m_onMasterClick;
     std::function<void(int, float, float)> m_onReturnRightClick;
     std::function<void(float, float)>      m_onMasterRightClick;
-
-#ifndef YAWN_TEST_BUILD
-    void openMidiLearnMenu(float mx, float my,
-                           const automation::AutomationTarget& target,
-                           float paramMin, float paramMax,
-                           std::function<void()> resetAction);
-#endif
 
     static constexpr float kMeterWidth     = 6.0f;
     static constexpr float kFaderWidth     = 20.0f;
@@ -306,6 +283,6 @@ private:
     static constexpr float kRetStripW      = 70.0f;
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

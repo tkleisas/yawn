@@ -1,6 +1,10 @@
-// MixerPanel.cpp — rendering and event implementations.
-// Split from MixerPanel.h to keep rendering code out of the header.
-// This file is only compiled in the main exe build (not test builds).
+// MixerPanel.cpp — UI v2 rendering + event implementations.
+//
+// Migrated from v1 fw::Widget to fw2::Widget. All child controls are
+// native fw2 widgets that dispatch directly through the fw2 gesture
+// SM — no V1EventBridge / m_v2Dragging tracking. Labels that used to
+// be v1 fw::Label widgets are now painted inline via
+// `ctx.textMetrics->drawText`.
 
 #include "MixerPanel.h"
 #include "audio/AudioEngine.h"
@@ -8,60 +12,71 @@
 #include "../Renderer.h"
 #include "../Font.h"
 #include "ui/framework/v2/V1MenuBridge.h"
+#include "ui/framework/v2/Theme.h"
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
-void MixerPanel::paint(UIContext& ctx) {
+void MixerPanel::render(UIContext& ctx) {
     if (!m_project || !m_engine) return;
-    auto& r = *ctx.renderer;
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
     float x = m_bounds.x, y = m_bounds.y;
     float w = m_bounds.w,  h = m_bounds.h;
 
-    r.drawRect(x, y, w, h, Theme::panelBg);
-    r.drawRect(x, y, w, 1, Theme::clipSlotBorder);
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::panelBg);
+    r.drawRect(x, y, w, 1, ::yawn::ui::Theme::clipSlotBorder);
 
     float stripY = y + 2;
     float stripH = h - 4 - kScrollbarH;
 
-    float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
-    m_mixLabel.setFontScale(labelScale);
-    m_mixLabel.layout(Rect{x + 6, stripY + 4, 30, 14}, ctx);
-    m_mixLabel.paint(ctx);
+    // "MIX" label — theme small size, scales with the font-scale
+    // preference like the rest of the fw2 UI.
+    {
+        const float mixSize = theme().metrics.fontSizeSmall;
+        const float lh = tm.lineHeight(mixSize);
+        tm.drawText(r, "MIX",
+                    x + 6,
+                    stripY + 4 + (14.0f - lh) * 0.5f,
+                    mixSize, ::yawn::ui::Theme::textPrimary);
+    }
 
     // I/O and Send toggle buttons in left margin
     float toggleW = 36.0f, toggleH = 18.0f;
     float toggleX = x + 4;
     float toggleY = stripY + 22;
 
-    // v2 toggles — setState drives the accent-fill visual; no per-paint
-    // colour juggling needed. Sync state from the panel's bools each
-    // paint (cheap no-op when unchanged).
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-    m_ioToggle.setState(m_showIO);
-    m_ioToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, v2ctx);
-    m_ioToggle.render(v2ctx);
+    // v2 toggles — setState drives the accent-fill visual. Sync state
+    // from the panel's bools each frame using Automation so the
+    // setOnChange callback only fires for real user clicks.
+    m_ioToggle.setState(m_showIO, ValueChangeSource::Automation);
+    m_ioToggle.measure(Constraints::tight(toggleW, toggleH), ctx);
+    m_ioToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
+    m_ioToggle.render(ctx);
 
     toggleY += toggleH + 2;
-    m_sendToggle.setState(m_showSends);
-    m_sendToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, v2ctx);
-    m_sendToggle.render(v2ctx);
+    m_sendToggle.setState(m_showSends, ValueChangeSource::Automation);
+    m_sendToggle.measure(Constraints::tight(toggleW, toggleH), ctx);
+    m_sendToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
+    m_sendToggle.render(ctx);
 
     toggleY += toggleH + 2;
-    m_returnToggle.setState(m_showReturns);
-    m_returnToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, v2ctx);
-    m_returnToggle.render(v2ctx);
+    m_returnToggle.setState(m_showReturns, ValueChangeSource::Automation);
+    m_returnToggle.measure(Constraints::tight(toggleW, toggleH), ctx);
+    m_returnToggle.layout(Rect{toggleX, toggleY, toggleW, toggleH}, ctx);
+    m_returnToggle.render(ctx);
 
-    float gridX = x + Theme::kSceneLabelWidth;
-    float gridW = w - Theme::kSceneLabelWidth;
+    float gridX = x + ::yawn::ui::Theme::kSceneLabelWidth;
+    float gridW = w - ::yawn::ui::Theme::kSceneLabelWidth;
 
     r.pushClip(gridX, y, gridW, h - kScrollbarH);
     for (int t = 0; t < m_project->numTracks(); ++t) {
-        float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-        if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-        paintStrip(ctx, t, sx, stripY, Theme::kTrackWidth, stripH);
+        float sx = gridX + t * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+        if (sx + ::yawn::ui::Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+        paintStrip(ctx, t, sx, stripY, ::yawn::ui::Theme::kTrackWidth, stripH);
     }
     r.popClip();
 
@@ -69,14 +84,12 @@ void MixerPanel::paint(UIContext& ctx) {
     // render loop — above every panel, with drop shadow. No per-panel
     // overlay pass needed.
 
-    float contentW = m_project->numTracks() * Theme::kTrackWidth;
+    float contentW = m_project->numTracks() * ::yawn::ui::Theme::kTrackWidth;
     m_scrollbar.setContentSize(contentW);
     m_scrollbar.setScrollPos(m_scrollX);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, v2ctx);
-        m_scrollbar.render(v2ctx);
-    }
+    m_scrollbar.measure(Constraints::tight(gridW, kScrollbarH), ctx);
+    m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, ctx);
+    m_scrollbar.render(ctx);
 
     // v1 context menu retired — fw2::ContextMenu paints via LayerStack
     // in App's render loop.
@@ -87,44 +100,43 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
 
-    // v1 context menu retired — LayerStack dispatch in App::pollEvents
-    // intercepts clicks while the fw2 menu is open.
+    // Route helper — direct dispatch to a fw2 child at its own bounds.
+    // The fw2 gesture SM handles capture via Widget::capturedWidget()
+    // internally, so onMouseMove/onMouseUp in the header will forward
+    // moves and ups to the captured widget for us.
+    auto hitChild = [&](Widget& wgt) -> bool {
+        const auto& b = wgt.bounds();
+        if (mx < b.x || mx >= b.x + b.w) return false;
+        if (my < b.y || my >= b.y + b.h) return false;
+        MouseEvent ev = e;
+        ev.lx = mx - b.x;
+        ev.ly = my - b.y;
+        wgt.dispatchMouseDown(ev);
+        return true;
+    };
 
     // v2 scrollbar — route through the gesture SM for drag + release.
     {
         const auto& sb = m_scrollbar.bounds();
         if (mx >= sb.x && mx < sb.x + sb.w && my >= sb.y && my < sb.y + sb.h) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
+            MouseEvent ev = e;
+            ev.lx = mx - sb.x;
+            ev.ly = my - sb.y;
             m_scrollbar.dispatchMouseDown(ev);
-            m_v2Dragging = &m_scrollbar;
-            captureMouse();
             return true;
         }
     }
 
-    // Toggle buttons in left margin — v2 FwToggle, routed through the
-    // v1→v2 event bridge + m_v2Dragging capture (same shape the strip
-    // buttons use below).
-    {
-        auto routePanelToggle = [&](::yawn::ui::fw2::FwToggle& t) -> bool {
-            if (rightClick) return false;
-            const auto& b = t.bounds();
-            if (mx < b.x || mx >= b.x + b.w) return false;
-            if (my < b.y || my >= b.y + b.h) return false;
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-            t.dispatchMouseDown(ev);
-            m_v2Dragging = &t;
-            captureMouse();
-            return true;
-        };
-        if (routePanelToggle(m_ioToggle))     return true;
-        if (routePanelToggle(m_sendToggle))   return true;
-        if (routePanelToggle(m_returnToggle)) return true;
+    // Toggle buttons in left margin — v2 FwToggle.
+    if (!rightClick) {
+        if (hitChild(m_ioToggle))     return true;
+        if (hitChild(m_sendToggle))   return true;
+        if (hitChild(m_returnToggle)) return true;
     }
 
-    float x = m_bounds.x, y = m_bounds.y;
-    float gridX = x + Theme::kSceneLabelWidth;
-    float gridW = m_bounds.w - Theme::kSceneLabelWidth;
+    float x = m_bounds.x;
+    float gridX = x + ::yawn::ui::Theme::kSceneLabelWidth;
+    float gridW = m_bounds.w - ::yawn::ui::Theme::kSceneLabelWidth;
 
     // v2 dropdowns route open-state clicks through LayerStack
     // (App::pollEvents dispatches before reaching the panel).
@@ -132,30 +144,16 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
     // loop needed here.
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
-        float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-        if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-        if (mx < sx || mx >= sx + Theme::kTrackWidth) continue;
+        float sx = gridX + t * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+        if (sx + ::yawn::ui::Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
+        if (mx < sx || mx >= sx + ::yawn::ui::Theme::kTrackWidth) continue;
 
         auto& s = m_strips[t];
 
-        // v2 button/toggle hit-tests — route through dispatchMouseDown +
-        // m_v2Dragging so the fw2 gesture SM gets its down/up pair via
-        // v1 capture. Uses the fw2 widget's own bounds() for hit-test.
-        auto routeV2Btn = [&](::yawn::ui::fw2::Widget& w) -> bool {
-            const auto& b = w.bounds();
-            if (mx < b.x || mx >= b.x + b.w) return false;
-            if (my < b.y || my >= b.y + b.h) return false;
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-            w.dispatchMouseDown(ev);
-            m_v2Dragging = &w;
-            captureMouse();
-            return true;
-        };
-
-        if (!rightClick && routeV2Btn(s.stopBtn))  return true;
-        if (!rightClick && routeV2Btn(s.muteBtn))  return true;
-        if (!rightClick && routeV2Btn(s.soloBtn))  return true;
-        if (!rightClick && routeV2Btn(s.armBtn))   return true;
+        if (!rightClick && hitChild(s.stopBtn))  return true;
+        if (!rightClick && hitChild(s.muteBtn))  return true;
+        if (!rightClick && hitChild(s.soloBtn))  return true;
+        if (!rightClick && hitChild(s.armBtn))   return true;
 
         // Monitor button — right-click resets to Auto (keep v1 undo),
         // otherwise forward to v2 for the cycle.
@@ -178,7 +176,7 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                     }
                     return true;
                 }
-                return routeV2Btn(s.monBtn);
+                return hitChild(s.monBtn);
             }
         }
 
@@ -200,13 +198,14 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                     }
                     return true;
                 }
-                return routeV2Btn(s.autoBtn);
+                return hitChild(s.autoBtn);
             }
         }
 
         if (m_showIO && m_project->track(t).type == Track::Type::Audio) {
-            // v2 dropdowns: toggle on mouseDown directly (v1 App loop
-            // doesn't forward mouseUp to v2 widgets).
+            // v2 dropdowns: toggle on mouseDown directly (we'd rather
+            // open-on-press than route through hitChild, since the
+            // dropdown's picker is hosted on the LayerStack).
             {
                 const auto& b = s.audioInputDrop.bounds();
                 if (!rightClick && mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
@@ -214,9 +213,9 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                     return true;
                 }
             }
-            if (!rightClick && routeV2Btn(s.monoBtn)) return true;
+            if (!rightClick && hitChild(s.monoBtn)) return true;
         } else if (m_showIO && m_project->track(t).type == Track::Type::Midi) {
-            auto tryToggle = [&](::yawn::ui::fw2::FwDropDown& d) -> bool {
+            auto tryToggle = [&](FwDropDown& d) -> bool {
                 const auto& b = d.bounds();
                 if (!rightClick && mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
                     d.toggle();
@@ -231,28 +230,25 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             if (tryToggle(s.sidechainDrop)) return true;
         }
 
-        // Send knobs — v2 widgets hosted inside the v1 panel. Drag
-        // uses the fw2 gesture SM, so we translate the event, capture
-        // v1 mouse so moves route back here, and stash the widget in
-        // m_v2Dragging.
+        // Send knobs — v2 widgets hosted inside the panel. Drag uses
+        // the fw2 gesture SM.
         if (m_showSends) {
             for (int d = 0; d < kMaxReturnBuses; ++d) {
                 auto& kn = s.sendKnobs[d];
                 const auto& kb = kn.bounds();
                 if (mx < kb.x || mx >= kb.x + kb.w) continue;
                 if (my < kb.y || my >= kb.y + kb.h) continue;
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, kb);
+                MouseEvent ev = e;
+                ev.lx = mx - kb.x;
+                ev.ly = my - kb.y;
                 kn.dispatchMouseDown(ev);
-                m_v2Dragging = &kn;
-                captureMouse();
                 return true;
             }
         }
 
-        // Pan — v2 FwPan, same v1→v2 event bridge pattern as knobs
-        // and faders. Right-click opens the MIDI Learn context menu
-        // (handled before dispatch so the widget's internal reset
-        // doesn't also fire).
+        // Pan — v2 FwPan. Right-click opens the MIDI Learn context
+        // menu (handled before dispatch so the widget's internal
+        // reset doesn't also fire).
         {
             const auto& pb = s.pan.bounds();
             if (mx >= pb.x && mx < pb.x + pb.w &&
@@ -276,17 +272,16 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                         });
                     return true;
                 }
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, pb);
+                MouseEvent ev = e;
+                ev.lx = mx - pb.x;
+                ev.ly = my - pb.y;
                 s.pan.dispatchMouseDown(ev);
-                m_v2Dragging = &s.pan;
-                captureMouse();
                 return true;
             }
         }
 
-        // Fader — v2 FwFader, same v1→v2 event bridge pattern as knobs
-        // and buttons. Right-click opens the MIDI Learn context menu
-        // (handled separately from the drag dispatch).
+        // Fader — v2 FwFader. Right-click opens the MIDI Learn
+        // context menu (handled separately from the drag dispatch).
         {
             const auto& fb = s.fader.bounds();
             if (mx >= fb.x && mx < fb.x + fb.w &&
@@ -310,10 +305,10 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                         });
                     return true;
                 }
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, fb);
+                MouseEvent ev = e;
+                ev.lx = mx - fb.x;
+                ev.ly = my - fb.y;
                 s.fader.dispatchMouseDown(ev);
-                m_v2Dragging = &s.fader;
-                captureMouse();
                 return true;
             }
         }
@@ -332,7 +327,7 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
                                     const automation::AutomationTarget& target,
                                     float paramMin, float paramMax,
                                     std::function<void()> resetAction) {
-    using Item = ContextMenu::Item;
+    using Item = ::yawn::ui::ContextMenu::Item;
     std::vector<Item> items;
 
     bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
@@ -375,9 +370,8 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
     resetItem.action = std::move(resetAction);
     items.push_back(std::move(resetItem));
 
-    ::yawn::ui::fw2::ContextMenu::show(
-        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
-        Point{mx, my});
+    ContextMenu::show(v1ItemsToFw2(std::move(items)),
+                      Point{mx, my});
 }
 
 void MixerPanel::setupStripCallbacks(int t) {
@@ -391,7 +385,7 @@ void MixerPanel::setupStripCallbacks(int t) {
 
     // Mute — v2 FwToggle. Red accent carries the muted state.
     s.muteBtn.setLabel("M");
-    s.muteBtn.setAccentColor(Color{255, 80, 80});
+    s.muteBtn.setAccentColor(Color{255, 80, 80, 255});
     s.muteBtn.setOnChange([this, t](bool on) {
         if (!m_engine) return;
         bool cur = !on;   // state before this click
@@ -406,7 +400,7 @@ void MixerPanel::setupStripCallbacks(int t) {
 
     // Solo — v2 FwToggle. Yellow accent carries the soloed state.
     s.soloBtn.setLabel("S");
-    s.soloBtn.setAccentColor(Color{255, 200, 50});
+    s.soloBtn.setAccentColor(Color{255, 200, 50, 255});
     s.soloBtn.setOnChange([this, t](bool on) {
         if (!m_engine) return;
         bool cur = !on;
@@ -421,7 +415,7 @@ void MixerPanel::setupStripCallbacks(int t) {
 
     // Arm — v2 FwToggle. Deeper red accent carries the armed state.
     s.armBtn.setLabel("R");
-    s.armBtn.setAccentColor(Color{200, 40, 40});
+    s.armBtn.setAccentColor(Color{200, 40, 40, 255});
     s.armBtn.setOnChange([this, t](bool on) {
         if (!m_project || !m_engine) return;
         bool cur = !on;
@@ -526,7 +520,7 @@ void MixerPanel::setupStripCallbacks(int t) {
     // Mono — v2 FwToggle. Green accent for the mono-on state (matches
     // the v1 green highlight). Label is set per-paint to Mono/Stereo.
     s.monoBtn.setLabel("S");
-    s.monoBtn.setAccentColor(Color{60, 100, 60});
+    s.monoBtn.setAccentColor(Color{60, 100, 60, 255});
     s.monoBtn.setOnChange([this, t](bool on) {
         if (!m_project || !m_engine) return;
         bool cur = !on;
@@ -716,15 +710,16 @@ void MixerPanel::setupStripCallbacks(int t) {
 
 void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
                  float stripW, float stripH) {
-    auto& r = *ctx.renderer;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
     auto& s = m_strips[idx];
-    float pad = Theme::kSlotPadding;
+    float pad = ::yawn::ui::Theme::kSlotPadding;
     float ix = sx + pad, iw = stripW - pad * 2;
     const auto& ch = m_engine->mixer().trackChannel(idx);
     const auto& track = m_project->track(idx);
-    Color col = Theme::trackColors[track.colorIndex % Theme::kNumTrackColors];
+    Color col = ::yawn::ui::Theme::trackColors[track.colorIndex % ::yawn::ui::Theme::kNumTrackColors];
 
-    r.drawRect(ix, stripY, iw, stripH, Theme::background);
+    r.drawRect(ix, stripY, iw, stripH, ::yawn::ui::Theme::background);
     if (idx == m_selectedTrack) {
         r.drawRect(ix, stripY, iw, stripH, Color{50, 55, 65, 255});
         // Selected track gets a thicker, brighter color bar at top
@@ -736,61 +731,74 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         r.drawRect(ix, stripY, iw, 3, col);
     }
 
-    char nameBuf[32];
-    const auto& trackName = m_project->track(idx).name;
-    std::snprintf(nameBuf, sizeof(nameBuf), "%s", trackName.c_str());
-    s.nameLabel.setText(nameBuf);
-    s.nameLabel.layout(Rect{ix + 4, stripY + 5, iw - 8, 14}, ctx);
-    s.nameLabel.paint(ctx);
+    // Track name (formerly s.nameLabel).
+    {
+        char nameBuf[32];
+        const auto& trackName = m_project->track(idx).name;
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", trackName.c_str());
+        const float nameSize = theme().metrics.fontSizeSmall;
+        const float lh = tm.lineHeight(nameSize);
+        tm.drawText(r, nameBuf, ix + 4,
+                    stripY + 5 + (14.0f - lh) * 0.5f,
+                    nameSize, ::yawn::ui::Theme::textPrimary);
+    }
 
     float curY = stripY + 24;
     float btnW = std::min((iw - 16) / 3.0f, kButtonWidth);
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
     // Stop / Mute / Solo row — all v2 widgets.
     // Stop: FwButton with a small stop-icon square overlaid on top.
     {
-        s.stopBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, v2ctx);
-        s.stopBtn.render(v2ctx);
+        s.stopBtn.measure(Constraints::tight(btnW, kButtonHeight), ctx);
+        s.stopBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
+        s.stopBtn.render(ctx);
         auto& sb = s.stopBtn.bounds();
         float iconSize = 6.0f;
         float iconX = sb.x + (sb.w - iconSize) * 0.5f;
         float iconY = sb.y + (sb.h - iconSize) * 0.5f;
-        r.drawRect(iconX, iconY, iconSize, iconSize, Theme::textSecondary);
+        r.drawRect(iconX, iconY, iconSize, iconSize, ::yawn::ui::Theme::textSecondary);
     }
 
-    // Mute: FwToggle. setState drives the red accent fill.
-    s.muteBtn.setState(ch.muted);
-    s.muteBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, v2ctx);
-    s.muteBtn.render(v2ctx);
+    // Mute: FwToggle. setState drives the red accent fill. Passes
+    // Automation source so the per-frame engine-state sync doesn't
+    // fire onChange — otherwise the engine's async command queue
+    // makes the button ping-pong (user click → sendCommand → next
+    // frame still reports old state → setState fires onChange →
+    // reverts the click at audio thread).
+    s.muteBtn.setState(ch.muted, ValueChangeSource::Automation);
+    s.muteBtn.measure(Constraints::tight(btnW, kButtonHeight), ctx);
+    s.muteBtn.layout(Rect{ix + 4 + btnW + 2, curY, btnW, kButtonHeight}, ctx);
+    s.muteBtn.render(ctx);
 
-    // Solo: FwToggle. setState drives the yellow accent fill.
-    s.soloBtn.setState(ch.soloed);
-    s.soloBtn.layout(Rect{ix + 4 + (btnW + 2) * 2, curY, btnW, kButtonHeight}, v2ctx);
-    s.soloBtn.render(v2ctx);
+    // Solo — same async-safe pattern.
+    s.soloBtn.setState(ch.soloed, ValueChangeSource::Automation);
+    s.soloBtn.measure(Constraints::tight(btnW, kButtonHeight), ctx);
+    s.soloBtn.layout(Rect{ix + 4 + (btnW + 2) * 2, curY, btnW, kButtonHeight}, ctx);
+    s.soloBtn.render(ctx);
 
     // Arm + Monitor row
     curY += kButtonHeight + 2;
     bool armed = track.armed;
     s.armBtn.setLabel("R");
-    s.armBtn.setState(armed);
-    s.armBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, v2ctx);
-    s.armBtn.render(v2ctx);
+    s.armBtn.setState(armed, ValueChangeSource::Automation);
+    s.armBtn.measure(Constraints::tight(btnW, kButtonHeight), ctx);
+    s.armBtn.layout(Rect{ix + 4, curY, btnW, kButtonHeight}, ctx);
+    s.armBtn.render(ctx);
 
     // Monitor — v2 FwButton, cycles Off/In/Auto. Accent color reflects
     // current state and setHighlighted(true) shows the fill. Auto is
     // the "no highlight" default (matches v1's clipSlotEmpty look).
     auto mode = track.monitorMode;
     const char* monLabel = "Auto";
-    Color monAccent = Color{40, 80, 40};
+    Color monAccent = Color{40, 80, 40, 255};
     bool monHL = false;
     if (mode == Track::MonitorMode::In) {
         monLabel = "In";
-        monAccent = Color{40, 80, 40};
+        monAccent = Color{40, 80, 40, 255};
         monHL = true;
     } else if (mode == Track::MonitorMode::Off) {
         monLabel = "Off";
-        monAccent = Color{80, 40, 40};
+        monAccent = Color{80, 40, 40, 255};
         monHL = true;
     }
     s.monBtn.setLabel(monLabel);
@@ -798,8 +806,9 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     s.monBtn.setHighlighted(monHL);
     float monX = ix + 4 + btnW + 2;
     float monW = iw - 8 - btnW - 2;          // fill remaining row width
-    s.monBtn.layout(Rect{monX, curY, monW, kButtonHeight}, v2ctx);
-    s.monBtn.render(v2ctx);
+    s.monBtn.measure(Constraints::tight(monW, kButtonHeight), ctx);
+    s.monBtn.layout(Rect{monX, curY, monW, kButtonHeight}, ctx);
+    s.monBtn.render(ctx);
 
     curY += kButtonHeight + 2;
 
@@ -808,40 +817,41 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     {
         auto am = track.autoMode;
         const char* autoLabel = "Off";
-        Color autoAccent = Theme::clipSlotEmpty;
+        Color autoAccent = ::yawn::ui::Theme::clipSlotEmpty;
         bool autoHL = false;
         if (am == automation::AutoMode::Read) {
             autoLabel = "Read";
-            autoAccent = Color{40, 80, 40};
+            autoAccent = Color{40, 80, 40, 255};
             autoHL = true;
         } else if (am == automation::AutoMode::Touch) {
             autoLabel = "Touch";
-            autoAccent = Color{100, 70, 20};
+            autoAccent = Color{100, 70, 20, 255};
             autoHL = true;
         } else if (am == automation::AutoMode::Latch) {
             autoLabel = "Latch";
-            autoAccent = Color{100, 30, 30};
+            autoAccent = Color{100, 30, 30, 255};
             autoHL = true;
         }
         s.autoBtn.setLabel(autoLabel);
         s.autoBtn.setAccentColor(autoAccent);
         s.autoBtn.setHighlighted(autoHL);
         float autoW = iw - 8;
-        s.autoBtn.layout(Rect{ix + 4, curY, autoW, kButtonHeight}, v2ctx);
-        s.autoBtn.render(v2ctx);
+        s.autoBtn.measure(Constraints::tight(autoW, kButtonHeight), ctx);
+        s.autoBtn.layout(Rect{ix + 4, curY, autoW, kButtonHeight}, ctx);
+        s.autoBtn.render(ctx);
     }
 
     curY += kButtonHeight + 4;
 
     // Pan — v2 FwPan, skip sync during drag to avoid engine rubber-banding.
+    // Automation source silences onChange so the per-frame engine-echo
+    // doesn't fire a second command (ping-pong).
     if (!s.pan.isDragging())
-        s.pan.setValue(ch.pan);
+        s.pan.setValue(ch.pan, ValueChangeSource::Automation);
     s.pan.setThumbColor(col);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, v2ctx);
-        s.pan.render(v2ctx);
-    }
+    s.pan.measure(Constraints::tight(iw - 8, 16), ctx);
+    s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, ctx);
+    s.pan.render(ctx);
 
     // CC label for pan mapping
     if (m_learnManager) {
@@ -849,10 +859,10 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         auto* panMap = m_learnManager->findByTarget(panTarget);
         if (panMap) {
             auto lbl = panMap->label();
-            float ccScale = 8.0f / Theme::kFontSize;
-            ctx.font->drawText(*ctx.renderer, lbl.c_str(),
-                ix + iw - 4 - ctx.font->textWidth(lbl.c_str(), ccScale),
-                curY + 2, ccScale, Color{100, 180, 255});
+            const float ccSize = 8.0f;
+            tm.drawText(r, lbl,
+                ix + iw - 4 - tm.textWidth(lbl, ccSize),
+                curY + 2, ccSize, Color{100, 180, 255, 255});
         }
     }
 
@@ -878,7 +888,7 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
             // back to the stale engine value and the drag would look
             // "jumpy". Same gate the v1 mixer had via isDragging().
             if (!knob.isDragging())
-                knob.setValue(send.level);
+                knob.setValue(send.level, ValueChangeSource::Automation);
 
             // Color feedback: off → green → yellow → red
             float v = knob.value();
@@ -887,25 +897,24 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
                 arcCol = Color{50, 50, 55, 255};  // off
             } else if (v < 0.5f) {
                 // green to yellow
-                float t = v / 0.5f;
+                float tt = v / 0.5f;
                 arcCol = Color{
-                    static_cast<uint8_t>(40 + t * 215),
-                    static_cast<uint8_t>(180 + t * 40),
-                    static_cast<uint8_t>(40 * (1.0f - t)),
+                    static_cast<uint8_t>(40 + tt * 215),
+                    static_cast<uint8_t>(180 + tt * 40),
+                    static_cast<uint8_t>(40 * (1.0f - tt)),
                     255};
             } else {
                 // yellow to red
-                float t = (v - 0.5f) / 0.5f;
+                float tt = (v - 0.5f) / 0.5f;
                 arcCol = Color{255,
-                    static_cast<uint8_t>(220 * (1.0f - t)),
+                    static_cast<uint8_t>(220 * (1.0f - tt)),
                     0, 255};
             }
             knob.setAccentColor(arcCol);
 
-            // Hosted v2 widget → render through the fw2 global UIContext.
-            auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-            knob.layout(Rect{kx, ky, knobW, knobH}, v2ctx);
-            knob.render(v2ctx);
+            knob.measure(Constraints::tight(knobW, knobH), ctx);
+            knob.layout(Rect{kx, ky, knobW, knobH}, ctx);
+            knob.render(ctx);
         }
         int rows = (kMaxReturnBuses + cols - 1) / cols;
         curY += rows * knobH + 2;
@@ -920,21 +929,17 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
     // (async) volume echo can't rubber-band the knob. Same gate the
     // mixer send knobs use.
     if (!s.fader.isDragging())
-        s.fader.setValue(ch.volume);
+        s.fader.setValue(ch.volume, ValueChangeSource::Automation);
     s.fader.setTrackColor(col);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        s.fader.layout(Rect{ix + 4, curY, kFaderWidth, faderH}, v2ctx);
-        s.fader.render(v2ctx);
-    }
+    s.fader.measure(Constraints::tight(kFaderWidth, faderH), ctx);
+    s.fader.layout(Rect{ix + 4, curY, kFaderWidth, faderH}, ctx);
+    s.fader.render(ctx);
 
     float meterX = ix + 4 + kFaderWidth + 3;
     s.meter.setPeak(m_trackMeters[idx].peakL, m_trackMeters[idx].peakR);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        s.meter.layout(Rect{meterX, curY, kMeterWidth * 2, faderH}, v2ctx);
-        s.meter.render(v2ctx);
-    }
+    s.meter.measure(Constraints::tight(kMeterWidth * 2, faderH), ctx);
+    s.meter.layout(Rect{meterX, curY, kMeterWidth * 2, faderH}, ctx);
+    s.meter.render(ctx);
 
     // I/O controls alongside fader (in space to the right of meter)
     if (m_showIO) {
@@ -948,16 +953,20 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         // Visual tracks have no audio/MIDI I/O — leave the region blank.
     }
 
-    float db = ch.volume > 0.001f ? 20.0f * std::log10(ch.volume) : -60.0f;
-    char dbText[16];
-    if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
-    else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-    s.dbLabel.setText(dbText);
-    s.dbLabel.setColor(Theme::textDim);
-    float dbScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
-    s.dbLabel.setFontScale(dbScale);
-    s.dbLabel.layout(Rect{ix + 4, stripY + stripH - 18, iw - 8, 14}, ctx);
-    s.dbLabel.paint(ctx);
+    // dB readout (formerly s.dbLabel). textSecondary gives better
+    // contrast than textDim while keeping it visually subdued against
+    // the active fader knob.
+    {
+        float db = ch.volume > 0.001f ? 20.0f * std::log10(ch.volume) : -60.0f;
+        char dbText[16];
+        if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
+        else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
+        const float dbSize = theme().metrics.fontSizeSmall;
+        const float lh = tm.lineHeight(dbSize);
+        tm.drawText(r, dbText, ix + 4,
+                    stripY + stripH - 18 + (14.0f - lh) * 0.5f,
+                    dbSize, ::yawn::ui::Theme::textSecondary);
+    }
 
     // CC label for volume mapping
     if (m_learnManager) {
@@ -965,20 +974,21 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
         auto* volMap = m_learnManager->findByTarget(volTarget);
         if (volMap) {
             auto lbl = volMap->label();
-            float ccScale = 8.0f / Theme::kFontSize;
-            ctx.font->drawText(*ctx.renderer, lbl.c_str(),
-                ix + 4, stripY + stripH - 30, ccScale, Color{100, 180, 255});
+            const float ccSize = 8.0f;
+            tm.drawText(r, lbl,
+                ix + 4, stripY + stripH - 30, ccSize,
+                Color{100, 180, 255, 255});
         }
     }
 
-    r.drawRect(sx + stripW - 1, stripY, 1, stripH, Theme::clipSlotBorder);
+    r.drawRect(sx + stripW - 1, stripY, 1, stripH, ::yawn::ui::Theme::clipSlotBorder);
 }
 
 void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
                    int idx, float ioX, float ioW, float ioY, float ioH) {
+    (void)ioH;
     float dropH = kIOHeight;
     float curY = ioY;
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
     // Audio input dropdown: hardware inputs + resample from other tracks
     std::vector<std::string> inputItems = {"None", "In 1", "In 2", "In 1+2",
@@ -1005,33 +1015,36 @@ void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
     } else {
         sel = std::clamp(track.audioInputCh, 0, hwCount - 1);
     }
-    s.audioInputDrop.setSelectedIndex(sel);
-    s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-    s.audioInputDrop.render(v2ctx);
+    s.audioInputDrop.setSelectedIndex(sel, ValueChangeSource::Automation);
+    s.audioInputDrop.measure(Constraints::tight(ioW, dropH), ctx);
+    s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+    s.audioInputDrop.render(ctx);
 
     // Mono toggle — v2 FwToggle. setState drives the green accent fill.
     curY += dropH + 2;
     s.monoBtn.setLabel(track.mono ? "Mono" : "Stereo");
-    s.monoBtn.setState(track.mono);
-    s.monoBtn.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-    s.monoBtn.render(v2ctx);
+    s.monoBtn.setState(track.mono, ValueChangeSource::Automation);
+    s.monoBtn.measure(Constraints::tight(ioW, dropH), ctx);
+    s.monoBtn.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+    s.monoBtn.render(ctx);
 }
 
 void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
                   int idx, float ioX, float ioW, float ioY, float ioH) {
-    float dropH = kIOHeight;
-    float labelH = 10.0f;
-    float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.45f;
-    float curY = ioY;
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+    (void)ioH;
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
-    // "RX" label
-    s.midiRxLabel.setText("RX");
-    s.midiRxLabel.setColor(Theme::textDim);
-    s.midiRxLabel.setFontScale(labelScale);
-    s.midiRxLabel.setAlign(TextAlign::Left);
-    s.midiRxLabel.layout(Rect{ioX, curY, ioW, labelH}, ctx);
-    s.midiRxLabel.paint(ctx);
+    float dropH = kIOHeight;
+    float labelH = 12.0f;
+    // Theme-small for the RX/TX/SC row labels so they scale with the
+    // font-scale setting and stay legible.
+    const float labelSize = theme().metrics.fontSizeSmall;
+    float curY = ioY;
+
+    // "RX" label (formerly s.midiRxLabel).
+    tm.drawText(r, "RX", ioX, curY, labelSize, ::yawn::ui::Theme::textSecondary);
     curY += labelH;
 
     // MIDI Input port
@@ -1044,9 +1057,12 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     int inPortSel = 0;
     if (track.midiInputPort == -2) inPortSel = 1;
     else if (track.midiInputPort >= 0) inPortSel = track.midiInputPort + 2;
-    s.midiInDrop.setSelectedIndex(std::clamp(inPortSel, 0, static_cast<int>(inPortItems.size()) - 1));
-    s.midiInDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-    s.midiInDrop.render(v2ctx);
+    s.midiInDrop.setSelectedIndex(
+        std::clamp(inPortSel, 0, static_cast<int>(inPortItems.size()) - 1),
+        ValueChangeSource::Automation);
+    s.midiInDrop.measure(Constraints::tight(ioW, dropH), ctx);
+    s.midiInDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+    s.midiInDrop.render(ctx);
     curY += dropH + 2;
 
     // MIDI Input channel
@@ -1054,18 +1070,15 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     for (int c = 1; c <= 16; ++c) chItems.push_back(std::to_string(c));
     s.midiInChDrop.setItems(chItems);
     int inChSel = (track.midiInputChannel < 0) ? 0 : track.midiInputChannel + 1;
-    s.midiInChDrop.setSelectedIndex(std::clamp(inChSel, 0, 16));
-    s.midiInChDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-    s.midiInChDrop.render(v2ctx);
+    s.midiInChDrop.setSelectedIndex(std::clamp(inChSel, 0, 16),
+        ValueChangeSource::Automation);
+    s.midiInChDrop.measure(Constraints::tight(ioW, dropH), ctx);
+    s.midiInChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+    s.midiInChDrop.render(ctx);
     curY += dropH + 4;
 
-    // "TX" label
-    s.midiTxLabel.setText("TX");
-    s.midiTxLabel.setColor(Theme::textDim);
-    s.midiTxLabel.setFontScale(labelScale);
-    s.midiTxLabel.setAlign(TextAlign::Left);
-    s.midiTxLabel.layout(Rect{ioX, curY, ioW, labelH}, ctx);
-    s.midiTxLabel.paint(ctx);
+    // "TX" label (formerly s.midiTxLabel).
+    tm.drawText(r, "TX", ioX, curY, labelSize, ::yawn::ui::Theme::textSecondary);
     curY += labelH;
 
     // MIDI Output port
@@ -1076,17 +1089,22 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     }
     s.midiOutDrop.setItems(outPortItems);
     int outPortSel = (track.midiOutputPort < 0) ? 0 : track.midiOutputPort + 1;
-    s.midiOutDrop.setSelectedIndex(std::clamp(outPortSel, 0, static_cast<int>(outPortItems.size()) - 1));
-    s.midiOutDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-    s.midiOutDrop.render(v2ctx);
+    s.midiOutDrop.setSelectedIndex(
+        std::clamp(outPortSel, 0, static_cast<int>(outPortItems.size()) - 1),
+        ValueChangeSource::Automation);
+    s.midiOutDrop.measure(Constraints::tight(ioW, dropH), ctx);
+    s.midiOutDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+    s.midiOutDrop.render(ctx);
     curY += dropH + 2;
 
     // MIDI Output channel
     s.midiOutChDrop.setItems(chItems);
     int outChSel = (track.midiOutputChannel < 0) ? 0 : track.midiOutputChannel + 1;
-    s.midiOutChDrop.setSelectedIndex(std::clamp(outChSel, 0, 16));
-    s.midiOutChDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-    s.midiOutChDrop.render(v2ctx);
+    s.midiOutChDrop.setSelectedIndex(std::clamp(outChSel, 0, 16),
+        ValueChangeSource::Automation);
+    s.midiOutChDrop.measure(Constraints::tight(ioW, dropH), ctx);
+    s.midiOutChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+    s.midiOutChDrop.render(ctx);
     curY += dropH + 4;
 
     // Sidechain source dropdown (only if instrument supports it)
@@ -1096,12 +1114,8 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
         if (inst && inst->supportsSidechain()) showSidechain = true;
     }
     if (showSidechain && m_project) {
-        s.sidechainLabel.setText("SC");
-        s.sidechainLabel.setColor(Theme::textDim);
-        s.sidechainLabel.setFontScale(labelScale);
-        s.sidechainLabel.setAlign(TextAlign::Left);
-        s.sidechainLabel.layout(Rect{ioX, curY, ioW, labelH}, ctx);
-        s.sidechainLabel.paint(ctx);
+        // "SC" label (formerly s.sidechainLabel).
+        tm.drawText(r, "SC", ioX, curY, labelSize, ::yawn::ui::Theme::textSecondary);
         curY += labelH;
 
         std::vector<std::string> scItems = {"None"};
@@ -1119,12 +1133,13 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
                 dropIdx++;
             }
         }
-        s.sidechainDrop.setSelectedIndex(scSel);
-        s.sidechainDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
-        s.sidechainDrop.render(v2ctx);
+        s.sidechainDrop.setSelectedIndex(scSel, ValueChangeSource::Automation);
+        s.sidechainDrop.measure(Constraints::tight(ioW, dropH), ctx);
+        s.sidechainDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
+        s.sidechainDrop.render(ctx);
     }
 }
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

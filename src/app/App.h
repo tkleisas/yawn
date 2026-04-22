@@ -14,9 +14,9 @@
 // v1 AboutDialog retired — fw2 About is inline in the menu handler.
 // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog lives on
 // LayerStack::Modal (include "ui/framework/v2/Dialog.h" to use it).
-#include "ui/framework/TextInputDialogWidget.h"
+#include "ui/framework/v2/TextInputDialog.h"
 #include "ui/panels/PreferencesDialog.h"
-#include "ui/framework/ExportDialog.h"
+#include "ui/framework/v2/ExportDialog.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/UIContext.h"
 #include "ui/framework/v2/UIContext.h"
@@ -170,19 +170,45 @@ private:
     ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
     ui::fw::DetailPanelWidget* m_detailPanel = nullptr;
     ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
-    ui::fw::MixerPanel*   m_mixerPanel   = nullptr;  // owned by unique_ptr below
-    ui::fw::SessionPanel* m_sessionPanel = nullptr;  // owned by unique_ptr below
+    // MixerPanel is fw2; owner holds it, wrapper goes into ContentGrid.
+    std::unique_ptr<ui::fw2::MixerPanel> m_mixerPanelOwner;
+    ui::fw2::MixerPanel*                 m_mixerPanel  = nullptr;
+    ui::fw::Widget*                      m_mixerPanelW = nullptr;
+    // SessionPanel is fw2; owner holds it, wrapper goes into ContentGrid.
+    std::unique_ptr<ui::fw2::SessionPanel> m_sessionPanelOwner;
+    ui::fw2::SessionPanel*                 m_sessionPanel  = nullptr;
+    ui::fw::Widget*                        m_sessionPanelW = nullptr;
     ui::fw::ArrangementPanel* m_arrangementPanel = nullptr;
-    ui::fw::TransportPanel*      m_transportPanel  = nullptr;
+    // TransportPanel is fw2 now; m_transportPanelOwner holds it (the
+    // m_wrappers vector only accepts v1 Widget ptrs). m_transportPanelW
+    // is its v1 wrapper sitting in m_rootLayout so the v1 tree can
+    // still dispatch to it.
+    std::unique_ptr<ui::fw2::TransportPanel> m_transportPanelOwner;
+    ui::fw2::TransportPanel*                 m_transportPanel  = nullptr;
+    ui::fw::Widget*                          m_transportPanelW = nullptr;
     ui::fw::ContentGrid*         m_contentGrid     = nullptr;
-    ui::fw::BrowserPanel*        m_browserPanel    = nullptr;
-    ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
-    ui::fw::VisualParamsPanel*   m_visualParamsPanel = nullptr;
+    // BrowserPanel is fw2; owner holds it, wrapper goes into ContentGrid.
+    std::unique_ptr<ui::fw2::BrowserPanel> m_browserPanelOwner;
+    ui::fw2::BrowserPanel*                 m_browserPanel  = nullptr;
+    ui::fw::Widget*                        m_browserPanelW = nullptr;
+    // ReturnMasterPanel is fw2; m_returnMasterPanelOwner holds it,
+    // m_returnMasterPanelW is the v1 wrapper that goes into ContentGrid.
+    std::unique_ptr<ui::fw2::ReturnMasterPanel> m_returnMasterPanelOwner;
+    ui::fw2::ReturnMasterPanel*                 m_returnMasterPanel  = nullptr;
+    ui::fw::Widget*                             m_returnMasterPanelW = nullptr;
+    // VisualParamsPanel is fw2; owner holds it, wrapper goes in
+    // m_rootLayout.
+    std::unique_ptr<ui::fw2::VisualParamsPanel> m_visualParamsPanelOwner;
+    ui::fw2::VisualParamsPanel*                 m_visualParamsPanel  = nullptr;
+    ui::fw::Widget*                             m_visualParamsPanelW = nullptr;
     // v1 m_aboutDialog retired — use fw2::Dialog.
     // v1 m_confirmDialog retired — use fw2::ConfirmDialog.
-    ui::fw::TextInputDialogWidget* m_textInputDialog = nullptr;
-    ui::fw::PreferencesDialog*    m_preferencesDialog = nullptr;
-    ui::fw::ExportDialog*         m_exportDialog = nullptr;
+    // TextInputDialog migrated to fw2 — value-typed member now.
+    ui::fw2::FwTextInputDialog    m_textInputDialog;
+    // PreferencesDialog migrated to fw2 — value-typed member since it's
+    // no longer a Widget subclass; lifetime is the App itself.
+    ui::fw2::FwPreferencesDialog  m_preferencesDialog;
+    ui::fw2::FwExportDialog       m_exportDialog;
     std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
     ui::fw::UIContext m_uiContext;
 

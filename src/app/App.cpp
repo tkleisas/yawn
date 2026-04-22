@@ -8,6 +8,7 @@
 #include "ui/framework/v2/Dialog.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/V1MenuBridge.h"
+#include "ui/framework/v2/Theme.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -191,7 +192,7 @@ void App::setupMenuBar() {
         M::item("Undo", [this]() { if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); } }, "Ctrl+Z"),
         M::item("Redo", [this]() { if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); } }, "Ctrl+Y"),
         M::item("Preferences", [this]() {
-            ui::fw::PreferencesDialog::State state;
+            ui::fw2::FwPreferencesDialog::State state;
             state.selectedOutputDevice = m_audioEngine.config().outputDevice;
             state.selectedInputDevice = m_audioEngine.config().inputDevice;
             state.sampleRate = m_audioEngine.config().sampleRate;
@@ -213,7 +214,8 @@ void App::setupMenuBar() {
             state.metronomeMode = m_settings.metronomeMode;
             state.countInBars = m_settings.countInBars;
             state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
-            m_preferencesDialog->open(state, &m_audioEngine, &m_midiEngine);
+            state.fontScale = m_settings.fontScale;
+            m_preferencesDialog.open(state, &m_audioEngine, &m_midiEngine);
         }),
     });
 
@@ -352,7 +354,10 @@ void App::setupMenuBar() {
             M::separator(),
             makeDeleteTrack(),
             M::item("Rename Track", [this]() {
-                if (m_sessionPanel->visible()) {
+                // SessionPanel is fw2 — use the wrapper's v1 visible()
+                // (what ContentGrid checks) since visibility is
+                // managed at the wrapper level.
+                if (m_sessionPanelW->visible()) {
                     m_sessionPanel->startTrackRename(m_selectedTrack);
                 } else {
                     m_arrangementPanel->startTrackRename(m_selectedTrack);
@@ -410,23 +415,28 @@ void App::buildWidgetTree() {
     m_rootLayout->setAlign(Align::Stretch);
 
     auto menuW      = std::make_unique<MenuBarWrapper>(m_menuBar);
-    auto transportP = std::make_unique<TransportPanel>();
-    auto sessionP   = std::make_unique<SessionPanel>();
+    auto transportP = std::make_unique<ui::fw2::TransportPanel>();
+    auto transportW = std::make_unique<TransportPanelWrapper>(*transportP);
+    auto sessionP   = std::make_unique<ui::fw2::SessionPanel>();
+    auto sessionW   = std::make_unique<SessionPanelWrapper>(*sessionP);
     auto arrP       = std::make_unique<ArrangementPanel>();
-    auto mixerP     = std::make_unique<MixerPanel>();
-    auto browserP   = std::make_unique<BrowserPanel>();
-    auto returnMstP = std::make_unique<ReturnMasterPanel>();
+    auto mixerP     = std::make_unique<ui::fw2::MixerPanel>();
+    auto mixerW     = std::make_unique<MixerPanelWrapper>(*mixerP);
+    auto browserP   = std::make_unique<ui::fw2::BrowserPanel>();
+    auto browserW   = std::make_unique<BrowserPanelWrapper>(*browserP);
+    auto returnMstP = std::make_unique<ui::fw2::ReturnMasterPanel>();
+    auto returnMstW = std::make_unique<ReturnMasterPanelWrapper>(*returnMstP);
     auto gridP      = std::make_unique<ContentGrid>();
     auto detailP    = std::make_unique<DetailPanelWidget>();
-    auto visualPP   = std::make_unique<VisualParamsPanel>();
+    auto visualPP   = std::make_unique<ui::fw2::VisualParamsPanel>();
+    auto visualPW   = std::make_unique<VisualParamsPanelWrapper>(*visualPP);
     auto pianoP     = std::make_unique<PianoRollPanel>();
     // v1 AboutDialog retired — fw2::Dialog drives the Help → About
     // prompt inline from the menu handler.
     // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog handles
     // confirm prompts on the Modal layer (LayerStack).
-    auto textInputDlg = std::make_unique<TextInputDialogWidget>();
-    auto prefsDlg   = std::make_unique<PreferencesDialog>();
-    auto exportDlg  = std::make_unique<ExportDialog>();
+    // v2 TextInputDialog, PreferencesDialog, and ExportDialog are
+    // value-typed members of App — nothing to allocate here.
 
     // ContentGrid fills remaining space
     gridP->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
@@ -434,22 +444,28 @@ void App::buildWidgetTree() {
     // Store raw pointers for quick access
     m_menuBarW          = menuW.get();
     m_transportPanel    = transportP.get();
+    m_transportPanelW   = transportW.get();
     m_sessionPanel      = sessionP.get();
+    m_sessionPanelW     = sessionW.get();
     m_arrangementPanel  = arrP.get();
     m_mixerPanel        = mixerP.get();
+    m_mixerPanelW       = mixerW.get();
     m_browserPanel      = browserP.get();
-    m_returnMasterPanel = returnMstP.get();
+    m_browserPanelW     = browserW.get();
+    // Hand the v1 UIContext through so the BrowserFilesTab / PresetsTab
+    // sub-widgets (still v1) can use it for paint + hit-test.
+    m_browserPanel->setV1Context(&m_uiContext);
+    m_returnMasterPanel  = returnMstP.get();
+    m_returnMasterPanelW = returnMstW.get();
     m_contentGrid       = gridP.get();
     m_detailPanel       = detailP.get();
-    m_visualParamsPanel = visualPP.get();
+    m_visualParamsPanel  = visualPP.get();
+    m_visualParamsPanelW = visualPW.get();
     m_pianoRoll         = pianoP.get();
-    m_textInputDialog   = textInputDlg.get();
-    m_preferencesDialog = prefsDlg.get();
-    m_exportDialog      = exportDlg.get();
 
-    m_preferencesDialog->setOnResult([this](ui::fw::DialogResult result) {
-        if (result == ui::fw::DialogResult::OK) {
-            auto& s = m_preferencesDialog->state();
+    m_preferencesDialog.setOnResult([this](ui::fw2::PreferencesResult result) {
+        if (result == ui::fw2::PreferencesResult::OK) {
+            auto& s = m_preferencesDialog.state();
             const auto& oldCfg = m_audioEngine.config();
             bool audioChanged = (s.sampleRate != oldCfg.sampleRate ||
                                  s.bufferSize != oldCfg.framesPerBuffer ||
@@ -486,6 +502,20 @@ void App::buildWidgetTree() {
             m_settings.metronomeMode = s.metronomeMode;
             m_settings.countInBars = s.countInBars;
             m_settings.metronomeVisualStyle = s.metronomeVisualStyle;
+
+            // Apply the UI font scale if it changed. setTheme() bumps
+            // the fw2 UIContext epoch which invalidates every widget's
+            // measure cache, so the new sizes propagate on the next
+            // layout pass.
+            if (s.fontScale != m_settings.fontScale) {
+                m_settings.fontScale = s.fontScale;
+                ui::fw2::Theme t;
+                const float sc = std::max(0.5f, std::min(3.0f, s.fontScale));
+                t.metrics.fontSize      *= sc;
+                t.metrics.fontSizeSmall *= sc;
+                t.metrics.fontSizeLarge *= sc;
+                ui::fw2::setTheme(std::move(t));
+            }
 
             // Apply metronome settings to audio engine
             m_audioEngine.sendCommand(audio::MetronomeSetVolumeMsg{s.metronomeVolume});
@@ -525,16 +555,19 @@ void App::buildWidgetTree() {
     });
     m_arrangementPanel->setVisible(false); // start in session view
 
-    // Wire the 4-quadrant layout
-    m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
-                               m_mixerPanel, m_returnMasterPanel);
+    // Wire the 4-quadrant layout. Returns+Master is fw2 now — pass
+    // the v1 wrapper into ContentGrid, which can't accept fw2 widgets
+    // directly.
+    m_contentGrid->setChildren(m_sessionPanelW, m_browserPanelW,
+                               m_mixerPanelW, m_returnMasterPanelW);
 
     m_rootLayout->addChild(m_menuBarW);
-    m_rootLayout->addChild(m_transportPanel);
+    m_rootLayout->addChild(m_transportPanelW);
     m_rootLayout->addChild(m_contentGrid);
     m_rootLayout->addChild(m_detailPanel);
-    m_rootLayout->addChild(m_visualParamsPanel);
-    m_visualParamsPanel->setVisible(false);
+    // VisualParamsPanel is fw2 — the wrapper sits in m_rootLayout.
+    m_rootLayout->addChild(m_visualParamsPanelW);
+    m_visualParamsPanelW->setVisible(false);
     m_visualParamsPanel->setDetailPanel(m_detailPanel);
     m_rootLayout->addChild(m_pianoRoll);
 
@@ -652,19 +685,33 @@ void App::buildWidgetTree() {
 
     // Transfer ownership
     m_wrappers.push_back(std::move(menuW));
-    m_wrappers.push_back(std::move(transportP));
-    m_wrappers.push_back(std::move(sessionP));
+    // TransportPanel is fw2 — store it in its dedicated owner; only
+    // the v1 wrapper goes into m_wrappers.
+    m_transportPanelOwner = std::move(transportP);
+    m_wrappers.push_back(std::move(transportW));
+    // SessionPanel is fw2 — panel in dedicated owner, v1 wrapper in
+    // m_wrappers (what ContentGrid references).
+    m_sessionPanelOwner = std::move(sessionP);
+    m_wrappers.push_back(std::move(sessionW));
     m_wrappers.push_back(std::move(arrP));
-    m_wrappers.push_back(std::move(mixerP));
-    m_wrappers.push_back(std::move(browserP));
-    m_wrappers.push_back(std::move(returnMstP));
+    // MixerPanel is fw2 — store panel separately, wrapper in m_wrappers.
+    m_mixerPanelOwner = std::move(mixerP);
+    m_wrappers.push_back(std::move(mixerW));
+    // BrowserPanel is fw2 — panel in dedicated owner, v1 wrapper in
+    // m_wrappers.
+    m_browserPanelOwner = std::move(browserP);
+    m_wrappers.push_back(std::move(browserW));
+    // ReturnMasterPanel is fw2 — store panel separately, v1 wrapper
+    // in m_wrappers (it's what ContentGrid references).
+    m_returnMasterPanelOwner = std::move(returnMstP);
+    m_wrappers.push_back(std::move(returnMstW));
     m_wrappers.push_back(std::move(gridP));
     m_wrappers.push_back(std::move(detailP));
-    m_wrappers.push_back(std::move(visualPP));
+    // VisualParamsPanel is fw2 — panel in dedicated owner, v1 wrapper
+    // in m_wrappers.
+    m_visualParamsPanelOwner = std::move(visualPP);
+    m_wrappers.push_back(std::move(visualPW));
     m_wrappers.push_back(std::move(pianoP));
-    m_wrappers.push_back(std::move(textInputDlg));
-    m_wrappers.push_back(std::move(prefsDlg));
-    m_wrappers.push_back(std::move(exportDlg));
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
@@ -695,13 +742,18 @@ void App::computeLayout() {
         m_project.track(m_selectedTrack).type == Track::Type::Visual;
     // Detail panel + Visual-params panel share a slot: never both at once.
     m_detailPanel->setVisible(m_showDetailPanel && !selectedIsVisual);
-    m_visualParamsPanel->setVisible(m_showDetailPanel && selectedIsVisual);
+    // Visibility goes to the wrapper (the v1 rootLayout measures it).
+    m_visualParamsPanelW->setVisible(m_showDetailPanel && selectedIsVisual);
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
     // ContentGrid manages session + mixer + browser + returns visibility
     // MixerPanel visibility is controlled via the content grid's bottom row
-    m_mixerPanel->setVisible(m_showMixer);
-    m_returnMasterPanel->setVisible(m_showMixer);
+    // Visibility is owned by the v1 wrapper (what ContentGrid checks);
+    // internal state stays on the fw2 panel.
+    m_mixerPanelW->setVisible(m_showMixer);
+    // Visibility goes to the v1 wrapper (ContentGrid tests that
+    // widget's visibility); setShowReturns is panel-internal state.
+    m_returnMasterPanelW->setVisible(m_showMixer);
     m_returnMasterPanel->setShowReturns(m_showReturns);
 
     Constraints c = Constraints::tight(static_cast<float>(w), static_cast<float>(h));
@@ -1449,7 +1501,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     return;
                 }
                 SDL_StartTextInput(m_mainWindow.getHandle());
-                m_textInputDialog->prompt("New Shader Name", "untitled",
+                m_textInputDialog.prompt("New Shader Name", "untitled",
                     [this, trackIndex, sceneIndex](const std::string& raw) {
                         SDL_StopTextInput(m_mainWindow.getHandle());
                         if (raw.empty()) return;
@@ -1673,7 +1725,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     if (s0 && s0->visualClip) initial = s0->visualClip->liveUrl;
                     if (initial.empty()) initial = "v4l2:///dev/video0";
                     SDL_StartTextInput(m_mainWindow.getHandle());
-                    m_textInputDialog->prompt("Live Input URL", initial,
+                    m_textInputDialog.prompt("Live Input URL", initial,
                         [this, applyLiveUrl](const std::string& url) {
                             SDL_StopTextInput(m_mainWindow.getHandle());
                             applyLiveUrl(url);
@@ -1984,7 +2036,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s || !s->visualClip) return;
                     SDL_StartTextInput(m_mainWindow.getHandle());
-                    m_textInputDialog->prompt("Text (for iChannel1)",
+                    m_textInputDialog.prompt("Text (for iChannel1)",
                         s->visualClip->text,
                         [this, trackIndex, sceneIndex](const std::string& txt) {
                             SDL_StopTextInput(m_mainWindow.getHandle());
@@ -2268,7 +2320,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         rlItems.push_back({"Custom...", [this, trackIndex, curRL]() {
             std::string def = (curRL > 0) ? std::to_string(curRL) : "4";
             SDL_StartTextInput(m_mainWindow.getHandle());
-            m_textInputDialog->prompt("Record Length (bars)", def,
+            m_textInputDialog.prompt("Record Length (bars)", def,
                 [this, trackIndex, curRL](const std::string& text) {
                     SDL_StopTextInput(m_mainWindow.getHandle());
                     int bars = 0;
@@ -3147,6 +3199,19 @@ bool App::init() {
 
     m_settings = util::AppSettings::load();
 
+    // Apply persisted UI font scale to the fw2 theme before any widget
+    // measures itself — multiplying the baked-in font sizes makes every
+    // v2 widget (menu bar, dropdowns, dialogs …) pick up the scale
+    // through theme().metrics.
+    {
+        ui::fw2::Theme t;
+        const float s = std::max(0.5f, std::min(3.0f, m_settings.fontScale));
+        t.metrics.fontSize      *= s;
+        t.metrics.fontSizeSmall *= s;
+        t.metrics.fontSizeLarge *= s;
+        ui::fw2::setTheme(std::move(t));
+    }
+
     audio::AudioEngineConfig audioConfig;
     audioConfig.sampleRate = m_settings.sampleRate;
     audioConfig.framesPerBuffer = m_settings.bufferSize;
@@ -3613,7 +3678,7 @@ bool App::init() {
         int bus = m_detailReturnBus;
         items.push_back({"Save Preset...", [this, type, chainIndex, deviceId, deviceName, target, bus]() {
             SDL_StartTextInput(m_mainWindow.getHandle());
-            m_textInputDialog->prompt("Save Preset", "My Preset",
+            m_textInputDialog.prompt("Save Preset", "My Preset",
                 [this, type, chainIndex, deviceId, deviceName, target, bus](const std::string& name) {
                     std::filesystem::path saved;
                     if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
@@ -4111,44 +4176,24 @@ void App::processEvents() {
                 // v1 confirm dialog retired — fw2::Dialog on the
                 // Modal layer handles Escape/Enter through LayerStack.
 
-                if (m_textInputDialog->isOpen()) {
-                    ui::fw::KeyEvent ke;
-                    ke.keyCode = static_cast<int>(event.key.key);
-                    m_textInputDialog->onKeyDown(ke);
-                    break;
-                }
+                // v1 TextInputDialog retired — fw2 FwTextInputDialog
+                // runs on LayerStack::Modal, so keys reach it via the
+                // LayerStack dispatchKey path above.
                 // v1 About dialog retired — fw2::Dialog handles
                 // Escape/Enter through LayerStack.
 
-                // Block keys when preferences dialog is open
-                if (m_preferencesDialog->isOpen()) {
-                    if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN) {
-                        ui::fw::KeyEvent ke;
-                        ke.keyCode = (event.key.key == SDLK_ESCAPE) ? 27 : 13;
-                        m_preferencesDialog->onKeyDown(ke);
-                    }
-                    break;
-                }
+                // v1 Preferences dialog retired — fw2 FwPreferencesDialog
+                // runs on LayerStack::Modal and consumes keys via the
+                // LayerStack::dispatchKey path above.
 
-                // Block keys when export dialog is open
-                if (m_exportDialog->isOpen()) {
-                    if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN) {
-                        ui::fw::KeyEvent ke;
-                        ke.keyCode = (event.key.key == SDLK_ESCAPE) ? 27 : 13;
-                        m_exportDialog->onKeyDown(ke);
-                    }
-                    break;
-                }
+                // v1 Export dialog retired — FwExportDialog runs on
+                // LayerStack::Modal and consumes keys via the
+                // LayerStack dispatchKey path above.
 
-                // An open Clip-tab dropdown captures Up/Down/Enter/Esc
-                // for keyboard nav. Without this early-route, those
-                // keys get consumed by global shortcuts (Play/Stop,
-                // quit, etc.) and the dropdown stays unnavigable.
-                if (m_browserPanel->hasOpenDropdown()) {
-                    ui::fw::KeyEvent ke;
-                    ke.keyCode = static_cast<int>(event.key.key);
-                    if (m_browserPanel->onKeyDown(ke)) break;
-                }
+                // v2 dropdowns in the BrowserPanel consume keyboard
+                // events through LayerStack::dispatchKey (handled
+                // above), so the panel-side hasOpenDropdown() early
+                // route is no longer needed.
 
                 // Transport editing (BPM / time signature) takes priority
                 if (m_transportPanel->isEditing()) {
@@ -4609,11 +4654,10 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
-                // Text input dialog (modal)
-                if (m_textInputDialog->isOpen()) {
-                    ui::fw::TextInputEvent te;
-                    std::strncpy(te.text, event.text.text, sizeof(te.text) - 1);
-                    m_textInputDialog->onTextInput(te);
+                // Text input dialog (modal) — takeTextInput pushes
+                // the text into the embedded FwTextInput.
+                if (m_textInputDialog.isOpen()) {
+                    m_textInputDialog.takeTextInput(event.text.text);
                     break;
                 }
                 // Track rename text input
@@ -4732,35 +4776,20 @@ void App::processEvents() {
                 // Modal layer handles mouse dispatch through
                 // LayerStack.
 
-                // Text input dialog (modal)
-                if (m_textInputDialog->isOpen()) {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = ui::fw::MouseButton::Left;
-                    m_textInputDialog->onMouseDown(me);
-                    break;
-                }
+                // v1 TextInput mouse dispatch retired — FwTextInputDialog
+                // receives clicks through LayerStack::dispatchMouseDown
+                // above.
 
                 // v1 About dialog retired — fw2::Dialog dispatches
                 // mouse events through LayerStack.
 
-                // Preferences dialog (modal)
-                if (m_preferencesDialog->isOpen()) {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = ui::fw::MouseButton::Left;
-                    m_preferencesDialog->onMouseDown(me);
-                    break;
-                }
+                // v1 Preferences mouse dispatch retired — FwPreferencesDialog
+                // receives clicks through LayerStack::dispatchMouseDown
+                // above.
 
-                // Export dialog (modal)
-                if (m_exportDialog->isOpen()) {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = ui::fw::MouseButton::Left;
-                    m_exportDialog->onMouseDown(me);
-                    break;
-                }
+                // v1 Export mouse dispatch retired — FwExportDialog
+                // receives clicks through LayerStack::dispatchMouseDown
+                // above.
 
                 // v1 context menu: retired — fw2::ContextMenu (handled
                 // by the LayerStack dispatch above) owns this slot now.
@@ -4790,13 +4819,14 @@ void App::processEvents() {
                 bool hadEditingKnob = m_showDetailPanel && m_detailPanel->hasEditingKnob();
                 if (m_showDetailPanel) {
                     // Visual-params panel is shown in place of detail panel
-                    // when the selected track is a Visual track.
-                    if (m_visualParamsPanel->visible()) {
+                    // when the selected track is a Visual track. Dispatch
+                    // through the v1 wrapper so the event converts to fw2.
+                    if (m_visualParamsPanelW->visible()) {
                         ui::fw::MouseEvent me;
                         me.x = mx; me.y = my;
                         me.button = rightClick ? ui::fw::MouseButton::Right
                                                 : ui::fw::MouseButton::Left;
-                        if (m_visualParamsPanel->onMouseDown(me)) break;
+                        if (m_visualParamsPanelW->onMouseDown(me)) break;
                     }
                     if (m_detailPanel->visible()) {
                         if (rightClick) {
@@ -4834,7 +4864,9 @@ void App::processEvents() {
                         ui::fw::MouseEvent me;
                         me.x = mx; me.y = my;
                         me.button = ui::fw::MouseButton::Left;
-                        if (m_browserPanel->onMouseDown(me)) {
+                        // Route through the v1 wrapper which converts
+                        // the event + forwards to the fw2 BrowserPanel.
+                        if (m_browserPanelW->onMouseDown(me)) {
                             if (m_browserPanel->hasEditingKnob() && !hadBrowserKnob)
                                 SDL_StartTextInput(m_mainWindow.getHandle());
                             else if (!m_browserPanel->hasEditingKnob() && hadBrowserKnob)
@@ -4931,14 +4963,16 @@ void App::processEvents() {
                         }
                     }
                 }
-                // Transport panel click (tap tempo, dismiss editing, MIDI Learn right-click)
+                // Transport panel click — dispatched through the v1
+                // wrapper which converts the event + forwards to the
+                // fw2 TransportPanel (and captures if needed).
                 bool wasEditing = m_transportPanel->isEditing();
                 bool transportHandled = false;
                 {
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
                     me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
-                    transportHandled = m_transportPanel->onMouseDown(me);
+                    transportHandled = m_transportPanelW->onMouseDown(me);
                 }
                 // If the transport panel handled the click (e.g. clicked a v2
                 // button that captured v1 mouse for drag/up dispatch), don't
@@ -5100,20 +5134,24 @@ void App::processEvents() {
                 }
 
                 auto sb = m_sessionPanel->bounds();
-                auto mb = m_mixerPanel->bounds();
+                // MixerPanel is fw2; bounds() returns fw2::Rect. The
+                // v1 wrapper's bounds() gives a v1 fw::Rect, which is
+                // what we need for the containing-rect comparison.
+                auto mb = m_mixerPanelW->bounds();
                 auto db = m_detailPanel->bounds();
                 auto pb = m_pianoRoll->bounds();
-                auto bb = m_browserPanel->bounds();
+                auto bb = m_browserPanelW->bounds();
 
                 // Browser panel first — its dropdown popups live
                 // inside this region and need wheel events to scroll
-                // through lists that overflow the 8-item cap.
+                // through lists that overflow the 8-item cap. Routed
+                // through the v1 wrapper for event conversion.
                 if (m_lastMouseX >= bb.x && m_lastMouseX < bb.x + bb.w &&
                     m_lastMouseY >= bb.y && m_lastMouseY < bb.y + bb.h) {
                     ui::fw::ScrollEvent se;
                     se.x = m_lastMouseX; se.y = m_lastMouseY;
                     se.dx = dx; se.dy = dy;
-                    if (m_browserPanel->onScroll(se)) break;
+                    if (m_browserPanelW->onScroll(se)) break;
                 }
 
                 if (m_pianoRoll->isOpen() && m_lastMouseY >= pb.y) {
@@ -5127,10 +5165,13 @@ void App::processEvents() {
                     m_detailPanel->setLastMousePos(m_lastMouseX, m_lastMouseY);
                     m_detailPanel->handleScroll(dx, dy, ctrl);
                 } else if (m_showMixer && m_lastMouseY >= mb.y && m_lastMouseY < mb.y + mb.h) {
+                    // Route through the v1 wrapper which converts v1
+                    // ScrollEvent → fw2 ScrollEvent and dispatches to
+                    // the fw2 MixerPanel.
                     ui::fw::ScrollEvent se;
                     se.x = m_lastMouseX; se.y = m_lastMouseY;
                     se.dx = dx; se.dy = dy;
-                    m_mixerPanel->onScroll(se);
+                    m_mixerPanelW->onScroll(se);
                 } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {
                     if (m_project.viewMode() == ViewMode::Arrangement) {
                         auto ab = m_arrangementPanel->bounds();
@@ -5363,7 +5404,7 @@ void App::update() {
     // Push live modulated knob values into the visual-params panel so the
     // A..H arcs breathe with their LFOs. Only active while the panel is
     // visible — audio/midi tracks get cleared overrides.
-    if (m_visualParamsPanel->visible() &&
+    if (m_visualParamsPanelW->visible() &&
         m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks() &&
         m_project.track(m_selectedTrack).type == Track::Type::Visual) {
         float disp[8];
@@ -5417,12 +5458,12 @@ void App::update() {
 #endif
 
     // Check if render completed
-    if (m_exportDialog->isRendering() && m_exportDialog->progress().done.load()) {
-        m_exportDialog->setRendering(false);
-        m_exportDialog->forceClose();
-        if (m_exportDialog->progress().failed.load()) {
+    if (m_exportDialog.isRendering() && m_exportDialog.progress().done.load()) {
+        m_exportDialog.setRendering(false);
+        m_exportDialog.forceClose();
+        if (m_exportDialog.progress().failed.load()) {
             LOG_ERROR("Export", "Render failed");
-        } else if (m_exportDialog->progress().cancelled.load()) {
+        } else if (m_exportDialog.progress().cancelled.load()) {
             LOG_INFO("Export", "Render cancelled by user");
         } else {
             LOG_INFO("Export", "Export completed successfully");
@@ -5728,19 +5769,12 @@ void App::render() {
 
         // v1 confirm dialog retired — fw2::Dialog paints via
         // LayerStack::paintLayers in the block below.
-        if (m_textInputDialog->isOpen()) {
-            m_textInputDialog->layout(screenBounds, m_uiContext);
-            m_textInputDialog->paint(m_uiContext);
-        }
+        // v1 TextInputDialog retired — FwTextInputDialog paints via
+        // LayerStack too.
         // v1 About dialog retired — fw2::Dialog paints via LayerStack.
-        if (m_preferencesDialog->isOpen()) {
-            m_preferencesDialog->layout(screenBounds, m_uiContext);
-            m_preferencesDialog->paint(m_uiContext);
-        }
-        if (m_exportDialog->isOpen()) {
-            m_exportDialog->layout(screenBounds, m_uiContext);
-            m_exportDialog->paint(m_uiContext);
-        }
+        // v1 PreferencesDialog + ExportDialog retired — their fw2
+        // versions paint via their LayerStack overlay entries in the
+        // paintLayers block below.
     }
 
     // Toasts draw last so they float above every dialog/panel.
@@ -5971,11 +6005,13 @@ void App::updateWindowTitle() {
 void App::switchToView(ViewMode mode) {
     m_project.setViewMode(mode);
     bool showArrangement = (mode == ViewMode::Arrangement);
-    m_sessionPanel->setVisible(!showArrangement);
+    // SessionPanel is fw2 — its visibility lives on the v1 wrapper
+    // (what ContentGrid inspects). ArrangementPanel is still v1.
+    m_sessionPanelW->setVisible(!showArrangement);
     m_arrangementPanel->setVisible(showArrangement);
     m_contentGrid->setTopLeft(showArrangement
         ? static_cast<ui::fw::Widget*>(m_arrangementPanel)
-        : static_cast<ui::fw::Widget*>(m_sessionPanel));
+        : static_cast<ui::fw::Widget*>(m_sessionPanelW));
     m_arrangementPanel->setSelectedTrack(m_selectedTrack);
 
     // Activate/deactivate arrangement mode for all tracks
@@ -6034,17 +6070,17 @@ void SDLCALL App::onExportSaveResult(void* userdata, const char* const* filelist
 // ---------------------------------------------------------------------------
 
 void App::openExportDialog() {
-    ui::fw::ExportDialog::Config cfg;
+    ui::fw2::FwExportDialog::Config cfg;
     cfg.arrangementLengthBeats = m_project.arrangementLength();
     cfg.loopEnabled = m_audioEngine.transport().isLoopEnabled();
     cfg.loopStartBeats = m_audioEngine.transport().loopStartBeats();
     cfg.loopEndBeats = m_audioEngine.transport().loopEndBeats();
     cfg.sampleRate = static_cast<int>(m_audioEngine.sampleRate());
 
-    m_exportDialog->setOnResult([this](ui::fw::DialogResult result) {
-        if (result == ui::fw::DialogResult::OK) {
+    m_exportDialog.setOnResult([this](ui::fw2::ExportResult result) {
+        if (result == ui::fw2::ExportResult::OK) {
             // Show native save file dialog
-            auto& cfg = m_exportDialog->config();
+            auto& cfg = m_exportDialog.config();
             const char* ext = util::formatExtension(cfg.format);
             LOG_INFO("Export", "Dialog OK, showing save dialog (format: %s)", ext);
 
@@ -6069,13 +6105,11 @@ void App::openExportDialog() {
         }
     });
 
-    m_exportDialog->open(cfg);
+    m_exportDialog.open(cfg);
 }
 
 void App::startExportRender(const std::string& filePath) {
-    if (!m_exportDialog) return;
-
-    auto& cfg = m_exportDialog->config();
+    auto& cfg = m_exportDialog.config();
 
     // Determine render range
     double startBeat = 0.0;
@@ -6105,10 +6139,10 @@ void App::startExportRender(const std::string& filePath) {
     int sampleRate = cfg.sampleRate;
 
     // Re-open the dialog in rendering mode
-    m_exportDialog->open(m_exportDialog->config());
-    m_exportDialog->setRendering(true);
+    m_exportDialog.open(m_exportDialog.config());
+    m_exportDialog.setRendering(true);
 
-    auto& progress = m_exportDialog->progress();
+    auto& progress = m_exportDialog.progress();
 
     // Launch render on a detached thread
     std::thread([this, renderCfg, outPath, format, bitDepth, sampleRate, &progress]() {

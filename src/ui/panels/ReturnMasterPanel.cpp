@@ -1,28 +1,29 @@
-// ReturnMasterPanel.cpp — rendering and event implementations.
-// Split from ReturnMasterPanel.h to keep rendering code out of the header.
-// This file is only compiled in the main exe build (not test builds).
+// ReturnMasterPanel.cpp — UI v2 rendering + event implementations.
 
 #include "ReturnMasterPanel.h"
 #include "../Renderer.h"
 #include "../Font.h"
 #include "ui/framework/v2/V1MenuBridge.h"
+#include "ui/framework/v2/Theme.h"
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
-void ReturnMasterPanel::paint(UIContext& ctx) {
+void ReturnMasterPanel::render(UIContext& ctx) {
+    if (!m_visible) return;
+    if (!ctx.renderer) return;
     if (!m_engine) return;
     auto& r = *ctx.renderer;
 
-    float x = m_bounds.x, y = m_bounds.y;
-    float w = m_bounds.w, h = m_bounds.h;
+    const float x = m_bounds.x, y = m_bounds.y;
+    const float w = m_bounds.w, h = m_bounds.h;
 
-    r.drawRect(x, y, w, h, Theme::panelBg);
-    r.drawRect(x, y, w, 1, Theme::clipSlotBorder);
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::panelBg);
+    r.drawRect(x, y, w, 1, ::yawn::ui::Theme::clipSlotBorder);
 
-    float stripY = y + 2;
-    float stripH = h - 4;
+    const float stripY = y + 2;
+    const float stripH = h - 4;
 
     float curX = x + 4;
     if (m_showReturns) {
@@ -31,47 +32,44 @@ void ReturnMasterPanel::paint(UIContext& ctx) {
             paintReturnStrip(ctx, b, curX, stripY, kRetStripW, stripH);
             curX += kRetStripW + kStripPadding;
         }
-        r.drawRect(curX, y + 4, kSeparatorWidth, h - 8, Theme::clipSlotBorder);
+        r.drawRect(curX, y + 4, kSeparatorWidth, h - 8, ::yawn::ui::Theme::clipSlotBorder);
         curX += kSeparatorWidth + 4;
     }
 
     if (curX + kRetStripW <= x + w)
         paintMasterStrip(ctx, curX, stripY, kRetStripW, stripH);
-
-    // v1 context menu retired — fw2::ContextMenu paints via LayerStack.
 }
 
 bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
     if (!m_engine) return false;
-    float mx = e.x, my = e.y;
-    bool rightClick = (e.button == MouseButton::Right);
-    float x = m_bounds.x, y = m_bounds.y;
+    const float mx = e.x, my = e.y;
+    const bool rightClick = (e.button == MouseButton::Right);
+    const float x = m_bounds.x;
 
-    // v1 context menu retired — LayerStack intercepts clicks upstream.
+    auto hitChild = [&](Widget& w) -> bool {
+        const auto& b = w.bounds();
+        if (mx < b.x || mx >= b.x + b.w) return false;
+        if (my < b.y || my >= b.y + b.h) return false;
+        MouseEvent ev = e;
+        ev.lx = mx - b.x;
+        ev.ly = my - b.y;
+        w.dispatchMouseDown(ev);
+        return true;
+    };
 
     float curX = x + 4;
     if (m_showReturns) {
         for (int b = 0; b < kMaxReturnBuses; ++b) {
-            float rx = curX + b * (kRetStripW + kStripPadding);
+            const float rx = curX + b * (kRetStripW + kStripPadding);
             if (mx < rx || mx >= rx + kRetStripW) continue;
 
             auto& rs = m_returnStrips[b];
 
             if (!rightClick) {
-                const auto& mb = rs.muteBtn.bounds();
-                if (mx >= mb.x && mx <= mb.x + mb.w &&
-                    my >= mb.y && my <= mb.y + mb.h) {
-                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, mb);
-                    rs.muteBtn.dispatchMouseDown(ev);
-                    m_v2Dragging = &rs.muteBtn;
-                    captureMouse();
-                    return true;
-                }
+                if (hitChild(rs.muteBtn)) return true;
             }
-            // Return pan — v2 FwPan. Right-click handled here (opens
-            // MIDI Learn; engine send + panel-side reset) before any
-            // dispatch, so the widget's internal reset doesn't also
-            // fire.
+
+            // Pan — right-click opens MIDI Learn menu, left-click drags.
             {
                 const auto& pb = rs.pan.bounds();
                 if (mx >= pb.x && mx < pb.x + pb.w &&
@@ -86,15 +84,10 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                             });
                         return true;
                     }
-                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, pb);
-                    rs.pan.dispatchMouseDown(ev);
-                    m_v2Dragging = &rs.pan;
-                    captureMouse();
-                    return true;
+                    return hitChild(rs.pan);
                 }
             }
-            // Return fader — v2 FwFader. Right-click still opens MIDI
-            // Learn menu; left-click drags via the gesture SM.
+            // Fader
             {
                 const auto& fb = rs.fader.bounds();
                 if (mx >= fb.x && mx < fb.x + fb.w &&
@@ -108,21 +101,14 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                             });
                         return true;
                     }
-                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, fb);
-                    rs.fader.dispatchMouseDown(ev);
-                    m_v2Dragging = &rs.fader;
-                    captureMouse();
-                    return true;
+                    return hitChild(rs.fader);
                 }
             }
 
-            // Right-click on strip background → show "Add Effect" context menu
             if (rightClick && m_onReturnRightClick) {
                 m_onReturnRightClick(b, mx, my);
                 return true;
             }
-
-            // Click on strip background/name area → open detail panel for this return bus
             if (!rightClick && m_onReturnClick) {
                 m_onReturnClick(b);
                 return true;
@@ -131,21 +117,12 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
         curX += kMaxReturnBuses * (kRetStripW + kStripPadding) + kSeparatorWidth + 4;
     }
 
-    float masterX = curX;
-
+    const float masterX = curX;
     if (mx >= masterX && mx < masterX + kRetStripW) {
         if (!rightClick) {
-            const auto& sb = m_stopAllBtn.bounds();
-            if (mx >= sb.x && mx <= sb.x + sb.w &&
-                my >= sb.y && my <= sb.y + sb.h) {
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
-                m_stopAllBtn.dispatchMouseDown(ev);
-                m_v2Dragging = &m_stopAllBtn;
-                captureMouse();
-                return true;
-            }
+            if (hitChild(m_stopAllBtn)) return true;
         }
-        // Master fader — v2 FwFader.
+        // Master fader
         {
             const auto& fb = m_masterStrip.fader.bounds();
             if (mx >= fb.x && mx < fb.x + fb.w &&
@@ -159,21 +136,14 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                         });
                     return true;
                 }
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, fb);
-                m_masterStrip.fader.dispatchMouseDown(ev);
-                m_v2Dragging = &m_masterStrip.fader;
-                captureMouse();
-                return true;
+                return hitChild(m_masterStrip.fader);
             }
         }
 
-        // Right-click on master strip background → show "Add Effect" context menu
         if (rightClick && m_onMasterRightClick) {
             m_onMasterRightClick(mx, my);
             return true;
         }
-
-        // Click on master strip background/name → open detail panel for master
         if (!rightClick && m_onMasterClick) {
             m_onMasterClick();
             return true;
@@ -184,185 +154,188 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
 }
 
 void ReturnMasterPanel::paintStripCommon(UIContext& ctx, StripWidgets& sw,
-                       const char* name, float x, float y,
-                       float w, float h, Color col,
-                       float volume, float peakL, float peakR,
-                       bool muted) {
-    auto& r = *ctx.renderer;
-    auto& f = *ctx.font;
-    float pixH = f.pixelHeight();
-    float scale = (pixH < 1.0f) ? Theme::kSmallFontSize
-                 : Theme::kSmallFontSize / pixH;
-    float smallScale = scale * 0.8f;
+                                          const char* name, float x, float y,
+                                          float w, float h, Color col,
+                                          float volume, float peakL, float peakR,
+                                          bool muted) {
+    (void)col;
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
-    sw.nameLabel.setFontScale(scale);
-    sw.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
-    sw.nameLabel.paint(ctx);
+    const ThemeMetrics& met = theme().metrics;
+    const float nameSize  = met.fontSizeSmall;
+    const float smallSize = met.fontSizeSmall;
+
+    if (name) {
+        const float lh = tm.lineHeight(nameSize);
+        tm.drawText(r, name, x + 4, y + 5 + (14.0f - lh) * 0.5f,
+                    nameSize, ::yawn::ui::Theme::textPrimary);
+    }
 
     float curY = y + 26;
 
-    // Mute button — v2 FwToggle. setState drives the accent-fill-on
-    // appearance; accent color was configured at construction.
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        sw.muteBtn.setState(muted);
-        sw.muteBtn.layout(Rect{x + 4, curY, kButtonWidth, kButtonHeight}, v2ctx);
-        sw.muteBtn.render(v2ctx);
-    }
+    // Mute toggle. Engine-state sync uses Automation source so
+    // onChange stays silent — otherwise the async command queue
+    // (user click → sendCommand → engine still reports old state
+    // next frame → setState re-fires onChange → reverts click at
+    // audio thread) pings-pongs the button. Same pattern as
+    // TransportPanel's BPM sync.
+    sw.muteBtn.setState(muted, ValueChangeSource::Automation);
+    sw.muteBtn.measure(Constraints::tight(kButtonWidth, kButtonHeight), ctx);
+    sw.muteBtn.layout(Rect{x + 4, curY, kButtonWidth, kButtonHeight}, ctx);
+    sw.muteBtn.render(ctx);
 
     curY += kButtonHeight + 6;
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        sw.pan.layout(Rect{x + 4, curY, w - 8, 16}, v2ctx);
-        sw.pan.render(v2ctx);
-    }
+    sw.pan.measure(Constraints::tight(w - 8, 16), ctx);
+    sw.pan.layout(Rect{x + 4, curY, w - 8, 16}, ctx);
+    sw.pan.render(ctx);
 
     curY += 16 + 8;
-    float faderBottom = y + h - 22;
-    float faderH = std::max(20.0f, faderBottom - curY);
+    const float faderBottom = y + h - 22;
+    const float faderH = std::max(20.0f, faderBottom - curY);
 
-    // v2 FwFader — skip sync during drag to avoid engine rubber-banding.
+    // Skip sync during drag so the engine's lagging value doesn't
+    // rubber-band the thumb the user is holding.
     if (!sw.fader.isDragging())
-        sw.fader.setValue(volume);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        sw.fader.layout(Rect{x + 4, curY, kFaderWidth, faderH}, v2ctx);
-        sw.fader.render(v2ctx);
-    }
+        sw.fader.setValue(volume, ValueChangeSource::Automation);
+    sw.fader.measure(Constraints::tight(kFaderWidth, faderH), ctx);
+    sw.fader.layout(Rect{x + 4, curY, kFaderWidth, faderH}, ctx);
+    sw.fader.render(ctx);
 
     sw.meter.setPeak(peakL, peakR);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
-                             kMeterWidth * 2, faderH}, v2ctx);
-        sw.meter.render(v2ctx);
-    }
+    sw.meter.measure(Constraints::tight(kMeterWidth * 2, faderH), ctx);
+    sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
+                          kMeterWidth * 2, faderH}, ctx);
+    sw.meter.render(ctx);
 
-    float db = volume > 0.001f ? 20.0f * std::log10(volume) : -60.0f;
+    // dB readout under the fader.
+    const float db = (volume > 0.001f) ? 20.0f * std::log10(volume) : -60.0f;
     char dbText[16];
     if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
-    else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-    sw.dbLabel.setText(dbText);
-    sw.dbLabel.setColor(Theme::textDim);
-    sw.dbLabel.setFontScale(smallScale);
-    sw.dbLabel.layout(Rect{x + 4, y + h - 18, w - 8, 14}, ctx);
-    sw.dbLabel.paint(ctx);
+    else              std::snprintf(dbText, sizeof(dbText), "%.1f", db);
+    const float dbLh = tm.lineHeight(smallSize);
+    tm.drawText(r, dbText, x + 4,
+                y + h - 18 + (14.0f - dbLh) * 0.5f,
+                smallSize, ::yawn::ui::Theme::textSecondary);
 }
 
 void ReturnMasterPanel::paintReturnStrip(UIContext& ctx, int idx, float x, float y,
-                       float w, float h) {
+                                          float w, float h) {
     auto& r = *ctx.renderer;
-    Color busCol{100, 180, 255};
+    const Color busCol{100, 180, 255, 255};
     auto& rs = m_returnStrips[idx];
     const auto& rb = m_engine->mixer().returnBus(idx);
 
-    r.drawRect(x, y, w, h, Theme::background);
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::background);
     r.drawRect(x, y, w, 3, busCol);
 
     if (!rs.pan.isDragging())
-        rs.pan.setValue(rb.pan);
+        rs.pan.setValue(rb.pan, ValueChangeSource::Automation);
     rs.fader.setTrackColor(busCol);
 
-    paintStripCommon(ctx, rs, nullptr, x, y, w, h, busCol,
+    paintStripCommon(ctx, rs, m_returnNames[idx].c_str(),
+                     x, y, w, h, busCol,
                      rb.volume,
                      m_returnMeters[idx].peakL,
                      m_returnMeters[idx].peakR,
                      rb.muted);
 
-    // CC labels for return bus volume/pan
+    // CC label for volume (above dB readout).
     if (m_learnManager) {
-        float ccScale = 7.0f / Theme::kFontSize;
-        Color ccCol{100, 180, 255};
-        int tIdx = -(idx + 2);
-        auto volTarget = automation::AutomationTarget::mixer(tIdx, automation::MixerParam::Volume);
-        auto* volMap = m_learnManager->findByTarget(volTarget);
-        if (volMap) {
-            auto lbl = volMap->label();
-            ctx.font->drawText(*ctx.renderer, lbl.c_str(), x + 4, y + h - 32, ccScale, ccCol);
+        const float ccSize = 7.0f;
+        const Color ccCol{100, 180, 255, 255};
+        const int tIdx = -(idx + 2);
+        const auto volTarget =
+            automation::AutomationTarget::mixer(tIdx, automation::MixerParam::Volume);
+        if (auto* volMap = m_learnManager->findByTarget(volTarget)) {
+            const auto lbl = volMap->label();
+            ctx.textMetrics->drawText(r, lbl, x + 4, y + h - 32, ccSize, ccCol);
         }
     }
 }
 
 void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
-                       float w, float h) {
-    auto& r = *ctx.renderer;
-    Color masterCol = Theme::transportAccent;
+                                          float w, float h) {
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
+    const Color masterCol = ::yawn::ui::Theme::transportAccent;
     const auto& master = m_engine->mixer().master();
 
-    r.drawRect(x, y, w, h, Color{35, 35, 40});
+    r.drawRect(x, y, w, h, Color{35, 35, 40, 255});
     r.drawRect(x, y, w, 3, masterCol);
 
     if (!m_masterStrip.fader.isDragging())
-        m_masterStrip.fader.setValue(master.volume);
+        m_masterStrip.fader.setValue(master.volume, ValueChangeSource::Automation);
 
-    m_masterStrip.nameLabel.layout(Rect{x + 4, y + 5, w - 8, 14}, ctx);
-    m_masterStrip.nameLabel.paint(ctx);
-
-    // Stop-all button — v2 FwButton with an overlaid stop-icon square.
+    const ThemeMetrics& met = theme().metrics;
+    const float nameSize = met.fontSizeSmall;
     {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_stopAllBtn.layout(Rect{x + 4, y + 22, w - 8, kButtonHeight}, v2ctx);
-        m_stopAllBtn.render(v2ctx);
-    }
-    {
-        auto& sb = m_stopAllBtn.bounds();
-        float iconSize = 8.0f;
-        float iconX = sb.x + (sb.w - iconSize) * 0.5f;
-        float iconY = sb.y + (sb.h - iconSize) * 0.5f;
-        r.drawRect(iconX, iconY, iconSize, iconSize, Theme::textSecondary);
+        const float lh = tm.lineHeight(nameSize);
+        tm.drawText(r, "MASTER", x + 4, y + 5 + (14.0f - lh) * 0.5f,
+                    nameSize, ::yawn::ui::Theme::textPrimary);
     }
 
-    float curY = y + 22 + kButtonHeight + 4;
-    float faderBottom = y + h - 22;
-    float faderH = std::max(20.0f, faderBottom - curY);
-
+    // Stop-all button with overlaid square icon.
+    m_stopAllBtn.measure(Constraints::tight(w - 8, kButtonHeight), ctx);
+    m_stopAllBtn.layout(Rect{x + 4, y + 22, w - 8, kButtonHeight}, ctx);
+    m_stopAllBtn.render(ctx);
     {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_masterStrip.fader.layout(Rect{x + 4, curY, kFaderWidth + 2, faderH}, v2ctx);
-        m_masterStrip.fader.render(v2ctx);
+        const auto& sb = m_stopAllBtn.bounds();
+        const float iconSize = 8.0f;
+        const float iconX = sb.x + (sb.w - iconSize) * 0.5f;
+        const float iconY = sb.y + (sb.h - iconSize) * 0.5f;
+        r.drawRect(iconX, iconY, iconSize, iconSize,
+                    ::yawn::ui::Theme::textSecondary);
     }
+
+    const float curY = y + 22 + kButtonHeight + 4;
+    const float faderBottom = y + h - 22;
+    const float faderH = std::max(20.0f, faderBottom - curY);
+
+    m_masterStrip.fader.measure(Constraints::tight(kFaderWidth + 2, faderH), ctx);
+    m_masterStrip.fader.layout(Rect{x + 4, curY, kFaderWidth + 2, faderH}, ctx);
+    m_masterStrip.fader.render(ctx);
 
     m_masterStrip.meter.setPeak(m_masterMeter.peakL, m_masterMeter.peakR);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,
-                                        kMeterWidth * 2 + 2, faderH}, v2ctx);
-        m_masterStrip.meter.render(v2ctx);
-    }
+    m_masterStrip.meter.measure(Constraints::tight(kMeterWidth * 2 + 2, faderH), ctx);
+    m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,
+                                      kMeterWidth * 2 + 2, faderH}, ctx);
+    m_masterStrip.meter.render(ctx);
 
-    float smallScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
-    float db = master.volume > 0.001f ? 20.0f * std::log10(master.volume) : -60.0f;
+    const float smallSize = met.fontSizeSmall;
+    const float db = (master.volume > 0.001f) ? 20.0f * std::log10(master.volume) : -60.0f;
     char dbText[16];
     if (db <= -60.0f) std::snprintf(dbText, sizeof(dbText), "-inf");
-    else std::snprintf(dbText, sizeof(dbText), "%.1f", db);
-    m_masterStrip.dbLabel.setText(dbText);
-    m_masterStrip.dbLabel.setColor(Theme::textDim);
-    m_masterStrip.dbLabel.setFontScale(smallScale);
-    m_masterStrip.dbLabel.layout(Rect{x + 4, y + h - 18, w - 8, 14}, ctx);
-    m_masterStrip.dbLabel.paint(ctx);
+    else              std::snprintf(dbText, sizeof(dbText), "%.1f", db);
+    const float dbLh = tm.lineHeight(smallSize);
+    tm.drawText(r, dbText, x + 4,
+                y + h - 18 + (14.0f - dbLh) * 0.5f,
+                smallSize, ::yawn::ui::Theme::textSecondary);
 
-    // CC label for master volume
+    // CC label for master volume.
     if (m_learnManager) {
-        auto target = automation::AutomationTarget::mixer(-1, automation::MixerParam::Volume);
-        auto* mapping = m_learnManager->findByTarget(target);
-        if (mapping) {
-            auto lbl = mapping->label();
-            float ccScale = 8.0f / Theme::kFontSize;
-            ctx.font->drawText(r, lbl.c_str(), x + 4, y + h - 32, ccScale, Color{100, 180, 255});
+        const auto target =
+            automation::AutomationTarget::mixer(-1, automation::MixerParam::Volume);
+        if (auto* mapping = m_learnManager->findByTarget(target)) {
+            const auto lbl = mapping->label();
+            const float ccSize = 8.0f;
+            tm.drawText(r, lbl, x + 4, y + h - 32, ccSize,
+                        Color{100, 180, 255, 255});
         }
     }
 }
 
 void ReturnMasterPanel::openMidiLearnMenu(float mx, float my,
-                                           const automation::AutomationTarget& target,
-                                           float paramMin, float paramMax,
-                                           std::function<void()> resetAction) {
-    using Item = ContextMenu::Item;
+                                            const automation::AutomationTarget& target,
+                                            float paramMin, float paramMax,
+                                            std::function<void()> resetAction) {
+    using Item = ::yawn::ui::ContextMenu::Item;
     std::vector<Item> items;
 
-    bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
-    bool isLearning = m_learnManager && m_learnManager->isLearning() &&
-                      m_learnManager->learnTarget() == target;
+    const bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
+    const bool isLearning = m_learnManager && m_learnManager->isLearning() &&
+                             m_learnManager->learnTarget() == target;
 
     if (isLearning) {
         Item cancelItem;
@@ -400,11 +373,10 @@ void ReturnMasterPanel::openMidiLearnMenu(float mx, float my,
     resetItem.action = std::move(resetAction);
     items.push_back(std::move(resetItem));
 
-    ::yawn::ui::fw2::ContextMenu::show(
-        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
-        Point{mx, my});
+    ContextMenu::show(v1ItemsToFw2(std::move(items)),
+                      Point{mx, my});
 }
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(YAWN
-    VERSION 0.36.0
+    VERSION 0.37.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -199,6 +199,13 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/NumberInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/TextInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/MenuBar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/ProgressBar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/RadioGroup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Stack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/FwGrid.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/ScrollView.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/TabView.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/SplitView.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)
