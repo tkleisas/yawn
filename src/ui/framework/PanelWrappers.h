@@ -31,14 +31,22 @@ public:
 
     Size measure(const Constraints& c, const UIContext&) override {
         // Match v1 MenuBar height so layout cells stay the same as
-        // before; full width of the container.
+        // before; full width of the container. Drive the inner v2
+        // bar's measure too so it builds its title strips (which
+        // live in its internal state, not in the wrapper).
         constexpr float kBarHeight = 26.0f;
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        Constraints fc = Constraints::loose(c.maxW, kBarHeight);
+        m_bar.measure(fc, v2ctx);
         return c.constrain({c.maxW, kBarHeight});
     }
 
     void layout(const Rect& bounds, const UIContext&) override {
         m_bounds = bounds;
         auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        // Re-measure so strips are up to date, then seat at bounds.
+        Constraints fc = Constraints::loose(bounds.w, bounds.h);
+        m_bar.measure(fc, v2ctx);
         m_bar.layout(::yawn::ui::fw2::Rect{bounds.x, bounds.y, bounds.w, bounds.h},
                      v2ctx);
     }
