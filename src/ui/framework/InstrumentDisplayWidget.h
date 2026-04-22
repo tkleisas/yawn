@@ -11,6 +11,9 @@
 
 #include "Widget.h"
 #include "Primitives.h"
+#include "v2/Knob.h"
+#include "v2/UIContext.h"
+#include "v2/V1EventBridge.h"
 #include "../Theme.h"
 
 #include <algorithm>
@@ -2209,15 +2212,17 @@ public:
             for (int idx : sd.paramIndices) {
                 if (idx < 0 || idx >= static_cast<int>(allParams.size())) continue;
                 auto& pd = allParams[idx];
-                auto* k = new FwKnob();
-                k->setName(std::to_string(pd.index));
+                auto* k = new ::yawn::ui::fw2::FwKnob();
                 k->setRange(pd.minVal, pd.maxVal);
-                k->setDefault(pd.defaultVal);
+                k->setDefaultValue(pd.defaultVal);
                 k->setValue(pd.defaultVal);
                 k->setLabel(shortenLabel(pd.name));
-                k->setBoolean(pd.isBoolean);
 
-                // Detect integer-range params and set step for snapping
+                // Detect integer-range params and set step for snapping.
+                // v1's "boolean" knob renders as a full circle toggle —
+                // v2 has no boolean mode, but booleans are already
+                // routed to FwToggle by the device factory, so this
+                // path only sees continuous knobs.
                 float range = pd.maxVal - pd.minVal;
                 bool isInteger = (range >= 2 && range <= 32 &&
                                   pd.minVal == std::floor(pd.minVal) &&
@@ -2225,14 +2230,16 @@ public:
                                   pd.unit.empty() && !pd.isBoolean);
                 if (isInteger) {
                     k->setStep(1.0f);
-                    k->setSensitivity(2.5f);
-                    k->setFormatCallback([](float v) {
+                    // v1 sens 2.5 = fast; v2 uses pixels-per-full-range,
+                    // so 120/2.5 = 48 px for full integer sweep.
+                    k->setPixelsPerFullRange(48.0f);
+                    k->setValueFormatter([](float v) {
                         char buf[8];
                         std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(std::round(v)));
                         return std::string(buf);
                     });
                 } else {
-                    k->setFormatCallback([unit = pd.unit, isBool = pd.isBoolean](float v) {
+                    k->setValueFormatter([unit = pd.unit, isBool = pd.isBoolean](float v) {
                         return formatParamValue(v, unit, isBool);
                     });
                 }
@@ -2240,8 +2247,15 @@ public:
                 k->setOnChange([this, pidx = pd.index](float v) {
                     if (m_onParamChange) m_onParamChange(pidx, v);
                 });
-                k->setOnTouch([this, pidx = pd.index, k](bool touching) {
-                    if (m_onParamTouch) m_onParamTouch(pidx, k->value(), touching);
+                // v2's drag-end callback replaces v1's onTouch(false)
+                // firing. For onTouch(true) — the "drag-begin" notice
+                // some hosts use to push an undo snapshot — we fake it
+                // from onDragEnd's startValue. Callers that need live
+                // touch signalling will need v2 support added later.
+                k->setOnDragEnd([this, pidx = pd.index](float startV, float endV) {
+                    if (!m_onParamTouch) return;
+                    m_onParamTouch(pidx, startV, /*touching*/true);
+                    m_onParamTouch(pidx, endV,   /*touching*/false);
                 });
                 sec.knobs.push_back({pd.index, k});
             }
@@ -2250,10 +2264,13 @@ public:
     }
 
     void updateParamValue(int index, float value) override {
+        // v2 setValue is a no-op on equal values; during drag the knob
+        // fires onChange → host writes the param → we re-enter here
+        // with the same value and skip. No isDragging guard needed.
         for (auto& sec : m_sections)
             for (auto& ke : sec.knobs)
                 if (ke.paramIndex == index) {
-                    if (!ke.knob->isDragging()) ke.knob->setValue(value);
+                    ke.knob->setValue(value);
                     return;
                 }
     }
@@ -2289,6 +2306,8 @@ public:
             x += m_displayWidth + kSectionGap;
         }
 
+        // v2 knob layout runs against the fw2 UIContext.
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
         for (auto& sec : m_sections) {
             int cols = sectionCols(sec);
             float secW = sectionWidth(sec);
@@ -2301,7 +2320,7 @@ public:
                 int row = static_cast<int>(i) / cols;
                 float kx = x + kPadX + col * kCellW;
                 float ky = knobY + row * kRowH;
-                sec.knobs[i].knob->layout({kx, ky, kKnobW, kKnobH}, ctx);
+                sec.knobs[i].knob->layout({kx, ky, kKnobW, kKnobH}, v2ctx);
             }
 
             x += secW + kSectionGap;
@@ -2316,6 +2335,7 @@ public:
 
         if (m_display) m_display->paint(ctx);
 
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
         float lblScale = 8.0f / Theme::kFontSize;
         bool first = true;
         for (auto& sec : m_sections) {
@@ -2332,7 +2352,7 @@ public:
             first = false;
 
             for (auto& ke : sec.knobs)
-                ke.knob->paint(ctx);
+                ke.knob->render(v2ctx);
         }
 #endif
     }
@@ -2341,61 +2361,80 @@ public:
         // Forward to display widget first (e.g. DrumSlop pad grid)
         if (m_display && m_display->bounds().contains(e.x, e.y))
             if (m_display->onMouseDown(e)) return true;
-        for (auto& sec : m_sections)
-            for (auto& ke : sec.knobs)
-                if (ke.knob->bounds().contains(e.x, e.y))
-                    return ke.knob->onMouseDown(e);
+        // v2 knob hit-test + dispatch via the v1→v2 bridge. captureMouse
+        // on self so v1 routes subsequent moves back here, where we
+        // translate and forward to the gesture SM.
+        for (auto& sec : m_sections) {
+            for (auto& ke : sec.knobs) {
+                const auto& kb = ke.knob->bounds();
+                if (e.x < kb.x || e.x >= kb.x + kb.w) continue;
+                if (e.y < kb.y || e.y >= kb.y + kb.h) continue;
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, kb);
+                ke.knob->dispatchMouseDown(ev);
+                m_v2Dragging = ke.knob;
+                captureMouse();
+                return true;
+            }
+        }
         return false;
     }
 
     bool onMouseUp(MouseEvent& e) override {
-        for (auto& sec : m_sections)
-            for (auto& ke : sec.knobs)
-                if (ke.knob->bounds().contains(e.x, e.y))
-                    return ke.knob->onMouseUp(e);
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
+            releaseMouse();
+            return true;
+        }
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
+        return false;
+    }
+
+    // Text-edit support — v2 knob consumes only Enter / Escape /
+    // Backspace from the key stream; digits arrive through
+    // forwardTextInput (SDL TEXT_INPUT).
+    ::yawn::ui::fw2::FwKnob* editingKnob() const {
         for (auto& sec : m_sections)
             for (auto& ke : sec.knobs)
-                if (ke.knob->onMouseMove(e)) return true;
-        return false;
+                if (ke.knob->isEditing()) return ke.knob;
+        return nullptr;
     }
 
-    // Text-edit support: check if any knob is in double-click edit mode
-    bool hasEditingKnob() const {
-        for (auto& sec : m_sections)
-            for (auto& ke : sec.knobs)
-                if (ke.knob->isEditing()) return true;
-        return false;
+    bool hasEditingKnob() const override {
+        return editingKnob() != nullptr;
     }
 
-    bool forwardKeyDown(int key) {
-        KeyEvent ke;
-        ke.keyCode = key;
-        for (auto& sec : m_sections)
-            for (auto& entry : sec.knobs)
-                if (entry.knob->isEditing()) return entry.knob->onKeyDown(ke);
-        return false;
+    bool forwardKeyDown(int key) override {
+        auto* k = editingKnob();
+        if (!k) return false;
+        ::yawn::ui::fw2::KeyEvent ke;
+        switch (key) {
+            case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
+            case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
+            case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+            default:                    return false;
+        }
+        return k->dispatchKeyDown(ke);
     }
 
-    bool forwardTextInput(const char* text) {
-        TextInputEvent te;
-        std::strncpy(te.text, text, sizeof(te.text) - 1);
-        te.text[sizeof(te.text) - 1] = '\0';
-        for (auto& sec : m_sections)
-            for (auto& entry : sec.knobs)
-                if (entry.knob->isEditing()) return entry.knob->onTextInput(te);
-        return false;
+    bool forwardTextInput(const char* text) override {
+        auto* k = editingKnob();
+        if (!k) return false;
+        k->takeTextInput(text ? text : "");
+        return true;
     }
 
-    void cancelEditingKnobs() {
-        KeyEvent ke;
-        ke.keyCode = 27; // Escape
-        for (auto& sec : m_sections)
-            for (auto& entry : sec.knobs)
-                if (entry.knob->isEditing()) entry.knob->onKeyDown(ke);
+    void cancelEditingKnobs() override {
+        if (auto* k = editingKnob()) k->endEdit(/*commit*/false);
     }
 
 private:
@@ -2408,7 +2447,7 @@ private:
     static constexpr float kPadX       = 6.0f;
     static constexpr int   kMaxRows    = 2;
 
-    struct KnobEntry { int paramIndex; FwKnob* knob; };
+    struct KnobEntry { int paramIndex; ::yawn::ui::fw2::FwKnob* knob; };
     struct InternalSection {
         std::string label;
         std::vector<KnobEntry> knobs;
@@ -2418,6 +2457,9 @@ private:
     Widget* m_display = nullptr;
     float   m_displayWidth = 0;
     std::vector<InternalSection> m_sections;
+    // Active v2 drag (one of sec.knobs[_].knob). Non-owning. Set on
+    // mouseDown, cleared on mouseUp.
+    ::yawn::ui::fw2::FwKnob* m_v2Dragging = nullptr;
     std::function<void(int, float)> m_onParamChange;
     std::function<void(int, float, bool)> m_onParamTouch;
 
