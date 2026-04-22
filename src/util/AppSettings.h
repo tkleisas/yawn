@@ -34,6 +34,12 @@ struct AppSettings {
     int countInBars = 0;            // 0, 1, 2, or 4
     int metronomeVisualStyle = 0;  // 0=Dots, 1=Beat Number
 
+    // Theme — UI typography scale applied to fw2 theme.metrics.fontSize*
+    // at startup. 1.0 keeps the baked-in 15/13/18 defaults; 1.25 makes
+    // everything 25% larger; 0.85 tightens it. Controlled via the
+    // Preferences → Theme tab.
+    float fontScale = 1.25f;   // default bumped per user feedback
+
     static std::filesystem::path settingsPath() {
 #ifdef _WIN32
         char appData[MAX_PATH];
@@ -73,6 +79,7 @@ struct AppSettings {
             s.metronomeMode = j.value("metronomeMode", 0);
             s.countInBars = j.value("countInBars", 0);
             s.metronomeVisualStyle = j.value("metronomeVisualStyle", 0);
+            s.fontScale = j.value("fontScale", 1.25f);
         } catch (...) {
             LOG_WARN("App", "Failed to parse settings file");
         }
@@ -95,6 +102,7 @@ struct AppSettings {
             j["metronomeMode"] = s.metronomeMode;
             j["countInBars"] = s.countInBars;
             j["metronomeVisualStyle"] = s.metronomeVisualStyle;
+            j["fontScale"] = s.fontScale;
             std::ofstream out(path);
             if (out.is_open()) {
                 out << j.dump(2);

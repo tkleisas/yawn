@@ -1,303 +1,175 @@
 #pragma once
+// PreferencesDialog — UI v2 version, widget-driven.
+//
+// Runs on LayerStack::Modal via an OverlayEntry. Internally builds a
+// tree of fw2 widgets (FwDropDown for every dropdown, FwCheckbox for
+// each MIDI port, v1 Widget::capturedWidget() for gesture follow-up)
+// and hand-dispatches events from the overlay callbacks. Each tab's
+// widgets are laid out + rendered in paintBody; popups (owned by
+// FwDropDown) push themselves onto LayerStack::Overlay so they draw
+// above the dialog body and dismiss on outside-click automatically.
+//
+// Public API (open/close/isOpen/state/setOnResult) matches the earlier
+// immediate-mode migration, so App wiring is unchanged.
 
-#include "ui/framework/Dialog.h"
-#include "ui/framework/Primitives.h"
-#include "ui/Theme.h"
+#include "ui/framework/v2/LayerStack.h"
+#include "ui/framework/v2/Widget.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/Checkbox.h"
+#include "ui/framework/v2/TabView.h"
+
 #include "audio/AudioEngine.h"
+#include "audio/ClipEngine.h"   // QuantizeMode
 #include "midi/MidiPort.h"
 #include "midi/MidiEngine.h"
-#include "audio/ClipEngine.h"
-#include <cstdio>
-#include <algorithm>
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
-class PreferencesDialog : public Dialog {
+enum class PreferencesResult { OK, Cancel };
+
+class FwPreferencesDialog {
 public:
     struct State {
         int selectedOutputDevice = -1;
-        int selectedInputDevice = -1;
-        double sampleRate = 44100.0;
-        int bufferSize = 256;
+        int selectedInputDevice  = -1;
+        double sampleRate        = 44100.0;
+        int bufferSize           = 256;
         audio::QuantizeMode defaultLaunchQuantize = audio::QuantizeMode::NextBar;
         audio::QuantizeMode defaultRecordQuantize = audio::QuantizeMode::NextBar;
         std::vector<int> enabledMidiInputs;
         std::vector<int> enabledMidiOutputs;
 
         // Metronome
-        float metronomeVolume = 0.7f;
-        int metronomeMode = 0;    // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
-        int countInBars = 0;      // 0, 1, 2, or 4
-        int metronomeVisualStyle = 0; // 0=Dots, 1=Beat Number
+        float metronomeVolume       = 0.7f;
+        int   metronomeMode         = 0;
+        int   countInBars           = 0;
+        int   metronomeVisualStyle  = 0;
+
+        // Theme
+        float fontScale             = 1.0f;
     };
 
-    PreferencesDialog()
-        : Dialog("Preferences", 540, 460)
-    {
-        m_showClose = true;
-        m_showOKCancel = true;
-        m_visible = false;
-    }
+    using ResultCallback = std::function<void(PreferencesResult)>;
+
+    FwPreferencesDialog();
+    ~FwPreferencesDialog();
+
+    FwPreferencesDialog(const FwPreferencesDialog&)            = delete;
+    FwPreferencesDialog& operator=(const FwPreferencesDialog&) = delete;
 
     void open(State initialState, audio::AudioEngine* engine,
-              midi::MidiEngine* midiEngine) {
-        m_state = std::move(initialState);
-        m_engine = engine;
-        m_midiEngine = midiEngine;
-        m_tab = 0;
-        refreshDevices();
-        m_visible = true;
-    }
+              midi::MidiEngine* midiEngine);
+    void close(PreferencesResult r = PreferencesResult::Cancel);
+    bool isOpen() const { return m_handle.active(); }
 
-    bool isOpen() const { return m_visible; }
     const State& state() const { return m_state; }
+    void setOnResult(ResultCallback cb) { m_onResult = std::move(cb); }
 
-    void close(DialogResult r = DialogResult::Cancel) override {
-        m_visible = false;
-        m_result = r;
-        if (m_onResult) m_onResult(m_result);
-    }
-
-    // ─── Layout ─────────────────────────────────────────────────────────
-
-    Size measure(const Constraints&, const UIContext&) override {
-        return {m_screenW, m_screenH};
-    }
-
-    void layout(const Rect& bounds, const UIContext& ctx) override {
-        m_bounds = bounds;
-        m_screenW = bounds.w;
-        m_screenH = bounds.h;
-        float dx = (m_screenW - m_preferredW) * 0.5f;
-        float dy = (m_screenH - m_preferredH) * 0.5f;
-        Dialog::layout(Rect{dx, dy, m_preferredW, m_preferredH}, ctx);
-        m_dx = dx;
-        m_dy = dy;
-    }
-
-    // ─── Rendering ──────────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
-#else
-    void paint(UIContext& ctx) override;
-#endif
-
-    // ─── Events ─────────────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    bool onMouseDown(MouseEvent&) override { return true; }
-#else
-    bool onMouseDown(MouseEvent& e) override;
-#endif
-
-    bool onKeyDown(KeyEvent& e) override {
-        if (e.keyCode == 27) {
-            close(DialogResult::Cancel);
-            return true;
-        }
-        if (e.keyCode == 13) {
-            close(DialogResult::OK);
-            return true;
-        }
-        return true;
-    }
+    // Paint hook — invoked by the overlay-entry paint closure. Public
+    // so the lambda set up in open() can call straight through.
+    void paintBody(UIContext& ctx);
 
 private:
-    void refreshDevices() {
-        m_outputDevices = audio::AudioEngine::enumerateDevices();
-        m_midiInputs  = midi::MidiPort::enumerateInputPorts();
-        m_midiOutputs = midi::MidiPort::enumerateOutputPorts();
-    }
+    // ─── Chrome metrics ─────────────────────────────────────────────
+    static constexpr float kTitleBarHeight  = 32.0f;
+    static constexpr float kFooterHeight    = 40.0f;
+    static constexpr float kPadding         = 8.0f;
+    static constexpr float kCloseButtonSize = 24.0f;
 
-    // ─── Audio Tab ──────────────────────────────────────────────────────
+    // ─── Geometry helpers ──────────────────────────────────────────
+    Rect bodyRect(const UIContext& ctx) const;
+    Rect closeButtonRect(const Rect& body) const;
+    Rect okButtonRect(const Rect& body) const;
+    Rect cancelButtonRect(const Rect& body) const;
 
-#ifdef YAWN_TEST_BUILD
-    void paintAudioTab(UIContext&, float, float, float, float,
-                       float, float) {}
-#else
-    void paintAudioTab(UIContext& ctx, float cx, float cy, float cw, float rh,
-                       float ts, float th);
-#endif
+    // ─── Setup ─────────────────────────────────────────────────────
+    void refreshDevices();
+    void configureStaticDropdowns();   // one-time items that don't depend on State
+    void syncDropdownsToState();       // per-open: items + selections
+    void rebuildMidiChecks();          // per-open: recreate FwCheckbox widgets
 
-#ifdef YAWN_TEST_BUILD
-    void handleAudioClick(float, float, float, float,
-                          float, float, float) {}
-#else
-    void handleAudioClick(float mx, float my, float cx, float cy,
-                          float dropX, float dropW, float rh);
-#endif
+    // ─── Paint ─────────────────────────────────────────────────────
+    // Tab strip is rendered by m_tabStrip (a TabView child) — the
+    // dialog lays it out + forwards events inside onMouseDown/Move.
+    void paintFooter(UIContext& ctx);
+    void layoutAndRenderAudioTab(UIContext& ctx, Rect content);
+    void layoutAndRenderMidiTab(UIContext& ctx, Rect content);
+    void layoutAndRenderDefaultsTab(UIContext& ctx, Rect content);
+    void layoutAndRenderMetronomeTab(UIContext& ctx, Rect content);
+    void layoutAndRenderThemeTab(UIContext& ctx, Rect content);
+    void drawLabeledRow(UIContext& ctx, const char* label,
+                        Rect labelArea, float textScale);
 
-    // ─── MIDI Tab ───────────────────────────────────────────────────────
+    // ─── Event dispatch ────────────────────────────────────────────
+    std::vector<Widget*> visibleWidgets();
+    Widget* findWidgetAt(float sx, float sy);
+    void    forwardMouse(Widget* w, MouseEvent& e,
+                         bool (Widget::*fn)(MouseEvent&));
+    void    forwardMouseMove(Widget* w, MouseMoveEvent& e);
 
-#ifdef YAWN_TEST_BUILD
-    void paintMidiTab(UIContext&, float, float, float, float,
-                      float, float) {}
-#else
-    void paintMidiTab(UIContext& ctx, float cx, float cy, float cw, float rh,
-                      float ts, float th);
-#endif
+    // ─── Overlay entry callbacks ───────────────────────────────────
+    bool onMouseDown(MouseEvent& e);
+    bool onMouseUp(MouseEvent& e);
+    bool onMouseMove(MouseMoveEvent& e);
+    bool onKey(KeyEvent& e);
+    void onDismiss();
 
-#ifdef YAWN_TEST_BUILD
-    void handleMidiClick(float, float, float, float,
-                         float, float) {}
-#else
-    void handleMidiClick(float mx, float my, float cx, float cy,
-                         float cw, float rh);
-#endif
-
-    // ─── Defaults Tab ───────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    void paintDefaultsTab(UIContext&, float, float, float, float,
-                          float, float) {}
-#else
-    void paintDefaultsTab(UIContext& ctx, float cx, float cy, float cw, float rh,
-                          float ts, float th);
-#endif
-
-#ifdef YAWN_TEST_BUILD
-    void handleDefaultsClick(float, float, float, float,
-                             float, float, float) {}
-#else
-    void handleDefaultsClick(float mx, float my, float cx, float cy,
-                             float dropX, float dropW, float rh);
-#endif
-
-    // ─── Metronome Tab ─────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    void paintMetronomeTab(UIContext&, float, float, float, float,
-                           float, float) {}
-#else
-    void paintMetronomeTab(UIContext& ctx, float cx, float cy, float cw, float rh,
-                           float ts, float th);
-#endif
-
-#ifdef YAWN_TEST_BUILD
-    void handleMetronomeClick(float, float, float, float,
-                              float, float, float) {}
-#else
-    void handleMetronomeClick(float mx, float my, float cx, float cy,
-                              float dropX, float dropW, float rh);
-#endif
-
-    // ─── Drawing Helpers ────────────────────────────────────────────────
-
-#ifdef YAWN_TEST_BUILD
-    void drawLabel(Renderer2D&, Font&, const char*,
-                   float, float, float) {}
-#else
-    void drawLabel(Renderer2D& r, Font& f, const char* text,
-                   float x, float y, float scale);
-#endif
-
-#ifdef YAWN_TEST_BUILD
-    void drawDropdown(Renderer2D&, Font&, float, float, float,
-                      float, float, float,
-                      const char*[], int, int,
-                      bool*, bool = false) {}
-#else
-    void drawDropdown(Renderer2D& r, Font& f, float x, float y, float w,
-                      float rh, float th, float ts,
-                      const char* items[], int count, int selected,
-                      bool* isOpen, bool overlayPass = false);
-#endif
-
-#ifdef YAWN_TEST_BUILD
-    void drawDeviceDropdown(Renderer2D&, Font&, float, float, float,
-                            float, float, float,
-                            const std::vector<audio::AudioDevice>&,
-                            int, bool, bool*, bool = false) {}
-#else
-    void drawDeviceDropdown(Renderer2D& r, Font& f, float x, float y, float w,
-                            float rh, float th, float ts,
-                            const std::vector<audio::AudioDevice>& devices,
-                            int selected, bool outputOnly, bool* isOpen,
-                            bool overlayPass = false);
-#endif
-
-    bool handleDropdownClick(float mx, float my, float x, float y,
-                             float w, float h, int count, int /*selected*/,
-                             bool* isOpen, std::function<void(int)> onSelect) {
-        if (mx >= x && mx <= x + w && my >= y && my < y + h) {
-            *isOpen = !*isOpen;
-            m_popupHover = -1;
-            return true;
-        }
-        if (*isOpen) {
-            float popupY = y + h;
-            for (int i = 0; i < count; ++i) {
-                float iy = popupY + i * 22.0f;
-                if (mx >= x && mx <= x + w && my >= iy && my < iy + 22.0f) {
-                    onSelect(i);
-                    *isOpen = false;
-                    return true;
-                }
-            }
-            *isOpen = false;
-            return true;
-        }
-        return false;
-    }
-
-    bool handleDeviceDropdownClick(float mx, float my, float x, float y,
-                                    float w, float h,
-                                    const std::vector<audio::AudioDevice>& devices,
-                                    int& selected, bool outputOnly, bool* isOpen) {
-        if (mx >= x && mx <= x + w && my >= y && my < y + h) {
-            *isOpen = !*isOpen;
-            m_popupHover = -1;
-            return true;
-        }
-        if (*isOpen) {
-            float popupY = y + h;
-            int idx = 0;
-            for (auto& d : devices) {
-                if (outputOnly && d.maxOutputChannels == 0) continue;
-                if (!outputOnly && d.maxInputChannels == 0) continue;
-                float iy = popupY + idx * 22.0f;
-                if (mx >= x && mx <= x + w && my >= iy && my < iy + 22.0f) {
-                    selected = d.id;
-                    *isOpen = false;
-                    return true;
-                }
-                idx++;
-            }
-            *isOpen = false;
-            return true;
-        }
-        return false;
-    }
-
-    // ─── Data ───────────────────────────────────────────────────────────
-
+    // ─── State ──────────────────────────────────────────────────────
     State m_state;
-    audio::AudioEngine* m_engine = nullptr;
-    midi::MidiEngine* m_midiEngine = nullptr;
-    std::vector<audio::AudioDevice> m_outputDevices;
-    std::vector<std::string> m_midiInputs;
-    std::vector<std::string> m_midiOutputs;
+    audio::AudioEngine*  m_engine     = nullptr;
+    midi::MidiEngine*    m_midiEngine = nullptr;
 
-    int m_tab = 0;
-    float m_screenW = 0, m_screenH = 0;
-    float m_dx = 0, m_dy = 0;
-    int m_popupHover = -1;
+    std::vector<audio::AudioDevice> m_audioDevices;
+    std::vector<std::string>         m_midiInputPorts;
+    std::vector<std::string>         m_midiOutputPorts;
+    // Map dropdown index → device.id (devices with 0 channels are
+    // filtered per output/input).
+    std::vector<int> m_outputDeviceIds;
+    std::vector<int> m_inputDeviceIds;
 
-    bool m_audioOutputOpen = false;
-    bool m_audioInputOpen = false;
-    bool m_sampleRateOpen = false;
-    bool m_bufferSizeOpen = false;
-    bool m_launchQOpen = false;
-    bool m_recordQOpen = false;
-    bool m_metroModeOpen = false;
-    bool m_metroVolumeOpen = false;
-    bool m_countInOpen = false;
-    bool m_vizStyleOpen = false;
+    int   m_tab         = 0;
+    float m_preferredW  = 540.0f;
+    float m_preferredH  = 460.0f;
+    Rect  m_body{};
+
+    // ─── Widgets ───────────────────────────────────────────────────
+    // TabView owns the strip (click routing, hover, active indicator).
+    // We pass nullptr content to each tab — the dialog paints the
+    // active tab's dropdowns itself via its per-tab render methods.
+    TabView    m_tabStrip;
+
+    FwDropDown m_outputDD;
+    FwDropDown m_inputDD;
+    FwDropDown m_sampleRateDD;
+    FwDropDown m_bufferSizeDD;
+    FwDropDown m_launchQDD;
+    FwDropDown m_recordQDD;
+    FwDropDown m_metroModeDD;
+    FwDropDown m_countInDD;
+    FwDropDown m_metroVolumeDD;
+    FwDropDown m_vizStyleDD;
+    FwDropDown m_fontScaleDD;
+
+    // MIDI port checkboxes — regenerated per-open since the port list
+    // changes with hardware. unique_ptr keeps widget addresses stable
+    // across vector reallocations.
+    std::vector<std::unique_ptr<FwCheckbox>> m_midiInputChecks;
+    std::vector<std::unique_ptr<FwCheckbox>> m_midiOutputChecks;
+
+    PreferencesResult m_result  = PreferencesResult::Cancel;
+    ResultCallback    m_onResult;
+    OverlayHandle     m_handle;
+    bool              m_closing = false;
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

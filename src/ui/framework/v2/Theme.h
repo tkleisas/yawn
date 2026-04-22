@@ -93,8 +93,9 @@ struct ThemeMetrics {
     float splitterThickness  = 6.0f;
 
     // Typography sizes bumped +2px from the original 13/11/16 after
-    // user feedback that v2 widgets read as too small. New baselines
-    // still fit comfortably within controlHeight = 28.
+    // user feedback that v2 widgets read as too small. Runtime scale
+    // is driven by AppSettings::fontScale (applied via setTheme() on
+    // startup + after the Preferences → Theme tab commits).
     float fontSize      = 15.0f;
     float fontSizeSmall = 13.0f;
     float fontSizeLarge = 18.0f;
