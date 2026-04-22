@@ -64,25 +64,9 @@ void MixerPanel::paint(UIContext& ctx) {
     }
     r.popClip();
 
-    // Paint open dropdown overlays on top (outside clip so they're not cut off)
-    if (m_showIO) {
-        for (int t = 0; t < m_project->numTracks(); ++t) {
-            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-            auto& s = m_strips[t];
-            auto type = m_project->track(t).type;
-            if (type == Track::Type::Audio) {
-                s.audioInputDrop.paintOverlay(ctx);
-            } else if (type == Track::Type::Midi) {
-                s.midiInDrop.paintOverlay(ctx);
-                s.midiInChDrop.paintOverlay(ctx);
-                s.midiOutDrop.paintOverlay(ctx);
-                s.midiOutChDrop.paintOverlay(ctx);
-                s.sidechainDrop.paintOverlay(ctx);
-            }
-            // Visual: no I/O overlays.
-        }
-    }
+    // v2 dropdown popups paint via LayerStack::paintLayers in App's
+    // render loop — above every panel, with drop shadow. No per-panel
+    // overlay pass needed.
 
     float contentW = m_project->numTracks() * Theme::kTrackWidth;
     m_scrollbar.setContentSize(contentW);
@@ -118,45 +102,10 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
     float gridX = x + Theme::kSceneLabelWidth;
     float gridW = m_bounds.w - Theme::kSceneLabelWidth;
 
-    // First pass: check if any open dropdown popup was clicked
-    if (m_showIO) {
-        for (int t = 0; t < m_project->numTracks(); ++t) {
-            float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-            if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-            auto& s = m_strips[t];
-            auto type = m_project->track(t).type;
-            if (type == Track::Type::Audio) {
-                if (s.audioInputDrop.hitPopup(mx, my))
-                    return s.audioInputDrop.handlePopupClick(mx, my);
-            } else if (type == Track::Type::Midi) {
-                if (s.midiInDrop.hitPopup(mx, my))
-                    return s.midiInDrop.handlePopupClick(mx, my);
-                if (s.midiInChDrop.hitPopup(mx, my))
-                    return s.midiInChDrop.handlePopupClick(mx, my);
-                if (s.midiOutDrop.hitPopup(mx, my))
-                    return s.midiOutDrop.handlePopupClick(mx, my);
-                if (s.midiOutChDrop.hitPopup(mx, my))
-                    return s.midiOutChDrop.handlePopupClick(mx, my);
-                if (s.sidechainDrop.hitPopup(mx, my))
-                    return s.sidechainDrop.handlePopupClick(mx, my);
-            }
-        }
-    }
-
-    // Close any open dropdowns if click is outside all popups
-    for (int t = 0; t < m_project->numTracks(); ++t) {
-        auto& s = m_strips[t];
-        auto type = m_project->track(t).type;
-        if (type == Track::Type::Audio) {
-            if (s.audioInputDrop.isOpen()) { s.audioInputDrop.close(); }
-        } else if (type == Track::Type::Midi) {
-            if (s.midiInDrop.isOpen()) s.midiInDrop.close();
-            if (s.midiInChDrop.isOpen()) s.midiInChDrop.close();
-            if (s.midiOutDrop.isOpen()) s.midiOutDrop.close();
-            if (s.midiOutChDrop.isOpen()) s.midiOutChDrop.close();
-            if (s.sidechainDrop.isOpen()) s.sidechainDrop.close();
-        }
-    }
+    // v2 dropdowns route open-state clicks through LayerStack
+    // (App::pollEvents dispatches before reaching the panel).
+    // Outside-click dismiss also happens upstream — no per-strip
+    // loop needed here.
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
         float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
@@ -212,21 +161,31 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
         }
 
         if (m_showIO && m_project->track(t).type == Track::Type::Audio) {
-            if (!rightClick && hitWidget(s.audioInputDrop, mx, my))
-                return s.audioInputDrop.onMouseDown(e);
+            // v2 dropdowns: toggle on mouseDown directly (v1 App loop
+            // doesn't forward mouseUp to v2 widgets).
+            {
+                const auto& b = s.audioInputDrop.bounds();
+                if (!rightClick && mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    s.audioInputDrop.toggle();
+                    return true;
+                }
+            }
             if (!rightClick && hitWidget(s.monoBtn, mx, my))
                 return s.monoBtn.onMouseDown(e);
         } else if (m_showIO && m_project->track(t).type == Track::Type::Midi) {
-            if (!rightClick && hitWidget(s.midiInDrop, mx, my))
-                return s.midiInDrop.onMouseDown(e);
-            if (!rightClick && hitWidget(s.midiInChDrop, mx, my))
-                return s.midiInChDrop.onMouseDown(e);
-            if (!rightClick && hitWidget(s.midiOutDrop, mx, my))
-                return s.midiOutDrop.onMouseDown(e);
-            if (!rightClick && hitWidget(s.midiOutChDrop, mx, my))
-                return s.midiOutChDrop.onMouseDown(e);
-            if (!rightClick && hitWidget(s.sidechainDrop, mx, my))
-                return s.sidechainDrop.onMouseDown(e);
+            auto tryToggle = [&](::yawn::ui::fw2::FwDropDown& d) -> bool {
+                const auto& b = d.bounds();
+                if (!rightClick && mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                    d.toggle();
+                    return true;
+                }
+                return false;
+            };
+            if (tryToggle(s.midiInDrop))    return true;
+            if (tryToggle(s.midiInChDrop))  return true;
+            if (tryToggle(s.midiOutDrop))   return true;
+            if (tryToggle(s.midiOutChDrop)) return true;
+            if (tryToggle(s.sidechainDrop)) return true;
         }
 
         // Send knobs
@@ -444,7 +403,7 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    s.audioInputDrop.setOnChange([this, t](int idx) {
+    s.audioInputDrop.setOnChange([this, t](int idx, const std::string&) {
         if (!m_project || !m_engine) return;
         // Decode: indices 0..N are hardware inputs, then come resample tracks
         // The item list is built in paintAudioIO; resample items start after hw inputs
@@ -504,7 +463,7 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    s.sidechainDrop.setOnChange([this, t](int idx) {
+    s.sidechainDrop.setOnChange([this, t](int idx, const std::string&) {
         if (!m_project || !m_engine) return;
         int oldVal = m_project->track(t).sidechainSource;
         int newVal = (idx == 0) ? -1 : -1; // decode below
@@ -530,7 +489,7 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    s.midiInDrop.setOnChange([this, t](int idx) {
+    s.midiInDrop.setOnChange([this, t](int idx, const std::string&) {
         if (!m_project) return;
         int oldVal = m_project->track(t).midiInputPort;
         if (idx == 0) m_project->track(t).midiInputPort = -1;
@@ -545,7 +504,7 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    s.midiInChDrop.setOnChange([this, t](int idx) {
+    s.midiInChDrop.setOnChange([this, t](int idx, const std::string&) {
         if (!m_project) return;
         int oldVal = m_project->track(t).midiInputChannel;
         m_project->track(t).midiInputChannel = (idx == 0) ? -1 : idx - 1;
@@ -558,7 +517,7 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    s.midiOutDrop.setOnChange([this, t](int idx) {
+    s.midiOutDrop.setOnChange([this, t](int idx, const std::string&) {
         if (!m_project) return;
         int oldPort = m_project->track(t).midiOutputPort;
         m_project->track(t).midiOutputPort = (idx == 0) ? -1 : idx - 1;
@@ -576,7 +535,7 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    s.midiOutChDrop.setOnChange([this, t](int idx) {
+    s.midiOutChDrop.setOnChange([this, t](int idx, const std::string&) {
         if (!m_project) return;
         int oldCh = m_project->track(t).midiOutputChannel;
         m_project->track(t).midiOutputChannel = (idx == 0) ? -1 : idx - 1;
@@ -918,6 +877,7 @@ void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
                    int idx, float ioX, float ioW, float ioY, float ioH) {
     float dropH = kIOHeight;
     float curY = ioY;
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
     // Audio input dropdown: hardware inputs + resample from other tracks
     std::vector<std::string> inputItems = {"None", "In 1", "In 2", "In 1+2",
@@ -944,9 +904,9 @@ void MixerPanel::paintAudioIO(UIContext& ctx, TrackStrip& s, const Track& track,
     } else {
         sel = std::clamp(track.audioInputCh, 0, hwCount - 1);
     }
-    s.audioInputDrop.setSelected(sel);
-    s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-    s.audioInputDrop.paint(ctx);
+    s.audioInputDrop.setSelectedIndex(sel);
+    s.audioInputDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+    s.audioInputDrop.render(v2ctx);
 
     // Mono toggle
     curY += dropH + 2;
@@ -963,6 +923,7 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     float labelH = 10.0f;
     float labelScale = Theme::kSmallFontSize / Theme::kFontSize * 0.45f;
     float curY = ioY;
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
     // "RX" label
     s.midiRxLabel.setText("RX");
@@ -983,9 +944,9 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     int inPortSel = 0;
     if (track.midiInputPort == -2) inPortSel = 1;
     else if (track.midiInputPort >= 0) inPortSel = track.midiInputPort + 2;
-    s.midiInDrop.setSelected(std::clamp(inPortSel, 0, static_cast<int>(inPortItems.size()) - 1));
-    s.midiInDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-    s.midiInDrop.paint(ctx);
+    s.midiInDrop.setSelectedIndex(std::clamp(inPortSel, 0, static_cast<int>(inPortItems.size()) - 1));
+    s.midiInDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+    s.midiInDrop.render(v2ctx);
     curY += dropH + 2;
 
     // MIDI Input channel
@@ -993,9 +954,9 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     for (int c = 1; c <= 16; ++c) chItems.push_back(std::to_string(c));
     s.midiInChDrop.setItems(chItems);
     int inChSel = (track.midiInputChannel < 0) ? 0 : track.midiInputChannel + 1;
-    s.midiInChDrop.setSelected(std::clamp(inChSel, 0, 16));
-    s.midiInChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-    s.midiInChDrop.paint(ctx);
+    s.midiInChDrop.setSelectedIndex(std::clamp(inChSel, 0, 16));
+    s.midiInChDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+    s.midiInChDrop.render(v2ctx);
     curY += dropH + 4;
 
     // "TX" label
@@ -1015,17 +976,17 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
     }
     s.midiOutDrop.setItems(outPortItems);
     int outPortSel = (track.midiOutputPort < 0) ? 0 : track.midiOutputPort + 1;
-    s.midiOutDrop.setSelected(std::clamp(outPortSel, 0, static_cast<int>(outPortItems.size()) - 1));
-    s.midiOutDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-    s.midiOutDrop.paint(ctx);
+    s.midiOutDrop.setSelectedIndex(std::clamp(outPortSel, 0, static_cast<int>(outPortItems.size()) - 1));
+    s.midiOutDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+    s.midiOutDrop.render(v2ctx);
     curY += dropH + 2;
 
     // MIDI Output channel
     s.midiOutChDrop.setItems(chItems);
     int outChSel = (track.midiOutputChannel < 0) ? 0 : track.midiOutputChannel + 1;
-    s.midiOutChDrop.setSelected(std::clamp(outChSel, 0, 16));
-    s.midiOutChDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-    s.midiOutChDrop.paint(ctx);
+    s.midiOutChDrop.setSelectedIndex(std::clamp(outChSel, 0, 16));
+    s.midiOutChDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+    s.midiOutChDrop.render(v2ctx);
     curY += dropH + 4;
 
     // Sidechain source dropdown (only if instrument supports it)
@@ -1058,9 +1019,9 @@ void MixerPanel::paintMidiIO(UIContext& ctx, TrackStrip& s, const Track& track,
                 dropIdx++;
             }
         }
-        s.sidechainDrop.setSelected(scSel);
-        s.sidechainDrop.layout(Rect{ioX, curY, ioW, dropH}, ctx);
-        s.sidechainDrop.paint(ctx);
+        s.sidechainDrop.setSelectedIndex(scSel);
+        s.sidechainDrop.layout(Rect{ioX, curY, ioW, dropH}, v2ctx);
+        s.sidechainDrop.render(v2ctx);
     }
 }
 

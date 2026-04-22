@@ -7,6 +7,8 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/UIContext.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -126,30 +128,11 @@ public:
 
     bool onMouseMove(MouseMoveEvent& e) override {
         // v1 context menu retired — fw2 handles its own hover via
-        // LayerStack dispatch in App::pollEvents.
+        // LayerStack dispatch in App::pollEvents. v2 dropdowns also
+        // get their popup hover via LayerStack while open — no
+        // per-strip forwarding needed.
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
-        }
-
-        // Forward mouse move to open dropdowns for hover tracking
-        if (m_project) {
-            float x = m_bounds.x;
-            float gridX = x + Theme::kSceneLabelWidth;
-            float gridW = m_bounds.w - Theme::kSceneLabelWidth;
-            for (int t = 0; t < m_project->numTracks(); ++t) {
-                float sx = gridX + t * Theme::kTrackWidth - m_scrollX;
-                if (sx + Theme::kTrackWidth < gridX || sx > gridX + gridW) continue;
-                auto& s = m_strips[t];
-                auto type = m_project->track(t).type;
-                if (type == Track::Type::Audio) {
-                    s.audioInputDrop.onMouseMove(e);
-                } else if (type == Track::Type::Midi) {
-                    s.midiInDrop.onMouseMove(e);
-                    s.midiInChDrop.onMouseMove(e);
-                    s.midiOutDrop.onMouseMove(e);
-                    s.midiOutChDrop.onMouseMove(e);
-                }
-            }
         }
 
         float sbY = m_bounds.y + m_bounds.h - kScrollbarH;
@@ -168,33 +151,9 @@ public:
 
     bool onScroll(ScrollEvent& e) override {
         if (!m_project) return false;
-        // If any dropdown is open and needs scrolling, forward scroll to it
-        if (m_showIO) {
-            auto tryScroll = [&](FwDropDown& d) -> bool {
-                if (!d.isOpen() || !d.needsScroll()) return false;
-                // Check if cursor is in the popup Y range (use generous X check)
-                float py = d.popupTop(), pb = d.popupBottom();
-                if (e.y >= py && e.y < pb) {
-                    int delta = (e.dy > 0) ? -1 : 1;
-                    d.scrollPopup(delta);
-                    return true;
-                }
-                return false;
-            };
-            for (int t = 0; t < m_project->numTracks(); ++t) {
-                auto& s = m_strips[t];
-                auto type = m_project->track(t).type;
-                if (type == Track::Type::Audio) {
-                    if (tryScroll(s.audioInputDrop)) return true;
-                } else if (type == Track::Type::Midi) {
-                    if (tryScroll(s.midiInDrop)) return true;
-                    if (tryScroll(s.midiInChDrop)) return true;
-                    if (tryScroll(s.midiOutDrop)) return true;
-                    if (tryScroll(s.midiOutChDrop)) return true;
-                    if (tryScroll(s.sidechainDrop)) return true;
-                }
-            }
-        }
+        // v2 dropdown popups handle their own wheel-scroll via
+        // LayerStack. Panel-level scroll just pans the horizontal
+        // track view.
         float gridW = m_bounds.w - Theme::kSceneLabelWidth;
         float contentW = m_project->numTracks() * Theme::kTrackWidth;
         float maxScroll = std::max(0.0f, contentW - gridW);
@@ -212,13 +171,13 @@ private:
         FwButton armBtn;
         FwButton monBtn;
         FwButton autoBtn;   // Automation mode: Off/Read/Touch/Latch
-        FwDropDown audioInputDrop;
+        ::yawn::ui::fw2::FwDropDown audioInputDrop;
         FwButton monoBtn;
-        FwDropDown midiInDrop;
-        FwDropDown midiInChDrop;
-        FwDropDown midiOutDrop;
-        FwDropDown midiOutChDrop;
-        FwDropDown sidechainDrop;
+        ::yawn::ui::fw2::FwDropDown midiInDrop;
+        ::yawn::ui::fw2::FwDropDown midiInChDrop;
+        ::yawn::ui::fw2::FwDropDown midiOutDrop;
+        ::yawn::ui::fw2::FwDropDown midiOutChDrop;
+        ::yawn::ui::fw2::FwDropDown sidechainDrop;
         Label midiRxLabel;
         Label midiTxLabel;
         Label sidechainLabel;

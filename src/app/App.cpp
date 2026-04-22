@@ -6,6 +6,7 @@
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Dialog.h"
+#include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/V1MenuBridge.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
@@ -5017,12 +5018,19 @@ void App::processEvents() {
             case SDL_EVENT_MOUSE_WHEEL: {
                 float dx = event.wheel.x;
                 float dy = event.wheel.y;
+                // SDL3's wheel event carries the mouse position at the
+                // moment of the scroll — use that directly so overlays
+                // dispatch against the live cursor location, not the
+                // last MOUSE_MOTION-tracked value (which can be stale
+                // when the pointer has moved between motion events).
+                float wheelX = event.wheel.mouse_x;
+                float wheelY = event.wheel.mouse_y;
 
                 // fw2 LayerStack — overlay lists consume wheel first.
                 {
                     ui::fw2::ScrollEvent se{};
-                    se.x = m_lastMouseX;
-                    se.y = m_lastMouseY;
+                    se.x = wheelX;
+                    se.y = wheelY;
                     se.dx = dx; se.dy = dy;
                     se.modifiers = sdlModsToFw2(SDL_GetModState());
                     if (m_fw2LayerStack.dispatchScroll(se)) break;
@@ -5634,6 +5642,7 @@ void App::render() {
         lastTick = now;
         ui::fw2::TooltipManager::instance().tick(dt);
         ui::fw2::ContextMenuManager::instance().tick(dt);
+        ui::fw2::FwDropDown::tickGlobal(dt);
     }
 
     // Compute widget tree layout and render all panels

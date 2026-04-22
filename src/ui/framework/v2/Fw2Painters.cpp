@@ -299,6 +299,38 @@ static void paintDropDownPopup(const FwDropDown& dd, UIContext& ctx) {
         }
     }
 
+    // Scroll indicators — subtle ▲ / ▼ overlays on the right edge of
+    // the first / last row when more items exist in that direction.
+    // Works alongside wheel scroll + hover auto-scroll so users can
+    // see that the list extends past the viewport.
+    {
+        const int totalItems = static_cast<int>(items.size());
+        const bool hasMoreAbove = startIdx > 0;
+        const bool hasMoreBelow = startIdx + rows < totalItems;
+        if (hasMoreAbove || hasMoreBelow) {
+            const float arrowW = fontSize * 0.45f;
+            const float arrowH = fontSize * 0.35f;
+            const float cx     = b.x + b.w - textPad;
+            const Color arrowC = p.textSecondary;
+            if (hasMoreAbove) {
+                const float cy = b.y + pad + ih * 0.5f;
+                ctx.renderer->drawTriangle(
+                    cx - arrowW * 0.5f, cy + arrowH * 0.5f,
+                    cx + arrowW * 0.5f, cy + arrowH * 0.5f,
+                    cx,                 cy - arrowH * 0.5f,
+                    arrowC);
+            }
+            if (hasMoreBelow) {
+                const float cy = b.y + b.h - pad - ih * 0.5f;
+                ctx.renderer->drawTriangle(
+                    cx - arrowW * 0.5f, cy - arrowH * 0.5f,
+                    cx + arrowW * 0.5f, cy - arrowH * 0.5f,
+                    cx,                 cy + arrowH * 0.5f,
+                    arrowC);
+            }
+        }
+    }
+
     ctx.renderer->popClip();
 }
 

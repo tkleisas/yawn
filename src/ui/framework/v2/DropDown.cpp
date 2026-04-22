@@ -40,6 +40,56 @@ void FwDropDown::setPopupPainter(PopupPaintFn fn) { popupPainterSlot() = fn; }
 FwDropDown::PopupPaintFn FwDropDown::popupPainter()     { return popupPainterSlot(); }
 
 // ───────────────────────────────────────────────────────────────────
+// Auto-scroll state (shared static — only one dropdown open at once)
+// ───────────────────────────────────────────────────────────────────
+
+FwDropDown* FwDropDown::s_openDropdown = nullptr;
+
+void FwDropDown::tickGlobal(float dtSec) {
+    FwDropDown* dd = s_openDropdown;
+    if (!dd || !dd->isOpen()) { s_openDropdown = nullptr; return; }
+
+    // Determine which row the cursor is on (if any).
+    const float ly = dd->m_lastPopupCursor.y - dd->m_popupBounds.y;
+    const int hoveredRow = dd->indexAtPopupY(ly);
+    if (hoveredRow < 0) {
+        dd->m_autoScrollTimer = 0.0f;
+        return;
+    }
+
+    const int totalItems   = static_cast<int>(dd->m_items.size());
+    const int rows         = dd->visibleRowCount();
+    const int firstVisible = dd->m_scrollOffset;
+    const int lastVisible  = firstVisible + rows - 1;
+
+    const bool canScrollUp   = dd->m_scrollOffset > 0;
+    const bool canScrollDown = dd->m_scrollOffset + rows < totalItems;
+    const bool atTop         = (hoveredRow == firstVisible) && canScrollUp;
+    const bool atBottom      = (hoveredRow == lastVisible)  && canScrollDown;
+
+    if (!atTop && !atBottom) {
+        dd->m_autoScrollTimer = 0.0f;
+        return;
+    }
+
+    dd->m_autoScrollTimer += dtSec;
+    if (dd->m_autoScrollTimer < dd->m_autoScrollDelay) return;
+    dd->m_autoScrollTimer -= dd->m_autoScrollDelay;
+
+    const int maxOffset = std::max(0, totalItems - rows);
+    if (atTop) {
+        dd->m_scrollOffset = std::max(0, dd->m_scrollOffset - 1);
+    } else {
+        dd->m_scrollOffset = std::min(maxOffset, dd->m_scrollOffset + 1);
+    }
+    // Update highlight under the (stationary) cursor so the painted
+    // row tint tracks the new item now occupying that screen row.
+    const float newLy = dd->m_lastPopupCursor.y - dd->m_popupBounds.y;
+    const int newIdx = dd->indexAtPopupY(newLy);
+    if (newIdx >= 0) dd->m_highlighted = newIdx;
+}
+
+// ───────────────────────────────────────────────────────────────────
 // Construction
 // ───────────────────────────────────────────────────────────────────
 
@@ -76,10 +126,31 @@ void FwDropDown::setItems(std::vector<std::string> items) {
 }
 
 void FwDropDown::setItems(std::vector<Item> items) {
+    // Skip the whole rebuild if the new vector matches the current one
+    // verbatim. Panels like the mixer call setItems every frame with
+    // the same static list; without this early-out the scroll offset
+    // (and highlight) would be reset every frame, breaking wheel
+    // scrolling inside the open popup.
+    auto itemsEqual = [](const std::vector<Item>& a, const std::vector<Item>& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].label     != b[i].label     ||
+                a[i].enabled   != b[i].enabled   ||
+                a[i].separator != b[i].separator) return false;
+        }
+        return true;
+    };
+    if (itemsEqual(m_items, items)) return;
+
     m_items = std::move(items);
     if (m_selected >= static_cast<int>(m_items.size())) m_selected = -1;
     m_highlighted  = -1;
-    m_scrollOffset = 0;
+    // Clamp scroll rather than zero it — a legitimate items change
+    // that doesn't invalidate the current offset should keep the
+    // user's scroll position.
+    const int rows = std::min(static_cast<int>(m_items.size()), m_maxVisibleItems);
+    const int maxOffset = std::max(0, static_cast<int>(m_items.size()) - rows);
+    m_scrollOffset = std::clamp(m_scrollOffset, 0, maxOffset);
     invalidate();
 }
 
@@ -273,6 +344,10 @@ void FwDropDown::open() {
     entry.onDismiss   = [this]() { popupOnDismiss(); };
 
     m_popupHandle = ctx.layerStack->push(OverlayLayer::Overlay, std::move(entry));
+    // Register as the currently-open dropdown so tickGlobal can drive
+    // our auto-scroll timer.
+    s_openDropdown = this;
+    m_autoScrollTimer = 0.0f;
 }
 
 void FwDropDown::close() {
@@ -293,6 +368,8 @@ void FwDropDown::popupOnDismiss() {
     m_popupHandle.detach_noRemove();
     m_highlighted  = -1;
     m_scrollOffset = 0;
+    m_autoScrollTimer = 0.0f;
+    if (s_openDropdown == this) s_openDropdown = nullptr;
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -397,6 +474,8 @@ bool FwDropDown::popupOnMouseDown(MouseEvent& e) {
 bool FwDropDown::popupOnMouseMove(MouseMoveEvent& e) {
     const float ly = e.y - m_popupBounds.y;
     const int idx = indexAtPopupY(ly);
+    // Cache cursor for tickGlobal's auto-scroll.
+    m_lastPopupCursor = {e.x, e.y};
     // Don't change highlight on "hovering gutter" — keep last.
     if (idx >= 0) m_highlighted = idx;
     return true;

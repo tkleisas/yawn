@@ -117,6 +117,16 @@ public:
     void toggle();
     bool isOpen() const { return m_popupHandle.active(); }
 
+    // Per-frame hook for auto-scroll. Drives the popup's scroll offset
+    // up or down by one step when the cursor has been hovering the
+    // first / last visible row long enough (autoScrollDelay). Only
+    // one dropdown can be open at a time so a single static tick
+    // covers them all — App calls this in the render loop next to
+    // TooltipManager::tick / ContextMenuManager::tick.
+    static void tickGlobal(float dtSec);
+    void  setAutoScrollDelay(float sec) { m_autoScrollDelay = sec; }
+    float autoScrollDelay() const       { return m_autoScrollDelay; }
+
     // ─── Paint-side accessors ────────────────────────────────────
     // Popup rect (screen coords). Only valid while isOpen() is true —
     // computed when the popup is pushed, not live. Null/undefined
@@ -183,6 +193,17 @@ private:
     bool                  m_popupOpensUpward = false;
     int                   m_highlighted     = -1;   // row being hover-highlighted
     int                   m_scrollOffset    = 0;    // first visible index
+
+    // Auto-scroll state — driven by tickGlobal when cursor lingers on
+    // first/last visible row.
+    Point                 m_lastPopupCursor{-1e9f, -1e9f};
+    float                 m_autoScrollTimer = 0.0f;
+    float                 m_autoScrollDelay = 0.25f;
+
+    // Exactly one dropdown can be open at a time (outside-click
+    // dismisses the previous one before a new one opens). Track it
+    // as a static so tickGlobal can iterate without a manager object.
+    static FwDropDown*    s_openDropdown;
 };
 
 } // namespace fw2
