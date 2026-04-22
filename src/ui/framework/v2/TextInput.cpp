@@ -8,6 +8,28 @@ namespace yawn {
 namespace ui {
 namespace fw2 {
 
+namespace {
+// UTF-8 codepoint-length at position p[0]. 1 for ASCII, 2/3/4 for
+// multi-byte sequences. Mirrors ui::utf8CharLen in Font.cpp — kept
+// local so FwTextInput stays in yawn_core (ui/Font.h pulls glad).
+int utf8ByteCount(const char* p) {
+    const auto b = static_cast<unsigned char>(*p);
+    if (b < 0x80)            return 1;
+    if ((b & 0xE0) == 0xC0)  return 2;
+    if ((b & 0xF0) == 0xE0)  return 3;
+    if ((b & 0xF8) == 0xF0)  return 4;
+    return 1;   // malformed — treat as single byte so we can escape
+}
+// Bytes to walk backward from `pos` to land on a codepoint boundary.
+int utf8PrevBytes(const std::string& s, int pos) {
+    if (pos <= 0) return 0;
+    int i = pos - 1;
+    while (i > 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80)
+        --i;
+    return pos - i;
+}
+} // anon
+
 FwTextInput::FwTextInput() {
     setSizePolicy(SizePolicy::flex(1.0f));
     setRelayoutBoundary(true);
@@ -115,14 +137,18 @@ bool FwTextInput::onKeyDown(KeyEvent& e) {
             return true;
         case Key::Backspace:
             if (m_cursor > 0 && !m_text.empty()) {
-                m_text.erase(static_cast<size_t>(m_cursor - 1), 1);
-                --m_cursor;
+                // Delete one full UTF-8 codepoint — a Greek / Cyrillic
+                // / emoji char is 2-4 bytes, not 1.
+                const int n = utf8PrevBytes(m_text, m_cursor);
+                m_text.erase(static_cast<size_t>(m_cursor - n), n);
+                m_cursor -= n;
                 if (m_onChange) m_onChange(m_text);
             }
             return true;
         case Key::Delete:
             if (m_cursor < static_cast<int>(m_text.size())) {
-                m_text.erase(static_cast<size_t>(m_cursor), 1);
+                const int n = utf8ByteCount(&m_text[m_cursor]);
+                m_text.erase(static_cast<size_t>(m_cursor), n);
                 if (m_onChange) m_onChange(m_text);
             }
             return true;
@@ -133,10 +159,11 @@ bool FwTextInput::onKeyDown(KeyEvent& e) {
             m_cursor = static_cast<int>(m_text.size());
             return true;
         case Key::Left:
-            if (m_cursor > 0) --m_cursor;
+            if (m_cursor > 0) m_cursor -= utf8PrevBytes(m_text, m_cursor);
             return true;
         case Key::Right:
-            if (m_cursor < static_cast<int>(m_text.size())) ++m_cursor;
+            if (m_cursor < static_cast<int>(m_text.size()))
+                m_cursor += utf8ByteCount(&m_text[m_cursor]);
             return true;
         default:
             return true;   // swallow other keys while editing

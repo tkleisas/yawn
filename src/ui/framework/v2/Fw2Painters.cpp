@@ -30,6 +30,11 @@
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/StepSelector.h"
 #include "ui/framework/v2/TextInput.h"
+#include "ui/framework/v2/ProgressBar.h"
+#include "ui/framework/v2/RadioGroup.h"
+#include "ui/framework/v2/ScrollView.h"
+#include "ui/framework/v2/TabView.h"
+#include "ui/framework/v2/SplitView.h"
 
 #include <cmath>
 
@@ -1240,6 +1245,9 @@ static void paintTextInput(Widget& w, UIContext& ctx) {
     const float lh     = ctx.textMetrics->lineHeight(fs);
     const float padX   = m.baseUnit;
     const float tx0    = b.x + padX;
+    // Text top (v1 Font::drawText interprets y as the glyph-bounding-
+    // box top). The -0.15 lh shim counteracts stbtt's baseline offset
+    // so text visually centres.
     const float ty     = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
 
     const bool showPlaceholder = !editing && t.text().empty() && !t.placeholder().empty();
@@ -1252,15 +1260,25 @@ static void paintTextInput(Widget& w, UIContext& ctx) {
     ctx.renderer->pushClip(b.x + padX * 0.5f, b.y, b.w - padX, b.h);
     ctx.textMetrics->drawText(*ctx.renderer, display, tx0, ty, fs, tc);
 
-    // Caret at cursor position while editing. Cursor is a byte offset;
-    // measure the substring-to-cursor to get its on-screen x.
+    // Caret at cursor position while editing. Size + centre it to
+    // match the glyph cap-to-baseline range (≈ 0.7 lh), vertically
+    // centred inside the field — looks balanced against the text
+    // regardless of the shim above.
     if (editing) {
-        const std::string pre = t.text().substr(0, t.cursor());
+        // Measure up to the cursor byte offset. If the cursor sits in
+        // the middle of a multi-byte char (shouldn't under the SM now
+        // that Backspace/arrows are UTF-8-aware, but be defensive),
+        // back it up to the prior codepoint boundary.
+        int c = t.cursor();
+        while (c > 0 &&
+                (static_cast<unsigned char>(t.text()[c]) & 0xC0) == 0x80)
+            --c;
+        const std::string pre = t.text().substr(0, c);
         const float caretX = tx0 + ctx.textMetrics->textWidth(pre, fs);
-        const float caretY0 = ty;
-        const float caretY1 = ty + lh * 0.9f;
-        ctx.renderer->drawLine(caretX, caretY0, caretX, caretY1, p.accent,
-                                1.5f);
+        const float caretH = lh * 0.75f;
+        const float caretY = b.y + (b.h - caretH) * 0.5f;
+        ctx.renderer->drawLine(caretX, caretY, caretX, caretY + caretH,
+                                p.accent, 1.5f);
     }
     ctx.renderer->popClip();
 }
@@ -1307,6 +1325,295 @@ static void paintMenuBar(Widget& w, UIContext& ctx) {
     }
 }
 
+// ─── ProgressBar ────────────────────────────────────────────────────
+
+static void paintProgressBar(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& pb = static_cast<FwProgressBar&>(w);
+    const Rect& b = pb.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const float radius = m.cornerRadius;
+
+    // Track: background rounded rect.
+    Color trackBg = p.controlBg;
+    if (!pb.isEnabled()) trackBg = Color{50, 50, 53, 255};
+    ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h, radius, trackBg);
+
+    if (pb.hasError()) {
+        // Full-width fill in error color.
+        ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h, radius, p.error);
+        return;
+    }
+
+    // Determine fill color: accent by default, complete-color when at
+    // 100%, caller override wins over theme defaults.
+    const bool complete = pb.isDeterminate() && pb.value() >= 0.999f;
+    Color fillColor;
+    if (complete) {
+        fillColor = pb.completeColor().value_or(p.success);
+    } else {
+        fillColor = pb.accentColor().value_or(p.accent);
+    }
+    if (!pb.isEnabled()) fillColor = Color{100, 100, 100, 255};
+
+    // Apply complete-fade alpha.
+    if (complete) {
+        const float a = pb.completeAlpha();
+        fillColor.a = static_cast<uint8_t>(
+            std::clamp(static_cast<float>(fillColor.a) * a, 0.0f, 255.0f));
+    }
+
+    if (pb.isDeterminate()) {
+        const float v = std::clamp(pb.value(), 0.0f, 1.0f);
+        if (pb.orientation() == ProgressOrientation::Horizontal) {
+            const float fillW = b.w * v;
+            if (fillW > 0.0f)
+                ctx.renderer->drawRoundedRect(b.x, b.y, fillW, b.h,
+                                               radius, fillColor);
+        } else {
+            // Vertical: grow bottom-up.
+            const float fillH = b.h * v;
+            if (fillH > 0.0f)
+                ctx.renderer->drawRoundedRect(b.x, b.y + b.h - fillH,
+                                               b.w, fillH, radius, fillColor);
+        }
+        return;
+    }
+
+    // Indeterminate: sweep. Phase in [0,1] drives position; we
+    // bounce-map to create a ping-pong so the sweep runs back and
+    // forth across the track.
+    const float phase = pb.sweepPhase();
+    const float bounced = 1.0f - std::fabs(phase * 2.0f - 1.0f);   // triangle wave in [0,1]
+    const float sweepFrac = 0.25f;   // sweep width as fraction of track
+    if (pb.orientation() == ProgressOrientation::Horizontal) {
+        const float sweepW = b.w * sweepFrac;
+        const float startX = b.x + (b.w - sweepW) * bounced;
+        ctx.renderer->drawRoundedRect(startX, b.y, sweepW, b.h,
+                                       radius, fillColor);
+    } else {
+        const float sweepH = b.h * sweepFrac;
+        const float startY = b.y + (b.h - sweepH) * bounced;
+        ctx.renderer->drawRoundedRect(b.x, startY, b.w, sweepH,
+                                       radius, fillColor);
+    }
+}
+
+// ─── RadioButton ────────────────────────────────────────────────────
+
+static void paintRadioButton(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& rb = static_cast<FwRadioButton&>(w);
+    const Rect& b = rb.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const Color accent = rb.accentColor().value_or(p.accent);
+
+    const float circleSize = m.controlHeight * 0.6f;
+    const float cx = b.x + circleSize * 0.5f;
+    const float cy = b.y + b.h * 0.5f;
+    const float r  = circleSize * 0.5f;
+
+    // Outer circle fill.
+    Color outerBg = p.controlBg;
+    if (!rb.isEnabled())      outerBg = Color{50, 50, 53, 255};
+    else if (rb.isPressed())  outerBg = p.controlActive;
+    else if (rb.isHovered())  outerBg = p.controlHover;
+    ctx.renderer->drawFilledCircle(cx, cy, r, outerBg, 20);
+
+    // Border — accent when selected, normal border otherwise. Simulate
+    // stroke by overdrawing a slightly smaller background circle.
+    const Color borderColor = rb.isSelected() ? accent : p.border;
+    ctx.renderer->drawFilledCircle(cx, cy, r,      borderColor, 20);
+    ctx.renderer->drawFilledCircle(cx, cy, r - 1.2f, outerBg,   20);
+
+    // Inner dot when selected.
+    if (rb.isSelected()) {
+        const Color dot = rb.isEnabled() ? accent : p.textDim;
+        ctx.renderer->drawFilledCircle(cx, cy, r * 0.5f, dot, 16);
+    }
+
+    // Label right of the circle.
+    if (ctx.textMetrics && !rb.label().empty()) {
+        const float fontSize = m.fontSize;
+        const float gap      = m.baseUnit;
+        const float lh       = ctx.textMetrics->lineHeight(fontSize);
+        const float tx       = b.x + circleSize + gap;
+        const float ty       = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+        const Color tc       = rb.isEnabled() ? p.textPrimary : p.textDim;
+        ctx.textMetrics->drawText(*ctx.renderer, rb.label(), tx, ty, fontSize, tc);
+    }
+}
+
+// ─── ScrollView ─────────────────────────────────────────────────────
+
+static void paintScrollView(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& sv = static_cast<ScrollView&>(w);
+    const Rect& b = sv.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p  = theme().palette;
+    const ThemeMetrics& tm = theme().metrics;
+    const float barT = sv.scrollbarThickness();
+    const Size  vp   = sv.viewportSize();
+
+    // Optional solid background.
+    if (sv.backgroundColor()) {
+        ctx.renderer->drawRect(b.x, b.y, b.w, b.h, *sv.backgroundColor());
+    }
+
+    // Clip to the viewport, render the content, unclip.
+    ctx.renderer->pushClip(b.x, b.y, vp.w, vp.h);
+    if (Widget* content = sv.content()) content->render(ctx);
+    ctx.renderer->popClip();
+
+    // Vertical bar along right edge.
+    if (sv.showVerticalBar()) {
+        const float trackX = b.x + b.w - barT;
+        const float trackY = b.y;
+        const float trackH = vp.h;
+        ctx.renderer->drawRect(trackX, trackY, barT, trackH, p.controlBg);
+
+        const Size cs = sv.contentSize();
+        if (cs.h > vp.h && vp.h > 0.0f) {
+            const float thumbH = std::max(20.0f, (vp.h / cs.h) * trackH);
+            const Point mx = sv.maxScrollOffset();
+            const float ratio = (mx.y > 0.0f) ? (sv.scrollOffset().y / mx.y) : 0.0f;
+            const float thumbY = trackY + (trackH - thumbH) * ratio;
+            ctx.renderer->drawRoundedRect(trackX + 2.0f, thumbY,
+                                           barT - 4.0f, thumbH,
+                                           tm.cornerRadius, p.border);
+        }
+    }
+    // Horizontal bar along bottom edge.
+    if (sv.showHorizontalBar()) {
+        const float trackX = b.x;
+        const float trackY = b.y + b.h - barT;
+        const float trackW = vp.w;
+        ctx.renderer->drawRect(trackX, trackY, trackW, barT, p.controlBg);
+
+        const Size cs = sv.contentSize();
+        if (cs.w > vp.w && vp.w > 0.0f) {
+            const float thumbW = std::max(20.0f, (vp.w / cs.w) * trackW);
+            const Point mx = sv.maxScrollOffset();
+            const float ratio = (mx.x > 0.0f) ? (sv.scrollOffset().x / mx.x) : 0.0f;
+            const float thumbX = trackX + (trackW - thumbW) * ratio;
+            ctx.renderer->drawRoundedRect(thumbX, trackY + 2.0f,
+                                           thumbW, barT - 4.0f,
+                                           tm.cornerRadius, p.border);
+        }
+    }
+}
+
+// ─── TabView ────────────────────────────────────────────────────────
+
+static void paintTabView(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& tv = static_cast<TabView&>(w);
+    const Rect& b = tv.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p  = theme().palette;
+    const ThemeMetrics& tm = theme().metrics;
+
+    // Content area background — same as the parent panel. Painted
+    // first so the active-tab content draws on top.
+    const Rect content = tv.contentAreaRect();
+    ctx.renderer->drawRect(content.x, content.y, content.w, content.h,
+                            p.panelBg);
+
+    // Strip background + bottom divider.
+    const float stripH = tv.tabStripHeight();
+    ctx.renderer->drawRect(b.x, b.y, b.w, stripH, p.panelBg);
+    ctx.renderer->drawRect(b.x, b.y + stripH - 1.0f, b.w, 1.0f, p.border);
+
+    // Each tab button.
+    const int active = tv.activeTabIndex();
+    const int hover  = tv.hoverIndex();
+    const float fontSize = tm.fontSize;
+
+    for (int i = 0; i < tv.tabCount(); ++i) {
+        const auto& t = tv.tabs()[i];
+        const Rect& sr = t.stripRect;
+        if (sr.w <= 0.0f) continue;
+
+        const bool isActive = (i == active);
+        const bool isHover  = (i == hover) && !isActive;
+
+        Color bg;
+        if (isActive)     bg = p.surface;
+        else if (isHover) bg = p.controlHover;
+        else              bg = p.controlBg;
+        ctx.renderer->drawRect(sr.x, sr.y, sr.w, sr.h, bg);
+
+        // Right-edge separator between inactive tabs.
+        if (!isActive) {
+            ctx.renderer->drawRect(sr.x + sr.w - 1.0f, sr.y + 4.0f,
+                                    1.0f, sr.h - 8.0f, p.borderSubtle);
+        }
+
+        // Label centered.
+        if (ctx.textMetrics && !t.label.empty()) {
+            const float lh = ctx.textMetrics->lineHeight(fontSize);
+            const float tw = ctx.textMetrics->textWidth(t.label, fontSize);
+            const float tx = sr.x + (sr.w - tw) * 0.5f;
+            const float ty = sr.y + (sr.h - lh) * 0.5f - lh * 0.15f;
+            const Color tc = isActive ? p.textPrimary : p.textSecondary;
+            ctx.textMetrics->drawText(*ctx.renderer, t.label, tx, ty,
+                                       fontSize, tc);
+        }
+
+        // Active-tab indicator bar — accent colored, 2 px at bottom.
+        if (isActive) {
+            ctx.renderer->drawRect(sr.x, sr.y + sr.h - 2.0f,
+                                    sr.w, 2.0f, p.accent);
+        }
+    }
+}
+
+// ─── SplitView ──────────────────────────────────────────────────────
+
+static void paintSplitView(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& sv = static_cast<SplitView&>(w);
+    const Rect d = sv.dividerRect();
+    if (d.w <= 0.0f || d.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+
+    // Divider fill — accent while dragging, hover tint on mouseover,
+    // border color at rest. Caller override wins over theme defaults.
+    Color fill = p.border;
+    if (sv.isDragging())         fill = p.accent;
+    else if (sv.isDividerHover()) fill = p.controlHover;
+    if (sv.dividerColor())       fill = *sv.dividerColor();
+
+    ctx.renderer->drawRect(d.x, d.y, d.w, d.h, fill);
+
+    // Grip dots — 3 small circles along the cross-axis centre. Helps
+    // users spot the divider as interactive without reading a
+    // separate label.
+    const bool horiz = (sv.orientation() == SplitOrientation::Horizontal);
+    const float cx = d.x + d.w * 0.5f;
+    const float cy = d.y + d.h * 0.5f;
+    const float spacing = 6.0f;
+    const float r       = 1.3f;
+    const Color dotCol  = p.textSecondary;
+    for (int i = -1; i <= 1; ++i) {
+        if (horiz) {
+            ctx.renderer->drawFilledCircle(cx, cy + i * spacing, r, dotCol, 8);
+        } else {
+            ctx.renderer->drawFilledCircle(cx + i * spacing, cy, r, dotCol, 8);
+        }
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1325,6 +1632,13 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwNumberInput), &paintNumberInput);
     registerPainter(typeid(FwTextInput), &paintTextInput);
     registerPainter(typeid(FwMenuBar),  &paintMenuBar);
+    registerPainter(typeid(FwProgressBar), &paintProgressBar);
+    registerPainter(typeid(FwRadioButton), &paintRadioButton);
+    registerPainter(typeid(ScrollView),    &paintScrollView);
+    registerPainter(typeid(TabView),       &paintTabView);
+    registerPainter(typeid(SplitView),     &paintSplitView);
+    // FwRadioGroup has no painter — it overrides render() to paint
+    // its buttons directly. Stack is pure layout, also painter-less.
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

@@ -78,6 +78,49 @@ inline MouseMoveEvent toFw2MouseMove(const ::yawn::ui::fw::MouseMoveEvent& e,
     return out;
 }
 
+// ─── fw2 → v1 converters ────────────────────────────────────────────
+//
+// Opposite direction: a fw2::Widget panel that needs to call into a
+// v1 sub-widget (tab body, legacy envelope editor, etc.) converts its
+// inbound fw2 event to v1 at the boundary using these.
+
+inline ::yawn::ui::fw::MouseButton toFw1Button(MouseButton b) {
+    switch (b) {
+        case MouseButton::Right:  return ::yawn::ui::fw::MouseButton::Right;
+        case MouseButton::Middle: return ::yawn::ui::fw::MouseButton::Middle;
+        default:                   return ::yawn::ui::fw::MouseButton::Left;
+    }
+}
+
+inline ::yawn::ui::fw::Modifiers toFw1Modifiers(uint16_t m) {
+    using namespace ModifierKey;
+    ::yawn::ui::fw::Modifiers out{};
+    out.shift = (m & Shift) != 0;
+    out.ctrl  = (m & Ctrl)  != 0;
+    out.alt   = (m & Alt)   != 0;
+    return out;
+}
+
+inline ::yawn::ui::fw::MouseEvent toFw1Mouse(const MouseEvent& e) {
+    ::yawn::ui::fw::MouseEvent out{};
+    out.x = e.x;
+    out.y = e.y;
+    out.button    = toFw1Button(e.button);
+    out.mods      = toFw1Modifiers(e.modifiers);
+    out.clickCount = 1;
+    return out;
+}
+
+inline ::yawn::ui::fw::MouseMoveEvent toFw1MouseMove(const MouseMoveEvent& e) {
+    ::yawn::ui::fw::MouseMoveEvent out{};
+    out.x = e.x;
+    out.y = e.y;
+    out.dx = e.dx;
+    out.dy = e.dy;
+    out.mods = toFw1Modifiers(e.modifiers);
+    return out;
+}
+
 } // namespace fw2
 } // namespace ui
 } // namespace yawn
