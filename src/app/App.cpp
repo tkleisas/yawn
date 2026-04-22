@@ -356,7 +356,30 @@ void App::setupMenuBar() {
 
     // Help menu
     m_menuBar.addMenu("Help", {
-        {"About Y.A.W.N",     "",  [this]() { m_aboutDialog->setVisible(true); }},
+        {"About Y.A.W.N",     "",  []() {
+            // v2 About dialog — fires on Help → About. Content is
+            // plain text; the v1 dialog's icon-on-left layout is
+            // dropped (DialogSpec doesn't do images yet). The title
+            // carries the branding, the message body covers the
+            // rest.
+            ui::fw2::DialogSpec spec;
+            spec.title = "Y.A.W.N";
+            spec.message =
+                "Yetanother Audio Workstation New\n"
+                "Version " YAWN_VERSION_STRING "\n"
+                "\n"
+                "Made with AI-Sloptronic(TM) technology\n"
+                "\n"
+                "PM: Tasos Kleisas\n"
+                "Chief Engineer: Claude (Anthropic)\n"
+                "Where \"it compiles\" is the new \"it works\"";
+            ui::fw2::DialogButton ok;
+            ok.label   = "OK";
+            ok.primary = true;
+            ok.cancel  = true;   // Escape also closes
+            spec.buttons.push_back(std::move(ok));
+            ui::fw2::Dialog::show(std::move(spec));
+        }},
         {"Keyboard Shortcuts", "",  nullptr},
     });
 }
@@ -378,7 +401,8 @@ void App::buildWidgetTree() {
     auto detailP    = std::make_unique<DetailPanelWidget>();
     auto visualPP   = std::make_unique<VisualParamsPanel>();
     auto pianoP     = std::make_unique<PianoRollPanel>();
-    auto aboutDlg   = std::make_unique<AboutDialog>();
+    // v1 AboutDialog retired — fw2::Dialog drives the Help → About
+    // prompt inline from the menu handler.
     // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog handles
     // confirm prompts on the Modal layer (LayerStack).
     auto textInputDlg = std::make_unique<TextInputDialogWidget>();
@@ -400,7 +424,6 @@ void App::buildWidgetTree() {
     m_detailPanel       = detailP.get();
     m_visualParamsPanel = visualPP.get();
     m_pianoRoll         = pianoP.get();
-    m_aboutDialog       = aboutDlg.get();
     m_textInputDialog   = textInputDlg.get();
     m_preferencesDialog = prefsDlg.get();
     m_exportDialog      = exportDlg.get();
@@ -620,7 +643,6 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(detailP));
     m_wrappers.push_back(std::move(visualPP));
     m_wrappers.push_back(std::move(pianoP));
-    m_wrappers.push_back(std::move(aboutDlg));
     m_wrappers.push_back(std::move(textInputDlg));
     m_wrappers.push_back(std::move(prefsDlg));
     m_wrappers.push_back(std::move(exportDlg));
@@ -2976,7 +2998,7 @@ bool App::init() {
     m_virtualKeyboard.init(&m_audioEngine);
     setupMenuBar();
     buildWidgetTree();
-    m_aboutDialog->setIconTexture(m_iconTexture);
+    // v1 m_aboutDialog retired — fw2 About dialog is text-only for now.
     m_pianoRoll->setTransport(&m_audioEngine.transport());
     m_sessionPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine, &m_undoManager);
@@ -4068,11 +4090,8 @@ void App::processEvents() {
                     m_textInputDialog->onKeyDown(ke);
                     break;
                 }
-                if (m_aboutDialog->isVisible()) {
-                    if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_RETURN)
-                        m_aboutDialog->setVisible(false);
-                    break;
-                }
+                // v1 About dialog retired — fw2::Dialog handles
+                // Escape/Enter through LayerStack.
 
                 // Block keys when preferences dialog is open
                 if (m_preferencesDialog->isOpen()) {
@@ -4695,14 +4714,8 @@ void App::processEvents() {
                     break;
                 }
 
-                // About dialog (modal)
-                if (m_aboutDialog->isVisible()) {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = ui::fw::MouseButton::Left;
-                    m_aboutDialog->onMouseDown(me);
-                    break;
-                }
+                // v1 About dialog retired — fw2::Dialog dispatches
+                // mouse events through LayerStack.
 
                 // Preferences dialog (modal)
                 if (m_preferencesDialog->isOpen()) {
@@ -5655,10 +5668,7 @@ void App::render() {
             m_textInputDialog->layout(screenBounds, m_uiContext);
             m_textInputDialog->paint(m_uiContext);
         }
-        if (m_aboutDialog->isVisible()) {
-            m_aboutDialog->layout(screenBounds, m_uiContext);
-            m_aboutDialog->paint(m_uiContext);
-        }
+        // v1 About dialog retired — fw2::Dialog paints via LayerStack.
         if (m_preferencesDialog->isOpen()) {
             m_preferencesDialog->layout(screenBounds, m_uiContext);
             m_preferencesDialog->paint(m_uiContext);

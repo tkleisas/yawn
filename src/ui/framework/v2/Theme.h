@@ -92,10 +92,12 @@ struct ThemeMetrics {
     float scrollbarThickness = 12.0f;
     float splitterThickness  = 6.0f;
 
-    // Typography
-    float fontSize      = 13.0f;
-    float fontSizeSmall = 11.0f;
-    float fontSizeLarge = 16.0f;
+    // Typography sizes bumped +2px from the original 13/11/16 after
+    // user feedback that v2 widgets read as too small. New baselines
+    // still fit comfortably within controlHeight = 28.
+    float fontSize      = 15.0f;
+    float fontSizeSmall = 13.0f;
+    float fontSizeLarge = 18.0f;
     std::string fontPath;                     // empty = default bundled
     float lineHeightMultiplier = 1.2f;
 };

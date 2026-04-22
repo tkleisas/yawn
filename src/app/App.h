@@ -11,7 +11,7 @@
 #include "ui/panels/PianoRollPanel.h"
 #include "ui/VirtualKeyboard.h"
 #include "ui/ContextMenu.h"
-#include "ui/framework/AboutDialog.h"
+// v1 AboutDialog retired — fw2 About is inline in the menu handler.
 // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog lives on
 // LayerStack::Modal (include "ui/framework/v2/Dialog.h" to use it).
 #include "ui/framework/TextInputDialogWidget.h"
@@ -178,7 +178,7 @@ private:
     ui::fw::BrowserPanel*        m_browserPanel    = nullptr;
     ui::fw::ReturnMasterPanel*   m_returnMasterPanel = nullptr;
     ui::fw::VisualParamsPanel*   m_visualParamsPanel = nullptr;
-    ui::fw::AboutDialog*          m_aboutDialog   = nullptr;
+    // v1 m_aboutDialog retired — use fw2::Dialog.
     // v1 m_confirmDialog retired — use fw2::ConfirmDialog.
     ui::fw::TextInputDialogWidget* m_textInputDialog = nullptr;
     ui::fw::PreferencesDialog*    m_preferencesDialog = nullptr;
