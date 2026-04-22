@@ -7,6 +7,10 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Button.h"
+#include "ui/framework/v2/Toggle.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -58,12 +62,23 @@ public:
     static constexpr uint16_t kDefVel   = 32512;
 
     PianoRollPanel() {
+        // Tool picker — radio-style: exactly one of the three toggles
+        // stays lit, corresponding to m_tool. onChange enforces that
+        // clicking a lit button doesn't un-select (the set of tools
+        // is mutually exclusive; you always have one active).
         static const char* toolNames[] = {"Draw", "Select", "Erase"};
         for (int i = 0; i < 3; ++i) {
             m_toolBtns[i].setLabel(toolNames[i]);
-            m_toolBtns[i].setDrawOutline(false);
-            m_toolBtns[i].setOnClick([this, i]() {
-                m_tool = static_cast<Tool>(i);
+            m_toolBtns[i].setAccentColor(Color{100, 180, 255});
+            m_toolBtns[i].setOnChange([this, i](bool on) {
+                if (on) {
+                    m_tool = static_cast<Tool>(i);
+                } else {
+                    // FwToggle flips state on every click; for radio
+                    // behaviour we pin it back to on so the active
+                    // tool can't be un-selected by clicking itself.
+                    m_toolBtns[i].setState(true);
+                }
             });
         }
 
@@ -72,41 +87,52 @@ public:
                                           kTripletBtnW, kTripletBtnW, kTripletBtnW};
         for (int i = 0; i < 7; ++i) {
             m_snapBtns[i].setLabel(snapNames[i]);
-            m_snapBtns[i].setDrawOutline(false);
-            m_snapBtns[i].setOnClick([this, i]() {
-                m_snap = static_cast<Snap>(i);
+            m_snapBtns[i].setAccentColor(Color{100, 180, 255});
+            m_snapBtns[i].setOnChange([this, i](bool on) {
+                if (on) {
+                    m_snap = static_cast<Snap>(i);
+                } else {
+                    m_snapBtns[i].setState(true);
+                }
             });
         }
+
+        // Seed the radio states so the first paint shows the default
+        // selection lit even before the panel syncs from m_tool / m_snap.
+        m_toolBtns[static_cast<int>(m_tool)].setState(true);
+        m_snapBtns[static_cast<int>(m_snap)].setState(true);
 
         m_snapLabel.setText("Snap:");
         m_snapLabel.setColor(Theme::textSecondary);
 
+        // Loop — v2 FwToggle. Green accent carries the loop-on state.
         m_loopBtn.setLabel("Loop");
-        m_loopBtn.setDrawOutline(false);
-        m_loopBtn.setOnClick([this]() {
-            if (m_clip) m_clip->setLoop(!m_clip->loop());
+        m_loopBtn.setAccentColor(Color{80, 220, 100});
+        m_loopBtn.setOnChange([this](bool on) {
+            if (m_clip) m_clip->setLoop(on);
         });
 
+        // Vel — v2 FwToggle. Soft-blue accent for the show-lane state.
         m_velBtn.setLabel("Vel");
-        m_velBtn.setDrawOutline(false);
-        m_velBtn.setOnClick([this]() {
-            m_showVelocityLane = !m_showVelocityLane;
+        m_velBtn.setAccentColor(Color{100, 180, 255});
+        m_velBtn.setOnChange([this](bool on) {
+            m_showVelocityLane = on;
         });
 
+        // Follow — v2 FwToggle. Same blue accent as m_velBtn.
         m_followBtn.setLabel("Follow");
-        m_followBtn.setDrawOutline(false);
-        m_followBtn.setOnClick([this]() {
-            m_followPlayhead = !m_followPlayhead;
+        m_followBtn.setAccentColor(Color{100, 180, 255});
+        m_followBtn.setOnChange([this](bool on) {
+            m_followPlayhead = on;
         });
 
+        // Zoom in/out — v2 FwButton, plain one-shot.
         m_zoomInBtn.setLabel("+");
-        m_zoomInBtn.setDrawOutline(false);
         m_zoomInBtn.setOnClick([this]() {
             m_pxBeat = std::min(kMaxPxBeat, m_pxBeat * 1.3f);
         });
 
         m_zoomOutBtn.setLabel("-");
-        m_zoomOutBtn.setDrawOutline(false);
         m_zoomOutBtn.setOnClick([this]() {
             m_pxBeat = std::max(kMinPxBeat, m_pxBeat / 1.3f);
         });
@@ -359,27 +385,32 @@ private:
     // ─── Toolbar click ──────────────────────────────────────────────────
 
     bool handleToolbarClick(float mx, float my) {
-        auto tryBtn = [&](Widget& w) -> bool {
-            auto& b = w.bounds();
-            if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-                MouseEvent e;
-                e.x = mx; e.y = my;
-                e.button = MouseButton::Left;
-                w.onMouseDown(e);
-                return true;
-            }
-            return false;
+        // All toolbar buttons are v2 widgets now. Route through the
+        // fw2 gesture SM via m_v2Dragging + v1 capture so the down/up
+        // pair reaches the widget even if the user drags off-button.
+        auto routeV2Btn = [&](::yawn::ui::fw2::Widget& w) -> bool {
+            const auto& b = w.bounds();
+            if (mx < b.x || mx >= b.x + b.w) return false;
+            if (my < b.y || my >= b.y + b.h) return false;
+            MouseEvent src;
+            src.x = mx; src.y = my;
+            src.button = MouseButton::Left;
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(src, b);
+            w.dispatchMouseDown(ev);
+            m_v2Dragging = &w;
+            captureMouse();
+            return true;
         };
 
         for (int i = 0; i < 3; ++i)
-            if (tryBtn(m_toolBtns[i])) return true;
+            if (routeV2Btn(m_toolBtns[i])) return true;
         for (int i = 0; i < 7; ++i)
-            if (tryBtn(m_snapBtns[i])) return true;
-        if (tryBtn(m_loopBtn)) return true;
-        if (tryBtn(m_velBtn)) return true;
-        if (tryBtn(m_followBtn)) return true;
-        if (tryBtn(m_zoomInBtn)) return true;
-        if (tryBtn(m_zoomOutBtn)) return true;
+            if (routeV2Btn(m_snapBtns[i])) return true;
+        if (routeV2Btn(m_loopBtn))    return true;
+        if (routeV2Btn(m_velBtn))     return true;
+        if (routeV2Btn(m_followBtn))  return true;
+        if (routeV2Btn(m_zoomInBtn))  return true;
+        if (routeV2Btn(m_zoomOutBtn)) return true;
         return true;
     }
 
@@ -743,14 +774,19 @@ private:
     static constexpr float kVelBtnW     = 40.0f;
     static constexpr float kZoomBtnW    = 28.0f;
 
-    FwButton  m_toolBtns[3];
-    FwButton  m_snapBtns[7];
+    ::yawn::ui::fw2::FwToggle m_toolBtns[3];
+    ::yawn::ui::fw2::FwToggle m_snapBtns[7];
     Label     m_snapLabel;
-    FwButton  m_loopBtn;
-    FwButton  m_velBtn;
-    FwButton  m_followBtn;
-    FwButton  m_zoomInBtn;
-    FwButton  m_zoomOutBtn;
+    ::yawn::ui::fw2::FwToggle m_loopBtn;
+    ::yawn::ui::fw2::FwToggle m_velBtn;
+    ::yawn::ui::fw2::FwToggle m_followBtn;
+    ::yawn::ui::fw2::FwButton m_zoomInBtn;
+    ::yawn::ui::fw2::FwButton m_zoomOutBtn;
+
+    // v2 widget that currently holds mouse capture (button/toggle
+    // press in progress). onMouseMove/onMouseUp flush translated events
+    // to this pointer before falling through to v1 capture handling.
+    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
     Label     m_clipNameLabel;
     ScrollBar m_scrollbar;
 

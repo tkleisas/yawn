@@ -212,6 +212,15 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
     if (!m_open || !m_clip) return false;
     float mx = e.x, my = e.y;
 
+    // v2 button/toggle drag in progress — forward translated events to
+    // the gesture SM. Handled BEFORE v1 capture because v2 widgets
+    // don't participate in v1's capturedWidget() mechanism.
+    if (m_v2Dragging) {
+        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+        m_v2Dragging->dispatchMouseMove(ev);
+        return true;
+    }
+
     if (Widget::capturedWidget() && Widget::capturedWidget() != this) {
         return Widget::capturedWidget()->onMouseMove(e);
     }
@@ -314,7 +323,16 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
 }
 
 bool PianoRollPanel::onMouseUp(MouseEvent& e) {
-    (void)e;
+    // v2 button/toggle release — flush the down/up pair to the fw2
+    // gesture SM and release v1 capture. Must come BEFORE the v1
+    // capturedWidget() path for the same reason as onMouseMove.
+    if (m_v2Dragging) {
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+        m_v2Dragging->dispatchMouseUp(ev);
+        m_v2Dragging = nullptr;
+        releaseMouse();
+        return true;
+    }
 
     if (Widget::capturedWidget() && Widget::capturedWidget() != this) {
         return Widget::capturedWidget()->onMouseUp(e);
@@ -500,13 +518,16 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     float gap = 4.0f;
     float sectionGap = 12.0f;
 
-    // Tool buttons
+    // v2 toggles/buttons — setState drives the accent-fill visual; no
+    // per-paint colour juggling needed. Sync state from the panel's
+    // bools each paint (cheap no-op when unchanged).
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+
+    // Tool radio group — exactly one toggle lit, corresponding to m_tool.
     for (int i = 0; i < 3; ++i) {
-        bool active = static_cast<int>(m_tool) == i;
-        m_toolBtns[i].setColor(active ? Color{100, 180, 255} : Color{55, 55, 60});
-        m_toolBtns[i].setTextColor(active ? Color{10, 10, 15} : Theme::textSecondary);
-        m_toolBtns[i].layout(Rect{x, tbY + 2, kToolBtnW, btnH}, ctx);
-        m_toolBtns[i].paint(ctx);
+        m_toolBtns[i].setState(static_cast<int>(m_tool) == i);
+        m_toolBtns[i].layout(Rect{x, tbY + 2, kToolBtnW, btnH}, v2ctx);
+        m_toolBtns[i].render(v2ctx);
         x += kToolBtnW + gap;
     }
 
@@ -515,52 +536,43 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     m_snapLabel.paint(ctx);
     x += 44;
 
-    // Snap buttons
+    // Snap radio group. Triplet buttons (indices 4..6) get an orange
+    // accent to visually group them apart from the power-of-two snaps.
     static constexpr float snapW[] = {kSnapBtnW, kSnapBtnW, kSnapBtnW, kSnapBtnW,
                                        kTripletBtnW, kTripletBtnW, kTripletBtnW};
     for (int i = 0; i < 7; ++i) {
-        bool active = static_cast<int>(m_snap) == i;
-        bool isTriplet = (i >= 4);
-        Color bg = active ? (isTriplet ? Color{255, 160, 60} : Color{100, 180, 255})
-                          : Color{55, 55, 60};
-        m_snapBtns[i].setColor(bg);
-        m_snapBtns[i].setTextColor(active ? Color{10, 10, 15} : Theme::textSecondary);
-        m_snapBtns[i].layout(Rect{x, tbY + 2, snapW[i], btnH}, ctx);
-        m_snapBtns[i].paint(ctx);
+        m_snapBtns[i].setAccentColor(i >= 4 ? Color{255, 160, 60}
+                                            : Color{100, 180, 255});
+        m_snapBtns[i].setState(static_cast<int>(m_snap) == i);
+        m_snapBtns[i].layout(Rect{x, tbY + 2, snapW[i], btnH}, v2ctx);
+        m_snapBtns[i].render(v2ctx);
         x += snapW[i] + gap;
     }
 
     x += sectionGap;
     bool loopOn = m_clip && m_clip->loop();
-    m_loopBtn.setColor(loopOn ? Color{80, 220, 100} : Color{55, 55, 60});
-    m_loopBtn.setTextColor(loopOn ? Color{10, 10, 15} : Theme::textSecondary);
-    m_loopBtn.layout(Rect{x, tbY + 2, kLoopBtnW, btnH}, ctx);
-    m_loopBtn.paint(ctx);
+    m_loopBtn.setState(loopOn);
+    m_loopBtn.layout(Rect{x, tbY + 2, kLoopBtnW, btnH}, v2ctx);
+    m_loopBtn.render(v2ctx);
     x += kLoopBtnW + gap;
 
-    m_velBtn.setColor(m_showVelocityLane ? Color{100, 180, 255} : Color{55, 55, 60});
-    m_velBtn.setTextColor(m_showVelocityLane ? Color{10, 10, 15} : Theme::textSecondary);
-    m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, ctx);
-    m_velBtn.paint(ctx);
+    m_velBtn.setState(m_showVelocityLane);
+    m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, v2ctx);
+    m_velBtn.render(v2ctx);
     x += kVelBtnW + gap;
 
-    m_followBtn.setColor(m_followPlayhead ? Color{100, 180, 255} : Color{55, 55, 60});
-    m_followBtn.setTextColor(m_followPlayhead ? Color{10, 10, 15} : Theme::textSecondary);
-    m_followBtn.layout(Rect{x, tbY + 2, kFollowBtnW, btnH}, ctx);
-    m_followBtn.paint(ctx);
+    m_followBtn.setState(m_followPlayhead);
+    m_followBtn.layout(Rect{x, tbY + 2, kFollowBtnW, btnH}, v2ctx);
+    m_followBtn.render(v2ctx);
     x += kFollowBtnW + sectionGap;
 
-    // Zoom buttons
-    m_zoomOutBtn.setColor(Color{55, 55, 60});
-    m_zoomOutBtn.setTextColor(Theme::textSecondary);
-    m_zoomOutBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, ctx);
-    m_zoomOutBtn.paint(ctx);
+    // Zoom buttons — plain v2 FwButton, default look.
+    m_zoomOutBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, v2ctx);
+    m_zoomOutBtn.render(v2ctx);
     x += kZoomBtnW + 2;
 
-    m_zoomInBtn.setColor(Color{55, 55, 60});
-    m_zoomInBtn.setTextColor(Theme::textSecondary);
-    m_zoomInBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, ctx);
-    m_zoomInBtn.paint(ctx);
+    m_zoomInBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, v2ctx);
+    m_zoomInBtn.render(v2ctx);
 
     // Clip name (right-aligned)
     if (m_clip && !m_clip->name().empty()) {
