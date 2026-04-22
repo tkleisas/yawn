@@ -238,28 +238,39 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             }
         }
 
-        // Pan: right-click opens MIDI Learn context menu
-        if (hitWidget(s.pan, mx, my)) {
-            if (rightClick) {
-                openMidiLearnMenu(mx, my,
-                    automation::AutomationTarget::mixer(t, automation::MixerParam::Pan),
-                    -1.0f, 1.0f,
-                    [this, t]() {
-                        float oldVal = m_strips[t].pan.value();
-                        m_strips[t].pan.setValue(0.0f);
-                        m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f});
-                        if (m_undoManager) {
-                            m_undoManager->push({"Reset Pan",
-                                [this, t, oldVal]{ m_strips[t].pan.setValue(oldVal);
-                                    m_engine->sendCommand(audio::SetTrackPanMsg{t, oldVal}); },
-                                [this, t]{ m_strips[t].pan.setValue(0.0f);
-                                    m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f}); },
-                                ""});
-                        }
-                    });
+        // Pan — v2 FwPan, same v1→v2 event bridge pattern as knobs
+        // and faders. Right-click opens the MIDI Learn context menu
+        // (handled before dispatch so the widget's internal reset
+        // doesn't also fire).
+        {
+            const auto& pb = s.pan.bounds();
+            if (mx >= pb.x && mx < pb.x + pb.w &&
+                my >= pb.y && my < pb.y + pb.h) {
+                if (rightClick) {
+                    openMidiLearnMenu(mx, my,
+                        automation::AutomationTarget::mixer(t, automation::MixerParam::Pan),
+                        -1.0f, 1.0f,
+                        [this, t]() {
+                            float oldVal = m_strips[t].pan.value();
+                            m_strips[t].pan.setValue(0.0f);
+                            m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f});
+                            if (m_undoManager) {
+                                m_undoManager->push({"Reset Pan",
+                                    [this, t, oldVal]{ m_strips[t].pan.setValue(oldVal);
+                                        m_engine->sendCommand(audio::SetTrackPanMsg{t, oldVal}); },
+                                    [this, t]{ m_strips[t].pan.setValue(0.0f);
+                                        m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f}); },
+                                    ""});
+                            }
+                        });
+                    return true;
+                }
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, pb);
+                s.pan.dispatchMouseDown(ev);
+                m_v2Dragging = &s.pan;
+                captureMouse();
                 return true;
             }
-            return s.pan.onMouseDown(e);
         }
 
         // Fader — v2 FwFader, same v1→v2 event bridge pattern as knobs
@@ -610,26 +621,20 @@ void MixerPanel::setupStripCallbacks(int t) {
         }
     });
 
-    // Pan knob — uses onTouch for undo capture
+    // Pan — v2 FwPan delivers (startValue, endValue) in one callback.
     s.pan.setOnChange([this, t](float v) {
         if (!m_engine) return;
         m_engine->sendCommand(audio::SetTrackPanMsg{t, v});
     });
-    s.pan.setOnTouch([this, t](bool touching) {
+    s.pan.setOnDragEnd([this, t](float oldVal, float newVal) {
         if (!m_undoManager || !m_engine) return;
-        if (touching) {
-            m_strips[t].panDragStart = m_strips[t].pan.value();
-        } else {
-            float oldVal = m_strips[t].panDragStart;
-            float newVal = m_strips[t].pan.value();
-            if (oldVal != newVal) {
-                m_undoManager->push({"Change Pan",
-                    [this, t, oldVal]{ m_strips[t].pan.setValue(oldVal);
-                        m_engine->sendCommand(audio::SetTrackPanMsg{t, oldVal}); },
-                    [this, t, newVal]{ m_strips[t].pan.setValue(newVal);
-                        m_engine->sendCommand(audio::SetTrackPanMsg{t, newVal}); },
-                    ""});
-            }
+        if (oldVal != newVal) {
+            m_undoManager->push({"Change Pan",
+                [this, t, oldVal]{ m_strips[t].pan.setValue(oldVal);
+                    m_engine->sendCommand(audio::SetTrackPanMsg{t, oldVal}); },
+                [this, t, newVal]{ m_strips[t].pan.setValue(newVal);
+                    m_engine->sendCommand(audio::SetTrackPanMsg{t, newVal}); },
+                ""});
         }
     });
 
@@ -817,11 +822,15 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
     curY += kButtonHeight + 4;
 
-    // Pan
-    s.pan.setValue(ch.pan);
+    // Pan — v2 FwPan, skip sync during drag to avoid engine rubber-banding.
+    if (!s.pan.isDragging())
+        s.pan.setValue(ch.pan);
     s.pan.setThumbColor(col);
-    s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, ctx);
-    s.pan.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        s.pan.layout(Rect{ix + 4, curY, iw - 8, 16}, v2ctx);
+        s.pan.render(v2ctx);
+    }
 
     // CC label for pan mapping
     if (m_learnManager) {

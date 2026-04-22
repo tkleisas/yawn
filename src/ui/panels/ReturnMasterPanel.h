@@ -8,6 +8,7 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Fader.h"
+#include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
@@ -83,20 +84,16 @@ public:
                 if (!m_engine) return;
                 m_engine->sendCommand(audio::SetReturnPanMsg{b, v});
             });
-            rs.pan.setOnTouch([this, b](bool start) {
+            // v2 FwPan delivers (startValue, endValue) in one callback.
+            rs.pan.setOnDragEnd([this, b](float oldV, float newV) {
                 if (!m_undoManager) return;
-                if (start) {
-                    m_returnPanStart[b] = m_returnStrips[b].pan.value();
-                } else {
-                    float oldV = m_returnPanStart[b];
-                    float newV = m_returnStrips[b].pan.value();
-                    m_undoManager->push({"Change Return Pan",
-                        [this, b, oldV]{ m_returnStrips[b].pan.setValue(oldV);
-                            if (m_engine) m_engine->sendCommand(audio::SetReturnPanMsg{b, oldV}); },
-                        [this, b, newV]{ m_returnStrips[b].pan.setValue(newV);
-                            if (m_engine) m_engine->sendCommand(audio::SetReturnPanMsg{b, newV}); },
-                        "return.pan." + std::to_string(b)});
-                }
+                if (oldV == newV) return;
+                m_undoManager->push({"Change Return Pan",
+                    [this, b, oldV]{ m_returnStrips[b].pan.setValue(oldV);
+                        if (m_engine) m_engine->sendCommand(audio::SetReturnPanMsg{b, oldV}); },
+                    [this, b, newV]{ m_returnStrips[b].pan.setValue(newV);
+                        if (m_engine) m_engine->sendCommand(audio::SetReturnPanMsg{b, newV}); },
+                    "return.pan." + std::to_string(b)});
             });
 
             rs.fader.setRange(0.0f, 2.0f);
@@ -225,7 +222,7 @@ public:
 private:
     struct StripWidgets {
         ::yawn::ui::fw2::FwToggle muteBtn;
-        PanWidget  pan;
+        ::yawn::ui::fw2::FwPan pan;
         ::yawn::ui::fw2::FwFader fader;
         MeterWidget meter;
         Label      nameLabel;
@@ -272,7 +269,6 @@ private:
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
-    float m_returnPanStart[kMaxReturnBuses] = {};
 
     ReturnMeter m_returnMeters[kMaxReturnBuses] = {};
     ReturnMeter m_masterMeter = {};

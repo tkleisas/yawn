@@ -22,6 +22,7 @@
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/Checkbox.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/StepSelector.h"
 
 #include <cmath>
@@ -994,6 +995,52 @@ static void paintStepSelector(Widget& w, UIContext& ctx) {
                                 rx + triW * 0.5f, cyA, rc);
 }
 
+// ─── Pan ────────────────────────────────────────────────────────────
+
+static void paintPan(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& p = static_cast<FwPan&>(w);
+    const Rect& b = p.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& pal = theme().palette;
+
+    // Track — thin horizontal strip, vertically centred.
+    const float trackH = std::min(b.h, 4.0f);
+    const float trackY = b.y + (b.h - trackH) * 0.5f;
+    ctx.renderer->drawRect(b.x, trackY, b.w, trackH,
+                            p.isEnabled() ? pal.controlBg : Color{40, 40, 45, 255});
+
+    // Center tick — a small vertical nub at the midpoint so users can
+    // see the "0 pan" position at a glance.
+    const float cx = b.x + b.w * 0.5f;
+    ctx.renderer->drawRect(cx - 0.5f, b.y + b.h * 0.2f, 1.0f, b.h * 0.6f,
+                            pal.border);
+
+    // Filled portion from center to thumb.
+    const float t = p.value();                          // -1..+1
+    const float thumbCx = cx + t * (b.w * 0.5f - 4.0f); // keep thumb inside
+    const Color fillCol = p.thumbColor().value_or(pal.accent);
+    if (t >= 0.0f) {
+        ctx.renderer->drawRect(cx, trackY, thumbCx - cx, trackH,
+                                p.isEnabled() ? fillCol : pal.textDim);
+    } else {
+        ctx.renderer->drawRect(thumbCx, trackY, cx - thumbCx, trackH,
+                                p.isEnabled() ? fillCol : pal.textDim);
+    }
+
+    // Thumb — small square centred on the current value.
+    const float thumbW = 6.0f;
+    const float thumbH = std::min(b.h - 2.0f, 12.0f);
+    ctx.renderer->drawRect(thumbCx - thumbW * 0.5f,
+                            b.y + (b.h - thumbH) * 0.5f,
+                            thumbW, thumbH,
+                            p.isEnabled() ? fillCol : pal.textDim);
+    ctx.renderer->drawRectOutline(thumbCx - thumbW * 0.5f,
+                                   b.y + (b.h - thumbH) * 0.5f,
+                                   thumbW, thumbH, pal.border, 1.0f);
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1005,6 +1052,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwCheckbox), &paintCheckbox);
     registerPainter(typeid(FwKnob),     &paintKnob);
     registerPainter(typeid(FwStepSelector), &paintStepSelector);
+    registerPainter(typeid(FwPan),      &paintPan);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

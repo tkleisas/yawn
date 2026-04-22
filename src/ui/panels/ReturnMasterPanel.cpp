@@ -68,18 +68,30 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
                     return true;
                 }
             }
-            if (hitWidget(rs.pan, mx, my)) {
-                if (rightClick) {
-                    openMidiLearnMenu(mx, my,
-                        automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Pan),
-                        -1.0f, 1.0f,
-                        [this, b]() {
-                            m_returnStrips[b].pan.setValue(0.0f);
-                            m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
-                        });
+            // Return pan — v2 FwPan. Right-click handled here (opens
+            // MIDI Learn; engine send + panel-side reset) before any
+            // dispatch, so the widget's internal reset doesn't also
+            // fire.
+            {
+                const auto& pb = rs.pan.bounds();
+                if (mx >= pb.x && mx < pb.x + pb.w &&
+                    my >= pb.y && my < pb.y + pb.h) {
+                    if (rightClick) {
+                        openMidiLearnMenu(mx, my,
+                            automation::AutomationTarget::mixer(-(b + 2), automation::MixerParam::Pan),
+                            -1.0f, 1.0f,
+                            [this, b]() {
+                                m_returnStrips[b].pan.setValue(0.0f);
+                                m_engine->sendCommand(audio::SetReturnPanMsg{b, 0.0f});
+                            });
+                        return true;
+                    }
+                    auto ev = ::yawn::ui::fw2::toFw2Mouse(e, pb);
+                    rs.pan.dispatchMouseDown(ev);
+                    m_v2Dragging = &rs.pan;
+                    captureMouse();
                     return true;
                 }
-                return rs.pan.onMouseDown(e);
             }
             // Return fader — v2 FwFader. Right-click still opens MIDI
             // Learn menu; left-click drags via the gesture SM.
@@ -199,8 +211,11 @@ void ReturnMasterPanel::paintStripCommon(UIContext& ctx, StripWidgets& sw,
     }
 
     curY += kButtonHeight + 6;
-    sw.pan.layout(Rect{x + 4, curY, w - 8, 16}, ctx);
-    sw.pan.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        sw.pan.layout(Rect{x + 4, curY, w - 8, 16}, v2ctx);
+        sw.pan.render(v2ctx);
+    }
 
     curY += 16 + 8;
     float faderBottom = y + h - 22;
@@ -241,7 +256,8 @@ void ReturnMasterPanel::paintReturnStrip(UIContext& ctx, int idx, float x, float
     r.drawRect(x, y, w, h, Theme::background);
     r.drawRect(x, y, w, 3, busCol);
 
-    rs.pan.setValue(rb.pan);
+    if (!rs.pan.isDragging())
+        rs.pan.setValue(rb.pan);
     rs.fader.setTrackColor(busCol);
 
     paintStripCommon(ctx, rs, nullptr, x, y, w, h, busCol,

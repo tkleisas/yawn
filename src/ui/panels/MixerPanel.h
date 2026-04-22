@@ -12,6 +12,7 @@
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
@@ -201,12 +202,11 @@ private:
         Label midiRxLabel;
         Label midiTxLabel;
         Label sidechainLabel;
-        PanWidget pan;
+        ::yawn::ui::fw2::FwPan pan;
         ::yawn::ui::fw2::FwFader fader;
         MeterWidget meter;
         Label nameLabel;
         Label dbLabel;
-        float panDragStart = 0.0f;  // captured on touch start for undo
         ::yawn::ui::fw2::FwKnob sendKnobs[kMaxReturnBuses];
         // (sendDragStart retired — v2's setOnDragEnd delivers
         // (startValue, endValue) directly, no manual capture needed.)

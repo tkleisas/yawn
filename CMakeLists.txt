@@ -191,6 +191,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Toggle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Checkbox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Knob.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Pan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/StepSelector.cpp
 )
 # VST3 hosting sources (conditional)
