@@ -161,7 +161,7 @@ private:
     ui::ToastManager m_toastManager;
     ui::MenuBar m_menuBar;
     ui::VirtualKeyboard m_virtualKeyboard;
-    ui::ContextMenu m_contextMenu;
+    // v1 m_contextMenu retired — replaced by fw2::ContextMenu (LayerStack).
     ui::InputState m_inputState;
 
     // Widget tree for layout (replaces manual layout math in render/events)

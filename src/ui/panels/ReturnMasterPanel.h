@@ -188,8 +188,7 @@ public:
 #endif
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (m_contextMenu.isOpen())
-            m_contextMenu.handleMouseMove(e.x, e.y);
+        // v1 context menu retired — fw2 handles hover via LayerStack.
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
         }
@@ -264,7 +263,6 @@ private:
 
     bool m_showReturns = true;
     midi::MidiLearnManager* m_learnManager = nullptr;
-    ui::ContextMenu m_contextMenu;
     std::function<void(int)> m_onReturnClick;
     std::function<void()>    m_onMasterClick;
     std::function<void(int, float, float)> m_onReturnRightClick;

@@ -308,7 +308,6 @@ private:
 
     // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;
-    ui::ContextMenu m_contextMenu;
 
     void openTransportLearnMenu(float mx, float my,
                                 const automation::AutomationTarget& target,

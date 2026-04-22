@@ -6,6 +6,7 @@
 #include "../Renderer.h"
 #include "../Font.h"
 #include "../../util/Logger.h"
+#include "ui/framework/v2/V1MenuBridge.h"
 
 namespace yawn {
 namespace ui {
@@ -15,11 +16,7 @@ bool DetailPanelWidget::handleRightClick(float mx, float my) {
     if (!m_open || my < m_bounds.y + kHandleHeight) return false;
     if (mx < m_bounds.x || mx > m_bounds.x + m_bounds.w) return false;
 
-    // If context menu is open, handle click on it
-    if (m_deviceContextMenu.isOpen()) {
-        m_deviceContextMenu.handleClick(mx, my);
-        return true;
-    }
+    // v1 device context menu retired — LayerStack intercepts upstream.
 
     for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
         auto& db = m_deviceWidgets[i]->bounds();
@@ -125,9 +122,8 @@ void DetailPanelWidget::paint(UIContext& ctx) {
     if (m_viewMode == ViewMode::AudioClip && m_autoTargetDropdown.isOpen())
         m_autoTargetDropdown.paintOverlay(ctx);
 
-    // MIDI Learn context menu overlay
-    if (m_deviceContextMenu.isOpen())
-        m_deviceContextMenu.render(renderer, font);
+    // v1 device context menu retired — fw2::ContextMenu paints via
+    // LayerStack in App's render loop.
 }
 
 bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
@@ -135,13 +131,8 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
     if (my < m_bounds.y || my > m_bounds.y + height()) return false;
     if (mx < m_bounds.x || mx > m_bounds.x + m_bounds.w) return false;
 
-    // Close MIDI Learn context menu on any click
-#ifndef YAWN_TEST_BUILD
-    if (m_deviceContextMenu.isOpen()) {
-        m_deviceContextMenu.handleClick(mx, my);
-        return true;
-    }
-#endif
+    // v1 device context menu retired — LayerStack handles open-menu
+    // clicks upstream in App::pollEvents.
 
     m_panelFocused = true;
 
@@ -495,7 +486,9 @@ void DetailPanelWidget::openDeviceMidiLearnMenu(float mx, float my,
     resetItem.action = std::move(resetAction);
     items.push_back(std::move(resetItem));
 
-    m_deviceContextMenu.open(mx, my, std::move(items));
+    ::yawn::ui::fw2::ContextMenu::show(
+        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
+        Point{mx, my});
 }
 
 } // namespace fw

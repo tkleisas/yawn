@@ -6,6 +6,7 @@
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Dialog.h"
+#include "ui/framework/v2/V1MenuBridge.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
 #include "instruments/Sampler.h"
@@ -1032,7 +1033,8 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             });   // promptCustom
     }, true, canDelete});
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
 }
 
 void App::launchVisualClipData(int track,
@@ -2242,7 +2244,8 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         items.push_back({rlLabel.c_str(), nullptr, false, true, std::move(rlItems)});
     }
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
 }
 
 std::string App::resolveShaderPath(const std::string& stored) const {
@@ -2586,7 +2589,8 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
     }
     items.push_back({"Depth", nullptr, false, true, std::move(depthItems)});
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
 }
 
 void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
@@ -2680,7 +2684,8 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
             }, ""});
     }, false, canDelete});
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
 }
 
 void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy) {
@@ -3080,7 +3085,8 @@ bool App::init() {
         }
 #endif
 
-        m_contextMenu.open(mx, my, std::move(fxItems));
+        ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(fxItems)),
+                                     ui::fw::Point{mx, my});
     };
 
     m_returnMasterPanel->setOnReturnRightClick([this, buildFxMenu](int bus, float mx, float my) {
@@ -3619,7 +3625,8 @@ bool App::init() {
             });
         }
 
-        m_contextMenu.open(mx, my, std::move(items));
+        ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
     });
 
 #ifdef YAWN_HAS_VST3
@@ -4373,8 +4380,6 @@ void App::processEvents() {
                         // keeps its menu/quit behaviour.
                         if (m_visualEngine.isFullscreen()) {
                             m_visualEngine.setFullscreen(false);
-                        } else if (m_contextMenu.isOpen()) {
-                            m_contextMenu.close();
                         } else if (m_menuBar.isOpen()) {
                             m_menuBar.close();
                         } else {
@@ -4623,9 +4628,6 @@ void App::processEvents() {
                     if (m_fw2LayerStack.dispatchMouseMove(me)) break;
                 }
 
-                // Context menu hover
-                m_contextMenu.handleMouseMove(mx, my);
-
                 // Detail panel context menu hover
                 if (m_showDetailPanel)
                     m_detailPanel->handleDeviceContextMenuMouseMove(mx, my);
@@ -4731,11 +4733,8 @@ void App::processEvents() {
                     break;
                 }
 
-                // Context menu takes priority when open
-                if (m_contextMenu.isOpen()) {
-                    m_contextMenu.handleClick(mx, my);
-                    break;
-                }
+                // v1 context menu: retired — fw2::ContextMenu (handled
+                // by the LayerStack dispatch above) owns this slot now.
 
                 // Priority: menu bar → input state widgets → mixer → session
                 if (m_menuBar.contains(mx, my) || (my < m_menuBar.height() && !m_menuBar.isOpen())) {
@@ -5644,8 +5643,8 @@ void App::render() {
     // Menu bar rendered last so dropdown menus appear on top of panels
     m_menuBar.render(m_renderer, m_font, static_cast<float>(w));
 
-    // Context menu (very top layer)
-    m_contextMenu.render(m_renderer, m_font);
+    // v1 context menu render call retired — fw2::ContextMenu paints
+    // via LayerStack::paintLayers below.
 
     // Modal dialogs (rendered on top of everything)
     {

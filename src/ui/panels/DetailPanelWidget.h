@@ -611,15 +611,11 @@ public:
     bool handleRightClick(float mx, float my);
 #endif
 
-    // MIDI Learn context menu for device parameters
-#ifdef YAWN_TEST_BUILD
+    // v1 MIDI Learn context menu retired — fw2::ContextMenu handles
+    // hover via LayerStack. API kept as an empty stub so the v1 App
+    // event loop compile path doesn't need to be edited yet; a
+    // follow-up will remove the call from App.cpp entirely.
     void handleDeviceContextMenuMouseMove(float, float) {}
-#else
-    void handleDeviceContextMenuMouseMove(float mx, float my) {
-        if (m_deviceContextMenu.isOpen())
-            m_deviceContextMenu.handleMouseMove(mx, my);
-    }
-#endif
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
@@ -1465,9 +1461,7 @@ private:
 
     // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;
-#ifndef YAWN_TEST_BUILD
-    ui::ContextMenu m_deviceContextMenu;
-#endif
+    // v1 m_deviceContextMenu retired — fw2::ContextMenu on LayerStack.
 
     void buildAutoTargetList() {
         std::vector<std::string> items;

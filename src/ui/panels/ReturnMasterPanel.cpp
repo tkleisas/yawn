@@ -5,6 +5,7 @@
 #include "ReturnMasterPanel.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "ui/framework/v2/V1MenuBridge.h"
 
 namespace yawn {
 namespace ui {
@@ -37,9 +38,7 @@ void ReturnMasterPanel::paint(UIContext& ctx) {
     if (curX + kRetStripW <= x + w)
         paintMasterStrip(ctx, curX, stripY, kRetStripW, stripH);
 
-    // Render context menu on top
-    if (m_contextMenu.isOpen())
-        m_contextMenu.render(r, *ctx.font);
+    // v1 context menu retired — fw2::ContextMenu paints via LayerStack.
 }
 
 bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
@@ -48,10 +47,7 @@ bool ReturnMasterPanel::onMouseDown(MouseEvent& e) {
     bool rightClick = (e.button == MouseButton::Right);
     float x = m_bounds.x, y = m_bounds.y;
 
-    // Context menu takes priority
-    if (m_contextMenu.isOpen()) {
-        return m_contextMenu.handleClick(mx, my);
-    }
+    // v1 context menu retired — LayerStack intercepts clicks upstream.
 
     float curX = x + 4;
     if (m_showReturns) {
@@ -334,7 +330,9 @@ void ReturnMasterPanel::openMidiLearnMenu(float mx, float my,
     resetItem.action = std::move(resetAction);
     items.push_back(std::move(resetItem));
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ::yawn::ui::fw2::ContextMenu::show(
+        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
+        Point{mx, my});
 }
 
 } // namespace fw

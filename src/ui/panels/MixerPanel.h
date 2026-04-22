@@ -125,12 +125,8 @@ public:
 #endif
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        // Context menu hover tracking
-        if (m_contextMenu.isOpen()) {
-            m_contextMenu.handleMouseMove(e.x, e.y);
-            return true;
-        }
-
+        // v1 context menu retired — fw2 handles its own hover via
+        // LayerStack dispatch in App::pollEvents.
         if (auto* cap = Widget::capturedWidget()) {
             return cap->onMouseMove(e);
         }
@@ -280,7 +276,6 @@ private:
     midi::MidiEngine*   m_midiEngine = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
     midi::MidiLearnManager* m_learnManager = nullptr;
-    ContextMenu         m_contextMenu;
 
     MixerMeter m_trackMeters[kMaxTracks] = {};
     TrackStrip m_strips[kMaxTracks];

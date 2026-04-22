@@ -5,6 +5,7 @@
 #include "app/Project.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "ui/framework/v2/V1MenuBridge.h"
 #include "util/SystemInfo.h"
 #include <SDL3/SDL.h>
 
@@ -332,9 +333,7 @@ void TransportPanel::paint(UIContext& ctx) {
                            Color{120, 130, 140, 255});
     }
 
-    // Context menu overlay
-    if (m_contextMenu.isOpen())
-        m_contextMenu.render(r, *ctx.font);
+    // v1 context menu retired — fw2::ContextMenu paints via LayerStack.
 }
 
 // ─── Transport Buttons ──────────────────────────────────────────────────────
@@ -407,11 +406,7 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
 
-    // Context menu click handling
-    if (m_contextMenu.isOpen()) {
-        m_contextMenu.handleClick(mx, my);
-        return true;
-    }
+    // v1 context menu retired — LayerStack intercepts upstream.
 
     // Right-click on transport buttons opens MIDI Learn menu
     if (rightClick && m_learnManager) {
@@ -497,10 +492,7 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
 }
 
 bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
-    if (m_contextMenu.isOpen()) {
-        m_contextMenu.handleMouseMove(e.x, e.y);
-        return true;
-    }
+    // v1 context menu retired — fw2 handles hover via LayerStack.
 
     m_bpmInput.onMouseMove(e);
     m_tsNumInput.onMouseMove(e);
@@ -597,7 +589,9 @@ void TransportPanel::openTransportLearnMenu(float mx, float my,
         items.push_back(std::move(resetItem));
     }
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ::yawn::ui::fw2::ContextMenu::show(
+        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
+        Point{mx, my});
 }
 
 } // namespace fw

@@ -7,6 +7,7 @@
 #include "midi/MidiEngine.h"
 #include "../Renderer.h"
 #include "../Font.h"
+#include "ui/framework/v2/V1MenuBridge.h"
 
 namespace yawn {
 namespace ui {
@@ -89,10 +90,8 @@ void MixerPanel::paint(UIContext& ctx) {
     m_scrollbar.layout(Rect{gridX, y + h - kScrollbarH, gridW, kScrollbarH}, ctx);
     m_scrollbar.paint(ctx);
 
-    // Render context menu on top of everything
-    if (m_contextMenu.isOpen()) {
-        m_contextMenu.render(r, *ctx.font);
-    }
+    // v1 context menu retired — fw2::ContextMenu paints via LayerStack
+    // in App's render loop.
 }
 
 bool MixerPanel::onMouseDown(MouseEvent& e) {
@@ -100,10 +99,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
     float mx = e.x, my = e.y;
     bool rightClick = (e.button == MouseButton::Right);
 
-    // Context menu takes priority
-    if (m_contextMenu.isOpen()) {
-        return m_contextMenu.handleClick(mx, my);
-    }
+    // v1 context menu retired — LayerStack dispatch in App::pollEvents
+    // intercepts clicks while the fw2 menu is open.
 
     if (hitWidget(m_scrollbar, mx, my)) {
         return m_scrollbar.onMouseDown(e);
@@ -345,7 +342,9 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
     resetItem.action = std::move(resetAction);
     items.push_back(std::move(resetItem));
 
-    m_contextMenu.open(mx, my, std::move(items));
+    ::yawn::ui::fw2::ContextMenu::show(
+        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
+        Point{mx, my});
 }
 
 void MixerPanel::setupStripCallbacks(int t) {
