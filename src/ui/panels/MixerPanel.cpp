@@ -930,8 +930,11 @@ void MixerPanel::paintStrip(UIContext& ctx, int idx, float sx, float stripY,
 
     float meterX = ix + 4 + kFaderWidth + 3;
     s.meter.setPeak(m_trackMeters[idx].peakL, m_trackMeters[idx].peakR);
-    s.meter.layout(Rect{meterX, curY, kMeterWidth * 2, faderH}, ctx);
-    s.meter.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        s.meter.layout(Rect{meterX, curY, kMeterWidth * 2, faderH}, v2ctx);
+        s.meter.render(v2ctx);
+    }
 
     // I/O controls alongside fader (in space to the right of meter)
     if (m_showIO) {

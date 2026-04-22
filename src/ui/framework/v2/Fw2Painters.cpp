@@ -23,6 +23,7 @@
 #include "ui/framework/v2/Checkbox.h"
 #include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/Meter.h"
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/StepSelector.h"
@@ -1137,6 +1138,33 @@ static void paintScrollBar(Widget& w, UIContext& ctx) {
     ctx.renderer->drawRect(tx, b.y + inset, tw, b.h - inset * 2.0f, thumbCol);
 }
 
+// ─── Meter ──────────────────────────────────────────────────────────
+
+static void paintMeter(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& m = static_cast<FwMeter&>(w);
+    const Rect& b = m.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& pal = theme().palette;
+
+    // Two bars, side-by-side, with a 2 px gap.
+    const float halfW = b.w * 0.5f - 1.0f;
+    const Color bg{20, 20, 22, 255};
+    ctx.renderer->drawRect(b.x, b.y, halfW, b.h, bg);
+    ctx.renderer->drawRect(b.x + halfW + 2.0f, b.y, halfW, b.h, bg);
+
+    // Peak heights (bottom-up fill).
+    const float hL = FwMeter::dbToHeight(m.peakL()) * b.h;
+    const float hR = FwMeter::dbToHeight(m.peakR()) * b.h;
+    ctx.renderer->drawRect(b.x, b.y + b.h - hL, halfW, hL,
+                            m.isEnabled() ? FwMeter::meterColor(m.peakL())
+                                          : pal.textDim);
+    ctx.renderer->drawRect(b.x + halfW + 2.0f, b.y + b.h - hR, halfW, hR,
+                            m.isEnabled() ? FwMeter::meterColor(m.peakR())
+                                          : pal.textDim);
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1151,6 +1179,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwPan),      &paintPan);
     registerPainter(typeid(FwCrossfader), &paintCrossfader);
     registerPainter(typeid(FwScrollBar), &paintScrollBar);
+    registerPainter(typeid(FwMeter),    &paintMeter);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

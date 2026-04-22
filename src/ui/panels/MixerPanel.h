@@ -12,6 +12,7 @@
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/Meter.h"
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/UIContext.h"
@@ -203,7 +204,7 @@ private:
         Label sidechainLabel;
         ::yawn::ui::fw2::FwPan pan;
         ::yawn::ui::fw2::FwFader fader;
-        MeterWidget meter;
+        ::yawn::ui::fw2::FwMeter meter;
         Label nameLabel;
         Label dbLabel;
         ::yawn::ui::fw2::FwKnob sendKnobs[kMaxReturnBuses];

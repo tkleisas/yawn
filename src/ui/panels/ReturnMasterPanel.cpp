@@ -231,9 +231,12 @@ void ReturnMasterPanel::paintStripCommon(UIContext& ctx, StripWidgets& sw,
     }
 
     sw.meter.setPeak(peakL, peakR);
-    sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
-                         kMeterWidth * 2, faderH}, ctx);
-    sw.meter.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
+                             kMeterWidth * 2, faderH}, v2ctx);
+        sw.meter.render(v2ctx);
+    }
 
     float db = volume > 0.001f ? 20.0f * std::log10(volume) : -60.0f;
     char dbText[16];
@@ -320,9 +323,12 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
     }
 
     m_masterStrip.meter.setPeak(m_masterMeter.peakL, m_masterMeter.peakR);
-    m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,
-                                    kMeterWidth * 2 + 2, faderH}, ctx);
-    m_masterStrip.meter.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,
+                                        kMeterWidth * 2 + 2, faderH}, v2ctx);
+        m_masterStrip.meter.render(v2ctx);
+    }
 
     float smallScale = Theme::kSmallFontSize / Theme::kFontSize * 0.6f;
     float db = master.volume > 0.001f ? 20.0f * std::log10(master.volume) : -60.0f;

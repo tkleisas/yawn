@@ -8,6 +8,7 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Fader.h"
+#include "ui/framework/v2/Meter.h"
 #include "ui/framework/v2/Pan.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
@@ -224,7 +225,7 @@ private:
         ::yawn::ui::fw2::FwToggle muteBtn;
         ::yawn::ui::fw2::FwPan pan;
         ::yawn::ui::fw2::FwFader fader;
-        MeterWidget meter;
+        ::yawn::ui::fw2::FwMeter meter;
         Label      nameLabel;
         Label      dbLabel;
     };
