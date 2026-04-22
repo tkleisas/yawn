@@ -22,6 +22,7 @@
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/Checkbox.h"
 #include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/StepSelector.h"
 
 #include <cmath>
 
@@ -927,6 +928,72 @@ static void paintKnob(Widget& w, UIContext& ctx) {
     }
 }
 
+// ─── Step Selector ──────────────────────────────────────────────────
+
+static void paintStepSelector(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& s = static_cast<FwStepSelector&>(w);
+    const Rect& b = s.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const float fontSize  = m.fontSize;
+    const float smallFS   = m.fontSizeSmall;
+
+    // Label (above display, dim).
+    float displayY = b.y;
+    float displayH = b.h;
+    if (!s.label().empty() && ctx.textMetrics) {
+        const float lh = ctx.textMetrics->lineHeight(smallFS);
+        const float tw = ctx.textMetrics->textWidth(s.label(), smallFS);
+        const float tx = b.x + (b.w - tw) * 0.5f;
+        ctx.textMetrics->drawText(*ctx.renderer, s.label(),
+                                   tx, b.y + 1.0f, smallFS, p.textSecondary);
+        const float consumed = lh + m.baseUnit * 0.25f;
+        displayY += consumed;
+        displayH -= consumed;
+    }
+
+    // Display background.
+    ctx.renderer->drawRect(b.x, displayY, b.w, displayH,
+                            s.isEnabled() ? p.controlBg : Color{40, 40, 45, 255});
+    ctx.renderer->drawRectOutline(b.x, displayY, b.w, displayH, p.border, 1.0f);
+
+    // Value text centred.
+    if (ctx.textMetrics) {
+        const std::string val = s.formattedValue();
+        const float lh = ctx.textMetrics->lineHeight(fontSize);
+        const float tw = ctx.textMetrics->textWidth(val, fontSize);
+        const float tx = b.x + (b.w - tw) * 0.5f;
+        const float ty = displayY + (displayH - lh) * 0.5f - lh * 0.15f;
+        const Color tc = s.isEnabled() ? p.textPrimary : p.textDim;
+        ctx.textMetrics->drawText(*ctx.renderer, val, tx, ty, fontSize, tc);
+    }
+
+    // Arrow glyphs — small filled triangles drawn into the arrow
+    // strips. Dimmer when the value is at an endpoint (and no wrap).
+    const float arrowW = s.arrowWidth();
+    const bool  atMin  = !s.wrap() && s.value() <= s.min();
+    const bool  atMax  = !s.wrap() && s.value() >= s.max();
+    const Color lc = (s.isEnabled() && !atMin) ? p.textPrimary : p.textDim;
+    const Color rc = (s.isEnabled() && !atMax) ? p.textPrimary : p.textDim;
+
+    const float cyA = displayY + displayH * 0.5f;
+    const float triH = displayH * 0.25f;
+    const float triW = arrowW * 0.35f;
+    // Left arrow: ◀
+    const float lx = b.x + arrowW * 0.5f;
+    ctx.renderer->drawTriangle(lx + triW * 0.5f, cyA - triH,
+                                lx + triW * 0.5f, cyA + triH,
+                                lx - triW * 0.5f, cyA, lc);
+    // Right arrow: ▶
+    const float rx = b.x + b.w - arrowW * 0.5f;
+    ctx.renderer->drawTriangle(rx - triW * 0.5f, cyA - triH,
+                                rx - triW * 0.5f, cyA + triH,
+                                rx + triW * 0.5f, cyA, rc);
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -937,6 +1004,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwToggle),   &paintToggle);
     registerPainter(typeid(FwCheckbox), &paintCheckbox);
     registerPainter(typeid(FwKnob),     &paintKnob);
+    registerPainter(typeid(FwStepSelector), &paintStepSelector);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.

@@ -12,6 +12,7 @@
 #include "Primitives.h"
 #include "VisualizerWidget.h"
 #include "v2/Knob.h"
+#include "v2/StepSelector.h"
 #include "v2/Toggle.h"
 #include "v2/UIContext.h"
 #include "v2/V1EventBridge.h"
@@ -66,50 +67,45 @@ public:
     // don't have a v1 setName() / name() string.
     struct ParamSlot {
         enum Type { TKnob, TDentedKnob, TStepSelector, TToggle, TKnob360 };
-        Widget* widget = nullptr;                     // v1 widget for TStepSelector; nullptr otherwise
-        ::yawn::ui::fw2::FwKnob*   knob   = nullptr;  // non-null for TKnob / TDentedKnob / TKnob360
-        ::yawn::ui::fw2::FwToggle* toggle = nullptr;  // non-null for TToggle
+        Widget* widget = nullptr;                                // v1 widget (none — all slots are v2 now)
+        ::yawn::ui::fw2::FwKnob*         knob    = nullptr;      // TKnob / TDentedKnob / TKnob360
+        ::yawn::ui::fw2::FwToggle*       toggle  = nullptr;      // TToggle
+        ::yawn::ui::fw2::FwStepSelector* stepSel = nullptr;      // TStepSelector
         Type type = TKnob;
-        int  paramIndex = -1;                          // copy of ParamInfo::index (used for CC labels)
+        int  paramIndex = -1;                                     // copy of ParamInfo::index (used for CC labels)
 
         bool isKnob() const {
             return type == TKnob || type == TDentedKnob || type == TKnob360;
         }
         bool isV2() const {
-            return isKnob() || type == TToggle;
+            return isKnob() || type == TToggle || type == TStepSelector;
         }
 
         ::yawn::ui::fw2::Widget* v2Widget() const {
-            if (isKnob())         return knob;
-            if (type == TToggle)  return toggle;
+            if (isKnob())                return knob;
+            if (type == TToggle)         return toggle;
+            if (type == TStepSelector)   return stepSel;
             return nullptr;
         }
 
         void setValue(float v) {
-            if (isKnob())        { knob->setValue(v); return; }
-            if (type == TToggle) { toggle->setState(v > 0.5f); return; }
-            switch (type) {
-            case TStepSelector: static_cast<FwStepSelector*>(widget)->setValue(static_cast<int>(v + 0.5f)); break;
-            default: break;
-            }
+            if (isKnob())              { knob->setValue(v); return; }
+            if (type == TToggle)       { toggle->setState(v > 0.5f); return; }
+            if (type == TStepSelector) { stepSel->setValue(static_cast<int>(v + 0.5f)); return; }
         }
 
         float getValue() const {
-            if (isKnob())        return knob->value();
-            if (type == TToggle) return toggle->state() ? 1.0f : 0.0f;
-            switch (type) {
-            case TStepSelector: return static_cast<float>(static_cast<FwStepSelector*>(widget)->value());
-            default: return 0.0f;
-            }
+            if (isKnob())              return knob->value();
+            if (type == TToggle)       return toggle->state() ? 1.0f : 0.0f;
+            if (type == TStepSelector) return static_cast<float>(stepSel->value());
+            return 0.0f;
         }
 
-        // Bounds accessor that hides the v1-vs-v2 split.
+        // Bounds accessor — all v2 now, no v1 fallback needed.
         const ::yawn::ui::fw2::Rect& bounds() const {
             if (auto* w = v2Widget()) return w->bounds();
-            // v1 Rect and fw2 Rect have the same field layout; safe to
-            // reinterpret. (Both are {float x,y,w,h;}.) Keeps callers
-            // from having to switch on type just to read a box.
-            return reinterpret_cast<const ::yawn::ui::fw2::Rect&>(widget->bounds());
+            static const ::yawn::ui::fw2::Rect kEmpty{};
+            return kEmpty;
         }
 
         bool isEditing() const {
@@ -564,19 +560,17 @@ public:
             }
         }
 
-        // Dispatch left-click. Any v2 widget (knob or toggle) goes
-        // through the fw2 event bridge + m_v2Dragging pointer so the
-        // gesture SM receives its down/up pair via v1 capture.
-        // v1 StepSelector still uses its own onMouseDown path.
+        // Dispatch left-click. Every param slot is a v2 widget now —
+        // route through the fw2 event bridge + m_v2Dragging pointer
+        // so the gesture SM gets its down/up pair via v1 capture.
         auto dispatchSlot = [&](ParamSlot& s) -> bool {
-            if (auto* v2w = s.v2Widget()) {
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, v2w->bounds());
-                v2w->dispatchMouseDown(ev);
-                m_v2Dragging = v2w;
-                captureMouse();
-                return true;
-            }
-            return s.widget->onMouseDown(e);
+            auto* v2w = s.v2Widget();
+            if (!v2w) return false;
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, v2w->bounds());
+            v2w->dispatchMouseDown(ev);
+            m_v2Dragging = v2w;
+            captureMouse();
+            return true;
         };
 
         if (m_isVisualizer && m_vizKnobGrid) {
@@ -615,38 +609,21 @@ public:
                    e.y >= b.y && e.y < b.y + b.h;
         };
 
-        // v1 StepSelector still has its own onMouseUp path; v2 widgets
-        // have already flushed above via m_v2Dragging.
-        if (m_isVisualizer) {
-            for (auto& s : m_vizKnobs)
-                if (hitSlot(s) && s.widget) return s.widget->onMouseUp(e);
-        } else if (m_customBody) {
-            return m_customBody->onMouseUp(e);
-        } else {
-            for (auto& s : m_knobs)
-                if (hitSlot(s) && s.widget) return s.widget->onMouseUp(e);
-        }
+        // All param slots are v2 now — mouseUp already flushed above
+        // via m_v2Dragging. CustomBody may have its own dispatch.
+        if (m_customBody) return m_customBody->onMouseUp(e);
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        // v2 widget drag (knob / toggle) — forward translated move to
-        // the gesture SM.
+        // v2 widget drag (knob / toggle / step selector) — forward
+        // translated move to the gesture SM.
         if (m_v2Dragging) {
             auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
             m_v2Dragging->dispatchMouseMove(ev);
             return true;
         }
-        // v1 StepSelector still drives its own drag via capturedWidget
-        // at the App level, but we forward moves here for its hover
-        // state.
-        if (m_isVisualizer) {
-            for (auto& s : m_vizKnobs) if (s.widget && s.widget->onMouseMove(e)) return true;
-        } else if (m_customBody) {
-            return m_customBody->onMouseMove(e);
-        } else {
-            for (auto& s : m_knobs) if (s.widget && s.widget->onMouseMove(e)) return true;
-        }
+        if (m_customBody) return m_customBody->onMouseMove(e);
         return false;
     }
 
@@ -696,10 +673,9 @@ private:
         auto measureSlots = [&](const std::vector<ParamSlot>& slots) {
             for (auto& s : slots) {
                 std::string lbl;
-                if (s.isKnob())                     lbl = s.knob->label();
+                if (s.isKnob())                          lbl = s.knob->label();
                 else if (s.type == ParamSlot::TToggle)       lbl = s.toggle->label();
-                else if (s.type == ParamSlot::TStepSelector && s.widget)
-                                                    lbl = static_cast<FwStepSelector*>(s.widget)->label();
+                else if (s.type == ParamSlot::TStepSelector) lbl = s.stepSel->label();
                 if (!lbl.empty()) {
                     float tw = ctx.font->textWidth(lbl, labelScale);
                     if (tw > maxLabelW) maxLabelW = tw;
@@ -725,20 +701,17 @@ private:
     // ─── Knob management ────────────────────────────────────────────────
 
     void clearKnobs() {
-        auto freeSlot = [&](ParamSlot& s, FwGrid* hostGrid) {
-            if (s.knob)   delete s.knob;
-            if (s.toggle) delete s.toggle;
-            // Only v1 StepSelector was addChild'd to the grid; delete
-            // it after removing from the parent. v2 widgets (knob /
-            // toggle) never joined the grid.
-            if (s.widget && !s.isV2()) {
-                if (hostGrid) hostGrid->removeChild(s.widget);
-                delete s.widget;
-            }
+        auto freeSlot = [&](ParamSlot& s) {
+            // All param slots are v2 now — knob / toggle / step selector.
+            // The v1 FwGrid is retained as a layout-coordinate source
+            // (see layoutV2KnobsInGrid) but has no children to remove.
+            if (s.knob)    delete s.knob;
+            if (s.toggle)  delete s.toggle;
+            if (s.stepSel) delete s.stepSel;
         };
-        for (auto& s : m_knobs)    freeSlot(s, &m_knobGrid);
+        for (auto& s : m_knobs)    freeSlot(s);
         m_knobs.clear();
-        for (auto& s : m_vizKnobs) freeSlot(s, m_vizKnobGrid);
+        for (auto& s : m_vizKnobs) freeSlot(s);
         m_vizKnobs.clear();
         m_v2Dragging = nullptr;
     }
@@ -793,8 +766,7 @@ private:
                 break;
             }
             case WidgetHint::StepSelector: {
-                auto* ss = new FwStepSelector();
-                ss->setName(std::to_string(p.index));
+                auto* ss = new ::yawn::ui::fw2::FwStepSelector();
                 ss->setRange(static_cast<int>(p.minVal + 0.5f),
                              static_cast<int>(p.maxVal + 0.5f));
                 ss->setValue(static_cast<int>(p.defaultVal + 0.5f));
@@ -802,27 +774,27 @@ private:
                 if (!p.valueLabels.empty()) {
                     auto labels = p.valueLabels;
                     int mn = static_cast<int>(p.minVal + 0.5f);
-                    ss->setFormat([labels, mn](int v) -> std::string {
-                        int idx = v - mn;
-                        if (idx >= 0 && idx < static_cast<int>(labels.size()))
-                            return labels[idx];
-                        return std::to_string(v);
-                    });
-                } else {
-                    ss->setFormat([unit = p.unit](int v) -> std::string {
-                        if (unit == "st") return std::to_string(v);
+                    ss->setFormatter([labels, mn](int v) -> std::string {
+                        int i = v - mn;
+                        if (i >= 0 && i < static_cast<int>(labels.size()))
+                            return labels[i];
                         return std::to_string(v);
                     });
                 }
+                // v1 StepSelector emitted onChange + onTouch(begin) +
+                // onTouch(end) around every step. v2 is click-only —
+                // synthesise the touch pair in onChange so existing
+                // undo-capturing hosts keep seeing the v1 shape.
                 ss->setOnChange([this, idx = p.index](int v) {
-                    if (m_onParamChange) m_onParamChange(idx, static_cast<float>(v));
+                    const float fv = static_cast<float>(v);
+                    if (m_onParamChange) m_onParamChange(idx, fv);
+                    if (m_onParamTouch) {
+                        m_onParamTouch(idx, fv, /*touching*/true);
+                        m_onParamTouch(idx, fv, /*touching*/false);
+                    }
                 });
-                ss->setOnTouch([this, idx = p.index, ss](bool touching) {
-                    if (m_onParamTouch)
-                        m_onParamTouch(idx, static_cast<float>(ss->value()), touching);
-                });
-                slot.widget = ss;
-                slot.type = ParamSlot::TStepSelector;
+                slot.stepSel = ss;
+                slot.type    = ParamSlot::TStepSelector;
                 break;
             }
             case WidgetHint::Toggle: {
@@ -867,11 +839,8 @@ private:
             }
             }
             slots.push_back(slot);
-            // Only v1 widgets still go through FwGrid for tree-based
-            // paint + events. v2 widgets (knob / toggle) are laid out
-            // + painted + event-dispatched manually by DeviceWidget.
-            if (slot.widget && !slot.isV2())
-                grid.addChild(slot.widget);
+            // All v2 now — no grid.addChild. DeviceWidget lays out +
+            // paints + event-dispatches every slot manually.
         }
     }
 
