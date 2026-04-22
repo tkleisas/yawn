@@ -13,6 +13,9 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Knob.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -58,17 +61,20 @@ public:
 
     VisualParamsPanel() {
         for (int i = 0; i < 8; ++i) {
-            auto k = std::make_unique<FwKnob>();
+            auto k = std::make_unique<::yawn::ui::fw2::FwKnob>();
             char label[2] = { static_cast<char>('A' + i), 0 };
             k->setLabel(label);
             k->setRange(0.0f, 1.0f);
-            k->setDefault(0.5f);
+            k->setDefaultValue(0.5f);
             k->setValue(0.5f);
             int idx = i;
             k->setOnChange([this, idx](float v) {
                 if (m_onKnobChanged) m_onKnobChanged(idx, v);
             });
-            k->setFormatCallback([](float v) {
+            k->setOnRightClick([this, idx](::yawn::ui::fw2::Point screen) {
+                if (m_onKnobRightClick) m_onKnobRightClick(idx, screen.x, screen.y);
+            });
+            k->setValueFormatter([](float v) {
                 char b[16];
                 std::snprintf(b, sizeof(b), "%.2f", v);
                 return std::string(b);
@@ -93,12 +99,14 @@ public:
 
     // Per-frame LFO arc feedback. Pass either a pointer to 8 live display
     // values to drive the "breathing" arc, or nullptr to clear overrides.
+    // v2 renders this as a modulation overlay (secondary indicator +
+    // "excursion" arc from primary to modulated position).
     void setKnobDisplayValues(const float* vals8) {
         if (!vals8) {
-            for (int i = 0; i < 8; ++i) m_knobAH[i]->clearDisplayValue();
+            for (int i = 0; i < 8; ++i) m_knobAH[i]->setModulatedValue(std::nullopt);
             return;
         }
-        for (int i = 0; i < 8; ++i) m_knobAH[i]->setDisplayValue(vals8[i]);
+        for (int i = 0; i < 8; ++i) m_knobAH[i]->setModulatedValue(vals8[i]);
     }
 
     void rebuildCustom(const std::vector<visual::VisualEngine::LayerParamInfo>& params,
@@ -140,16 +148,16 @@ public:
         m_customSig.clear();
         m_customSig.reserve(params.size());
         for (const auto& p : params) {
-            auto k = std::make_unique<FwKnob>();
+            auto k = std::make_unique<::yawn::ui::fw2::FwKnob>();
             k->setLabel(p.name);
             k->setRange(p.min, p.max);
-            k->setDefault(p.defaultValue);
+            k->setDefaultValue(p.defaultValue);
             k->setValue(p.value);
             std::string nm = p.name;
             k->setOnChange([this, nm](float v) {
                 if (m_onChanged) m_onChanged(nm, v);
             });
-            k->setFormatCallback([](float v) {
+            k->setValueFormatter([](float v) {
                 char b[16];
                 std::snprintf(b, sizeof(b), "%.2f", v);
                 return std::string(b);
@@ -163,7 +171,7 @@ public:
     // chain changes or a different visual track is selected.
     struct PostFXEntry {
         std::string name;
-        std::vector<std::unique_ptr<FwKnob>> knobs;
+        std::vector<std::unique_ptr<::yawn::ui::fw2::FwKnob>> knobs;
     };
     void rebuildPostFX(
         const std::vector<std::pair<std::string,
@@ -215,17 +223,17 @@ public:
             PostFXSig sig;
             sig.name = chain[i].first;
             for (const auto& p : chain[i].second) {
-                auto k = std::make_unique<FwKnob>();
+                auto k = std::make_unique<::yawn::ui::fw2::FwKnob>();
                 k->setLabel(p.name);
                 k->setRange(p.min, p.max);
-                k->setDefault(p.defaultValue);
+                k->setDefaultValue(p.defaultValue);
                 k->setValue(p.value);
                 int fxIdx = static_cast<int>(i);
                 std::string nm = p.name;
                 k->setOnChange([this, fxIdx, nm](float v) {
                     if (m_onPostFXChanged) m_onPostFXChanged(fxIdx, nm, v);
                 });
-                k->setFormatCallback([](float v) {
+                k->setValueFormatter([](float v) {
                     char b[16];
                     std::snprintf(b, sizeof(b), "%.2f", v);
                     return std::string(b);
@@ -253,11 +261,13 @@ public:
 
     void layout(const Rect& bounds, const UIContext& ctx) override {
         m_bounds = bounds;
+        // v2 knobs layout against the fw2 UIContext.
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
         float x0 = bounds.x + kPad;
         float y0 = bounds.y + kHandleH + kTitleH + 22.0f;
         for (int i = 0; i < 8; ++i) {
             float x = x0 + i * (kKnobW + kKnobGapX);
-            m_knobAH[i]->layout(Rect{x, y0, kKnobW, kKnobH}, ctx);
+            m_knobAH[i]->layout(Rect{x, y0, kKnobW, kKnobH}, v2ctx);
         }
         // Row 2+: custom knobs, flow-wrapped. Per-knob column width
         // grows to fit the label so long names (e.g. "bandCenterY")
@@ -270,7 +280,7 @@ public:
                 x = x0;
                 y += kKnobH + kKnobGapY;
             }
-            k->layout(Rect{x, y, colW, kKnobH}, ctx);
+            k->layout(Rect{x, y, colW, kKnobH}, v2ctx);
             x += colW + kKnobGapX;
         }
 
@@ -294,7 +304,7 @@ public:
             // Knobs start after label + × + small gap
             float kx = px + kLabelW + kRemoveW + kKnobGapX;
             for (auto& k : entry.knobs) {
-                k->layout(Rect{kx, py, kKnobW, kKnobH}, ctx);
+                k->layout(Rect{kx, py, kKnobW, kKnobH}, v2ctx);
                 kx += kKnobW + kKnobGapX;
             }
             px += cardW + 18.0f;
@@ -327,8 +337,9 @@ public:
                      + f.pixelHeight() * scale * 0.5f - 2.0f,
                    scale, Theme::textDim);
 
-        for (int i = 0; i < 8; ++i) m_knobAH[i]->paint(ctx);
-        for (auto& k : m_customKnobs) k->paint(ctx);
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        for (int i = 0; i < 8; ++i) m_knobAH[i]->render(v2ctx);
+        for (auto& k : m_customKnobs) k->render(v2ctx);
 
         // Post-FX section header + per-effect group.
         if (!m_postFX.empty()) {
@@ -358,7 +369,7 @@ public:
                            xr.y + xr.h * 0.5f + 5.0f,
                            scale * 1.1f, Theme::textPrimary);
 
-                for (auto& k : entry.knobs) k->paint(ctx);
+                for (auto& k : entry.knobs) k->render(v2ctx);
             }
         }
     }
@@ -374,16 +385,31 @@ public:
             captureMouse();
             return true;
         }
+        // v2 knob hit-test + dispatch via the v1→v2 bridge. Right-click
+        // on A..H still fires the app-side callback (MIDI Learn etc.);
+        // the v2 knob's right-click handler is a no-op for those since
+        // we don't wire setOnRightClick on m_knobAH. For custom / post-fx
+        // knobs we let the v2 gesture SM handle right-click normally.
+        auto beginV2Drag = [&](::yawn::ui::fw2::FwKnob& k) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, k.bounds());
+            k.dispatchMouseDown(ev);
+            m_v2Dragging = &k;
+            captureMouse();
+        };
         for (int i = 0; i < 8; ++i) {
-            if (!hitWidget(*m_knobAH[i], e.x, e.y)) continue;
+            if (!hitWidgetV2(*m_knobAH[i], e.x, e.y)) continue;
             if (rightClick) {
                 if (m_onKnobRightClick) m_onKnobRightClick(i, e.x, e.y);
                 return true;
             }
-            return m_knobAH[i]->onMouseDown(e);
+            beginV2Drag(*m_knobAH[i]);
+            return true;
         }
-        for (auto& k : m_customKnobs)
-            if (hitWidget(*k, e.x, e.y)) return k->onMouseDown(e);
+        for (auto& k : m_customKnobs) {
+            if (!hitWidgetV2(*k, e.x, e.y)) continue;
+            beginV2Drag(*k);
+            return true;
+        }
 
         // Post-FX knobs + remove buttons.
         for (size_t i = 0; i < m_postFX.size(); ++i) {
@@ -395,8 +421,11 @@ public:
                     m_onPostFXRemove(static_cast<int>(i));
                 return true;
             }
-            for (auto& k : m_postFX[i].knobs)
-                if (hitWidget(*k, e.x, e.y)) return k->onMouseDown(e);
+            for (auto& k : m_postFX[i].knobs) {
+                if (!hitWidgetV2(*k, e.x, e.y)) continue;
+                beginV2Drag(*k);
+                return true;
+            }
         }
         return false;
     }
@@ -407,20 +436,26 @@ public:
             m_detail->setPanelHeight(m_handleStartH + delta);
             return true;
         }
+        // v2 knob drag in progress.
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseMove(ev);
+            return true;
+        }
         if (auto* cap = Widget::capturedWidget()) return cap->onMouseMove(e);
-        for (int i = 0; i < 8; ++i)
-            if (hitWidget(*m_knobAH[i], e.x, e.y)) m_knobAH[i]->onMouseMove(e);
-        for (auto& k : m_customKnobs)
-            if (hitWidget(*k, e.x, e.y)) k->onMouseMove(e);
-        for (auto& entry : m_postFX)
-            for (auto& k : entry.knobs)
-                if (hitWidget(*k, e.x, e.y)) k->onMouseMove(e);
         return false;
     }
 
     bool onMouseUp(MouseEvent& e) override {
         if (m_handleDrag) {
             m_handleDrag = false;
+            releaseMouse();
+            return true;
+        }
+        if (m_v2Dragging) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
+            m_v2Dragging->dispatchMouseUp(ev);
+            m_v2Dragging = nullptr;
             releaseMouse();
             return true;
         }
@@ -434,12 +469,18 @@ private:
         auto& b = w.bounds();
         return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
     }
+    // v2 widgets use fw2::Rect with the same field layout.
+    bool hitWidgetV2(::yawn::ui::fw2::Widget& w, float mx, float my) {
+        auto& b = w.bounds();
+        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+    }
 
     // Column width for a single custom knob: wide enough to fit its
     // label at the same scale FwKnob uses (9px), plus a small padding
     // so adjacent labels don't kiss. Floored at kKnobW so the knob
     // graphic never shrinks.
-    float columnWidthFor(const FwKnob& k, const UIContext& ctx) const {
+    float columnWidthFor(const ::yawn::ui::fw2::FwKnob& k,
+                         const UIContext& ctx) const {
 #ifndef YAWN_TEST_BUILD
         if (!ctx.font) return kKnobW;
         float labelScale = 9.0f / Theme::kFontSize;
@@ -495,8 +536,11 @@ private:
     }
 
     Rect m_bounds{};
-    std::unique_ptr<FwKnob> m_knobAH[8];
-    std::vector<std::unique_ptr<FwKnob>> m_customKnobs;
+    std::unique_ptr<::yawn::ui::fw2::FwKnob> m_knobAH[8];
+    std::vector<std::unique_ptr<::yawn::ui::fw2::FwKnob>> m_customKnobs;
+    // Active v2 drag (one of m_knobAH, m_customKnobs, or m_postFX's
+    // knobs) — set on mouseDown, cleared on mouseUp. Non-owning.
+    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
     // Parallel array tracking the identity (name+range+default) each
     // custom knob was built for, so the per-frame rebuild call can
     // reuse existing instances when nothing structural changed.
