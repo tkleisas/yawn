@@ -19,6 +19,8 @@
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Dialog.h"
+#include "ui/framework/v2/Toggle.h"
+#include "ui/framework/v2/Checkbox.h"
 
 #include "ui/Renderer.h"
 #include "ui/Theme.h"
@@ -560,6 +562,128 @@ static void paintDialog(const DialogManager::State& s, UIContext& ctx) {
     ctx.renderer->popClip();
 }
 
+// ─── Toggle ─────────────────────────────────────────────────────────
+
+static void paintToggle(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& tog = static_cast<FwToggle&>(w);
+    const Rect& b = tog.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const Color accent = tog.accentColor().value_or(p.accent);
+
+    if (tog.variant() == ToggleVariant::Switch) {
+        // Pill track + knob.
+        const float trackH = b.h * 0.55f;
+        const float trackY = b.y + (b.h - trackH) * 0.5f;
+        const float radius = trackH * 0.5f;
+
+        Color trackCol = tog.state() ? accent : p.controlBg;
+        if (!tog.isEnabled()) trackCol = Color{50, 50, 53, 255};
+        else if (tog.isPressed())  trackCol = tog.state() ? p.accentActive : p.controlActive;
+        else if (tog.isHovered())  trackCol = tog.state() ? p.accentHover  : p.controlHover;
+
+        ctx.renderer->drawRoundedRect(b.x, trackY, b.w, trackH, radius, trackCol);
+        ctx.renderer->drawRectOutline(b.x, trackY, b.w, trackH, p.border, m.borderWidth);
+
+        // Knob — circle on left (off) or right (on). Slight inset so
+        // it doesn't kiss the outline.
+        const float knobR   = trackH * 0.45f;
+        const float knobCY  = trackY + trackH * 0.5f;
+        const float inset   = trackH * 0.1f;
+        const float knobCX  = tog.state()
+            ? (b.x + b.w - inset - knobR)
+            : (b.x + inset + knobR);
+        const Color knobCol = tog.isEnabled() ? p.elevated : p.textDim;
+        ctx.renderer->drawFilledCircle(knobCX, knobCY, knobR, knobCol, 16);
+        return;
+    }
+
+    // Button variant — rectangular fill.
+    Color bg = tog.state() ? accent : p.controlBg;
+    if (!tog.isEnabled()) bg = Color{50, 50, 53, 255};
+    else if (tog.isPressed()) bg = tog.state() ? p.accentActive : p.controlActive;
+    else if (tog.isHovered()) bg = tog.state() ? p.accentHover  : p.controlHover;
+
+    ctx.renderer->drawRoundedRect(b.x, b.y, b.w, b.h, m.cornerRadius, bg);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, m.borderWidth);
+
+    if (ctx.textMetrics && !tog.label().empty()) {
+        const float fontSize = m.fontSize;
+        const float tw = ctx.textMetrics->textWidth(tog.label(), fontSize);
+        const float lh = ctx.textMetrics->lineHeight(fontSize);
+        const float tx = b.x + (b.w - tw) * 0.5f;
+        const float ty = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+        Color textColor = p.textPrimary;
+        if (!tog.isEnabled())       textColor = p.textDim;
+        else if (tog.state())       textColor = p.textOnAccent;
+        ctx.textMetrics->drawText(*ctx.renderer, tog.label(), tx, ty, fontSize, textColor);
+    }
+}
+
+// ─── Checkbox ───────────────────────────────────────────────────────
+
+static void paintCheckbox(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& cb = static_cast<FwCheckbox&>(w);
+    const Rect& b = cb.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+    const Color accent = cb.accentColor().value_or(p.accent);
+
+    const float boxSize = m.controlHeight * 0.6f;
+    const float boxX    = b.x;
+    const float boxY    = b.y + (b.h - boxSize) * 0.5f;
+    const CheckState s  = cb.state();
+
+    // Box background + border.
+    Color boxBg = p.controlBg;
+    if (!cb.isEnabled())        boxBg = Color{50, 50, 53, 255};
+    else if (s == CheckState::On || s == CheckState::Indeterminate) boxBg = accent;
+    else if (cb.isPressed())    boxBg = p.controlActive;
+    else if (cb.isHovered())    boxBg = p.controlHover;
+
+    ctx.renderer->drawRoundedRect(boxX, boxY, boxSize, boxSize,
+                                   m.cornerRadius * 0.5f, boxBg);
+    ctx.renderer->drawRectOutline(boxX, boxY, boxSize, boxSize,
+                                   p.border, m.borderWidth);
+
+    // Glyph — checkmark (On) or horizontal bar (Indeterminate).
+    if (s == CheckState::On) {
+        // Simple two-segment checkmark. Stroke from (0.22, 0.52) →
+        // (0.45, 0.72) → (0.78, 0.32) in unit coordinates within the
+        // box.
+        const Color tc = cb.isEnabled() ? p.textOnAccent : p.textDim;
+        const float x0 = boxX + boxSize * 0.22f, y0 = boxY + boxSize * 0.52f;
+        const float x1 = boxX + boxSize * 0.45f, y1 = boxY + boxSize * 0.72f;
+        const float x2 = boxX + boxSize * 0.78f, y2 = boxY + boxSize * 0.32f;
+        ctx.renderer->drawLine(x0, y0, x1, y1, tc, 1.5f);
+        ctx.renderer->drawLine(x1, y1, x2, y2, tc, 1.5f);
+    } else if (s == CheckState::Indeterminate) {
+        const Color tc = cb.isEnabled() ? p.textOnAccent : p.textDim;
+        const float barW = boxSize * 0.55f;
+        const float barH = std::max(2.0f, boxSize * 0.12f);
+        const float barX = boxX + (boxSize - barW) * 0.5f;
+        const float barY = boxY + (boxSize - barH) * 0.5f;
+        ctx.renderer->drawRect(barX, barY, barW, barH, tc);
+    }
+
+    // Label right of box.
+    if (ctx.textMetrics && !cb.label().empty()) {
+        const float fontSize = m.fontSize;
+        const float gap      = m.baseUnit;
+        const float lh       = ctx.textMetrics->lineHeight(fontSize);
+        const float tx       = boxX + boxSize + gap;
+        const float ty       = b.y + (b.h - lh) * 0.5f - lh * 0.15f;
+        const Color tc = cb.isEnabled() ? p.textPrimary : p.textDim;
+        ctx.textMetrics->drawText(*ctx.renderer, cb.label(), tx, ty, fontSize, tc);
+    }
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -567,6 +691,8 @@ void registerAllFw2Painters() {
     registerPainter(typeid(FwButton),   &paintButton);
     registerPainter(typeid(FwFader),    &paintFader);
     registerPainter(typeid(FwDropDown), &paintDropDownButton);
+    registerPainter(typeid(FwToggle),   &paintToggle);
+    registerPainter(typeid(FwCheckbox), &paintCheckbox);
     // DropDown's popup is NOT a registered widget painter — it's a
     // static hook on the class because the popup is an OverlayEntry
     // closure, not a Widget subtree.
