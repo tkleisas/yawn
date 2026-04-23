@@ -327,7 +327,12 @@ public:
     bool onMouseDown(MouseEvent&) override { return false; }
     bool onMouseDownWithClicks(MouseEvent&, int) { return false; }
 #else
-    bool onMouseDown(MouseEvent& e) override { return onMouseDownWithClicks(e, 1); }
+    // clickCount is now carried by MouseEvent::clickCount (populated by
+    // ContentGridWrapper from SDL event.button.clicks). The old int-param
+    // overload is kept so any remaining direct call sites still compile.
+    bool onMouseDown(MouseEvent& e) override {
+        return onMouseDownWithClicks(e, e.clickCount);
+    }
     bool onMouseDownWithClicks(MouseEvent& e, int clickCount);
 #endif
 

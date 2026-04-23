@@ -12,6 +12,7 @@
 #include "v2/MenuBar.h"
 #include "v2/UIContext.h"
 #include "v2/V1EventBridge.h"
+#include "v2/ContentGrid.h"
 
 #include "ui/panels/TransportPanel.h"
 #include "ui/panels/ReturnMasterPanel.h"
@@ -524,6 +525,85 @@ public:
 
 private:
     ::yawn::ui::fw2::SessionPanel& m_panel;
+};
+
+// ─── ContentGridWrapper ─────────────────────────────────────────────
+//
+// v1 shim around the fw2::ContentGrid so the grid can live inside the
+// v1 rootLayout. Forwards measure/layout/render and all mouse/scroll
+// events through the v1↔fw2 bridge exactly like the panel wrappers above.
+//
+// Cursor-hint queries (wantsHorizontalResize etc.) are delegated to the
+// inner fw2::ContentGrid — App.cpp may call them directly on the fw2
+// grid pointer it owns alongside this wrapper.
+
+class ContentGridWrapper : public Widget {
+public:
+    explicit ContentGridWrapper(::yawn::ui::fw2::ContentGrid& grid)
+        : m_grid(grid) {}
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        auto fc = ::yawn::ui::fw2::Constraints::loose(c.maxW, c.maxH);
+        auto s = m_grid.measure(fc, v2ctx);
+        return c.constrain({s.w, s.h});
+    }
+
+    void layout(const Rect& bounds, const UIContext&) override {
+        m_bounds = bounds;
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        auto fc = ::yawn::ui::fw2::Constraints::tight(bounds.w, bounds.h);
+        m_grid.measure(fc, v2ctx);
+        m_grid.layout(::yawn::ui::fw2::Rect{bounds.x, bounds.y, bounds.w, bounds.h},
+                       v2ctx);
+    }
+
+    void paint(UIContext&) override {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_grid.render(v2ctx);
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        const auto& b = m_grid.bounds();
+        if (e.x < b.x || e.x >= b.x + b.w) return false;
+        if (e.y < b.y || e.y >= b.y + b.h) return false;
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        ev.clickCount = e.clickCount;   // preserve SDL double-click count
+        const bool handled = m_grid.dispatchMouseDown(ev);
+        if (handled || ::yawn::ui::fw2::Widget::capturedWidget()) {
+            captureMouse();
+        }
+        return handled;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        const auto& b = m_grid.bounds();
+        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, b);
+        m_grid.dispatchMouseMove(ev);
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent& e) override {
+        const auto& b = m_grid.bounds();
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        m_grid.dispatchMouseUp(ev);
+        if (!::yawn::ui::fw2::Widget::capturedWidget()) {
+            releaseMouse();
+        }
+        return true;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        ::yawn::ui::fw2::ScrollEvent se{};
+        se.x = e.x; se.y = e.y;
+        se.dx = e.dx; se.dy = e.dy;
+        return m_grid.dispatchScroll(se);
+    }
+
+    ::yawn::ui::fw2::ContentGrid& grid() { return m_grid; }
+
+private:
+    ::yawn::ui::fw2::ContentGrid& m_grid;
 };
 
 } // namespace fw

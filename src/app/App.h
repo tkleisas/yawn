@@ -22,7 +22,8 @@
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/FontAdapter.h"
 #include "ui/framework/v2/LayerStack.h"
-#include "ui/framework/ContentGrid.h"
+#include "ui/framework/v2/ContentGrid.h"
+#include "ui/framework/v2/V1WidgetAdapter.h"
 #include "ui/panels/MixerPanel.h"
 #include "ui/panels/SessionPanel.h"
 #include "ui/panels/ArrangementPanel.h"
@@ -170,32 +171,30 @@ private:
     ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
     ui::fw::DetailPanelWidget* m_detailPanel = nullptr;
     ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
-    // MixerPanel is fw2; owner holds it, wrapper goes into ContentGrid.
+    // MixerPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::MixerPanel> m_mixerPanelOwner;
     ui::fw2::MixerPanel*                 m_mixerPanel  = nullptr;
-    ui::fw::Widget*                      m_mixerPanelW = nullptr;
-    // SessionPanel is fw2; owner holds it, wrapper goes into ContentGrid.
+    // SessionPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::SessionPanel> m_sessionPanelOwner;
     ui::fw2::SessionPanel*                 m_sessionPanel  = nullptr;
-    ui::fw::Widget*                        m_sessionPanelW = nullptr;
-    ui::fw::ArrangementPanel* m_arrangementPanel = nullptr;
-    // TransportPanel is fw2 now; m_transportPanelOwner holds it (the
-    // m_wrappers vector only accepts v1 Widget ptrs). m_transportPanelW
-    // is its v1 wrapper sitting in m_rootLayout so the v1 tree can
-    // still dispatch to it.
+    // ArrangementPanel — still v1; wrapped by m_arrFw2W for ContentGrid.
+    ui::fw::ArrangementPanel*  m_arrangementPanel = nullptr;
+    ui::fw2::V1WidgetAdapter*  m_arrFw2W = nullptr;  // fw2 adapter (in m_fw2Owners)
+    // TransportPanel is fw2 now; m_transportPanelOwner holds it.
+    // m_transportPanelW is its v1 wrapper sitting in m_rootLayout.
     std::unique_ptr<ui::fw2::TransportPanel> m_transportPanelOwner;
     ui::fw2::TransportPanel*                 m_transportPanel  = nullptr;
     ui::fw::Widget*                          m_transportPanelW = nullptr;
-    ui::fw::ContentGrid*         m_contentGrid     = nullptr;
-    // BrowserPanel is fw2; owner holds it, wrapper goes into ContentGrid.
+    // ContentGrid — now fw2; m_contentGridW is the v1 wrapper for rootLayout.
+    std::unique_ptr<ui::fw2::ContentGrid>    m_contentGridOwner;
+    ui::fw2::ContentGrid*                    m_contentGrid  = nullptr;
+    ui::fw::Widget*                          m_contentGridW = nullptr;
+    // BrowserPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::BrowserPanel> m_browserPanelOwner;
     ui::fw2::BrowserPanel*                 m_browserPanel  = nullptr;
-    ui::fw::Widget*                        m_browserPanelW = nullptr;
-    // ReturnMasterPanel is fw2; m_returnMasterPanelOwner holds it,
-    // m_returnMasterPanelW is the v1 wrapper that goes into ContentGrid.
+    // ReturnMasterPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::ReturnMasterPanel> m_returnMasterPanelOwner;
     ui::fw2::ReturnMasterPanel*                 m_returnMasterPanel  = nullptr;
-    ui::fw::Widget*                             m_returnMasterPanelW = nullptr;
     // VisualParamsPanel is fw2; owner holds it, wrapper goes in
     // m_rootLayout.
     std::unique_ptr<ui::fw2::VisualParamsPanel> m_visualParamsPanelOwner;
@@ -209,7 +208,9 @@ private:
     // no longer a Widget subclass; lifetime is the App itself.
     ui::fw2::FwPreferencesDialog  m_preferencesDialog;
     ui::fw2::FwExportDialog       m_exportDialog;
-    std::vector<std::unique_ptr<ui::fw::Widget>> m_wrappers;
+    std::vector<std::unique_ptr<ui::fw::Widget>>  m_wrappers;
+    // fw2-owned heap objects that aren't in m_wrappers (which is v1-only).
+    std::vector<std::unique_ptr<ui::fw2::Widget>> m_fw2Owners;
     ui::fw::UIContext m_uiContext;
 
     // v2 UI framework (ui-v2 in-progress). Coexists with v1 for now —

@@ -356,8 +356,8 @@ void App::setupMenuBar() {
             M::item("Rename Track", [this]() {
                 // SessionPanel is fw2 — use the wrapper's v1 visible()
                 // (what ContentGrid checks) since visibility is
-                // managed at the wrapper level.
-                if (m_sessionPanelW->visible()) {
+                // SessionPanel is fw2 — check its own visibility directly.
+                if (m_sessionPanel->isVisible()) {
                     m_sessionPanel->startTrackRename(m_selectedTrack);
                 } else {
                     m_arrangementPanel->startTrackRename(m_selectedTrack);
@@ -418,15 +418,13 @@ void App::buildWidgetTree() {
     auto transportP = std::make_unique<ui::fw2::TransportPanel>();
     auto transportW = std::make_unique<TransportPanelWrapper>(*transportP);
     auto sessionP   = std::make_unique<ui::fw2::SessionPanel>();
-    auto sessionW   = std::make_unique<SessionPanelWrapper>(*sessionP);
     auto arrP       = std::make_unique<ArrangementPanel>();
+    auto arrFw2W    = std::make_unique<ui::fw2::V1WidgetAdapter>();
     auto mixerP     = std::make_unique<ui::fw2::MixerPanel>();
-    auto mixerW     = std::make_unique<MixerPanelWrapper>(*mixerP);
     auto browserP   = std::make_unique<ui::fw2::BrowserPanel>();
-    auto browserW   = std::make_unique<BrowserPanelWrapper>(*browserP);
     auto returnMstP = std::make_unique<ui::fw2::ReturnMasterPanel>();
-    auto returnMstW = std::make_unique<ReturnMasterPanelWrapper>(*returnMstP);
-    auto gridP      = std::make_unique<ContentGrid>();
+    auto gridP      = std::make_unique<ui::fw2::ContentGrid>();
+    auto gridW      = std::make_unique<ContentGridWrapper>(*gridP);
     auto detailP    = std::make_unique<DetailPanelWidget>();
     auto visualPP   = std::make_unique<ui::fw2::VisualParamsPanel>();
     auto visualPW   = std::make_unique<VisualParamsPanelWrapper>(*visualPP);
@@ -438,26 +436,24 @@ void App::buildWidgetTree() {
     // v2 TextInputDialog, PreferencesDialog, and ExportDialog are
     // value-typed members of App — nothing to allocate here.
 
-    // ContentGrid fills remaining space
-    gridP->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
+    // ContentGrid wrapper fills remaining space in the v1 rootLayout flex.
+    gridW->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
 
     // Store raw pointers for quick access
     m_menuBarW          = menuW.get();
     m_transportPanel    = transportP.get();
     m_transportPanelW   = transportW.get();
     m_sessionPanel      = sessionP.get();
-    m_sessionPanelW     = sessionW.get();
     m_arrangementPanel  = arrP.get();
+    m_arrFw2W           = arrFw2W.get();
     m_mixerPanel        = mixerP.get();
-    m_mixerPanelW       = mixerW.get();
     m_browserPanel      = browserP.get();
-    m_browserPanelW     = browserW.get();
     // Hand the v1 UIContext through so the BrowserFilesTab / PresetsTab
     // sub-widgets (still v1) can use it for paint + hit-test.
     m_browserPanel->setV1Context(&m_uiContext);
     m_returnMasterPanel  = returnMstP.get();
-    m_returnMasterPanelW = returnMstW.get();
-    m_contentGrid       = gridP.get();
+    m_contentGrid        = gridP.get();
+    m_contentGridW       = gridW.get();
     m_detailPanel       = detailP.get();
     m_visualParamsPanel  = visualPP.get();
     m_visualParamsPanelW = visualPW.get();
@@ -555,15 +551,16 @@ void App::buildWidgetTree() {
     });
     m_arrangementPanel->setVisible(false); // start in session view
 
-    // Wire the 4-quadrant layout. Returns+Master is fw2 now — pass
-    // the v1 wrapper into ContentGrid, which can't accept fw2 widgets
-    // directly.
-    m_contentGrid->setChildren(m_sessionPanelW, m_browserPanelW,
-                               m_mixerPanelW, m_returnMasterPanelW);
-
+    // Wire the 4-quadrant layout. ContentGrid is fw2 now; panels go in
+    // directly (no v1 wrappers needed). The ArrangementPanel (still v1)
+    // is wrapped by m_arrFw2W for the topLeft slot swap in setViewMode.
+    m_arrFw2W->setV1Widget(m_arrangementPanel);
+    m_arrFw2W->setV1Context(&m_uiContext);
+    m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
+                               m_mixerPanel, m_returnMasterPanel);
     m_rootLayout->addChild(m_menuBarW);
     m_rootLayout->addChild(m_transportPanelW);
-    m_rootLayout->addChild(m_contentGrid);
+    m_rootLayout->addChild(m_contentGridW);
     m_rootLayout->addChild(m_detailPanel);
     // VisualParamsPanel is fw2 — the wrapper sits in m_rootLayout.
     m_rootLayout->addChild(m_visualParamsPanelW);
@@ -689,23 +686,21 @@ void App::buildWidgetTree() {
     // the v1 wrapper goes into m_wrappers.
     m_transportPanelOwner = std::move(transportP);
     m_wrappers.push_back(std::move(transportW));
-    // SessionPanel is fw2 — panel in dedicated owner, v1 wrapper in
-    // m_wrappers (what ContentGrid references).
+    // SessionPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
     m_sessionPanelOwner = std::move(sessionP);
-    m_wrappers.push_back(std::move(sessionW));
+    // ArrangementPanel is v1 — still in m_wrappers; the fw2 V1WidgetAdapter
+    // that wraps it lives in m_fw2Owners.
     m_wrappers.push_back(std::move(arrP));
-    // MixerPanel is fw2 — store panel separately, wrapper in m_wrappers.
+    m_fw2Owners.push_back(std::move(arrFw2W));
+    // MixerPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
     m_mixerPanelOwner = std::move(mixerP);
-    m_wrappers.push_back(std::move(mixerW));
-    // BrowserPanel is fw2 — panel in dedicated owner, v1 wrapper in
-    // m_wrappers.
+    // BrowserPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
     m_browserPanelOwner = std::move(browserP);
-    m_wrappers.push_back(std::move(browserW));
-    // ReturnMasterPanel is fw2 — store panel separately, v1 wrapper
-    // in m_wrappers (it's what ContentGrid references).
+    // ReturnMasterPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
     m_returnMasterPanelOwner = std::move(returnMstP);
-    m_wrappers.push_back(std::move(returnMstW));
-    m_wrappers.push_back(std::move(gridP));
+    // ContentGrid is fw2 — grid in dedicated owner, v1 wrapper in m_wrappers.
+    m_contentGridOwner = std::move(gridP);
+    m_wrappers.push_back(std::move(gridW));
     m_wrappers.push_back(std::move(detailP));
     // VisualParamsPanel is fw2 — panel in dedicated owner, v1 wrapper
     // in m_wrappers.
@@ -749,11 +744,9 @@ void App::computeLayout() {
     // ContentGrid manages session + mixer + browser + returns visibility
     // MixerPanel visibility is controlled via the content grid's bottom row
     // Visibility is owned by the v1 wrapper (what ContentGrid checks);
-    // internal state stays on the fw2 panel.
-    m_mixerPanelW->setVisible(m_showMixer);
-    // Visibility goes to the v1 wrapper (ContentGrid tests that
-    // widget's visibility); setShowReturns is panel-internal state.
-    m_returnMasterPanelW->setVisible(m_showMixer);
+    // ContentGrid is fw2 — visibility is set directly on the fw2 panels.
+    m_mixerPanel->setVisible(m_showMixer);
+    m_returnMasterPanel->setVisible(m_showMixer);
     m_returnMasterPanel->setShowReturns(m_showReturns);
 
     Constraints c = Constraints::tight(static_cast<float>(w), static_cast<float>(h));
@@ -4733,11 +4726,14 @@ void App::processEvents() {
                     m_rootLayout->dispatchMouseMove(me);
                 }
 
-                // ContentGrid hover detection for divider cursor
+                // ContentGrid hover detection for divider cursor.
+                // Route through the v1 wrapper which converts to fw2 and
+                // updates the grid's internal hover state. The grid's
+                // wantsH/V methods are then queried below for cursor shape.
                 {
                     ui::fw::MouseMoveEvent me;
                     me.x = mx; me.y = my;
-                    m_contentGrid->onMouseMove(me);
+                    m_contentGridW->onMouseMove(me);
                 }
 
                 // Update cursor shape based on content grid divider hover or panel resize
@@ -4857,16 +4853,15 @@ void App::processEvents() {
                 }
                 m_detailPanel->setFocused(false);
 
-                // Browser panel — dispatch via widget tree
+                // Browser panel — dispatch directly to fw2::BrowserPanel.
                 {
                     bool hadBrowserKnob = m_browserPanel->hasEditingKnob();
                     if (!rightClick) {
-                        ui::fw::MouseEvent me;
+                        ui::fw2::MouseEvent me{};
                         me.x = mx; me.y = my;
-                        me.button = ui::fw::MouseButton::Left;
-                        // Route through the v1 wrapper which converts
-                        // the event + forwards to the fw2 BrowserPanel.
-                        if (m_browserPanelW->onMouseDown(me)) {
+                        me.button = ui::fw2::MouseButton::Left;
+                        me.clickCount = event.button.clicks;
+                        if (m_browserPanel->dispatchMouseDown(me)) {
                             if (m_browserPanel->hasEditingKnob() && !hadBrowserKnob)
                                 SDL_StartTextInput(m_mainWindow.getHandle());
                             else if (!m_browserPanel->hasEditingKnob() && hadBrowserKnob)
@@ -4993,7 +4988,10 @@ void App::processEvents() {
                     me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
                     me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
                     me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
-                    m_contentGrid->dispatchMouseDown(me);
+                    // Route through the v1 ContentGridWrapper which converts
+                    // the v1 event (including clickCount) to a fw2 event and
+                    // dispatches to fw2::ContentGrid and its fw2 children.
+                    m_contentGridW->dispatchMouseDown(me);
                     // Start SDL text input if a track rename started
                     if (m_sessionPanel->isRenamingTrack() || m_arrangementPanel->isRenamingTrack()) {
                         SDL_StartTextInput(m_mainWindow.getHandle());
@@ -5134,24 +5132,23 @@ void App::processEvents() {
                 }
 
                 auto sb = m_sessionPanel->bounds();
-                // MixerPanel is fw2; bounds() returns fw2::Rect. The
-                // v1 wrapper's bounds() gives a v1 fw::Rect, which is
-                // what we need for the containing-rect comparison.
-                auto mb = m_mixerPanelW->bounds();
+                // ContentGrid is fw2; all child panel bounds() return fw2::Rect
+                // (same x/y/w/h fields as v1 — comparison math is unchanged).
+                auto mb = m_mixerPanel->bounds();
                 auto db = m_detailPanel->bounds();
                 auto pb = m_pianoRoll->bounds();
-                auto bb = m_browserPanelW->bounds();
+                auto bb = m_browserPanel->bounds();
 
                 // Browser panel first — its dropdown popups live
                 // inside this region and need wheel events to scroll
-                // through lists that overflow the 8-item cap. Routed
-                // through the v1 wrapper for event conversion.
+                // through lists that overflow the 8-item cap. Dispatched
+                // directly to the fw2::BrowserPanel.
                 if (m_lastMouseX >= bb.x && m_lastMouseX < bb.x + bb.w &&
                     m_lastMouseY >= bb.y && m_lastMouseY < bb.y + bb.h) {
-                    ui::fw::ScrollEvent se;
+                    ui::fw2::ScrollEvent se{};
                     se.x = m_lastMouseX; se.y = m_lastMouseY;
                     se.dx = dx; se.dy = dy;
-                    if (m_browserPanelW->onScroll(se)) break;
+                    if (m_browserPanel->dispatchScroll(se)) break;
                 }
 
                 if (m_pianoRoll->isOpen() && m_lastMouseY >= pb.y) {
@@ -5165,13 +5162,11 @@ void App::processEvents() {
                     m_detailPanel->setLastMousePos(m_lastMouseX, m_lastMouseY);
                     m_detailPanel->handleScroll(dx, dy, ctrl);
                 } else if (m_showMixer && m_lastMouseY >= mb.y && m_lastMouseY < mb.y + mb.h) {
-                    // Route through the v1 wrapper which converts v1
-                    // ScrollEvent → fw2 ScrollEvent and dispatches to
-                    // the fw2 MixerPanel.
-                    ui::fw::ScrollEvent se;
+                    // Dispatch directly to fw2::MixerPanel.
+                    ui::fw2::ScrollEvent se{};
                     se.x = m_lastMouseX; se.y = m_lastMouseY;
                     se.dx = dx; se.dy = dy;
-                    m_mixerPanelW->onScroll(se);
+                    m_mixerPanel->dispatchScroll(se);
                 } else if (m_lastMouseY >= sb.y && m_lastMouseY < sb.y + sb.h) {
                     if (m_project.viewMode() == ViewMode::Arrangement) {
                         auto ab = m_arrangementPanel->bounds();
@@ -6005,13 +6000,14 @@ void App::updateWindowTitle() {
 void App::switchToView(ViewMode mode) {
     m_project.setViewMode(mode);
     bool showArrangement = (mode == ViewMode::Arrangement);
-    // SessionPanel is fw2 — its visibility lives on the v1 wrapper
-    // (what ContentGrid inspects). ArrangementPanel is still v1.
-    m_sessionPanelW->setVisible(!showArrangement);
-    m_arrangementPanel->setVisible(showArrangement);
+    // ContentGrid is fw2; swap the topLeft slot between the fw2 SessionPanel
+    // and the fw2 V1WidgetAdapter wrapping the v1 ArrangementPanel.
+    m_sessionPanel->setVisible(!showArrangement);
+    m_arrFw2W->setVisible(showArrangement);
+    m_arrangementPanel->setVisible(showArrangement);  // keeps v1 hit-test flags
     m_contentGrid->setTopLeft(showArrangement
-        ? static_cast<ui::fw::Widget*>(m_arrangementPanel)
-        : static_cast<ui::fw::Widget*>(m_sessionPanelW));
+        ? static_cast<ui::fw2::Widget*>(m_arrFw2W)
+        : static_cast<ui::fw2::Widget*>(m_sessionPanel));
     m_arrangementPanel->setSelectedTrack(m_selectedTrack);
 
     // Activate/deactivate arrangement mode for all tracks

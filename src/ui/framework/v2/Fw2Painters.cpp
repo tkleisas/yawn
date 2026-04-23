@@ -35,6 +35,7 @@
 #include "ui/framework/v2/ScrollView.h"
 #include "ui/framework/v2/TabView.h"
 #include "ui/framework/v2/SplitView.h"
+#include "ui/framework/v2/ContentGrid.h"
 
 #include <cmath>
 
@@ -1614,6 +1615,36 @@ static void paintSplitView(Widget& w, UIContext& ctx) {
     }
 }
 
+// ─── ContentGrid ────────────────────────────────────────────────────
+// Paints just the two divider bars (+ intersection) on top of children.
+// Children have already been rendered by ContentGrid::render() before
+// Widget::render() calls this painter.
+
+static void paintContentGrid(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    auto& cg = static_cast<ContentGrid&>(w);
+    const auto& d  = cg.paintData();
+    const auto& p  = theme().palette;
+
+    const bool anyH = d.hoverH || d.dragH;
+    const bool anyV = d.hoverV || d.dragV;
+
+    Color hCol = d.dragH ? p.accent
+               : d.hoverH ? Color{80, 80, 90, 255}
+               : Color{55, 55, 60, 255};
+    Color vCol = d.dragV ? p.accent
+               : d.hoverV ? Color{80, 80, 90, 255}
+               : Color{55, 55, 60, 255};
+
+    // Horizontal divider (full width)
+    ctx.renderer->drawRect(d.bx, d.hDivY, d.bw, d.divSize, hCol);
+    // Vertical divider (full height)
+    ctx.renderer->drawRect(d.vDivX, d.by, d.divSize, d.bh, vCol);
+    // Intersection highlight when either is active
+    if (anyH || anyV)
+        ctx.renderer->drawRect(d.vDivX, d.hDivY, d.divSize, d.divSize, p.accent);
+}
+
 // ─── Registration ──────────────────────────────────────────────────
 
 void registerAllFw2Painters() {
@@ -1637,6 +1668,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(ScrollView),    &paintScrollView);
     registerPainter(typeid(TabView),       &paintTabView);
     registerPainter(typeid(SplitView),     &paintSplitView);
+    registerPainter(typeid(ContentGrid),   &paintContentGrid);
     // FwRadioGroup has no painter — it overrides render() to paint
     // its buttons directly. Stack is pure layout, also painter-less.
     // DropDown's popup is NOT a registered widget painter — it's a

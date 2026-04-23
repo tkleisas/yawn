@@ -62,6 +62,7 @@ struct MouseEvent {
     float lx = 0, ly = 0;         // widget-local coords
     MouseButton button = MouseButton::Left;
     uint16_t    modifiers = 0;
+    int         clickCount = 1;   // SDL button.clicks (1 = single, 2 = double)
     uint64_t    timestampMs = 0;
     bool        consumed = false;
 };

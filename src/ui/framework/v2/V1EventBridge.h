@@ -58,8 +58,9 @@ inline MouseEvent toFw2Mouse(const ::yawn::ui::fw::MouseEvent& e, Rect widgetBou
     out.y  = e.y;
     out.lx = e.x - widgetBounds.x;
     out.ly = e.y - widgetBounds.y;
-    out.button    = toFw2Button(e.button);
-    out.modifiers = toFw2Modifiers(e.mods);
+    out.button     = toFw2Button(e.button);
+    out.modifiers  = toFw2Modifiers(e.mods);
+    out.clickCount = e.clickCount;      // preserve SDL double-click info
     out.timestampMs = v1BridgeNowMs();
     return out;
 }
@@ -107,7 +108,7 @@ inline ::yawn::ui::fw::MouseEvent toFw1Mouse(const MouseEvent& e) {
     out.y = e.y;
     out.button    = toFw1Button(e.button);
     out.mods      = toFw1Modifiers(e.modifiers);
-    out.clickCount = 1;
+    out.clickCount = e.clickCount;      // forward SDL double-click count
     return out;
 }
 
