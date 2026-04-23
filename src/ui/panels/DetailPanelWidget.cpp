@@ -38,9 +38,12 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
     float bodyH = m_animatedHeight - kHandleHeight;
     if (bodyH < 0) bodyH = 0;
 
+    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
         // Match paint's dynamic layout: title + waveform(fills space) + control strip + effects
-        float overviewExtra = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+        float overviewExtra = ::yawn::ui::fw2::WaveformWidget::kOverviewH
+                            + ::yawn::ui::fw2::WaveformWidget::kOverviewGap;
         static constexpr float kControlStripH = 76.0f;
         static constexpr float kFxLabelH      = 18.0f;
         float fxReserve = m_deviceWidgets.empty() ? kFxLabelH
@@ -50,14 +53,29 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
         static constexpr float kMinWaveH = 60.0f;
         float waveH = std::max(kMinWaveH, availableForWave) + overviewExtra;
         float stripY = bodyY + kClipTitleRowH + waveH + kClipSectionGap;
-        float fxSepY = stripY + 5.0f + 13.0f + 6.0f + 50.0f + 6.0f; // sep+pad + labelH + gap + knobH + margin
+        float fxSepY = stripY + 5.0f + 13.0f + 6.0f + 50.0f + 6.0f;
         float scrollY = fxSepY + kFxLabelH;
         float scrollH = std::max(0.0f, bodyY + bodyH - scrollY);
-        m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
-        m_scroll.layout(Rect{bounds.x, scrollY, bounds.w, scrollH}, ctx);
+        m_scroll.measure(::yawn::ui::fw2::Constraints::loose(bounds.w, scrollH), v2ctx);
+        m_scroll.layout(::yawn::ui::fw2::Rect{bounds.x, scrollY, bounds.w, scrollH}, v2ctx);
     } else {
-        m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
-        m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
+        m_scroll.measure(::yawn::ui::fw2::Constraints::loose(bounds.w, bodyH), v2ctx);
+        m_scroll.layout(::yawn::ui::fw2::Rect{bounds.x, bodyY, bounds.w, bodyH}, v2ctx);
+    }
+
+    // After fw2 lays out the device widgets, drive the v1 custom
+    // panels / bodies at the rects fw2::DeviceWidget computed — they
+    // live in the still-v1 InstrumentDisplayWidget cluster so only the
+    // v1 UIContext can layout them.
+    for (auto* dw : m_deviceWidgets) {
+        if (auto* panel = dw->customPanel()) {
+            auto r = dw->customPanelLayoutRect();
+            panel->layout({r.x, r.y, r.w, r.h}, ctx);
+        }
+        if (auto* body = dw->customBody()) {
+            auto r = dw->customBodyLayoutRect();
+            body->layout({r.x, r.y, r.w, r.h}, ctx);
+        }
     }
 }
 
@@ -95,7 +113,16 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         } else {
             updateParamValues();
             updateVisualizerData();
-            m_scroll.paint(ctx);
+            m_scroll.render(::yawn::ui::fw2::UIContext::global());
+
+            // After fw2 renders the device headers + knob grids, paint
+            // any v1 custom panels / bodies (instrument display widgets
+            // from InstrumentDisplayWidget.h — still-v1 cluster).
+            for (auto* dw : m_deviceWidgets) {
+                if (!dw->isExpanded()) continue;
+                if (auto* panel = dw->customPanel()) panel->paint(ctx);
+                if (auto* body  = dw->customBody())  body->paint(ctx);
+            }
 
             // Draw drag-to-reorder insertion indicator
             if (m_dragReorderActive && m_dragInsertIdx >= 0 &&
@@ -156,11 +183,16 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
     if (m_viewMode == ViewMode::AudioClip) {
         // v2 dropdown popups are handled by LayerStack upstream; when
         // the popup is open we don't reach this point for clicks.
-        auto& wb = m_waveformWidget.bounds();
+        const auto& wb = m_waveformWidget.bounds();
         if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
-            e.lx = mx - wb.x;
-            e.ly = my - wb.y;
-            if (m_waveformWidget.onMouseDown(e)) return true;
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, wb);
+            const bool handled = m_waveformWidget.dispatchMouseDown(ev);
+            if (handled || ::yawn::ui::fw2::Widget::capturedWidget() == &m_waveformWidget) {
+                m_v2Dragging = &m_waveformWidget;
+                captureMouse();
+                return true;
+            }
+            if (handled) return true;
         }
         // Automation envelope editor — fw2 widget; bridge the v1 event
         // and hook into m_v2Dragging so subsequent moves/ups flow back
@@ -241,16 +273,28 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     if (m_deviceWidgets.empty()) return false;
 
-    if (m_scroll.onMouseDown(e)) return true;
+    // Scroll buttons first — fw2 SnapScrollContainer only consumes
+    // `<`/`>` clicks and returns false for everything else, so device
+    // clicks still reach the loop below.
+    {
+        const auto& sb = m_scroll.bounds();
+        auto sev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
+        if (m_scroll.dispatchMouseDown(sev)) return true;
+    }
 
     for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
         auto* dw = m_deviceWidgets[i];
-        auto& db = dw->bounds();
+        const auto& db = dw->bounds();
         bool inside = mx >= db.x && mx < db.x + db.w && my >= db.y && my < db.y + db.h;
         LOG_INFO("UI", "DetailPanel device[%zu] bounds=(%g,%g,%g,%g) click=(%g,%g) inside=%d",
                  i, db.x, db.y, db.w, db.h, mx, my, (int)inside);
         if (inside) {
-            if (dw->onMouseDown(e)) return true;
+            auto dev = ::yawn::ui::fw2::toFw2Mouse(e, db);
+            if (dw->dispatchMouseDown(dev)) {
+                if (::yawn::ui::fw2::Widget::capturedWidget())
+                    captureMouse();
+                return true;
+            }
         }
     }
     return true;
@@ -364,7 +408,8 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     // ── WaveformWidget: overview bar + scrollable/zoomable waveform ──
     // Waveform fills available space minus control strip and effects area
     float waveY = headerY + kClipTitleRowH - 4.0f;
-    float overviewExtra = WaveformWidget::kOverviewH + WaveformWidget::kOverviewGap;
+    float overviewExtra = ::yawn::ui::fw2::WaveformWidget::kOverviewH
+                        + ::yawn::ui::fw2::WaveformWidget::kOverviewGap;
     static constexpr float kControlStripH = 88.0f;   // sep(1) + pad(4) + labelH(13) + gap(6) + knobH(50) + margin
     static constexpr float kFxLabelH      = 18.0f;   // separator + "Audio Effects" label
     // Reserve space for effects: at least 220px when effects exist, 35% of panel
@@ -374,8 +419,14 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float availableForWave = bodyH - (waveY - bodyY) - fixedBelow;
     static constexpr float kMinWaveH = 60.0f;
     float waveH = std::max(kMinWaveH, availableForWave) + overviewExtra;
-    m_waveformWidget.layout(Rect{sectionX, waveY, sectionW, waveH}, ctx);
-    m_waveformWidget.paint(ctx);
+    {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_waveformWidget.measure(
+            ::yawn::ui::fw2::Constraints::tight(sectionW, waveH), v2ctx);
+        m_waveformWidget.layout(
+            ::yawn::ui::fw2::Rect{sectionX, waveY, sectionW, waveH}, v2ctx);
+        m_waveformWidget.render(v2ctx);
+    }
 
     // Overlay automation envelope on waveform area (semi-transparent)
     if (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0 &&
@@ -501,7 +552,12 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     if (!m_deviceWidgets.empty()) {
         updateParamValues();
         updateVisualizerData();
-        m_scroll.paint(ctx);
+        m_scroll.render(::yawn::ui::fw2::UIContext::global());
+        for (auto* dw : m_deviceWidgets) {
+            if (!dw->isExpanded()) continue;
+            if (auto* panel = dw->customPanel()) panel->paint(ctx);
+            if (auto* body  = dw->customBody())  body->paint(ctx);
+        }
     } else {
         float noFxY = fxLabelY + 14.0f;
         font.drawText(renderer, "No effects", sectionX + 80.0f, noFxY,

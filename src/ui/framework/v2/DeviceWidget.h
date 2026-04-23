@@ -22,6 +22,12 @@
 #include "ui/framework/v2/StepSelector.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/V1EventBridge.h"
+// Pulls in full definitions for v1 CustomDeviceBody + auxiliary v1
+// display panels (InstrumentDisplayWidget cluster). This DeviceWidget
+// hosts such v1 widgets as customPanel / customBody and calls v1
+// Widget methods on them (layout / paint / onMouseDown); the forward
+// declaration below isn't enough for those bodies.
+#include "ui/framework/InstrumentDisplayWidget.h"
 #include "ui/Theme.h"
 #include "util/Logger.h"
 #include "WidgetHint.h"
@@ -38,14 +44,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-// Forward-declare v1 types for the custom-panel / custom-body crossover.
-// The actual v1 classes live in ui/framework/Widget.h and
-// ui/framework/InstrumentDisplayWidget.h; the v1 wrapper pulls those in.
-namespace yawn { namespace ui { namespace fw {
-class Widget;
-class CustomDeviceBody;
-}}}
 
 namespace yawn {
 namespace ui {
@@ -178,7 +176,8 @@ public:
         clearKnobs();
         delete m_visualizer;
         delete m_vizKnobGrid;
-        // m_customPanel / m_customBody are owned by the v1 wrapper.
+        delete m_customPanel;
+        delete m_customBody;
     }
 
     DeviceWidget(const DeviceWidget&) = delete;
@@ -219,18 +218,24 @@ public:
         }
     }
 
-    // ─── v1-crossover slots (non-owning) ─────────────────────────────
-    // The v1 wrapper owns the pointers; this class just tracks them so
-    // it can size + route around them during layout.
+    // ─── v1-crossover slots (owned) ──────────────────────────────────
+    // These point at v1 widgets from the still-v1 InstrumentDisplayWidget
+    // cluster (CustomDeviceBody + auxiliary display panels). DeviceWidget
+    // takes ownership — replacing or destroying the DeviceWidget deletes
+    // the previous instance. Inline v1 Widget methods are reached
+    // through the v1 lifecycle bridge driven by the panel hosting this
+    // DeviceWidget.
 
-    void setCustomPanelRef(::yawn::ui::fw::Widget* panel, float h, float minW) {
+    void setCustomPanel(::yawn::ui::fw::Widget* panel, float h, float minW = 0.0f) {
+        if (m_customPanel != panel) delete m_customPanel;
         m_customPanel  = panel;
         m_customPanelH = h;
         m_customMinW   = minW;
     }
     ::yawn::ui::fw::Widget* customPanel() const { return m_customPanel; }
 
-    void setCustomBodyRef(::yawn::ui::fw::CustomDeviceBody* body) {
+    void setCustomBody(::yawn::ui::fw::CustomDeviceBody* body) {
+        if (m_customBody != body) delete m_customBody;
         m_customBody = body;
     }
     ::yawn::ui::fw::CustomDeviceBody* customBody() const { return m_customBody; }
@@ -346,9 +351,13 @@ public:
     float preferredWidth() const {
         if (!m_expanded) return kCollapsedW;
         if (m_customBody) {
-            // v1 wrapper supplies CustomDeviceBody::preferredBodyWidth()
-            // separately; fallback when no body is installed.
-            return std::max(kMinExpandedW, headerMinWidth());
+            // Let the v1 CustomDeviceBody dictate its preferred width —
+            // otherwise the device strip is sized only by the header
+            // and the rightmost knob columns fall outside customBody's
+            // bounds (which are clamped to our own w-8) so clicks never
+            // reach them.
+            const float bodyW = m_customBody->preferredBodyWidth() + 16.0f;
+            return std::max({kMinExpandedW, headerMinWidth(), bodyW});
         }
         const float cellW = std::max(kKnobSize + kKnobSpacing, m_cachedCellW);
         const int paramCount = static_cast<int>(m_knobs.size() + m_vizKnobs.size());
@@ -539,12 +548,26 @@ public:
             if (rectContains(m_vizKnobGrid->bounds(), e.x, e.y)) {
                 for (auto& s : m_vizKnobs) if (hitSlot(s)) return dispatchSlot(s);
             }
-        } else if (!m_customBody) {
+        } else if (m_customBody) {
+            // v1 custom body owns the click area below the header.
+            // Convert to v1 event and forward; track drag so follow-up
+            // moves / up route there directly.
+            const auto& cb = m_customBody->bounds();
+            if (e.x >= cb.x && e.x < cb.x + cb.w &&
+                e.y >= cb.y && e.y < cb.y + cb.h) {
+                auto v1ev = ::yawn::ui::fw2::toFw1Mouse(e);
+                if (m_customBody->onMouseDown(v1ev)) {
+                    m_draggingCustomBody = true;
+                    captureMouse();
+                    return true;
+                }
+            }
+        } else {
             if (rectContains(m_knobGrid.bounds(), e.x, e.y)) {
                 for (auto& s : m_knobs) if (hitSlot(s)) return dispatchSlot(s);
             }
         }
-        return false;  // customBody handled by v1 wrapper
+        return false;
     }
 
     bool onMouseUp(MouseEvent& e) override {
@@ -552,6 +575,14 @@ public:
             return m_header.dispatchMouseUp(e);
 
         if (!m_expanded) return false;
+
+        if (m_draggingCustomBody && m_customBody) {
+            auto v1ev = ::yawn::ui::fw2::toFw1Mouse(e);
+            m_customBody->onMouseUp(v1ev);
+            m_draggingCustomBody = false;
+            releaseMouse();
+            return true;
+        }
 
         if (m_v2Dragging) {
             MouseEvent ev = e;
@@ -566,6 +597,11 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_draggingCustomBody && m_customBody) {
+            auto v1ev = ::yawn::ui::fw2::toFw1MouseMove(e);
+            m_customBody->onMouseMove(v1ev);
+            return true;
+        }
         if (m_v2Dragging) {
             MouseMoveEvent ev = e;
             ev.lx = e.x - m_v2Dragging->bounds().x;
@@ -622,6 +658,7 @@ private:
 
     float m_cachedCellW = 0;
     Widget* m_v2Dragging = nullptr;
+    bool    m_draggingCustomBody = false;
 
     RemoveCallback                          m_onRemove;
     ParamChangeCallback                     m_onParamChange;

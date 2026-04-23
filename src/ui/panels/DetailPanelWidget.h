@@ -9,11 +9,12 @@
 // tree doesn't dispatch right-click events yet.
 
 #include "ui/framework/Widget.h"
-#include "ui/framework/DeviceWidget.h"
 #include "ui/framework/InstrumentDisplayWidget.h"
 #include "ui/framework/Primitives.h"
-#include "ui/framework/SnapScrollContainer.h"
-#include "ui/framework/WaveformWidget.h"
+#include "ui/framework/v2/DeviceHeaderWidget.h"
+#include "ui/framework/v2/DeviceWidget.h"
+#include "ui/framework/v2/SnapScrollContainer.h"
+#include "ui/framework/v2/WaveformWidget.h"
 #include "ui/framework/v2/AutomationEnvelope.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/DropDown.h"
@@ -363,9 +364,9 @@ public:
                 ref.chainIndex = i;
                 ref.audioEffect = fx;
 
-                auto* dw = new DeviceWidget();
+                auto* dw = new ::yawn::ui::fw2::DeviceWidget();
                 dw->setDeviceName(fx->name());
-                dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
+                dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::AudioEffect);
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
@@ -448,8 +449,8 @@ public:
         });
     }
 
-    WaveformWidget&       waveformWidget()       { return m_waveformWidget; }
-    const WaveformWidget& waveformWidget() const { return m_waveformWidget; }
+    ::yawn::ui::fw2::WaveformWidget&       waveformWidget()       { return m_waveformWidget; }
+    const ::yawn::ui::fw2::WaveformWidget& waveformWidget() const { return m_waveformWidget; }
 
     // Rebuild the device chain from current track state.
     void setDeviceChain(midi::MidiEffectChain* midiChain,
@@ -488,9 +489,9 @@ public:
                 ref.chainIndex = i;
                 ref.midiEffect = fx;
 
-                auto* dw = new DeviceWidget();
+                auto* dw = new ::yawn::ui::fw2::DeviceWidget();
                 dw->setDeviceName(fx->name());
-                dw->setDeviceType(DeviceHeaderWidget::DeviceType::MidiEffect);
+                dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::MidiEffect);
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
@@ -513,9 +514,9 @@ public:
             ref.chainIndex = 0;
             ref.instrument = inst;
 
-            auto* dw = new DeviceWidget();
+            auto* dw = new ::yawn::ui::fw2::DeviceWidget();
             dw->setDeviceName(inst->name());
-            dw->setDeviceType(DeviceHeaderWidget::DeviceType::Instrument);
+            dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::Instrument);
             dw->setRemovable(false);
             dw->setExpanded(findPrevExpanded(static_cast<void*>(inst)));
             dw->setBypassed(inst->bypassed());
@@ -540,9 +541,9 @@ public:
                 ref.chainIndex = i;
                 ref.audioEffect = fx;
 
-                auto* dw = new DeviceWidget();
+                auto* dw = new ::yawn::ui::fw2::DeviceWidget();
                 dw->setDeviceName(fx->name());
-                dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
+                dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::AudioEffect);
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
@@ -607,16 +608,17 @@ public:
 
     void handleScroll(float dx, float dy, bool ctrl = false) {
         if (m_viewMode == ViewMode::AudioClip) {
-            auto& wb = m_waveformWidget.bounds();
+            const auto& wb = m_waveformWidget.bounds();
             if (m_lastMouseX >= wb.x && m_lastMouseX < wb.x + wb.w &&
                 m_lastMouseY >= wb.y && m_lastMouseY < wb.y + wb.h) {
-                ScrollEvent se;
+                ::yawn::ui::fw2::ScrollEvent se;
                 se.x = m_lastMouseX; se.y = m_lastMouseY;
                 se.lx = m_lastMouseX - wb.x;
                 se.ly = m_lastMouseY - wb.y;
                 se.dx = dx; se.dy = dy;
-                se.mods.ctrl = ctrl;
-                m_waveformWidget.onScroll(se);
+                if (ctrl)
+                    se.modifiers |= ::yawn::ui::fw2::ModifierKey::Ctrl;
+                m_waveformWidget.dispatchScroll(se);
                 return;
             }
         }
@@ -720,21 +722,25 @@ public:
             m_v2Dragging->dispatchMouseMove(ev);
             return true;
         }
-        // Captured widget receives moves regardless of position
-        if (Widget::capturedWidget()) {
-            return Widget::capturedWidget()->onMouseMove(e);
+        // A fw2 descendant (device knob / custom body knob) has capture
+        // — route the move there directly. v1 capture is on ourselves,
+        // which means v1 App already forwards moves here; self-recursing
+        // via Widget::capturedWidget()->onMouseMove would stack-overflow.
+        if (auto* cap = ::yawn::ui::fw2::Widget::capturedWidget()) {
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, cap->bounds());
+            return cap->dispatchMouseMove(ev);
         }
         // Forward to waveform widget in audio clip view
         if (m_viewMode == ViewMode::AudioClip) {
             // v2 dropdown popups get their mouseMove via LayerStack —
             // no panel-side branch needed for open-state routing.
-            auto& wb = m_waveformWidget.bounds();
-            e.lx = e.x - wb.x;
-            e.ly = e.y - wb.y;
-            if (m_waveformWidget.onMouseMove(e)) return true;
+            const auto& wb = m_waveformWidget.bounds();
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, wb);
+            if (m_waveformWidget.dispatchMouseMove(ev)) return true;
         }
         for (auto* dw : m_deviceWidgets) {
-            if (dw->onMouseMove(e)) return true;
+            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, dw->bounds());
+            if (dw->dispatchMouseMove(ev)) return true;
         }
         return false;
     }
@@ -777,25 +783,29 @@ public:
             releaseMouse();
             return true;
         }
-        if (Widget::capturedWidget()) {
-            bool handled = Widget::capturedWidget()->onMouseUp(e);
-            return handled;
+        // A fw2 descendant had capture — release it there and drop our
+        // v1 capture (we held it so App would route us follow-up moves).
+        if (auto* cap = ::yawn::ui::fw2::Widget::capturedWidget()) {
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, cap->bounds());
+            cap->dispatchMouseUp(ev);
+            releaseMouse();
+            return true;
         }
         // Forward to waveform widget
         if (m_viewMode == ViewMode::AudioClip) {
             // v2 dropdowns toggle on mouse-down directly — no mouseUp
             // forwarding needed. v2 button + toggle release via the
             // m_v2Dragging path above. v2 knobs likewise.
-            auto& wb = m_waveformWidget.bounds();
-            e.lx = e.x - wb.x;
-            e.ly = e.y - wb.y;
-            if (m_waveformWidget.onMouseUp(e)) return true;
+            const auto& wb = m_waveformWidget.bounds();
+            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, wb);
+            if (m_waveformWidget.dispatchMouseUp(ev)) return true;
         }
         for (auto* dw : m_deviceWidgets) {
-            auto& db = dw->bounds();
+            const auto& db = dw->bounds();
             if (e.x >= db.x && e.x < db.x + db.w &&
                 e.y >= db.y && e.y < db.y + db.h) {
-                if (dw->onMouseUp(e)) return true;
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, db);
+                if (dw->dispatchMouseUp(ev)) return true;
             }
         }
         return false;
@@ -804,12 +814,11 @@ public:
     bool onScroll(ScrollEvent& e) override {
         if (!m_open) return false;
         if (m_viewMode == ViewMode::AudioClip) {
-            auto& wb = m_waveformWidget.bounds();
+            const auto& wb = m_waveformWidget.bounds();
             if (e.x >= wb.x && e.x < wb.x + wb.w &&
                 e.y >= wb.y && e.y < wb.y + wb.h) {
-                e.lx = e.x - wb.x;
-                e.ly = e.y - wb.y;
-                return m_waveformWidget.onScroll(e);
+                auto ev = ::yawn::ui::fw2::toFw2Scroll(e, wb);
+                return m_waveformWidget.dispatchScroll(ev);
             }
         }
         return false;
@@ -873,18 +882,18 @@ private:
     };
 
     // ── Wire header-only callbacks (preset) that setup*Display may skip ──
-    void wireHeaderCallbacks(DeviceWidget* dw, const DeviceRef& ref) {
+    void wireHeaderCallbacks(::yawn::ui::fw2::DeviceWidget* dw, const DeviceRef& ref) {
         dw->setOnPresetClick([this, type = ref.type, chainIdx = ref.chainIndex](float x, float y) {
             if (m_onPresetClick) m_onPresetClick(type, chainIdx, x, y);
         });
     }
 
     // ── Build params and wire callbacks for a DeviceWidget ──
-    void configureDeviceWidget(DeviceWidget* dw, const DeviceRef& ref) {
-        std::vector<DeviceWidget::ParamInfo> params;
+    void configureDeviceWidget(::yawn::ui::fw2::DeviceWidget* dw, const DeviceRef& ref) {
+        std::vector<::yawn::ui::fw2::DeviceWidget::ParamInfo> params;
         int count = ref.paramCount();
         for (int p = 0; p < count; ++p) {
-            DeviceWidget::ParamInfo pi;
+            ::yawn::ui::fw2::DeviceWidget::ParamInfo pi;
             pi.index = p;
             if (ref.midiEffect) {
                 auto& info = ref.midiEffect->parameterInfo(p);
@@ -1016,7 +1025,7 @@ private:
     }
 
     // ── Create instrument-specific grouped layout (returns true if handled) ──
-    bool setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst,
+    bool setupInstrumentDisplay(::yawn::ui::fw2::DeviceWidget* dw, instruments::Instrument* inst,
                                 const DeviceRef& ref) {
         if (!inst) return false;
         std::string nm = inst->name();
@@ -1340,7 +1349,7 @@ private:
     }
 
     // ── Build custom display for MIDI effects (currently LFO) ──
-    bool setupMidiEffectDisplay(DeviceWidget* dw, midi::MidiEffect* fx,
+    bool setupMidiEffectDisplay(::yawn::ui::fw2::DeviceWidget* dw, midi::MidiEffect* fx,
                                 const DeviceRef& ref) {
         if (!fx) return false;
         std::string nm = fx->id();
@@ -1399,8 +1408,8 @@ private:
     }
 
     // ── State ──
-    SnapScrollContainer m_scroll;
-    std::vector<DeviceWidget*> m_deviceWidgets;  // owned
+    ::yawn::ui::fw2::SnapScrollContainer m_scroll;
+    std::vector<::yawn::ui::fw2::DeviceWidget*> m_deviceWidgets;  // owned
     std::vector<DeviceRef>     m_deviceRefs;     // parallel to m_deviceWidgets
     std::vector<ExpandState>   m_expandStates;
     std::vector<std::function<void()>> m_displayUpdaters;  // instrument display updaters
@@ -1451,7 +1460,7 @@ private:
     ViewMode m_viewMode = ViewMode::Devices;
     const audio::Clip* m_clipPtr = nullptr;
     int m_clipSampleRate = 44100;
-    WaveformWidget m_waveformWidget;
+    ::yawn::ui::fw2::WaveformWidget m_waveformWidget;
     ::yawn::ui::fw2::FwDropDown m_warpModeDropdown;
     ::yawn::ui::fw2::FwButton m_detectBtn;
     ::yawn::ui::fw2::FwKnob m_gainKnob;

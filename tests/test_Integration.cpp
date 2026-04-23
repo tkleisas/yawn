@@ -7,10 +7,9 @@
 #include "ui/framework/Widget.h"
 #include "ui/framework/FlexBox.h"
 #include "ui/framework/Primitives.h"
-#include "ui/framework/DeviceWidget.h"
-#include "ui/framework/DeviceHeaderWidget.h"
-#include "ui/framework/SnapScrollContainer.h"
-#include "ui/framework/VisualizerWidget.h"
+#include "ui/framework/v2/DeviceHeaderWidget.h"
+#include "ui/framework/v2/DeviceWidget.h"
+#include "ui/framework/v2/SnapScrollContainer.h"
 #include "ui/framework/FwGrid.h"
 
 // Panels (only those that compile under YAWN_TEST_BUILD)
@@ -809,11 +808,11 @@ TEST(IntegrationCrossPanel, ToggleDetailAndRelayout) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 TEST(IntegrationDeviceWidget, ParameterSetupAndMeasure) {
-    DeviceWidget dw;
+    ::yawn::ui::fw2::DeviceWidget dw;
     dw.setDeviceName("SubSynth");
-    dw.setDeviceType(DeviceHeaderWidget::DeviceType::Instrument);
+    dw.setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::Instrument);
 
-    std::vector<DeviceWidget::ParamInfo> params = {
+    std::vector<::yawn::ui::fw2::DeviceWidget::ParamInfo> params = {
         {0, "Volume", "dB", 0, 1, 0.7f, false},
         {1, "Cutoff", "Hz", 20, 20000, 1000, false},
         {2, "Reso",   "%",  0, 1, 0.5f, false},
@@ -821,20 +820,20 @@ TEST(IntegrationDeviceWidget, ParameterSetupAndMeasure) {
     };
     dw.setParameters(params);
 
-    UIContext ctx{};
+    ::yawn::ui::fw2::UIContext ctx{};
     Size s = dw.measure(Constraints::loose(400, 200), ctx);
     EXPECT_GT(s.w, 0.0f);
     EXPECT_GT(s.h, 0.0f);
 }
 
 TEST(IntegrationDeviceWidget, DeviceWidgetsInSnapScroll) {
-    SnapScrollContainer scroll;
+    ::yawn::ui::fw2::SnapScrollContainer scroll;
 
-    DeviceWidget dw1, dw2;
+    ::yawn::ui::fw2::DeviceWidget dw1, dw2;
     dw1.setDeviceName("Synth");
     dw2.setDeviceName("Reverb");
 
-    std::vector<DeviceWidget::ParamInfo> params = {
+    std::vector<::yawn::ui::fw2::DeviceWidget::ParamInfo> params = {
         {0, "Mix", "%", 0, 1, 0.5f, false},
     };
     dw1.setParameters(params);
@@ -843,7 +842,7 @@ TEST(IntegrationDeviceWidget, DeviceWidgetsInSnapScroll) {
     scroll.addChild(&dw1);
     scroll.addChild(&dw2);
 
-    UIContext ctx{};
+    ::yawn::ui::fw2::UIContext ctx{};
     scroll.measure(Constraints::loose(600, 200), ctx);
     scroll.layout(Rect{0, 0, 600, 200}, ctx);
 
