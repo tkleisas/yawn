@@ -1,7 +1,5 @@
 Lua scripting especially in the context of supporting controllers like ableton push (create scripts for supporting various controllers starting with ableton push and ableton move)
 
-Clip launching with actions. Playback for a number of measures, then move on to the next or move to the first, and A and B actions with probabilities.
-Tuner for tuning instruments
 Render audio to track. Render Arrangement view, or loop region of arrangements
 Resample, record an instrument to an audio track
 Convolution reverb
@@ -15,22 +13,21 @@ Preallocated memory management (how much memory to preallocate). Also use disk s
 Disk free display (display the free diskspace)
 CPU meter (display the cpu usage)
 
+Built in limiter for audio tracks?
+Audio device -> Tape saturation
+Synth -> Physical Modelling?
+Autosampler workflow for multisampler
 
-=== VIDEO & PROCEDURAL GRAPHICS ===
+Default view 4 tracks instead of 8.
+Default scenes 4 instead of 8
+Default view shows master and hides return channels
+Also maybe add Master for video slider?
 
-Two new track types mirroring the audio/MIDI paradigm:
-  - Video Track (like audio): plays video file clips with trim/loop/fade
-  - Procedural Track (like MIDI): runs GLSL fragment shaders as visual instruments
+Equal power when playing multiple notes?
 
-Visual effects chain: post-processing shaders on video/procedural tracks (blur, color grade, etc.)
-Visual mixer: layer compositing with opacity, blend modes (add, multiply, screen, overlay)
-Master visual output: renders to a separate SDL3 window (multi-window already supported)
+Virtual keyboard velocity setting?
 
-Audio-reactive uniforms: feed FFT bins, RMS, transient triggers, beat phase into shaders
-Automation: route existing automation system to shader uniform parameters (knobs control visuals)
+Allow setting of video resolution from 640x360 to 1280x720 (x4 original) up to 1920x1080 (x9 original)
 
-Shader engine: hot-reloadable GLSL with standard interface (iTime, iBeat, iFFT[], iTransient, custom params)
-Video decode: FFmpeg/libav on separate thread, frame textures uploaded to GPU
-Timing: video frames synced to transport position (not wall clock), scrubbing/looping works
+Set Clip grid height to 16:9 ratio
 
-Compositing: layer stack with blend modes, or future node graph
