@@ -71,6 +71,15 @@ public:
     static constexpr float kBypassW = 24.0f;
     static constexpr float kStripeH = 3.0f;
 
+    // fw2 TextMetrics takes actual pixel sizes. The v1 widget used a
+    // `pt / Theme::kFontSize(=26)` scale against a 48-px font bake,
+    // yielding ~22/18/16 px at pt={12,10,9}. The button rows are only
+    // 19 px tall (kHeaderH - kStripeH - 2) so kFsSmall can't exceed ~18
+    // without clipping the glyph box vertically.
+    static constexpr float kFsMed   = 20.0f;
+    static constexpr float kFsSmall = 16.0f;
+    static constexpr float kFsTiny  = 14.0f;
+
     // Hit-test rects (public so tests can inspect; kept in sync by
     // onLayout + render).
     Rect expandBtnRect() const { return m_expandBtn; }
@@ -118,16 +127,12 @@ public:
         if (m_bypassed) { stripe.r /= 2; stripe.g /= 2; stripe.b /= 2; }
         r.drawRect(x, y, w, kStripeH, stripe);
 
-        const float smlFs  = 10.0f;
-        const float tinyFs = 9.0f;
-        const float medFs  = 12.0f;
-
         auto* tm = ctx.textMetrics;
 
         // Expand/collapse toggle
         const char* tog = m_expanded ? "\xe2\x96\xbc" : "\xe2\x96\xb6";
         if (tm) tm->drawText(r, tog, m_expandBtn.x, m_expandBtn.y,
-                              smlFs, ::yawn::ui::Theme::textSecondary);
+                              kFsSmall, ::yawn::ui::Theme::textSecondary);
 
         // Bypass pill
         const Color bpBg  = m_bypassed ? Color{100, 40, 40, 255}
@@ -137,17 +142,17 @@ public:
         r.drawRect(m_bypassBtn.x, m_bypassBtn.y, kBypassW, kBtnSize, bpBg);
         if (tm) {
             const char* bpLabel = m_bypassed ? "Off" : "On";
-            const float bpLabelW = tm->textWidth(bpLabel, tinyFs);
+            const float bpLabelW = tm->textWidth(bpLabel, kFsTiny);
             tm->drawText(r, bpLabel,
                           m_bypassBtn.x + (kBypassW - bpLabelW) * 0.5f,
-                          m_bypassBtn.y + 3, tinyFs, bpTxt);
+                          m_bypassBtn.y + 3, kFsTiny, bpTxt);
         }
 
         // Device name
         const Color nameC = m_bypassed ? ::yawn::ui::Theme::textDim
                                          : ::yawn::ui::Theme::textPrimary;
         const float nameX = x + 22 + kBypassW + 6;
-        if (tm) tm->drawText(r, m_name, nameX, m_expandBtn.y, medFs, nameC);
+        if (tm) tm->drawText(r, m_name, nameX, m_expandBtn.y, kFsMed, nameC);
 
         // Remove button
         if (m_removable) {
@@ -155,7 +160,7 @@ public:
                        Color{60, 30, 30, 255});
             if (tm) tm->drawText(r, "X",
                                   m_removeBtn.x + 4, m_removeBtn.y + 3,
-                                  smlFs, Color{200, 100, 100, 255});
+                                  kFsSmall, Color{200, 100, 100, 255});
         }
 
         // Preset drop-down
@@ -170,7 +175,7 @@ public:
                 const std::string label = presetButtonLabel();
                 tm->drawText(r, label,
                               m_presetBtn.x + 4, m_expandBtn.y,
-                              smlFs, Color{200, 200, 210, 255});
+                              kFsSmall, Color{200, 200, 210, 255});
             }
         }
     }
@@ -241,14 +246,11 @@ private:
     void recomputePresetRect(Rect bounds, UIContext& ctx) {
         const float x = bounds.x, y = bounds.y, w = bounds.w;
         const float nameX   = x + 22 + kBypassW + 6;
-        const float smlFs   = 10.0f;
-        const float medFs   = 12.0f;
-
         float nameW = 0;
         float labelW = 0;
         if (ctx.textMetrics) {
-            nameW  = ctx.textMetrics->textWidth(m_name, medFs);
-            labelW = ctx.textMetrics->textWidth(presetButtonLabel(), smlFs);
+            nameW  = ctx.textMetrics->textWidth(m_name, kFsMed);
+            labelW = ctx.textMetrics->textWidth(presetButtonLabel(), kFsSmall);
         } else {
             // Fallback approximation when text metrics aren't wired up
             // (unit tests). 8 px/char matches the other fw2 widgets'
