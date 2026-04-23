@@ -416,8 +416,7 @@ void App::buildWidgetTree() {
     auto transportP = std::make_unique<ui::fw2::TransportPanel>();
     auto transportW = std::make_unique<TransportPanelWrapper>(*transportP);
     auto sessionP   = std::make_unique<ui::fw2::SessionPanel>();
-    auto arrP       = std::make_unique<ArrangementPanel>();
-    auto arrFw2W    = std::make_unique<ui::fw2::V1WidgetAdapter>();
+    auto arrP       = std::make_unique<ui::fw2::ArrangementPanel>();
     auto mixerP     = std::make_unique<ui::fw2::MixerPanel>();
     auto browserP   = std::make_unique<ui::fw2::BrowserPanel>();
     auto returnMstP = std::make_unique<ui::fw2::ReturnMasterPanel>();
@@ -443,7 +442,6 @@ void App::buildWidgetTree() {
     m_transportPanelW   = transportW.get();
     m_sessionPanel      = sessionP.get();
     m_arrangementPanel  = arrP.get();
-    m_arrFw2W           = arrFw2W.get();
     m_mixerPanel        = mixerP.get();
     m_browserPanel      = browserP.get();
     // Hand the v1 UIContext through for the v1 AutomationEnvelopeWidget
@@ -550,11 +548,9 @@ void App::buildWidgetTree() {
     });
     m_arrangementPanel->setVisible(false); // start in session view
 
-    // Wire the 4-quadrant layout. ContentGrid is fw2 now; panels go in
-    // directly (no v1 wrappers needed). The ArrangementPanel (still v1)
-    // is wrapped by m_arrFw2W for the topLeft slot swap in setViewMode.
-    m_arrFw2W->setV1Widget(m_arrangementPanel);
-    m_arrFw2W->setV1Context(&m_uiContext);
+    // Wire the 4-quadrant layout. ContentGrid and every panel including
+    // ArrangementPanel are fw2 now — panels plug in directly and the
+    // topLeft slot swaps between session and arrangement in setViewMode.
     m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
                                m_mixerPanel, m_returnMasterPanel);
     m_rootLayout->addChild(m_menuBarW);
@@ -687,10 +683,8 @@ void App::buildWidgetTree() {
     m_wrappers.push_back(std::move(transportW));
     // SessionPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
     m_sessionPanelOwner = std::move(sessionP);
-    // ArrangementPanel is v1 — still in m_wrappers; the fw2 V1WidgetAdapter
-    // that wraps it lives in m_fw2Owners.
-    m_wrappers.push_back(std::move(arrP));
-    m_fw2Owners.push_back(std::move(arrFw2W));
+    // ArrangementPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
+    m_arrangementPanelOwner = std::move(arrP);
     // MixerPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
     m_mixerPanelOwner = std::move(mixerP);
     // BrowserPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
@@ -4522,10 +4516,7 @@ void App::processEvents() {
 
                     case SDLK_D:
                         if (ctrl && !shift && m_project.viewMode() == ViewMode::Arrangement) {
-                            ui::fw::KeyEvent ke;
-                            ke.keyCode = 'd';
-                            ke.mods.ctrl = true;
-                            m_arrangementPanel->onKeyDown(ke);
+                            m_arrangementPanel->handleAppKey(SDLK_D, /*ctrl=*/true);
                         } else if (!shift && !ctrl) {
                             m_showDetailPanel = !m_showDetailPanel;
                             if (m_showDetailPanel) {
@@ -4542,9 +4533,8 @@ void App::processEvents() {
                     case SDLK_DELETE:
                     case SDLK_BACKSPACE: {
                         if (m_project.viewMode() == ViewMode::Arrangement) {
-                            ui::fw::KeyEvent ke;
-                            ke.keyCode = static_cast<int>(event.key.key);
-                            m_arrangementPanel->onKeyDown(ke);
+                            m_arrangementPanel->handleAppKey(
+                                static_cast<int>(event.key.key), /*ctrl=*/ctrl);
                         } else {
                             auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
                             if (slot && !slot->empty()) {
@@ -4627,9 +4617,8 @@ void App::processEvents() {
                     case SDLK_LEFTBRACKET:
                     case SDLK_RIGHTBRACKET:
                         if (m_project.viewMode() == ViewMode::Arrangement) {
-                            ui::fw::KeyEvent ke;
-                            ke.keyCode = static_cast<int>(event.key.key);
-                            m_arrangementPanel->onKeyDown(ke);
+                            m_arrangementPanel->handleAppKey(
+                                static_cast<int>(event.key.key), /*ctrl=*/ctrl);
                         }
                         break;
 
@@ -4853,9 +4842,18 @@ void App::processEvents() {
                 m_detailPanel->setFocused(false);
 
                 // Browser panel — dispatch directly to fw2::BrowserPanel.
+                // Hit-test first: fw2::Widget::dispatchMouseDown starts
+                // the gesture state machine on *any* mouseDown, which
+                // would return true + capture mouse even for clicks
+                // miles outside the panel. That would eat clicks meant
+                // for the ContentGrid divider just past its left edge
+                // (hit zone extends 6px into the panel's neighbours).
                 {
                     bool hadBrowserKnob = m_browserPanel->hasEditingKnob();
-                    if (!rightClick) {
+                    auto bbPanel = m_browserPanel->bounds();
+                    bool inBrowser = mx >= bbPanel.x && mx < bbPanel.x + bbPanel.w
+                                  && my >= bbPanel.y && my < bbPanel.y + bbPanel.h;
+                    if (!rightClick && inBrowser) {
                         ui::fw2::MouseEvent me{};
                         me.x = mx; me.y = my;
                         me.button = ui::fw2::MouseButton::Left;
@@ -5171,13 +5169,14 @@ void App::processEvents() {
                         auto ab = m_arrangementPanel->bounds();
                         if (m_lastMouseX >= ab.x && m_lastMouseX < ab.x + ab.w) {
                             auto mod = SDL_GetModState();
-                            bool ctrl  = (mod & SDL_KMOD_CTRL) != 0;
-                            bool shift = (mod & SDL_KMOD_SHIFT) != 0;
-                            ui::fw::ScrollEvent se;
+                            uint16_t mods = 0;
+                            if (mod & SDL_KMOD_CTRL)  mods |= ui::fw2::ModifierKey::Ctrl;
+                            if (mod & SDL_KMOD_SHIFT) mods |= ui::fw2::ModifierKey::Shift;
+                            ui::fw2::ScrollEvent se;
                             se.x = m_lastMouseX; se.y = m_lastMouseY;
                             se.dx = dx; se.dy = dy;
-                            se.mods.ctrl = ctrl; se.mods.shift = shift;
-                            m_arrangementPanel->onScroll(se);
+                            se.modifiers = mods;
+                            m_arrangementPanel->dispatchScroll(se);
                         }
                     } else {
                         m_sessionPanel->handleScroll(dx, dy);
@@ -5207,8 +5206,8 @@ void App::processEvents() {
                     // Arrangement view: drop audio file onto timeline
                     if (m_project.viewMode() == ViewMode::Arrangement) {
                         auto ab = m_arrangementPanel->bounds();
-                        float arrGridX = ab.x + ui::fw::ArrangementPanel::kTrackHeaderW;
-                        float arrGridY = ab.y + ui::fw::ArrangementPanel::kRulerH;
+                        float arrGridX = ab.x + ui::fw2::ArrangementPanel::kTrackHeaderW;
+                        float arrGridY = ab.y + ui::fw2::ArrangementPanel::kRulerH;
                         if (dropX >= arrGridX && dropY >= arrGridY) {
                             float relX = (dropX - arrGridX) + m_arrangementPanel->scrollX();
                             float relY = (dropY - arrGridY) + m_arrangementPanel->scrollY();
@@ -5999,13 +5998,12 @@ void App::updateWindowTitle() {
 void App::switchToView(ViewMode mode) {
     m_project.setViewMode(mode);
     bool showArrangement = (mode == ViewMode::Arrangement);
-    // ContentGrid is fw2; swap the topLeft slot between the fw2 SessionPanel
-    // and the fw2 V1WidgetAdapter wrapping the v1 ArrangementPanel.
+    // ContentGrid and ArrangementPanel are both fw2 — swap the topLeft
+    // slot between the two panels directly.
     m_sessionPanel->setVisible(!showArrangement);
-    m_arrFw2W->setVisible(showArrangement);
-    m_arrangementPanel->setVisible(showArrangement);  // keeps v1 hit-test flags
+    m_arrangementPanel->setVisible(showArrangement);
     m_contentGrid->setTopLeft(showArrangement
-        ? static_cast<ui::fw2::Widget*>(m_arrFw2W)
+        ? static_cast<ui::fw2::Widget*>(m_arrangementPanel)
         : static_cast<ui::fw2::Widget*>(m_sessionPanel));
     m_arrangementPanel->setSelectedTrack(m_selectedTrack);
 

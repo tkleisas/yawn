@@ -1,5 +1,5 @@
 #pragma once
-// ArrangementPanel — Horizontal timeline view for arrangement mode.
+// ArrangementPanel — Horizontal timeline view for arrangement mode (fw2).
 //
 // Layout:
 //   Top: Time ruler showing bar:beat markers (zoomable)
@@ -9,9 +9,15 @@
 //
 // Tracks are stacked vertically with variable height (expanded tracks
 // show automation lanes below the main clip row).
+//
+// Migrated from v1 fw::Widget to fw2::Widget: paint helpers now take
+// fw2::TextMetrics instead of fw::Font; events use fw2::MouseEvent etc.
+// App-level key shortcuts still arrive via handleAppKey() taking the
+// raw SDL keycode so the [/ ] keys (absent from fw2::Key) keep working.
 
-#include "ui/framework/Widget.h"
-#include "ui/Font.h"
+#include "ui/framework/v2/Widget.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/Font.h"    // ui::utf8CharLen / utf8PrevCharOffset (rename caret)
 #include "ui/Theme.h"
 #include "app/Project.h"
 #include "audio/AudioEngine.h"
@@ -27,7 +33,12 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+
+// Forward declarations so ArrangementPanel doesn't pull in the full
+// Renderer2D header (paint helpers take it by reference).
+class Renderer2D;
+
+namespace fw2 {
 
 class ArrangementPanel : public Widget {
 public:
@@ -116,6 +127,14 @@ public:
         return true;
     }
 
+    // ─── App-level keyboard shortcuts ─────────────────────────────────
+    // App.cpp pre-filters the SDL event loop and invokes this with the
+    // raw SDL keycode + ctrl state for arrangement-specific shortcuts
+    // (Delete clip, Ctrl+D duplicate, L toggle-loop, F follow, [ / ]
+    // set loop markers). The fw2::Key enum deliberately omits bracket
+    // keys so we still need an SDL-side path.
+    bool handleAppKey(int sdlKeycode, bool ctrl);
+
     // ─── Snap grid ─────────────────────────────────────────────────────
 
     enum class Snap { Off, Bar, Beat, Half, Quarter, Eighth };
@@ -197,26 +216,24 @@ public:
     // Label for an automation target
     std::string autoLaneName(const automation::AutomationTarget& tgt) const;
 
-    // ─── Widget overrides ──────────────────────────────────────────────
+    // ─── fw2 Widget overrides ──────────────────────────────────────────
 
-    Size measure(const Constraints& c, const UIContext&) override {
+    Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({400.0f, 200.0f});
     }
 
 #ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
+    void render(UIContext&) override {}
     bool onMouseDown(MouseEvent&) override { return false; }
     bool onMouseUp(MouseEvent&) override { return false; }
     bool onMouseMove(MouseMoveEvent&) override { return false; }
     bool onScroll(ScrollEvent&) override { return false; }
-    bool onKeyDown(KeyEvent&) override { return false; }
 #else
-    void paint(UIContext& ctx) override;
+    void render(UIContext& ctx) override;
     bool onMouseDown(MouseEvent& e) override;
     bool onMouseUp(MouseEvent& e) override;
     bool onMouseMove(MouseMoveEvent& e) override;
     bool onScroll(ScrollEvent& e) override;
-    bool onKeyDown(KeyEvent& e) override;
 #endif
 
 private:
@@ -250,7 +267,6 @@ private:
 
     void commitRename() {
         if (m_renameTrack < 0 || !m_project) { m_renameTrack = -1; return; }
-        // Trim whitespace
         auto trimmed = m_renameText;
         while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(0, 1);
         while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
@@ -320,22 +336,22 @@ private:
     // ─── Paint helpers (implemented in ArrangementPanel.cpp) ───────────
 
 #ifdef YAWN_TEST_BUILD
-    void paintRuler(Renderer2D&, Font&, float, float, float) {}
-    void paintTrackHeaders(Renderer2D&, Font&, float, float, float) {}
-    void paintClipTimeline(Renderer2D&, Font&, float, float, float, float) {}
-    void paintAutoLanes(Renderer2D&, Font&, float, float, float, float) {}
-    void paintPlayhead(Renderer2D&, float, float, float, float) {}
-    void paintScrollbar(Renderer2D&, float, float, float) {}
+    void paintRuler(::yawn::ui::Renderer2D&, TextMetrics&, float, float, float) {}
+    void paintTrackHeaders(::yawn::ui::Renderer2D&, TextMetrics&, float, float, float) {}
+    void paintClipTimeline(::yawn::ui::Renderer2D&, TextMetrics&, float, float, float, float) {}
+    void paintAutoLanes(::yawn::ui::Renderer2D&, TextMetrics&, float, float, float, float) {}
+    void paintPlayhead(::yawn::ui::Renderer2D&, float, float, float, float) {}
+    void paintScrollbar(::yawn::ui::Renderer2D&, float, float, float) {}
 #else
-    void paintRuler(Renderer2D& r, Font& f, float x, float y, float w);
-    void paintTrackHeaders(Renderer2D& r, Font& f, float x, float y, float h);
-    void paintClipTimeline(Renderer2D& r, Font& f, float x, float y, float w, float h);
-    void paintAutoLanes(Renderer2D& r, Font& f, float x, float y, float w, float h);
-    void paintPlayhead(Renderer2D& r, float x, float y, float w, float h);
-    void paintScrollbar(Renderer2D& r, float x, float y, float w);
+    void paintRuler(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float w);
+    void paintTrackHeaders(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float h);
+    void paintClipTimeline(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float w, float h);
+    void paintAutoLanes(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float w, float h);
+    void paintPlayhead(::yawn::ui::Renderer2D& r, float x, float y, float w, float h);
+    void paintScrollbar(::yawn::ui::Renderer2D& r, float x, float y, float w);
 #endif
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

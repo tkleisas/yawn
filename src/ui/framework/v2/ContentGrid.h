@@ -134,7 +134,7 @@ public:
             m_hRatio = std::clamp(newRatio,
                                   kMinTop    / m_bounds.h,
                                   1.0f - (kMinBottom + kDividerSize) / m_bounds.h);
-            recomputeDividers();
+            reflowChildren();
             return true;
         }
         if (m_dragV) {
@@ -143,8 +143,22 @@ public:
             m_vRatio = std::clamp(newRatio,
                                   kMinLeft  / m_bounds.w,
                                   1.0f - (kMinRight + kDividerSize) / m_bounds.w);
-            recomputeDividers();
+            reflowChildren();
             return true;
+        }
+
+        // If a child captured fw2 mouse (e.g. SessionPanel scrollbar drag,
+        // MixerPanel fader drag), forward moves to it. ContentGrid isn't in
+        // a fw2 parent tree so no one else routes this for us.
+        if (Widget* cap = capturedWidget()) {
+            if (cap == m_tl || cap == m_tr || cap == m_bl || cap == m_br) {
+                MouseMoveEvent ce = e;
+                const Rect& cb = cap->bounds();
+                ce.lx = e.x - cb.x;
+                ce.ly = e.y - cb.y;
+                cap->dispatchMouseMove(ce);
+                return true;
+            }
         }
 
         m_hoverH = std::fabs(my - m_hDivY) < kHitZone
@@ -154,9 +168,23 @@ public:
         return m_hoverH || m_hoverV;
     }
 
-    bool onMouseUp(MouseEvent&) override {
+    bool onMouseUp(MouseEvent& e) override {
         bool wasDragging = m_dragH || m_dragV;
         m_dragH = m_dragV = false;
+        // Forward mouseUp to a captured child so its gesture SM can end
+        // its drag + release capture. Without this the child stays
+        // "pressed" forever and fw2 capture sticks, locking subsequent
+        // mouse events.
+        if (Widget* cap = capturedWidget()) {
+            if (cap == m_tl || cap == m_tr || cap == m_bl || cap == m_br) {
+                MouseEvent ce = e;
+                const Rect& cb = cap->bounds();
+                ce.lx = e.x - cb.x;
+                ce.ly = e.y - cb.y;
+                cap->dispatchMouseUp(ce);
+                return true;
+            }
+        }
         return wasDragging;
     }
 
@@ -231,6 +259,37 @@ private:
 
         m_vDivX = x + leftW;
         m_hDivY = y + topH;
+    }
+
+    // Re-layout children mid-drag when the divider ratio changes.
+    // The fw2 layout cache on a child keys on (bounds, measure-version,
+    // epoch): if we only invalidate *ourselves* the child still thinks
+    // its previous bounds are valid until something bumps its own
+    // measure version. invalidate() on each child sidesteps the cache
+    // and forces its layout to recompute on the next pass driven by
+    // this reflow call.
+    void reflowChildren() {
+        recomputeDividers();
+
+        float x = m_bounds.x, y = m_bounds.y;
+        float leftW  = m_vDivX - x;
+        float rightW = (x + m_bounds.w) - (m_vDivX + kDividerSize);
+        float topH   = m_hDivY - y;
+        float botH   = (y + m_bounds.h) - (m_hDivY + kDividerSize);
+        float rx     = m_vDivX + kDividerSize;
+        float by     = m_hDivY + kDividerSize;
+
+        UIContext& ctx = UIContext::global();
+        auto relayout = [&](Widget* w, float wx, float wy, float ww, float wh) {
+            if (!w) return;
+            w->invalidate();                                   // force child layout miss
+            w->measure(Constraints::tight(ww, wh), ctx);
+            w->layout(Rect{wx, wy, ww, wh}, ctx);
+        };
+        relayout(m_tl, x,  y,  leftW,  topH);
+        relayout(m_tr, rx, y,  rightW, topH);
+        relayout(m_bl, x,  by, leftW,  botH);
+        relayout(m_br, rx, by, rightW, botH);
     }
 };
 

@@ -23,7 +23,6 @@
 #include "ui/framework/v2/FontAdapter.h"
 #include "ui/framework/v2/LayerStack.h"
 #include "ui/framework/v2/ContentGrid.h"
-#include "ui/framework/v2/V1WidgetAdapter.h"
 #include "ui/panels/MixerPanel.h"
 #include "ui/panels/SessionPanel.h"
 #include "ui/panels/ArrangementPanel.h"
@@ -177,9 +176,9 @@ private:
     // SessionPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::SessionPanel> m_sessionPanelOwner;
     ui::fw2::SessionPanel*                 m_sessionPanel  = nullptr;
-    // ArrangementPanel — still v1; wrapped by m_arrFw2W for ContentGrid.
-    ui::fw::ArrangementPanel*  m_arrangementPanel = nullptr;
-    ui::fw2::V1WidgetAdapter*  m_arrFw2W = nullptr;  // fw2 adapter (in m_fw2Owners)
+    // ArrangementPanel — fw2; plugs directly into fw2::ContentGrid.
+    std::unique_ptr<ui::fw2::ArrangementPanel> m_arrangementPanelOwner;
+    ui::fw2::ArrangementPanel*                 m_arrangementPanel = nullptr;
     // TransportPanel is fw2 now; m_transportPanelOwner holds it.
     // m_transportPanelW is its v1 wrapper sitting in m_rootLayout.
     std::unique_ptr<ui::fw2::TransportPanel> m_transportPanelOwner;
@@ -209,8 +208,6 @@ private:
     ui::fw2::FwPreferencesDialog  m_preferencesDialog;
     ui::fw2::FwExportDialog       m_exportDialog;
     std::vector<std::unique_ptr<ui::fw::Widget>>  m_wrappers;
-    // fw2-owned heap objects that aren't in m_wrappers (which is v1-only).
-    std::vector<std::unique_ptr<ui::fw2::Widget>> m_fw2Owners;
     ui::fw::UIContext m_uiContext;
 
     // v2 UI framework (ui-v2 in-progress). Coexists with v1 for now —

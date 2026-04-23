@@ -1,14 +1,21 @@
 // ArrangementPanel implementation — timeline view for arrangement mode.
 // Split from header for maintainability. Includes clip interaction,
 // automation lane rendering, and breakpoint editing.
+//
+// Migrated from v1 to fw2::Widget. Paint helpers take fw2::TextMetrics
+// instead of v1 Font; mouse/scroll events use the fw2 types directly.
+// App-level keyboard shortcuts still arrive as raw SDL keycodes via
+// handleAppKey() because fw2::Key has no bracket entries.
 
 #include "ArrangementPanel.h"
 #include "../Renderer.h"
-#include "../Font.h"
+#include "ui/framework/v2/Theme.h"
+
+#include <SDL3/SDL_keycode.h>
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 // ── Layout helpers ─────────────────────────────────────────────────────
 
@@ -39,8 +46,6 @@ int ArrangementPanel::trackAtY(float relY) const {
     return std::max(0, m_project->numTracks() - 1);
 }
 
-// Returns which auto lane sub-row the y falls into within a track
-// Returns -1 if in the main clip row, or 0..n-1 for auto lane index
 int ArrangementPanel::autoLaneAtY(int track, float relYInTrack) const {
     if (!m_project || !m_expandedTracks.count(track)) return -1;
     float base = trackBaseHeight(track);
@@ -82,7 +87,6 @@ std::string ArrangementPanel::autoLaneName(const automation::AutomationTarget& t
             return buf;
         }
         case automation::TargetType::VisualKnob: {
-            // paramIndex 0..7 → A..H.
             if (tgt.paramIndex >= 0 && tgt.paramIndex < 8) {
                 char buf[16];
                 std::snprintf(buf, sizeof(buf), "Knob %c",
@@ -104,15 +108,17 @@ std::string ArrangementPanel::autoLaneName(const automation::AutomationTarget& t
 
 #ifndef YAWN_TEST_BUILD
 
-void ArrangementPanel::paint(UIContext& ctx) {
+void ArrangementPanel::render(UIContext& ctx) {
+    if (!isVisible()) return;
     if (!m_project || !m_engine) return;
-    auto& r = *ctx.renderer;
-    auto& f = *ctx.font;
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
     float x = m_bounds.x, y = m_bounds.y;
-    float w = m_bounds.w,  h = m_bounds.h;
+    float w = m_bounds.w, h = m_bounds.h;
 
-    r.drawRect(x, y, w, h, Theme::background);
+    r.drawRect(x, y, w, h, ::yawn::ui::Theme::background);
 
     float gridX = x + kTrackHeaderW;
     float gridW = w - kTrackHeaderW;
@@ -131,15 +137,35 @@ void ArrangementPanel::paint(UIContext& ctx) {
         }
     }
 
-    paintRuler(r, f, gridX, y, gridW);
-    paintTrackHeaders(r, f, x, gridY, gridH);
-    paintClipTimeline(r, f, gridX, gridY, gridW, gridH);
-    paintAutoLanes(r, f, gridX, gridY, gridW, gridH);
+    paintRuler(r, tm, gridX, y, gridW);
+    paintTrackHeaders(r, tm, x, gridY, gridH);
+    paintClipTimeline(r, tm, gridX, gridY, gridW, gridH);
+    paintAutoLanes(r, tm, gridX, gridY, gridW, gridH);
     paintPlayhead(r, gridX, gridY, gridW, gridH + kRulerH);
     paintScrollbar(r, gridX, gridY + gridH, gridW);
 }
 
 #endif // !YAWN_TEST_BUILD
+
+// ── Event helpers (local to this TU) ───────────────────────────────────
+
+namespace {
+inline bool hasShift(const MouseEvent& e) {
+    return (e.modifiers & ModifierKey::Shift) != 0;
+}
+inline bool hasShift(const MouseMoveEvent& e) {
+    return (e.modifiers & ModifierKey::Shift) != 0;
+}
+inline bool hasCtrl(const ScrollEvent& e) {
+    return (e.modifiers & ModifierKey::Ctrl) != 0;
+}
+inline bool hasShift(const ScrollEvent& e) {
+    return (e.modifiers & ModifierKey::Shift) != 0;
+}
+inline bool isLeft(const MouseEvent& e)  { return e.button == MouseButton::Left;  }
+inline bool isRight(const MouseEvent& e) { return e.button == MouseButton::Right; }
+inline bool isDouble(const MouseEvent& e) { return e.clickCount >= 2; }
+} // anonymous namespace
 
 bool ArrangementPanel::onMouseDown(MouseEvent& e) {
     if (!m_project) return false;
@@ -157,12 +183,12 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         beat = std::max(0.0, beat);
 
         // Shift+click sets loop start, Shift+right-click sets loop end
-        if (e.mods.shift) {
+        if (hasShift(e)) {
             double snapped = snapBeat(beat);
-            if (e.isLeftButton()) {
+            if (isLeft(e)) {
                 m_loopStart = snapped;
                 if (m_loopEnd <= m_loopStart) m_loopEnd = m_loopStart + 4.0;
-            } else if (e.isRightButton()) {
+            } else if (isRight(e)) {
                 m_loopEnd = snapped;
                 if (m_loopEnd <= m_loopStart) m_loopStart = std::max(0.0, m_loopEnd - 4.0);
             }
@@ -204,7 +230,7 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             float ty = gridY + trackYOffset(track) - m_scrollY;
             float baseH = trackBaseHeight(track);
 
-            // Check for resize handle (bottom 4px of base area)
+            // Resize handle (bottom 4px of base area)
             float resizeZone = ty + baseH;
             if (e.y >= resizeZone - 4 && e.y <= resizeZone + 2) {
                 m_dragMode = DragMode::ResizeTrackH;
@@ -254,7 +280,7 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             if (m_onTrackClick) m_onTrackClick(track);
 
             // Double-click on track name area → rename
-            if (e.isDoubleClick() && e.y < btnRowY) {
+            if (isDouble(e) && e.y < btnRowY) {
                 startTrackRename(track);
             }
         }
@@ -292,7 +318,6 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             auto& lane = m_project->track(trackIdx).automationLanes[laneIdx];
             float laneTop = gridY + trackTop + trackBaseHeight(trackIdx) + laneIdx * kAutoLaneH - m_scrollY;
 
-            // Convert mouse to time and value
             double clickBeat = beat;
             float clickVal = 1.0f - (e.y - laneTop) / kAutoLaneH;
             clickVal = std::clamp(clickVal, 0.0f, 1.0f);
@@ -312,7 +337,7 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
                 }
             }
 
-            if (e.isRightButton() && hitPt >= 0) {
+            if (isRight(e) && hitPt >= 0) {
                 // Right-click: delete point
                 auto oldPt = lane.envelope.point(hitPt);
                 int ti = trackIdx, li = laneIdx;
@@ -336,7 +361,6 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             }
 
             if (hitPt >= 0) {
-                // Drag existing point
                 m_dragMode = DragMode::AutoPoint;
                 m_autoPointDragTrack = trackIdx;
                 m_autoPointDragLane = laneIdx;
@@ -346,7 +370,6 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
                 m_dragStartBeat = beat;
                 captureMouse();
             } else {
-                // Add new point
                 lane.envelope.addPoint(clickBeat, clickVal);
                 if (m_undoManager) {
                     int ti = trackIdx, li = laneIdx;
@@ -405,7 +428,7 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             clearClipSelection();
 
             // Double-click on empty space in MIDI track → add empty clip
-            if (e.isDoubleClick() &&
+            if (isDouble(e) &&
                 m_project->track(trackIdx).type == Track::Type::Midi) {
                 double snapB = std::max(0.0, snapBeat(beat));
                 double len = snapVal() > 0 ? std::max(snapVal() * 4.0, 4.0) : 4.0;
@@ -493,12 +516,10 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
     }
     if (m_dragMode != DragMode::None) {
         if (m_dragMode == DragMode::AutoPoint) {
-            // Push undo for auto point move if it actually moved
             if (m_undoManager && m_autoPointDragTrack >= 0 && m_autoPointDragLane >= 0) {
                 int ti = m_autoPointDragTrack, li = m_autoPointDragLane;
                 double origTime = m_autoPointDragOrigTime;
                 float origVal = m_autoPointDragOrigVal;
-                // Find current position of the dragged point
                 auto& lane = m_project->track(ti).automationLanes[li];
                 if (m_autoPointDragIdx >= 0 && m_autoPointDragIdx < lane.envelope.pointCount()) {
                     auto pt = lane.envelope.point(m_autoPointDragIdx);
@@ -539,7 +560,6 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
                 m_onClipChange(affected);
                 if (crossTrack) m_onClipChange(m_dragOrigTrack);
             }
-            // Push undo for clip move/resize
             if (m_undoManager && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
                 auto& clips = m_project->track(m_selClipTrack).arrangementClips;
                 if (m_selClipIdx < static_cast<int>(clips.size())) {
@@ -553,18 +573,15 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
                     bool changed = (newStart != origStart || newLen != origLen || newTrack != origTrack);
                     if (changed) {
                         if (crossTrack) {
-                            // Cross-track move: clip was removed from origTrack, added to newTrack
                             ArrangementClip snapshot = c;
                             m_undoManager->push({"Move Arrangement Clip",
                                 [this, origTrack, origStart, origLen, newTrack, newStart, snapshot]{
-                                    // Remove from new track
                                     auto& dst = m_project->track(newTrack).arrangementClips;
                                     for (auto it = dst.begin(); it != dst.end(); ++it) {
                                         if (std::abs(it->startBeat - newStart) < 0.001) {
                                             dst.erase(it); break;
                                         }
                                     }
-                                    // Add back to original track
                                     ArrangementClip restored = snapshot;
                                     restored.startBeat = origStart;
                                     restored.lengthBeats = origLen;
@@ -575,14 +592,12 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
                                     clearClipSelection();
                                 },
                                 [this, origTrack, origStart, newTrack, newStart, newLen, snapshot]{
-                                    // Remove from original track
                                     auto& src = m_project->track(origTrack).arrangementClips;
                                     for (auto it = src.begin(); it != src.end(); ++it) {
                                         if (std::abs(it->startBeat - origStart) < 0.001) {
                                             src.erase(it); break;
                                         }
                                     }
-                                    // Add to new track
                                     ArrangementClip moved = snapshot;
                                     moved.startBeat = newStart;
                                     moved.lengthBeats = newLen;
@@ -593,7 +608,6 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
                                     clearClipSelection();
                                 }, ""});
                         } else {
-                            // Same-track move or resize
                             m_undoManager->push({"Move/Resize Arrangement Clip",
                                 [this, newTrack, newStart, origStart, origLen]{
                                     auto& cs = m_project->track(newTrack).arrangementClips;
@@ -792,7 +806,7 @@ bool ArrangementPanel::onScroll(ScrollEvent& e) {
     if (!m_project) return false;
 
     // Ctrl+scroll = zoom
-    if (e.mods.ctrl) {
+    if (hasCtrl(e)) {
         float zoomFactor = e.dy > 0 ? 1.15f : (1.0f / 1.15f);
         float oldZoom = m_pixelsPerBeat;
         m_pixelsPerBeat = std::clamp(m_pixelsPerBeat * zoomFactor, kMinZoom, kMaxZoom);
@@ -806,8 +820,8 @@ bool ArrangementPanel::onScroll(ScrollEvent& e) {
     }
 
     // Shift+scroll = horizontal
-    if (e.mods.shift || std::abs(e.dx) > std::abs(e.dy)) {
-        float d = e.mods.shift ? e.dy : e.dx;
+    if (hasShift(e) || std::abs(e.dx) > std::abs(e.dy)) {
+        float d = hasShift(e) ? e.dy : e.dx;
         m_scrollX = std::max(0.0f, m_scrollX - d * 30.0f);
         return true;
     }
@@ -817,11 +831,14 @@ bool ArrangementPanel::onScroll(ScrollEvent& e) {
     return true;
 }
 
-bool ArrangementPanel::onKeyDown(KeyEvent& e) {
+// ── App-level keyboard shortcuts ──────────────────────────────────────
+
+bool ArrangementPanel::handleAppKey(int sdlKeycode, bool ctrl) {
     if (!m_project) return false;
 
     // Delete selected clip
-    if ((e.isDelete() || e.isBackspace()) && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
+    if ((sdlKeycode == SDLK_DELETE || sdlKeycode == SDLK_BACKSPACE) &&
+        m_selClipTrack >= 0 && m_selClipIdx >= 0) {
         auto& clips = m_project->track(m_selClipTrack).arrangementClips;
         if (m_selClipIdx < static_cast<int>(clips.size())) {
             int t = m_selClipTrack;
@@ -853,7 +870,7 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
     }
 
     // Ctrl+D = duplicate selected clip
-    if (e.keyCode == 'd' && e.mods.ctrl && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
+    if (sdlKeycode == SDLK_D && ctrl && m_selClipTrack >= 0 && m_selClipIdx >= 0) {
         auto& clips = m_project->track(m_selClipTrack).arrangementClips;
         if (m_selClipIdx < static_cast<int>(clips.size())) {
             ArrangementClip dup = clips[m_selClipIdx];
@@ -881,9 +898,8 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
                         m_project->updateArrangementLength();
                         clearClipSelection();
                     },
-                    [this, t, dupStart, origIdx = m_selClipIdx - (m_selClipIdx > 0 ? 0 : 0)]{
+                    [this, t, dupStart]{
                         auto& cs = m_project->track(t).arrangementClips;
-                        // find original clip near the duplicated position minus its length
                         for (auto& c : cs) {
                             if (std::abs(c.endBeat() - dupStart) < 0.001) {
                                 ArrangementClip dup2 = c;
@@ -901,7 +917,7 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
     }
 
     // L = toggle loop
-    if (e.keyCode == 'l') {
+    if (sdlKeycode == SDLK_L) {
         bool wasEnabled = m_loopEnabled;
         double oldStart = m_loopStart, oldEnd = m_loopEnd;
         m_loopEnabled = !m_loopEnabled;
@@ -926,13 +942,13 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
     }
 
     // F = toggle auto-scroll (follow)
-    if (e.keyCode == 'f') {
+    if (sdlKeycode == SDLK_F) {
         m_autoScroll = !m_autoScroll;
         return true;
     }
 
     // [ = set loop start to playhead position
-    if (e.keyCode == '[') {
+    if (sdlKeycode == SDLK_LEFTBRACKET) {
         double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
         double snapped = snapBeat(cur);
         m_loopStart = snapped;
@@ -943,7 +959,7 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
     }
 
     // ] = set loop end to playhead position
-    if (e.keyCode == ']') {
+    if (sdlKeycode == SDLK_RIGHTBRACKET) {
         double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
         double snapped = snapBeat(cur);
         m_loopEnd = snapped;
@@ -960,7 +976,7 @@ bool ArrangementPanel::onKeyDown(KeyEvent& e) {
 
 #ifndef YAWN_TEST_BUILD
 
-void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, float w) {
+void ArrangementPanel::paintRuler(Renderer2D& r, TextMetrics& tm, float x, float y, float w) {
     r.drawRect(x, y, w, kRulerH, Color{35, 35, 40, 255});
     r.pushClip(x - 1, y, w + 2, kRulerH + 1);
 
@@ -990,9 +1006,8 @@ void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, floa
     float endBeat = startBeat + w / m_pixelsPerBeat;
     int endBar = static_cast<int>(endBeat / beatsPerBar) + 1;
 
-    float scale = Theme::kSmallFontSize / f.pixelHeight();
-    float textH = Theme::kSmallFontSize;
-    float textY = y + (kRulerH - textH) * 0.5f;
+    const float fs = theme().metrics.fontSizeSmall;
+    float textY = y + (kRulerH - tm.lineHeight(fs)) * 0.5f;
 
     for (int bar = startBar; bar <= endBar; ++bar) {
         float beatPos = static_cast<float>(bar * beatsPerBar);
@@ -1002,16 +1017,7 @@ void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, floa
         if (bar >= 0 && (bar % barLabelEvery) == 0) {
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%d", bar + 1);
-            float tx = px + 4;
-            const char* bp = buf;
-            while (*bp) {
-                uint32_t cp = ui::decodeUtf8(bp);
-                auto g = f.getGlyph(cp, tx, textY, scale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Theme::textSecondary, f.textureId());
-                tx += g.xAdvance;
-            }
+            tm.drawText(r, buf, px + 4, textY, fs, ::yawn::ui::Theme::textSecondary);
         }
 
         if (m_pixelsPerBeat >= 8.0f) {
@@ -1027,12 +1033,12 @@ void ArrangementPanel::paintRuler(Renderer2D& r, Font& f, float x, float y, floa
     r.popClip();
 }
 
-void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
+void ArrangementPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm,
                                           float x, float y, float h) {
     r.pushClip(x, y, kTrackHeaderW, h);
     int numTracks = m_project->numTracks();
-    float scale = Theme::kSmallFontSize / f.pixelHeight();
-    float smallScale = (Theme::kSmallFontSize * 0.85f) / f.pixelHeight();
+    const float fs      = theme().metrics.fontSizeSmall;
+    const float fsSmall = fs * 0.85f;
 
     for (int t = 0; t < numTracks; ++t) {
         float ty = y + trackYOffset(t) - m_scrollY;
@@ -1048,7 +1054,7 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
         r.drawRect(x, ty, kTrackHeaderW, baseH, bg);
 
         // Color bar (left edge)
-        Color col = Theme::trackColors[tr.colorIndex % Theme::kNumTrackColors];
+        Color col = ::yawn::ui::Theme::trackColors[tr.colorIndex % ::yawn::ui::Theme::kNumTrackColors];
         r.drawRect(x + 1, ty + 1, 4, baseH - 2, col);
 
         // Track name (top row)
@@ -1057,42 +1063,25 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
             float boxX = x + 7, boxY = ty + 2;
             float boxW = kTrackHeaderW - 12, boxH = baseH / 2 - 2;
             r.drawRect(boxX, boxY, boxW, boxH, Color{20, 22, 28, 255});
-            r.drawRectOutline(boxX, boxY, boxW, boxH, Theme::transportAccent);
-            float cx = boxX + 4;
+            r.drawRectOutline(boxX, boxY, boxW, boxH, ::yawn::ui::Theme::transportAccent);
+            float textX = boxX + 4;
             float textY = ty + 4;
-            if (m_renameCursor == 0)
-                r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
-            {
-                const char* rp = m_renameText.c_str();
-                int bytePos = 0;
-                while (*rp) {
-                    const char* prev = rp;
-                    uint32_t cp = ui::decodeUtf8(rp);
-                    int charBytes = static_cast<int>(rp - prev);
-                    auto g = f.getGlyph(cp, cx, textY, scale);
-                    if (cx + g.xAdvance > boxX + boxW - 4) break;
-                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                       g.u0, g.v0, g.u1, g.v1,
-                                       Theme::textPrimary, f.textureId());
-                    cx += g.xAdvance;
-                    bytePos += charBytes;
-                    if (bytePos == m_renameCursor)
-                        r.drawRect(cx, boxY + 2, 1, boxH - 4, Theme::transportAccent);
-                }
-            }
+            // Draw the full text clipped to the box
+            r.pushClip(boxX + 1, boxY + 1, boxW - 2, boxH - 2);
+            tm.drawText(r, m_renameText, textX, textY, fs,
+                        ::yawn::ui::Theme::textPrimary);
+            r.popClip();
+            // Cursor: position = left + width of prefix up to cursor byte-offset.
+            const std::string prefix = m_renameText.substr(0, m_renameCursor);
+            float cx = textX + tm.textWidth(prefix, fs);
+            if (cx <= boxX + boxW - 2)
+                r.drawRect(cx, boxY + 2, 1, boxH - 4, ::yawn::ui::Theme::transportAccent);
         } else {
-            float tx = x + 10;
-            float textY = ty + 4;
-            float maxNameX = x + kTrackHeaderW - 6;
-            const char* np = tr.name.c_str();
-            while (*np && tx < maxNameX) {
-                uint32_t cp = ui::decodeUtf8(np);
-                auto g = f.getGlyph(cp, tx, textY, scale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                   g.u0, g.v0, g.u1, g.v1,
-                                   Theme::textPrimary, f.textureId());
-                tx += g.xAdvance;
-            }
+            // Regular track name — clip to header width.
+            r.pushClip(x + 10, ty, kTrackHeaderW - 16, baseH);
+            tm.drawText(r, tr.name, x + 10, ty + 4, fs,
+                        ::yawn::ui::Theme::textPrimary);
+            r.popClip();
         }
 
         // Button row (bottom area)
@@ -1112,12 +1101,10 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
             float ts = 4.0f; // triangle half-size
             Color triCol{180, 180, 190, 220};
             if (expanded) {
-                // Down-pointing triangle ▼
                 r.drawTriangle(cx - ts, cy - ts * 0.5f,
                                cx + ts, cy - ts * 0.5f,
                                cx,      cy + ts * 0.5f, triCol);
             } else {
-                // Right-pointing triangle ▶
                 r.drawTriangle(cx - ts * 0.4f, cy - ts,
                                cx - ts * 0.4f, cy + ts,
                                cx + ts * 0.6f, cy, triCol);
@@ -1132,11 +1119,11 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
         r.drawRoundedRect(bx, btnRowY, saW, btnH, 3.0f, saBg, 4);
         {
             const char* saLabel = arrActive ? "Arr" : "Ses";
-            float tw = f.textWidth(saLabel, smallScale);
+            float tw = tm.textWidth(saLabel, fsSmall);
             float saTextX = bx + (saW - tw) * 0.5f;
-            float saTextY = btnRowY + (btnH - Theme::kSmallFontSize * 0.85f) * 0.5f;
-            f.drawText(r, saLabel, saTextX, saTextY, smallScale,
-                       Color{255, 255, 255, 220});
+            float saTextY = btnRowY + (btnH - tm.lineHeight(fsSmall)) * 0.5f;
+            tm.drawText(r, saLabel, saTextX, saTextY, fsSmall,
+                        Color{255, 255, 255, 220});
         }
 
         // Bottom border — slightly thicker as resize handle hint
@@ -1152,17 +1139,11 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
                 r.drawRect(x, ly, kTrackHeaderW, kAutoLaneH, Color{36, 36, 40, 255});
 
                 std::string name = autoLaneName(tr.automationLanes[li].target);
-                float lnx = x + 10;
-                float lny = ly + (kAutoLaneH - Theme::kSmallFontSize * 0.8f) * 0.5f;
-                const char* lp = name.c_str();
-                while (*lp && lnx < x + kTrackHeaderW - 4) {
-                    uint32_t cp = ui::decodeUtf8(lp);
-                    auto g = f.getGlyph(cp, lnx, lny, smallScale);
-                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                       g.u0, g.v0, g.u1, g.v1,
-                                       Color{160, 160, 180, 200}, f.textureId());
-                    lnx += g.xAdvance;
-                }
+                float lny = ly + (kAutoLaneH - tm.lineHeight(fsSmall)) * 0.5f;
+                r.pushClip(x + 10, ly, kTrackHeaderW - 14, kAutoLaneH);
+                tm.drawText(r, name, x + 10, lny, fsSmall,
+                            Color{160, 160, 180, 200});
+                r.popClip();
 
                 r.drawRect(x, ly + kAutoLaneH - 1, kTrackHeaderW, 1,
                            Color{50, 50, 55, 255});
@@ -1172,12 +1153,12 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, Font& f,
     r.popClip();
 }
 
-void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
+void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                                           float x, float y, float w, float h) {
     r.pushClip(x, y, w, h);
 
     int numTracks = m_project->numTracks();
-    float scale = Theme::kSmallFontSize / f.pixelHeight();
+    const float fs = theme().metrics.fontSizeSmall;
     float viewStartBeat = m_scrollX / m_pixelsPerBeat;
     float viewEndBeat = viewStartBeat + w / m_pixelsPerBeat;
 
@@ -1219,7 +1200,7 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
 
         // Arrangement clips
         auto& track = m_project->track(t);
-        Color trackCol = Theme::trackColors[track.colorIndex % Theme::kNumTrackColors];
+        Color trackCol = ::yawn::ui::Theme::trackColors[track.colorIndex % ::yawn::ui::Theme::kNumTrackColors];
 
         for (int ci = 0; ci < static_cast<int>(track.arrangementClips.size()); ++ci) {
             auto& clip = track.arrangementClips[ci];
@@ -1232,7 +1213,7 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
             float ch = baseH - 4;
 
             Color clipCol = clip.colorIndex >= 0
-                ? Theme::trackColors[clip.colorIndex % Theme::kNumTrackColors]
+                ? ::yawn::ui::Theme::trackColors[clip.colorIndex % ::yawn::ui::Theme::kNumTrackColors]
                 : trackCol;
             bool selected = (t == m_selClipTrack && ci == m_selClipIdx);
             Color bodyCol{clipCol.r, clipCol.g, clipCol.b,
@@ -1250,7 +1231,6 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
                 double beatsPerSec = bpm / 60.0;
                 int totalFrames = clip.audioBuffer->numFrames();
 
-                // Convert offsetBeats to frame offset
                 int startFrame = static_cast<int>(
                     clip.offsetBeats / beatsPerSec * sampleRate);
                 startFrame = std::max(0, std::min(startFrame, totalFrames - 1));
@@ -1306,10 +1286,7 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
                 r.popClip();
             }
 
-            // Visual clip decoration — a small type glyph in the
-            // upper-left so "video" vs "model" vs "shader" vs "live"
-            // is readable at a glance. The clip name is still drawn
-            // below (shared code path).
+            // Visual clip type glyph in upper-left.
             if (clip.type == ArrangementClip::Type::Visual &&
                 clip.visualClip && cw > 12.0f) {
                 const auto& vc = *clip.visualClip;
@@ -1318,15 +1295,8 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
                 else if (!vc.modelPath.empty())   glyph = "◆";  // 3D model
                 else if (!vc.videoPath.empty())   glyph = "▸";  // file video
                 else if (!vc.text.empty())        glyph = "T";  // text
-
-                float gScale = Theme::kSmallFontSize / f.pixelHeight();
-                float gx = cx + 4.0f;
-                float gy = cy + 2.0f;
-                uint32_t cp = ui::decodeUtf8(glyph);
-                auto g = f.getGlyph(cp, gx, gy, gScale);
-                r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                     g.u0, g.v0, g.u1, g.v1,
-                                     Color{255, 255, 255, 230}, f.textureId());
+                tm.drawText(r, glyph, cx + 4.0f, cy + 2.0f, fs,
+                            Color{255, 255, 255, 230});
             }
 
             r.drawRectOutline(cx, cy, cw, ch,
@@ -1340,18 +1310,11 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
             }
 
             if (cw > 20.0f && !clip.name.empty()) {
-                float ntx = cx + 4;
-                float nty = cy + (ch - Theme::kSmallFontSize) * 0.5f;
-                float nMaxX = cx + cw - 4;
-                const char* cnp = clip.name.c_str();
-                while (*cnp && ntx < nMaxX) {
-                    uint32_t cp = ui::decodeUtf8(cnp);
-                    auto g = f.getGlyph(cp, ntx, nty, scale);
-                    r.drawTexturedQuad(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0,
-                                       g.u0, g.v0, g.u1, g.v1,
-                                       Color{255, 255, 255, 220}, f.textureId());
-                    ntx += g.xAdvance;
-                }
+                r.pushClip(cx, cy, cw, ch);
+                float nty = cy + (ch - tm.lineHeight(fs)) * 0.5f;
+                tm.drawText(r, clip.name, cx + 4, nty, fs,
+                            Color{255, 255, 255, 220});
+                r.popClip();
             }
         }
 
@@ -1361,7 +1324,6 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
             for (int li = 0; li < nLanes; ++li) {
                 float ly = ty + baseH + li * kAutoLaneH;
                 r.drawRect(x, ly, w, kAutoLaneH, Color{28, 28, 32, 255});
-                // Center line (value = 0.5)
                 r.drawRect(x, ly + kAutoLaneH * 0.5f, w, 1, Color{40, 40, 48, 150});
                 r.drawRect(x, ly + kAutoLaneH - 1, w, 1, Color{40, 40, 45, 100});
             }
@@ -1371,7 +1333,7 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, Font& f,
     r.popClip();
 }
 
-void ArrangementPanel::paintAutoLanes(Renderer2D& r, Font&,
+void ArrangementPanel::paintAutoLanes(Renderer2D& r, TextMetrics&,
                                        float x, float y, float w, float h) {
     r.pushClip(x, y, w, h);
 
@@ -1396,7 +1358,6 @@ void ArrangementPanel::paintAutoLanes(Renderer2D& r, Font&,
             Color lineCol{100, 160, 255, 200};
             Color ptCol{220, 230, 255, 255};
 
-            // Draw envelope line segments
             for (int i = 0; i < static_cast<int>(pts.size()) - 1; ++i) {
                 auto& a = pts[i];
                 auto& b = pts[i + 1];
@@ -1409,7 +1370,6 @@ void ArrangementPanel::paintAutoLanes(Renderer2D& r, Font&,
                 r.drawLine(ax, ay, bx, by, lineCol);
             }
 
-            // Extend to edges
             if (!pts.empty()) {
                 auto& first = pts.front();
                 float fy = laneY + (1.0f - first.value) * kAutoLaneH;
@@ -1424,7 +1384,6 @@ void ArrangementPanel::paintAutoLanes(Renderer2D& r, Font&,
                     r.drawLine(lx, ly2, x + w, ly2, Color{100, 160, 255, 80});
             }
 
-            // Draw breakpoint handles
             for (int i = 0; i < static_cast<int>(pts.size()); ++i) {
                 auto& pt = pts[i];
                 if (pt.time < viewStartBeat - 1 || pt.time > viewEndBeat + 1) continue;
@@ -1476,6 +1435,6 @@ void ArrangementPanel::paintScrollbar(Renderer2D& r, float x, float y, float w) 
 
 #endif // !YAWN_TEST_BUILD
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn
