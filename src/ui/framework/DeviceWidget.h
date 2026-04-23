@@ -219,11 +219,15 @@ public:
 
         auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
         const bool handled = m_impl.dispatchMouseDown(ev);
-        if (handled || ::yawn::ui::fw2::Widget::capturedWidget()) {
+        // Only capture if fw2 actually has a drag target (gesture SM
+        // captured during dispatch). For one-shot actions — button
+        // clicks, header drag-start callbacks, preset menu triggers —
+        // we return handled without capturing so DetailPanelWidget can
+        // receive follow-up moves for its own drag-reorder state and
+        // pop-up menus can take focus.
+        if (::yawn::ui::fw2::Widget::capturedWidget())
             captureMouse();
-            return handled;
-        }
-        return false;
+        return handled;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
