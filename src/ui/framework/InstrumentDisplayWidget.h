@@ -10,7 +10,6 @@
 //   - SubSynthDisplayPanel:  Composite panel for Subtractive Synth
 
 #include "Widget.h"
-#include "Primitives.h"
 #include "v2/Knob.h"
 #include "v2/UIContext.h"
 #include "v2/V1EventBridge.h"

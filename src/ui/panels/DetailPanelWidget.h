@@ -10,7 +10,6 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/InstrumentDisplayWidget.h"
-#include "ui/framework/Primitives.h"
 #include "ui/framework/v2/DeviceHeaderWidget.h"
 #include "ui/framework/v2/DeviceWidget.h"
 #include "ui/framework/v2/SnapScrollContainer.h"
