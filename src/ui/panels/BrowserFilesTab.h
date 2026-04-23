@@ -1,15 +1,18 @@
 #pragma once
-// BrowserFilesTab — Files tab for the BrowserPanel.
+// BrowserFilesTab — Files tab for the BrowserPanel (fw2::Widget).
 // Provides a tree-view file browser backed by LibraryDatabase.
+//
+// Migrated from v1 plain class (taking v1 MouseEvent + Font&) to a
+// proper fw2::Widget. Bounds come from m_bounds after layout(); the
+// parent BrowserPanel just does measure/layout/render each frame like
+// it does with the other fw2 children (follow-action knobs, etc.).
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/TextInput.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
+#include "ui/framework/v2/Theme.h"
 #include "ui/Renderer.h"
-#include "ui/Font.h"
 #include "ui/Theme.h"
 #include "library/LibraryDatabase.h"
 #include "library/LibraryScanner.h"
@@ -18,6 +21,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <set>
@@ -26,7 +30,7 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 struct FileTreeNode {
     std::string name;
@@ -41,19 +45,15 @@ struct FileTreeNode {
     std::vector<FileTreeNode> children;
 };
 
-class BrowserFilesTab {
+class BrowserFilesTab : public Widget {
 public:
     BrowserFilesTab() {
         m_searchInput.setPlaceholder("Search files...");
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
-        // Live search on every keystroke (v1 drove this from
-        // forwardTextInput; v2's onChange fires on every edit so we
-        // centralise it here and drop the forwardTextInput-side call).
+        // Live search on every keystroke.
         m_searchInput.setOnChange([this](const std::string&) { doSearch(); });
         m_addFolderBtn.setLabel("+");
-        // Click routed manually in onMouseDown below (predates v2
-        // migration, kept to avoid a new m_v2Pressed pointer on the
-        // tab just for a single glyph-width button).
+        setFocusable(false);
     }
 
     void setDatabase(library::LibraryDatabase* db) { m_db = db; }
@@ -90,45 +90,100 @@ public:
         flattenTree();
     }
 
-    // ── Events ──────────────────────────────────────────────────────────
+    // ─── Editing / keyboard-forward API (App.cpp passes SDL keycodes) ───
 
-    bool onMouseDown(MouseEvent& e, float x, float y, float w, float h, UIContext& ctx) {
-        float mx = e.x, my = e.y;
-        bool rightClick = (e.button == MouseButton::Right);
-
-        // Search input — v2 widget. onMouseDown enters edit mode and
-        // returns true, so dispatchMouseDown short-circuits the gesture
-        // SM (no capture needed, no paired mouseUp). No m_v2Dragging
-        // slot on this tab — parent BrowserPanel owns that.
-        if (hitRect(mx, my, x + 4, y + 4, w - 30, 20)) {
-            const auto& b = m_searchInput.bounds();
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-            m_searchInput.dispatchMouseDown(ev);
+    bool isSearchEditing() const { return m_searchInput.isEditing(); }
+    bool forwardKeyDown(int key) {
+        if (key == SDLK_ESCAPE) {
+            // Escape: clear search + collapse, then cancel widget edit.
+            m_searchInput.endEdit(/*commit*/false);
+            m_searchInput.setText("");
+            m_searching = false;
+            flattenTree();
             return true;
+        }
+        KeyEvent ke;
+        switch (static_cast<SDL_Keycode>(key)) {
+            case SDLK_RETURN:    ke.key = Key::Enter;     break;
+            case SDLK_BACKSPACE: ke.key = Key::Backspace; break;
+            case SDLK_DELETE:    ke.key = Key::Delete;    break;
+            case SDLK_HOME:      ke.key = Key::Home;      break;
+            case SDLK_END:       ke.key = Key::End;       break;
+            case SDLK_LEFT:      ke.key = Key::Left;      break;
+            case SDLK_RIGHT:     ke.key = Key::Right;     break;
+            default: return false;
+        }
+        return m_searchInput.dispatchKeyDown(ke);
+    }
+    bool forwardTextInput(const char* text) {
+        m_searchInput.takeTextInput(text ? text : "");
+        return true;
+    }
+    void cancelEditing() {
+        m_searchInput.endEdit(/*commit*/false);
+    }
+
+protected:
+    // ─── fw2 Widget overrides ───────────────────────────────────────────
+
+    Size onMeasure(Constraints c, UIContext&) override {
+        return c.constrain({c.maxW, c.maxH});
+    }
+
+    void onLayout(Rect bounds, UIContext& ctx) override {
+        m_bounds = bounds;
+        // Position the search input + add-folder button in the top row.
+        const float x = bounds.x, y = bounds.y, w = bounds.w;
+        m_searchInput.measure(Constraints::tight(w - 30, 20), ctx);
+        m_searchInput.layout(Rect{x + 4, y + 4, w - 30, 20}, ctx);
+        m_addFolderBtn.measure(Constraints::tight(20, 20), ctx);
+        m_addFolderBtn.layout(Rect{x + w - 24, y + 4, 20, 20}, ctx);
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        const float mx = e.x, my = e.y;
+        const bool rightClick = (e.button == MouseButton::Right);
+        const float x = m_bounds.x, y = m_bounds.y;
+        const float w = m_bounds.w, h = m_bounds.h;
+
+        // Search input — let fw2 widget handle it via dispatch. Its
+        // onMouseDown enters edit mode and returns true, short-circuiting
+        // the gesture SM (no capture needed, no paired mouseUp).
+        {
+            const auto& b = m_searchInput.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                MouseEvent se = e;
+                se.lx = mx - b.x;
+                se.ly = my - b.y;
+                m_searchInput.dispatchMouseDown(se);
+                return true;
+            }
         }
 
         // Add folder button
-        float btnX = x + w - 24, btnY = y + 4;
-        if (!rightClick && hitRect(mx, my, btnX, btnY, 20, 20)) {
-            if (m_onAddFolder) m_onAddFolder();
-            return true;
+        {
+            const auto& b = m_addFolderBtn.bounds();
+            if (!rightClick && mx >= b.x && mx < b.x + b.w &&
+                my >= b.y && my < b.y + b.h) {
+                if (m_onAddFolder) m_onAddFolder();
+                return true;
+            }
         }
 
         // Tree/list area
-        float listY = y + 28;
-        float listH = h - 28;
+        const float listY = y + 28;
+        const float listH = h - 28;
         if (my < listY || my >= listY + listH) return false;
 
         auto& items = m_searching ? m_flatSearchResults : m_flatList;
-        float rowH = kRowHeight;
+        const float rowH = kRowHeight;
         int row = static_cast<int>((my - listY) / rowH) + m_scrollOffset;
         if (row < 0 || row >= static_cast<int>(items.size())) return false;
 
         auto* node = items[row];
 
-        // Right-click on a root library folder → context menu
+        // Right-click on a root library folder → inline context menu
         if (rightClick && node->isDirectory && node->depth == 0) {
-            // Store for context menu handling
             m_contextNodeId = node->libraryPathId;
             m_contextNodePath = node->fullPath;
             m_showContextMenu = true;
@@ -142,13 +197,11 @@ public:
             m_showContextMenu = false;
             float cmY = m_contextMenuY;
             if (hitRect(mx, my, m_contextMenuX, cmY, 120, 20)) {
-                // "Rescan" item
                 if (m_onRescanFolder) m_onRescanFolder(m_contextNodeId, m_contextNodePath);
                 return true;
             }
             cmY += 20;
             if (hitRect(mx, my, m_contextMenuX, cmY, 120, 20)) {
-                // "Remove" item
                 if (m_onRemoveFolder) m_onRemoveFolder(m_contextNodeId);
                 refreshTree();
                 return true;
@@ -174,115 +227,73 @@ public:
         return true;
     }
 
-    bool onScroll(ScrollEvent& e) {
+    bool onScroll(ScrollEvent& e) override {
         m_scrollOffset -= static_cast<int>(e.dy * 3);
         if (m_scrollOffset < 0) m_scrollOffset = 0;
         return true;
     }
 
-    bool onMouseMove(MouseMoveEvent& /*e*/) {
-        // v2 FwTextInput doesn't drag — nothing to forward. The SM
-        // short-circuits in dispatchMouseDown so no capture is held.
-        return false;
-    }
+    // No mouseMove/mouseUp handling required — the search input short-
+    // circuits the gesture SM in its own onMouseDown (enters edit mode,
+    // no capture) and the tree-list rows only respond to mouseDown.
 
-    bool onMouseUp(MouseEvent& /*e*/) {
-        // No paired mouseUp for the text input — see onMouseDown.
-        return false;
-    }
+public:
+    void render(UIContext& ctx) override {
+        if (!isVisible()) return;
+        if (!ctx.renderer || !ctx.textMetrics) return;
+        auto& r  = *ctx.renderer;
+        auto& tm = *ctx.textMetrics;
 
-    bool isSearchEditing() const { return m_searchInput.isEditing(); }
-    bool forwardKeyDown(int key) {
-        if (key == SDLK_ESCAPE) { // Escape — always clear search + collapse,
-                         // then let the widget cancel its edit state.
-                         // The widget's endEdit(false) would restore
-                         // the pre-edit snapshot, but we want a clean
-                         // empty search regardless, so we overwrite
-                         // after the widget's state settles.
-            m_searchInput.endEdit(/*commit*/false);
-            m_searchInput.setText("");
-            m_searching = false;
-            flattenTree();
-            return true;
-        }
-        ::yawn::ui::fw2::KeyEvent ke;
-        switch (static_cast<SDL_Keycode>(key)) {
-            case SDLK_RETURN:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
-            case SDLK_BACKSPACE: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
-            case SDLK_DELETE:    ke.key = ::yawn::ui::fw2::Key::Delete;    break;
-            case SDLK_HOME:      ke.key = ::yawn::ui::fw2::Key::Home;      break;
-            case SDLK_END:       ke.key = ::yawn::ui::fw2::Key::End;       break;
-            case SDLK_LEFT:      ke.key = ::yawn::ui::fw2::Key::Left;      break;
-            case SDLK_RIGHT:     ke.key = ::yawn::ui::fw2::Key::Right;     break;
-            default: return false;
-        }
-        return m_searchInput.dispatchKeyDown(ke);
-    }
-    bool forwardTextInput(const char* text) {
-        m_searchInput.takeTextInput(text ? text : "");
-        // Live-search fires via setOnChange (installed in ctor).
-        return true;
-    }
-    void cancelEditing() {
-        m_searchInput.endEdit(/*commit*/false);
-    }
+        const float x = m_bounds.x, y = m_bounds.y;
+        const float w = m_bounds.w, h = m_bounds.h;
+        const float fs = theme().metrics.fontSizeSmall;
 
-    // ── Rendering ───────────────────────────────────────────────────────
-
-    void paint(Renderer2D& r, Font& f, float x, float y, float w, float h, UIContext& ctx) {
-        float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
-
-        // Search input — v2 widget, renders through fw2 UIContext.
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_searchInput.layout(Rect{x + 4, y + 4, w - 30, 20}, v2ctx);
-        m_searchInput.render(v2ctx);
-
-        // Add folder button — v2 widget, renders through fw2 UIContext.
-        {
-            m_addFolderBtn.layout(Rect{x + w - 24, y + 4, 20, 20}, v2ctx);
-            m_addFolderBtn.render(v2ctx);
-        }
+        // Search input + add folder button (already laid out in onLayout)
+        m_searchInput.render(ctx);
+        m_addFolderBtn.render(ctx);
 
         // Scanning indicator
         if (m_scanner && m_scanner->isScanning()) {
             float pct = m_scanner->progress() * 100.0f;
             char buf[32];
             std::snprintf(buf, sizeof(buf), "Scanning %.0f%%", pct);
-            float tw = f.textWidth(buf, scale);
-            f.drawText(r, buf, x + w - tw - 4, y + 26, scale, Color{100, 180, 120, 255});
+            const std::string s = buf;
+            float tw = tm.textWidth(s, fs);
+            tm.drawText(r, s, x + w - tw - 4, y + 26, fs,
+                        Color{100, 180, 120, 255});
         }
 
-        float listY = y + 28;
-        float listH = h - 28;
+        const float listY = y + 28;
+        const float listH = h - 28;
         if (listH <= 0) return;
 
         auto& items = m_searching ? m_flatSearchResults : m_flatList;
         int totalRows = static_cast<int>(items.size());
 
         if (totalRows == 0) {
-            if (f.isLoaded()) {
-                const char* msg = m_fileTree.empty() ? "Click '+ Folder' to add a sample library"
-                                                     : "No matching files";
-                float tw = f.textWidth(msg, scale);
-                f.drawText(r, msg, x + (w - tw) * 0.5f, listY + listH * 0.4f, scale, Theme::textDim);
-            }
+            const char* msg = m_fileTree.empty() ? "Click '+ Folder' to add a sample library"
+                                                 : "No matching files";
+            float tw = tm.textWidth(msg, fs);
+            tm.drawText(r, msg, x + (w - tw) * 0.5f, listY + listH * 0.4f, fs,
+                        ::yawn::ui::Theme::textDim);
             return;
         }
 
         // Clamp scroll
-        float rowH = kRowHeight;
+        const float rowH = kRowHeight;
         int visibleRows = static_cast<int>(listH / rowH);
         int maxScroll = std::max(0, totalRows - visibleRows);
         if (m_scrollOffset > maxScroll) m_scrollOffset = maxScroll;
 
         r.pushClip(x, listY, w, listH);
 
+        const float lh = tm.lineHeight(fs);
         for (int i = 0; i < visibleRows + 1 && (i + m_scrollOffset) < totalRows; ++i) {
             int idx = i + m_scrollOffset;
             auto* node = items[idx];
             float ry = listY + i * rowH;
 
-            // Selection highlight
+            // Selection highlight / zebra
             if (idx == m_selectedIndex) {
                 r.drawRect(x, ry, w, rowH, Color{50, 60, 80, 255});
             } else if (i % 2 == 1) {
@@ -290,31 +301,35 @@ public:
             }
 
             float indent = 8.0f + node->depth * 16.0f;
-            float textY = ry + (rowH - f.lineHeight(scale)) * 0.5f;
+            float textY = ry + (rowH - lh) * 0.5f;
 
             if (node->isDirectory) {
                 // Expand/collapse triangle
                 const char* tri = node->expanded ? "\xe2\x96\xbc" : "\xe2\x96\xb6";
-                f.drawText(r, tri, x + indent, textY, scale * 0.8f, Theme::textSecondary);
-                // Folder name
-                Color nameCol = (node->depth == 0) ? Color{180, 200, 230, 255} : Theme::textPrimary;
-                f.drawText(r, node->name.c_str(), x + indent + 14, textY, scale, nameCol);
+                tm.drawText(r, tri, x + indent, textY, fs * 0.8f,
+                            ::yawn::ui::Theme::textSecondary);
+                Color nameCol = (node->depth == 0) ? Color{180, 200, 230, 255}
+                                                   : ::yawn::ui::Theme::textPrimary;
+                tm.drawText(r, node->name, x + indent + 14, textY, fs, nameCol);
             } else {
                 // File icon (small dot)
                 float dotY = ry + rowH * 0.5f - 2;
                 r.drawRect(x + indent, dotY, 4, 4, Color{100, 180, 120, 255});
-                // File name
-                f.drawText(r, node->name.c_str(), x + indent + 10, textY, scale, Theme::textPrimary);
+                tm.drawText(r, node->name, x + indent + 10, textY, fs,
+                            ::yawn::ui::Theme::textPrimary);
                 // Duration on right side
                 if (node->duration > 0) {
                     char dur[16];
                     if (node->duration >= 60.0f)
-                        std::snprintf(dur, sizeof(dur), "%d:%02d", static_cast<int>(node->duration) / 60,
+                        std::snprintf(dur, sizeof(dur), "%d:%02d",
+                                      static_cast<int>(node->duration) / 60,
                                       static_cast<int>(node->duration) % 60);
                     else
                         std::snprintf(dur, sizeof(dur), "%.1fs", node->duration);
-                    float dw = f.textWidth(dur, scale * 0.9f);
-                    f.drawText(r, dur, x + w - dw - 8, textY, scale * 0.9f, Theme::textDim);
+                    const std::string ds = dur;
+                    float dw = tm.textWidth(ds, fs * 0.9f);
+                    tm.drawText(r, ds, x + w - dw - 8, textY, fs * 0.9f,
+                                ::yawn::ui::Theme::textDim);
                 }
             }
         }
@@ -336,8 +351,10 @@ public:
             float cmX = m_contextMenuX, cmY = m_contextMenuY;
             r.drawRect(cmX, cmY, 120, 40, Color{45, 45, 50, 255});
             r.drawRectOutline(cmX, cmY, 120, 40, Color{70, 70, 78, 255});
-            f.drawText(r, "Rescan", cmX + 8, cmY + 3, scale, Theme::textPrimary);
-            f.drawText(r, "Remove Folder", cmX + 8, cmY + 23, scale, Theme::textPrimary);
+            tm.drawText(r, "Rescan", cmX + 8, cmY + 3, fs,
+                        ::yawn::ui::Theme::textPrimary);
+            tm.drawText(r, "Remove Folder", cmX + 8, cmY + 23, fs,
+                        ::yawn::ui::Theme::textPrimary);
         }
     }
 
@@ -347,11 +364,11 @@ private:
     library::LibraryDatabase* m_db = nullptr;
     library::LibraryScanner*  m_scanner = nullptr;
 
-    ::yawn::ui::fw2::FwTextInput m_searchInput;
-    ::yawn::ui::fw2::FwButton m_addFolderBtn;
+    FwTextInput m_searchInput;
+    FwButton    m_addFolderBtn;
 
     std::vector<FileTreeNode>  m_fileTree;       // root nodes
-    std::vector<FileTreeNode*> m_flatList;        // flattened visible nodes
+    std::vector<FileTreeNode*> m_flatList;       // flattened visible nodes
     std::vector<FileTreeNode*> m_flatSearchResults;
     bool m_searching = false;
 
@@ -369,30 +386,18 @@ private:
     std::string m_contextNodePath;
 
     // Callbacks
-    std::function<void()>              m_onAddFolder;
-    std::function<void(const std::string&)> m_onFileDoubleClick;
-    std::function<void(int64_t)>       m_onRemoveFolder;
-    std::function<void(int64_t, const std::string&)> m_onRescanFolder;
+    std::function<void()>                             m_onAddFolder;
+    std::function<void(const std::string&)>           m_onFileDoubleClick;
+    std::function<void(int64_t)>                      m_onRemoveFolder;
+    std::function<void(int64_t, const std::string&)>  m_onRescanFolder;
 
     static bool hitRect(float mx, float my, float rx, float ry, float rw, float rh) {
         return mx >= rx && mx < rx + rw && my >= ry && my < ry + rh;
     }
 
     void buildTree(FileTreeNode& parent, const std::vector<library::AudioFileRecord>& files) {
-        // Group files by directory structure relative to the library path
         namespace fs = std::filesystem;
         fs::path rootPath(parent.fullPath);
-
-        // Collect unique subdirectories and files
-        struct DirEntry {
-            std::string name;
-            std::string fullPath;
-            bool isDir = false;
-            float duration = 0;
-            int sampleRate = 0;
-            int channels = 0;
-            std::vector<const library::AudioFileRecord*> children;
-        };
 
         // Map: relative dir path → list of files in that dir
         std::map<std::string, std::vector<const library::AudioFileRecord*>> dirFiles;
@@ -402,7 +407,6 @@ private:
             dirFiles[rel.string()].push_back(&f);
         }
 
-        // Build tree recursively from dir structure
         buildSubTree(parent, rootPath, "", dirFiles, 1);
     }
 
@@ -413,7 +417,6 @@ private:
         namespace fs = std::filesystem;
         const char sep = static_cast<char>(fs::path::preferred_separator);
 
-        // Collect immediate subdirectories
         std::set<std::string> subdirs;
         for (auto& [rel, files] : dirFiles) {
             if (rel == relDir) continue;
@@ -431,7 +434,6 @@ private:
             }
         }
 
-        // Add subdirectory nodes
         for (auto& subdir : subdirs) {
             FileTreeNode dirNode;
             fs::path subPath(subdir);
@@ -445,7 +447,6 @@ private:
                 parent.children.push_back(std::move(dirNode));
         }
 
-        // Add file nodes for this directory
         auto it = dirFiles.find(relDir);
         if (it != dirFiles.end()) {
             for (auto* rec : it->second) {
@@ -512,6 +513,6 @@ private:
     std::vector<FileTreeNode> m_searchResultNodes;
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

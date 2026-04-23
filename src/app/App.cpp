@@ -446,8 +446,9 @@ void App::buildWidgetTree() {
     m_arrFw2W           = arrFw2W.get();
     m_mixerPanel        = mixerP.get();
     m_browserPanel      = browserP.get();
-    // Hand the v1 UIContext through so the BrowserFilesTab / PresetsTab
-    // sub-widgets (still v1) can use it for paint + hit-test.
+    // Hand the v1 UIContext through for the v1 AutomationEnvelopeWidget
+    // on the Clip tab (still v1 — migration pending). Files/Presets tabs
+    // are now fw2 and paint through ctx.renderer / ctx.textMetrics.
     m_browserPanel->setV1Context(&m_uiContext);
     m_returnMasterPanel  = returnMstP.get();
     m_contentGrid        = gridP.get();

@@ -1,17 +1,19 @@
 #pragma once
-// BrowserPresetsTab — Presets tab for the BrowserPanel.
+// BrowserPresetsTab — Presets tab for the BrowserPanel (fw2::Widget).
 // Provides a grouped preset list backed by LibraryDatabase.
+//
+// Migrated from v1 plain class to a proper fw2::Widget. Bounds come
+// from m_bounds after layout(); parent BrowserPanel drives measure/
+// layout/render each frame.
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/TextInput.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
+#include "ui/framework/v2/Theme.h"
 #include "ui/Renderer.h"
-#include "ui/Font.h"
 #include "ui/Theme.h"
 #include "library/LibraryDatabase.h"
 #include <SDL3/SDL_keycode.h>  // SDLK_* — forwarded key ints from App.cpp
@@ -24,7 +26,7 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 struct PresetListEntry {
     std::string name;
@@ -36,33 +38,17 @@ struct PresetListEntry {
     bool        isHeader = false;
 };
 
-// NB: v1 panels hosting a single v2 widget like FwDropDown call the
-// widget's high-level method (toggle/open/close) directly from their
-// own onMouseDown, bypassing v2's gesture state machine. That's
-// because App.cpp only routes mouseUp into the v1 tree when v1's
-// Widget::capturedWidget() is non-null — v2's captureMouse() uses a
-// separate slot, so v1 never re-enters here on release and the
-// gesture state machine's click would never fire. A future v1→fw2
-// event-translation helper lives in this file when a migration
-// actually needs the full gesture pipeline.
-
-class BrowserPresetsTab {
+class BrowserPresetsTab : public Widget {
 public:
     BrowserPresetsTab() {
         m_searchInput.setPlaceholder("Search presets...");
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
-        // Live search on each keystroke — v2 onChange fires on every
-        // edit; v1 drove this from forwardTextInput.
         m_searchInput.setOnChange([this](const std::string&) { doSearch(); });
-        // v2 FwDropDown — popup lives on fw2::LayerStack (App owns it),
-        // so it paints above every panel and auto-dismisses on outside
-        // click without explicit paintOverlay/hitPopup glue.
         m_filterDropdown.setItems(std::vector<std::string>{"All", "Instruments", "Effects"});
         m_filterDropdown.setSelectedIndex(0);
         m_filterDropdown.setOnChange([this](int, const std::string&) { refreshList(); });
-        // First v2 tooltip on a real widget — hover the button to see
-        // the bubble pop above/below.
-        ::yawn::ui::fw2::Tooltip::attach(&m_filterDropdown, "Filter presets by category");
+        Tooltip::attach(&m_filterDropdown, "Filter presets by category");
+        setFocusable(false);
     }
 
     void setDatabase(library::LibraryDatabase* db) { m_db = db; }
@@ -81,67 +67,109 @@ public:
         m_selectedIndex = -1;
     }
 
-    // ── Events ──────────────────────────────────────────────────────────
+    // ─── Editing / keyboard-forward API (App.cpp passes SDL keycodes) ───
 
-    bool onMouseDown(MouseEvent& e, float x, float y, float w, float h, UIContext& ctx) {
-        float mx = e.x, my = e.y;
-
-        // Search input — v2 widget. onMouseDown returns true (enters
-        // edit mode), so dispatchMouseDown short-circuits the gesture
-        // SM: no capture, no paired mouseUp required.
-        if (hitRect(mx, my, x + 4, y + 4, w - 80, 20)) {
-            const auto& b = m_searchInput.bounds();
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-            m_searchInput.dispatchMouseDown(ev);
+    bool isSearchEditing() const { return m_searchInput.isEditing(); }
+    bool forwardKeyDown(int key) {
+        if (key == SDLK_ESCAPE) {
+            m_searchInput.endEdit(/*commit*/false);
+            m_searchInput.setText("");
+            m_searching = false;
+            refreshList();
             return true;
         }
+        KeyEvent ke;
+        switch (static_cast<SDL_Keycode>(key)) {
+            case SDLK_RETURN:    ke.key = Key::Enter;     break;
+            case SDLK_BACKSPACE: ke.key = Key::Backspace; break;
+            case SDLK_DELETE:    ke.key = Key::Delete;    break;
+            case SDLK_HOME:      ke.key = Key::Home;      break;
+            case SDLK_END:       ke.key = Key::End;       break;
+            case SDLK_LEFT:      ke.key = Key::Left;      break;
+            case SDLK_RIGHT:     ke.key = Key::Right;     break;
+            default: return false;
+        }
+        return m_searchInput.dispatchKeyDown(ke);
+    }
+    bool forwardTextInput(const char* text) {
+        m_searchInput.takeTextInput(text ? text : "");
+        return true;
+    }
+    void cancelEditing() {
+        m_searchInput.endEdit(/*commit*/false);
+    }
 
-        // Filter dropdown (closed button only — the open popup lives
-        // on fw2::LayerStack and is handled before we see events).
-        //
-        // We call toggle() directly instead of going through the full
-        // v2 gesture state machine via dispatchMouseDown + dispatchMouseUp.
-        // Reason: v1's App.cpp only dispatches mouseUp into the widget
-        // tree when Widget::capturedWidget() (v1's capture slot) is
-        // non-null. v2's captureMouse() uses a separate slot, so v1
-        // never routes the mouseUp back here — the gesture SM's click
-        // never fires, toggle never runs. Direct toggle() matches
-        // v1 FwDropDown behaviour exactly (open/close on mouse-down)
-        // and is the right pattern for v1-hosted v2 widgets until we
-        // have v2-native panels that do their own tree dispatch.
-        float ddX = x + w - 72, ddY = y + 4;
-        if (hitRect(mx, my, ddX, ddY, 68, 20)) {
-            if (e.button == ::yawn::ui::fw::MouseButton::Left) {
-                m_filterDropdown.toggle();
-            } else if (e.button == ::yawn::ui::fw::MouseButton::Right) {
-                // Demo v2 ContextMenu — right-click the filter to set
-                // a preset category directly (bypasses the dropdown)
-                // and exercise a submenu entry.
-                namespace fw2 = ::yawn::ui::fw2;
-                fw2::ContextMenu::show({
-                    fw2::Menu::header("Filter"),
-                    fw2::Menu::radio("filter", "All",         m_filterDropdown.selectedIndex() == 0,
-                                      [this]{ m_filterDropdown.setSelectedIndex(0, fw2::ValueChangeSource::User); }),
-                    fw2::Menu::radio("filter", "Instruments", m_filterDropdown.selectedIndex() == 1,
-                                      [this]{ m_filterDropdown.setSelectedIndex(1, fw2::ValueChangeSource::User); }),
-                    fw2::Menu::radio("filter", "Effects",     m_filterDropdown.selectedIndex() == 2,
-                                      [this]{ m_filterDropdown.setSelectedIndex(2, fw2::ValueChangeSource::User); }),
-                    fw2::Menu::separator(),
-                    fw2::Menu::submenu("Quick actions", {
-                        fw2::Menu::item("Refresh list", [this]{ refreshList(); }, "F5"),
-                        fw2::Menu::item("Clear search", [this]{ m_searchInput.setText(""); refreshList(); }),
-                    }),
-                }, fw2::Point{e.x, e.y});
+protected:
+    // ─── fw2 Widget overrides ───────────────────────────────────────────
+
+    Size onMeasure(Constraints c, UIContext&) override {
+        return c.constrain({c.maxW, c.maxH});
+    }
+
+    void onLayout(Rect bounds, UIContext& ctx) override {
+        m_bounds = bounds;
+        const float x = bounds.x, y = bounds.y, w = bounds.w;
+        m_searchInput.measure(Constraints::tight(w - 80, 20), ctx);
+        m_searchInput.layout(Rect{x + 4, y + 4, w - 80, 20}, ctx);
+        m_filterDropdown.measure(Constraints::tight(68, 20), ctx);
+        m_filterDropdown.layout(Rect{x + w - 72, y + 4, 68, 20}, ctx);
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        const float mx = e.x, my = e.y;
+        const float x = m_bounds.x, y = m_bounds.y;
+        const float w = m_bounds.w, h = m_bounds.h;
+
+        // Search input — dispatch to fw2 widget; enters edit mode on
+        // down + short-circuits gesture SM (no capture, no paired up).
+        {
+            const auto& b = m_searchInput.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                MouseEvent se = e;
+                se.lx = mx - b.x;
+                se.ly = my - b.y;
+                m_searchInput.dispatchMouseDown(se);
+                return true;
             }
-            return true;
+        }
+
+        // Filter dropdown — call toggle() directly (bypass gesture SM)
+        // because v1 App doesn't route paired mouseUp through v2 capture.
+        // See the v1 file's comment for the detailed rationale; same
+        // constraint still applies because the BrowserPanel is wrapped
+        // by BrowserPanelWrapper in the v1 rootLayout.
+        {
+            const auto& b = m_filterDropdown.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                if (e.button == MouseButton::Left) {
+                    m_filterDropdown.toggle();
+                } else if (e.button == MouseButton::Right) {
+                    // Demo context menu — set category directly.
+                    ContextMenu::show({
+                        Menu::header("Filter"),
+                        Menu::radio("filter", "All",         m_filterDropdown.selectedIndex() == 0,
+                                    [this]{ m_filterDropdown.setSelectedIndex(0, ValueChangeSource::User); }),
+                        Menu::radio("filter", "Instruments", m_filterDropdown.selectedIndex() == 1,
+                                    [this]{ m_filterDropdown.setSelectedIndex(1, ValueChangeSource::User); }),
+                        Menu::radio("filter", "Effects",     m_filterDropdown.selectedIndex() == 2,
+                                    [this]{ m_filterDropdown.setSelectedIndex(2, ValueChangeSource::User); }),
+                        Menu::separator(),
+                        Menu::submenu("Quick actions", {
+                            Menu::item("Refresh list", [this]{ refreshList(); }, "F5"),
+                            Menu::item("Clear search", [this]{ m_searchInput.setText(""); refreshList(); }),
+                        }),
+                    }, Point{e.x, e.y});
+                }
+                return true;
+            }
         }
 
         // List area
-        float listY = y + 28;
-        float listH = h - 28 - kInfoAreaH;
+        const float listY = y + 28;
+        const float listH = h - 28 - kInfoAreaH;
         if (my < listY || my >= listY + listH) return false;
 
-        float rowH = kRowHeight;
+        const float rowH = kRowHeight;
         int row = static_cast<int>((my - listY) / rowH) + m_scrollOffset;
         if (row < 0 || row >= static_cast<int>(m_entries.size())) return false;
 
@@ -164,120 +192,74 @@ public:
         return true;
     }
 
-    bool onScroll(ScrollEvent& e) {
+    bool onScroll(ScrollEvent& e) override {
         m_scrollOffset -= static_cast<int>(e.dy * 3);
         if (m_scrollOffset < 0) m_scrollOffset = 0;
         return true;
     }
 
-    bool onMouseMove(MouseMoveEvent& /*e*/) {
-        // v2 popup handles hover via LayerStack; v2 FwTextInput doesn't
-        // drag (SM short-circuits in dispatchMouseDown) so no forward.
-        return false;
-    }
+public:
+    void render(UIContext& ctx) override {
+        if (!isVisible()) return;
+        if (!ctx.renderer || !ctx.textMetrics) return;
+        auto& r  = *ctx.renderer;
+        auto& tm = *ctx.textMetrics;
 
-    bool onMouseUp(MouseEvent& /*e*/) {
-        // v2 dropdown toggles on mouse-down directly (no gesture SM
-        // pipeline — see comment in onMouseDown). FwTextInput also
-        // needs no paired mouseUp. Nothing to forward.
-        return false;
-    }
+        const float x = m_bounds.x, y = m_bounds.y;
+        const float w = m_bounds.w, h = m_bounds.h;
+        const float fs      = theme().metrics.fontSizeSmall;
+        const float fsSmall = fs * 0.9f;
 
-    bool isSearchEditing() const { return m_searchInput.isEditing(); }
-    bool forwardKeyDown(int key) {
-        if (key == SDLK_ESCAPE) {
-            // Match v1 behaviour: Escape always clears + refreshes the
-            // list, regardless of what the widget had buffered. Call
-            // endEdit(false) first so the widget leaves edit state
-            // cleanly, then overwrite to the empty string.
-            m_searchInput.endEdit(/*commit*/false);
-            m_searchInput.setText("");
-            m_searching = false;
-            refreshList();
-            return true;
-        }
-        ::yawn::ui::fw2::KeyEvent ke;
-        switch (static_cast<SDL_Keycode>(key)) {
-            case SDLK_RETURN:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
-            case SDLK_BACKSPACE: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
-            case SDLK_DELETE:    ke.key = ::yawn::ui::fw2::Key::Delete;    break;
-            case SDLK_HOME:      ke.key = ::yawn::ui::fw2::Key::Home;      break;
-            case SDLK_END:       ke.key = ::yawn::ui::fw2::Key::End;       break;
-            case SDLK_LEFT:      ke.key = ::yawn::ui::fw2::Key::Left;      break;
-            case SDLK_RIGHT:     ke.key = ::yawn::ui::fw2::Key::Right;     break;
-            default: return false;
-        }
-        return m_searchInput.dispatchKeyDown(ke);
-    }
-    bool forwardTextInput(const char* text) {
-        m_searchInput.takeTextInput(text ? text : "");
-        // Live search fires via setOnChange (installed in ctor).
-        return true;
-    }
-    void cancelEditing() {
-        m_searchInput.endEdit(/*commit*/false);
-    }
+        // Search input + filter dropdown (laid out in onLayout).
+        m_searchInput.render(ctx);
+        m_filterDropdown.render(ctx);
 
-    // ── Rendering ───────────────────────────────────────────────────────
-
-    void paint(Renderer2D& r, Font& f, float x, float y, float w, float h, UIContext& ctx) {
-        float scale = Theme::kSmallFontSize / f.pixelHeight() * 0.78f;
-        float scaleSmall = scale * 0.9f;
-
-        // Search input — v2 widget, renders through fw2 UIContext.
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_searchInput.layout(Rect{x + 4, y + 4, w - 80, 20}, v2ctx);
-        m_searchInput.render(v2ctx);
-
-        // Filter dropdown — v2 widget. Popup is painted later by
-        // LayerStack (App render loop), not here.
-        m_filterDropdown.layout(Rect{x + w - 72, y + 4, 68, 20}, v2ctx);
-        m_filterDropdown.render(v2ctx);
-
-        float listY = y + 28;
-        float infoH = kInfoAreaH;
-        float listH = h - 28 - infoH;
+        const float listY = y + 28;
+        const float infoH = kInfoAreaH;
+        const float listH = h - 28 - infoH;
         if (listH <= 0) return;
 
         int totalRows = static_cast<int>(m_entries.size());
 
         if (totalRows == 0) {
             const char* msg = "No presets found";
-            float tw = f.textWidth(msg, scale);
-            f.drawText(r, msg, x + (w - tw) * 0.5f, listY + listH * 0.4f, scale, Theme::textDim);
+            float tw = tm.textWidth(msg, fs);
+            tm.drawText(r, msg, x + (w - tw) * 0.5f, listY + listH * 0.4f, fs,
+                        ::yawn::ui::Theme::textDim);
             return;
         }
 
         // Clamp scroll
-        float rowH = kRowHeight;
+        const float rowH = kRowHeight;
         int visibleRows = static_cast<int>(listH / rowH);
         int maxScroll = std::max(0, totalRows - visibleRows);
         if (m_scrollOffset > maxScroll) m_scrollOffset = maxScroll;
 
         r.pushClip(x, listY, w, listH);
 
+        const float lh      = tm.lineHeight(fs);
+        const float lhSmall = tm.lineHeight(fsSmall);
         for (int i = 0; i < visibleRows + 1 && (i + m_scrollOffset) < totalRows; ++i) {
             int idx = i + m_scrollOffset;
             auto& entry = m_entries[idx];
             float ry = listY + i * rowH;
 
             if (entry.isHeader) {
-                // Device group header
                 r.drawRect(x, ry, w, rowH, Color{38, 38, 44, 255});
                 r.drawRect(x, ry + rowH - 1, w, 1, Color{55, 55, 62, 255});
-                float textY = ry + (rowH - f.lineHeight(scale)) * 0.5f;
-                f.drawText(r, entry.deviceName.c_str(), x + 8, textY, scale, Color{140, 170, 210, 255});
+                float textY = ry + (rowH - lh) * 0.5f;
+                tm.drawText(r, entry.deviceName, x + 8, textY, fs,
+                            Color{140, 170, 210, 255});
             } else {
-                // Preset row
                 if (idx == m_selectedIndex)
                     r.drawRect(x, ry, w, rowH, Color{50, 60, 80, 255});
                 else if (i % 2 == 1)
                     r.drawRect(x, ry, w, rowH, Color{36, 36, 40, 255});
 
-                float textY = ry + (rowH - f.lineHeight(scale)) * 0.5f;
-                f.drawText(r, entry.name.c_str(), x + 16, textY, scale, Theme::textPrimary);
+                float textY = ry + (rowH - lh) * 0.5f;
+                tm.drawText(r, entry.name, x + 16, textY, fs,
+                            ::yawn::ui::Theme::textPrimary);
 
-                // Genre/instrument tags on the right
                 if (!entry.genre.empty() || !entry.instrument.empty()) {
                     std::string tags;
                     if (!entry.genre.empty()) tags = entry.genre;
@@ -285,8 +267,9 @@ public:
                         if (!tags.empty()) tags += " | ";
                         tags += entry.instrument;
                     }
-                    float tw = f.textWidth(tags, scaleSmall);
-                    f.drawText(r, tags.c_str(), x + w - tw - 8, textY, scaleSmall, Theme::textDim);
+                    float tw = tm.textWidth(tags, fsSmall);
+                    tm.drawText(r, tags, x + w - tw - 8, textY, fsSmall,
+                                ::yawn::ui::Theme::textDim);
                 }
             }
         }
@@ -312,24 +295,26 @@ public:
             auto& sel = m_entries[m_selectedIndex];
             if (!sel.isHeader) {
                 float ty = infoY + 4;
-                f.drawText(r, sel.name.c_str(), x + 8, ty, scale, Theme::textPrimary);
-                ty += f.lineHeight(scale) + 2;
-                f.drawText(r, sel.deviceName.c_str(), x + 8, ty, scaleSmall, Color{140, 170, 210, 255});
+                tm.drawText(r, sel.name, x + 8, ty, fs,
+                            ::yawn::ui::Theme::textPrimary);
+                ty += lh + 2;
+                tm.drawText(r, sel.deviceName, x + 8, ty, fsSmall,
+                            Color{140, 170, 210, 255});
                 if (!sel.genre.empty()) {
-                    ty += f.lineHeight(scaleSmall) + 1;
+                    ty += lhSmall + 1;
                     std::string label = "Genre: " + sel.genre;
-                    f.drawText(r, label.c_str(), x + 8, ty, scaleSmall, Theme::textDim);
+                    tm.drawText(r, label, x + 8, ty, fsSmall,
+                                ::yawn::ui::Theme::textDim);
                 }
                 if (!sel.instrument.empty()) {
-                    ty += f.lineHeight(scaleSmall) + 1;
+                    ty += lhSmall + 1;
                     std::string label = "Instrument: " + sel.instrument;
-                    f.drawText(r, label.c_str(), x + 8, ty, scaleSmall, Theme::textDim);
+                    tm.drawText(r, label, x + 8, ty, fsSmall,
+                                ::yawn::ui::Theme::textDim);
                 }
             }
         }
-
-        // NB: no paintOverlay() here — v2 LayerStack paints the
-        // dropdown popup above everything at end-of-frame (App.cpp).
+        // Dropdown popup paints via LayerStack (App render loop).
     }
 
 private:
@@ -338,8 +323,8 @@ private:
 
     library::LibraryDatabase* m_db = nullptr;
 
-    ::yawn::ui::fw2::FwTextInput m_searchInput;
-    ::yawn::ui::fw2::FwDropDown m_filterDropdown;
+    FwTextInput m_searchInput;
+    FwDropDown  m_filterDropdown;
 
     std::vector<PresetListEntry> m_entries;
     bool m_searching = false;
@@ -352,15 +337,6 @@ private:
 
     std::function<void(const std::string&, const std::string&)> m_onPresetDoubleClick;
 
-    static bool hitRect(float mx, float my, float rx, float ry, float rw, float rh) {
-        return mx >= rx && mx < rx + rw && my >= ry && my < ry + rh;
-    }
-
-    // Translate the filter dropdown's selection into a DB query token:
-    //   0 → "" (all) — LibraryDatabase::getFilteredPresets returns all.
-    //   1 → "instrument"
-    //   2 → "effect"
-    // Any other index (shouldn't happen) falls through to "".
     std::string currentFilterType() const {
         switch (m_filterDropdown.selectedIndex()) {
             case 1: return "instrument";
@@ -403,8 +379,6 @@ private:
 
         m_searching = true;
         auto results = m_db->searchPresets(query);
-        // Apply the current filter to search results too, so "Instruments"
-        // + "bass" narrows search instead of ignoring the dropdown.
         const std::string filter = currentFilterType();
         if (!filter.empty()) {
             results.erase(
@@ -419,6 +393,6 @@ private:
     }
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

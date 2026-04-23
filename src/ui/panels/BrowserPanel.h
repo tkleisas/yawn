@@ -93,8 +93,8 @@ public:
     FollowAction* followActionPtr() const { return m_followActionPtr; }
 
     // ── Files & Presets tabs ──
-    ::yawn::ui::fw::BrowserFilesTab&   filesTab()   { return m_filesTab; }
-    ::yawn::ui::fw::BrowserPresetsTab& presetsTab() { return m_presetsTab; }
+    BrowserFilesTab&   filesTab()   { return m_filesTab; }
+    BrowserPresetsTab& presetsTab() { return m_presetsTab; }
     void setLibraryDatabase(library::LibraryDatabase* db) {
         m_filesTab.setDatabase(db);
         m_presetsTab.setDatabase(db);
@@ -220,22 +220,14 @@ protected:
             }
         }
 
-        // Files tab — v1 sub-widget, convert event at boundary.
+        // Files tab — fw2 sub-widget, dispatch natively.
         if (m_activeTab == Tab::Files) {
-            float bodyY = y + kTabH;
-            float bodyH = m_bounds.h - kTabH;
-            if (!m_v1Ctx) return false;
-            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
-            return m_filesTab.onMouseDown(v1e, x, bodyY, w, bodyH, *m_v1Ctx);
+            return m_filesTab.dispatchMouseDown(e);
         }
 
-        // Presets tab — v1 sub-widget, convert event at boundary.
+        // Presets tab — fw2 sub-widget, dispatch natively.
         if (m_activeTab == Tab::Presets) {
-            float bodyY = y + kTabH;
-            float bodyH = m_bounds.h - kTabH;
-            if (!m_v1Ctx) return false;
-            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
-            return m_presetsTab.onMouseDown(v1e, x, bodyY, w, bodyH, *m_v1Ctx);
+            return m_presetsTab.dispatchMouseDown(e);
         }
 
         // Clip tab: follow action widgets.
@@ -294,12 +286,10 @@ protected:
 
     bool onMouseMove(MouseMoveEvent& e) override {
         if (m_activeTab == Tab::Files) {
-            auto v1e = ::yawn::ui::fw2::toFw1MouseMove(e);
-            return m_filesTab.onMouseMove(v1e);
+            return m_filesTab.dispatchMouseMove(e);
         }
         if (m_activeTab == Tab::Presets) {
-            auto v1e = ::yawn::ui::fw2::toFw1MouseMove(e);
-            return m_presetsTab.onMouseMove(v1e);
+            return m_presetsTab.dispatchMouseMove(e);
         }
         // fw2 drag in progress — forward translated events to the
         // captured widget via its local coordinates.
@@ -328,12 +318,10 @@ protected:
 
     bool onMouseUp(MouseEvent& e) override {
         if (m_activeTab == Tab::Files) {
-            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
-            return m_filesTab.onMouseUp(v1e);
+            return m_filesTab.dispatchMouseUp(e);
         }
         if (m_activeTab == Tab::Presets) {
-            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
-            return m_presetsTab.onMouseUp(v1e);
+            return m_presetsTab.dispatchMouseUp(e);
         }
         // fw2 drag release — dispatch to captured widget; its own
         // gesture SM releases capture internally.
@@ -359,22 +347,10 @@ protected:
 
     bool onScroll(ScrollEvent& e) override {
         if (m_activeTab == Tab::Files) {
-            // BrowserFilesTab::onScroll takes a v1 ScrollEvent; build
-            // one inline (no dedicated bridge helper yet).
-            ::yawn::ui::fw::ScrollEvent v1e;
-            v1e.x  = e.x;
-            v1e.y  = e.y;
-            v1e.dx = e.dx;
-            v1e.dy = e.dy;
-            return m_filesTab.onScroll(v1e);
+            return m_filesTab.dispatchScroll(e);
         }
         if (m_activeTab == Tab::Presets) {
-            ::yawn::ui::fw::ScrollEvent v1e;
-            v1e.x  = e.x;
-            v1e.y  = e.y;
-            v1e.dx = e.dx;
-            v1e.dy = e.dy;
-            return m_presetsTab.onScroll(v1e);
+            return m_presetsTab.dispatchScroll(e);
         }
         // v2 dropdowns route wheel events to their popup automatically
         // when open (LayerStack dispatch). No per-panel glue needed.
@@ -429,12 +405,14 @@ public:
 
         switch (m_activeTab) {
         case Tab::Files:
-            if (m_v1Ctx && m_v1Ctx->font)
-                m_filesTab.paint(r, *m_v1Ctx->font, x, bodyY, w, bodyH, *m_v1Ctx);
+            m_filesTab.measure(Constraints::tight(w, bodyH), ctx);
+            m_filesTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
+            m_filesTab.render(ctx);
             break;
         case Tab::Presets:
-            if (m_v1Ctx && m_v1Ctx->font)
-                m_presetsTab.paint(r, *m_v1Ctx->font, x, bodyY, w, bodyH, *m_v1Ctx);
+            m_presetsTab.measure(Constraints::tight(w, bodyH), ctx);
+            m_presetsTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
+            m_presetsTab.render(ctx);
             break;
         case Tab::Clip:
             paintClipTab(ctx, x, bodyY, w, bodyH);
@@ -461,9 +439,9 @@ private:
     ::yawn::ui::fw::UIContext* m_v1Ctx = nullptr;
     float m_tabWidths[4] = {55, 55, 55, 55}; // computed in render
 
-    // Files and Presets tabs — still v1 widgets internally.
-    ::yawn::ui::fw::BrowserFilesTab   m_filesTab;
-    ::yawn::ui::fw::BrowserPresetsTab m_presetsTab;
+    // Files and Presets tabs — fw2 widgets; bounds driven by our render().
+    BrowserFilesTab   m_filesTab;
+    BrowserPresetsTab m_presetsTab;
 
     // MIDI monitor state
     midi::MidiMonitorBuffer* m_midiMonitor = nullptr;
