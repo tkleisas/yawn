@@ -130,8 +130,13 @@ public:
         }
     };
 
-    // Layout constants (shared with v1 wrapper via constexpr re-exports)
-    static constexpr float kKnobSize       = 48.0f;
+    // Layout constants (shared with v1 wrapper via constexpr re-exports).
+    // Cell size (kKnobSize + kKnobSpacing wide, kKnobSize + 22 tall =
+    // 60×66) is tuned smaller than v1's {64,70} so generic-device knobs
+    // render at the same visible size as the GroupedKnobBody knobs in
+    // Subtractive Synth (cell 62×68 there; paintKnob picks disc-diameter
+    // from min(cell.w, cell.h - labels)).
+    static constexpr float kKnobSize       = 44.0f;
     static constexpr float kKnobSpacing    = 16.0f;
     static constexpr int   kMaxKnobRows    = 2;
     static constexpr float kCollapsedW     = 60.0f;
@@ -327,12 +332,23 @@ public:
 
     // ─── Width calculation (matches v1) ─────────────────────────────
 
+    // Rough header width needed to fit expand/bypass/name/preset/remove
+    // without clipping. Chars at ~12 px/col at the 25-px device-name
+    // font size, plus fixed gutters. Used as a floor for preferredWidth.
+    float headerMinWidth() const {
+        constexpr float kExpand = 16.0f, kBypass = 24.0f, kRemove = 24.0f;
+        constexpr float kPresetW = 72.0f;  // "Preset ▾" at kFsSmall
+        constexpr float kGutters = 4 + 2 + 6 + 8 + 4;  // small paddings
+        const float nameW = static_cast<float>(m_deviceName.size()) * 12.0f;
+        return kExpand + kBypass + nameW + kPresetW + kRemove + kGutters;
+    }
+
     float preferredWidth() const {
         if (!m_expanded) return kCollapsedW;
         if (m_customBody) {
             // v1 wrapper supplies CustomDeviceBody::preferredBodyWidth()
             // separately; fallback when no body is installed.
-            return kMinExpandedW;  // wrapper may override externally
+            return std::max(kMinExpandedW, headerMinWidth());
         }
         const float cellW = std::max(kKnobSize + kKnobSpacing, m_cachedCellW);
         const int paramCount = static_cast<int>(m_knobs.size() + m_vizKnobs.size());
@@ -340,14 +356,14 @@ public:
             int cols = paramCount == 0 ? 0
                       : static_cast<int>(std::ceil(static_cast<float>(paramCount) / 1.0f));
             const float knobW = cols * cellW + 16.0f;
-            return std::max(kVisualizerMinW, knobW);
+            return std::max({kVisualizerMinW, knobW, headerMinWidth()});
         }
         int cols = paramCount == 0 ? 1
                   : static_cast<int>(std::ceil(static_cast<float>(paramCount)
                                                / static_cast<float>(kMaxKnobRows)));
         float w = cols * cellW + 24.0f;
         if (m_customPanel && m_customMinW > 0) w = std::max(w, m_customMinW);
-        return std::max(kMinExpandedW, w);
+        return std::max({kMinExpandedW, w, headerMinWidth()});
     }
 
     // ─── fw2 lifecycle ──────────────────────────────────────────────
@@ -697,9 +713,35 @@ private:
             k->setDefaultValue(p.defaultVal);
             k->setValue(p.defaultVal);
             k->setLabel(p.name);
-            k->setValueFormatter([unit = p.unit, isBool = p.isBoolean](float v) {
-                return formatValue(v, unit, isBool);
-            });
+            // Integer-range detection (mirrors GroupedKnobBody): small
+            // unit-less integer params (Semitones, Octave, Algorithm)
+            // snap to 1.0 and format as plain integers instead of the
+            // default %.2f. Covers Arpeggiator / Pitch / similar.
+            const float range = p.maxVal - p.minVal;
+            const bool isInteger = (range >= 2.0f && range <= 128.0f &&
+                                     p.minVal == std::floor(p.minVal) &&
+                                     p.maxVal == std::floor(p.maxVal) &&
+                                     !p.isBoolean);
+            if (isInteger) {
+                k->setStep(1.0f);
+                // ~2 px per integer step — snap stays clean across large
+                // ranges (Semitones is -48..+48 → 96 steps). A fixed 48
+                // gave 0.5 px/step and dragged in 2-unit jumps.
+                k->setPixelsPerFullRange(std::max(48.0f, range * 2.0f));
+                k->setValueFormatter([unit = p.unit](float v) {
+                    char buf[16];
+                    const int iv = static_cast<int>(std::round(v));
+                    if (unit.empty())
+                        std::snprintf(buf, sizeof(buf), "%d", iv);
+                    else
+                        std::snprintf(buf, sizeof(buf), "%d %s", iv, unit.c_str());
+                    return std::string(buf);
+                });
+            } else {
+                k->setValueFormatter([unit = p.unit, isBool = p.isBoolean](float v) {
+                    return formatValue(v, unit, isBool);
+                });
+            }
             const int idx = p.index;
             k->setOnChange([this, idx](float v) {
                 if (m_onParamChange) m_onParamChange(idx, v);
