@@ -544,6 +544,37 @@ void App::buildWidgetTree() {
         m_audioEngine.sendCommand(audio::TransportSetLoopEnabledMsg{enabled});
         m_audioEngine.sendCommand(audio::TransportSetLoopRangeMsg{start, end});
     });
+    m_arrangementPanel->setOnClipContextMenu(
+        [this](int track, int clipIdx, float mx, float my) {
+            showArrangementClipContextMenu(track, clipIdx, mx, my);
+        });
+    m_arrangementPanel->setOnClipDoubleClick(
+        [this](int track, int clipIdx) {
+            auto& clips = m_project.track(track).arrangementClips;
+            if (clipIdx < 0 || clipIdx >= static_cast<int>(clips.size())) return;
+            auto& ac = clips[clipIdx];
+            if (ac.type == ArrangementClip::Type::Midi && ac.midiClip) {
+                m_pianoRoll->setClip(ac.midiClip.get(), track,
+                    ui::fw2::PianoRollPanel::Source::Arrangement);
+                // Sync arrangement-clip duration from the MIDI clip
+                // whenever it's edited (x2 / /2 / Clr / loop-drag /
+                // autoExtend on note-draw). Without this the grid
+                // representation would drift away from the audible
+                // length of the clip.
+                m_pianoRoll->setOnLengthChanged([this, track, clipIdx]() {
+                    auto& cs = m_project.track(track).arrangementClips;
+                    if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
+                    auto& a = cs[clipIdx];
+                    if (a.type != ArrangementClip::Type::Midi || !a.midiClip) return;
+                    a.lengthBeats = a.midiClip->lengthBeats();
+                    m_project.track(track).sortArrangementClips();
+                    m_project.updateArrangementLength();
+                    syncArrangementClipsToEngine(track);
+                    markDirty();
+                });
+                m_pianoRoll->setOpen(true);
+            }
+        });
     m_arrangementPanel->setVisible(false); // start in session view
 
     // Wire the 4-quadrant layout. ContentGrid and every panel including
@@ -2070,6 +2101,56 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         items.push_back({"", nullptr, true}); // separator
     }
 
+    // "Send to Arrangement" for audio/MIDI session clips — mirrors the
+    // visual-clip path above. Audio shares the underlying AudioBuffer
+    // with the session slot; MIDI is cloned (unique_ptr source → shared
+    // on the arrangement side so the same clip can recur on the
+    // timeline without cross-editing the session version).
+    const bool canSendAudio = slot && slot->audioClip && slot->audioClip->buffer;
+    const bool canSendMidi  = slot && slot->midiClip;
+    if (canSendAudio || canSendMidi) {
+        items.push_back({"Send to Arrangement",
+            [this, trackIndex, sceneIndex]() {
+                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                if (!s) return;
+                ArrangementClip ac;
+                ac.startBeat  = m_audioEngine.transport().positionInBeats();
+                ac.colorIndex = m_project.track(trackIndex).colorIndex;
+                if (s->audioClip && s->audioClip->buffer) {
+                    const double sr  = m_audioEngine.sampleRate();
+                    const double bpm = m_audioEngine.transport().bpm();
+                    const double durSec =
+                        static_cast<double>(s->audioClip->buffer->numFrames()) / sr;
+                    ac.type        = ArrangementClip::Type::Audio;
+                    ac.audioBuffer = s->audioClip->buffer;
+                    ac.lengthBeats = durSec * bpm / 60.0;
+                    ac.name        = s->audioClip->name.empty()
+                                     ? "audio" : s->audioClip->name;
+                } else if (s->midiClip) {
+                    ac.type        = ArrangementClip::Type::Midi;
+                    ac.midiClip    = std::shared_ptr<midi::MidiClip>(
+                                         s->midiClip->clone().release());
+                    ac.lengthBeats = s->midiClip->lengthBeats() > 0
+                                     ? s->midiClip->lengthBeats() : 4.0;
+                    ac.name        = s->midiClip->name().empty()
+                                     ? "midi" : s->midiClip->name();
+                } else {
+                    return;
+                }
+                m_project.track(trackIndex).arrangementClips.push_back(std::move(ac));
+                m_project.track(trackIndex).sortArrangementClips();
+                m_project.updateArrangementLength();
+                syncArrangementClipsToEngine(trackIndex);
+                if (!m_project.track(trackIndex).arrangementActive) {
+                    m_project.track(trackIndex).arrangementActive = true;
+                    m_audioEngine.sendCommand(
+                        audio::SetTrackArrActiveMsg{trackIndex, true});
+                }
+                markDirty();
+            }, false, true});
+        items.push_back({"", nullptr, true}); // separator
+    }
+
     items.push_back({"Copy", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && s->audioClip) {
@@ -2765,6 +2846,71 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                 markDirty();
             }, ""});
     }, false, canDelete});
+
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
+}
+
+void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
+                                         float mx, float my) {
+    if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
+    auto& clips = m_project.track(trackIndex).arrangementClips;
+    if (clipIdx < 0 || clipIdx >= static_cast<int>(clips.size())) return;
+
+    std::vector<ui::ContextMenu::Item> items;
+
+    items.push_back({"Copy", [this, trackIndex, clipIdx]() {
+        auto& cs = m_project.track(trackIndex).arrangementClips;
+        if (clipIdx >= 0 && clipIdx < static_cast<int>(cs.size())) {
+            m_arrangementClipboard = cs[clipIdx];
+            m_arrangementClipboardValid = true;
+        }
+    }, false, true});
+
+    items.push_back({"Cut", [this, trackIndex, clipIdx]() {
+        auto& cs = m_project.track(trackIndex).arrangementClips;
+        if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
+        m_arrangementClipboard      = cs[clipIdx];
+        m_arrangementClipboardValid = true;
+        // Reuse panel's delete path so selection + undo stay consistent.
+        m_arrangementPanel->setSelectedClip(trackIndex, clipIdx);
+        m_arrangementPanel->handleAppKey(SDLK_DELETE, /*ctrl=*/false);
+    }, false, true});
+
+    // Paste: enabled only if the clipboard holds something compatible
+    // with this track's type (audio→Audio, midi→Midi, visual→Visual).
+    const auto trkType  = m_project.track(trackIndex).type;
+    const bool canPaste = m_arrangementClipboardValid && (
+        (trkType == Track::Type::Audio  && m_arrangementClipboard.type == ArrangementClip::Type::Audio)  ||
+        (trkType == Track::Type::Midi   && m_arrangementClipboard.type == ArrangementClip::Type::Midi)   ||
+        (trkType == Track::Type::Visual && m_arrangementClipboard.type == ArrangementClip::Type::Visual));
+    items.push_back({"Paste", [this, trackIndex]() {
+        if (!m_arrangementClipboardValid) return;
+        ArrangementClip ac = m_arrangementClipboard;
+        ac.startBeat = m_audioEngine.transport().positionInBeats();
+        m_project.track(trackIndex).arrangementClips.push_back(std::move(ac));
+        m_project.track(trackIndex).sortArrangementClips();
+        m_project.updateArrangementLength();
+        syncArrangementClipsToEngine(trackIndex);
+        if (!m_project.track(trackIndex).arrangementActive) {
+            m_project.track(trackIndex).arrangementActive = true;
+            m_audioEngine.sendCommand(
+                audio::SetTrackArrActiveMsg{trackIndex, true});
+        }
+        markDirty();
+    }, false, canPaste});
+
+    items.push_back({"", nullptr, true}); // separator
+
+    items.push_back({"Duplicate", [this, trackIndex, clipIdx]() {
+        m_arrangementPanel->setSelectedClip(trackIndex, clipIdx);
+        m_arrangementPanel->handleAppKey(SDLK_D, /*ctrl=*/true);
+    }, false, true});
+
+    items.push_back({"Delete", [this, trackIndex, clipIdx]() {
+        m_arrangementPanel->setSelectedClip(trackIndex, clipIdx);
+        m_arrangementPanel->handleAppKey(SDLK_DELETE, /*ctrl=*/false);
+    }, false, true});
 
     ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
                                  ui::fw::Point{mx, my});
@@ -4216,6 +4362,19 @@ void App::processEvents() {
                             if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); }
                             break;
                         case SDLK_C: { // Copy clip
+                            // Arrangement view: copy the selected arrangement clip
+                            if (m_project.viewMode() == ViewMode::Arrangement) {
+                                int ct = m_arrangementPanel->selectedClipTrack();
+                                int ci = m_arrangementPanel->selectedClipIndex();
+                                if (ct >= 0 && ci >= 0) {
+                                    auto& cs = m_project.track(ct).arrangementClips;
+                                    if (ci < static_cast<int>(cs.size())) {
+                                        m_arrangementClipboard = cs[ci];
+                                        m_arrangementClipboardValid = true;
+                                    }
+                                }
+                                break;
+                            }
                             auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
                             if (slot && slot->audioClip) {
                                 m_clipboard.clear();
@@ -4229,6 +4388,21 @@ void App::processEvents() {
                             break;
                         }
                         case SDLK_X: { // Cut clip
+                            // Arrangement view: cut = copy + delete
+                            if (m_project.viewMode() == ViewMode::Arrangement) {
+                                int ct = m_arrangementPanel->selectedClipTrack();
+                                int ci = m_arrangementPanel->selectedClipIndex();
+                                if (ct >= 0 && ci >= 0) {
+                                    auto& cs = m_project.track(ct).arrangementClips;
+                                    if (ci < static_cast<int>(cs.size())) {
+                                        m_arrangementClipboard = cs[ci];
+                                        m_arrangementClipboardValid = true;
+                                        m_arrangementPanel->handleAppKey(
+                                            SDLK_DELETE, /*ctrl=*/false);
+                                    }
+                                }
+                                break;
+                            }
                             int ct = m_selectedTrack, cs = m_selectedScene;
                             auto* slot = m_project.getSlot(ct, cs);
                             if (slot && slot->audioClip) {
@@ -4271,6 +4445,43 @@ void App::processEvents() {
                             break;
                         }
                         case SDLK_V: { // Paste clip
+                            // Arrangement view: paste at current transport position
+                            // on the source track, from the arrangement clipboard.
+                            if (m_project.viewMode() == ViewMode::Arrangement) {
+                                if (!m_arrangementClipboardValid) break;
+                                // Pick destination track: selected track if it
+                                // matches the clipboard's clip type, otherwise
+                                // fall back to whatever track the clip came from
+                                // when it was copied (we don't preserve that
+                                // explicitly, so default to m_selectedTrack and
+                                // let the user move it if needed).
+                                int pt = m_arrangementPanel->selectedTrack();
+                                if (pt < 0 || pt >= m_project.numTracks()) break;
+                                // Type compatibility: audio→Audio track,
+                                // midi→Midi, visual→Visual. If mismatched,
+                                // reject silently — pasting a MIDI clip on an
+                                // audio track wouldn't play.
+                                auto trkType = m_project.track(pt).type;
+                                auto clipType = m_arrangementClipboard.type;
+                                bool typeOk =
+                                    (trkType == Track::Type::Audio  && clipType == ArrangementClip::Type::Audio)  ||
+                                    (trkType == Track::Type::Midi   && clipType == ArrangementClip::Type::Midi)   ||
+                                    (trkType == Track::Type::Visual && clipType == ArrangementClip::Type::Visual);
+                                if (!typeOk) break;
+                                ArrangementClip ac = m_arrangementClipboard;  // deep copy (visualClip cloned)
+                                ac.startBeat = m_audioEngine.transport().positionInBeats();
+                                m_project.track(pt).arrangementClips.push_back(std::move(ac));
+                                m_project.track(pt).sortArrangementClips();
+                                m_project.updateArrangementLength();
+                                syncArrangementClipsToEngine(pt);
+                                if (!m_project.track(pt).arrangementActive) {
+                                    m_project.track(pt).arrangementActive = true;
+                                    m_audioEngine.sendCommand(
+                                        audio::SetTrackArrActiveMsg{pt, true});
+                                }
+                                markDirty();
+                                break;
+                            }
                             int pt = m_selectedTrack, ps = m_selectedScene;
                             if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
                                 auto* slot = m_project.getSlot(pt, ps);
@@ -4937,6 +5148,7 @@ void App::processEvents() {
                         auto* slot = m_project.getSlot(dblTrack, dblScene);
                         if (slot && slot->midiClip) {
                             m_pianoRoll->setClip(slot->midiClip.get(), dblTrack);
+                            m_pianoRoll->setOnLengthChanged(nullptr);
                             m_pianoRoll->setOpen(true);
                             m_selectedTrack = dblTrack;
                             break;
@@ -4952,6 +5164,7 @@ void App::processEvents() {
                             int ct = dblTrack, cs = dblScene;
                             m_project.setMidiClip(ct, cs, std::move(newClip));
                             m_pianoRoll->setClip(clipPtr, ct);
+                            m_pianoRoll->setOnLengthChanged(nullptr);
                             m_pianoRoll->setOpen(true);
                             m_selectedTrack = ct;
                             markDirty();

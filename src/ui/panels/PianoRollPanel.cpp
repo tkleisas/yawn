@@ -293,6 +293,7 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
             } else {
                 double minEnd = m_clip->loopStartBeat() + snapVal();
                 m_clip->setLengthBeats(std::max(minEnd, beat));
+                if (m_onLengthChanged) m_onLengthChanged();
             }
         }
         return true;
@@ -472,6 +473,10 @@ bool PianoRollPanel::handleKeyDown(int key, bool ctrl) {
         return true;
     }
     if (key == kDelete || key == kBackspace) {
+        // Only consume when we actually have notes to delete. Returning
+        // true unconditionally here would swallow Delete for the whole
+        // app while the piano roll is open — e.g. blocking deletion of
+        // the selected arrangement clip behind it.
         if (!m_selectedNotes.empty() && m_clip) {
             std::vector<int> indices(m_selectedNotes.rbegin(), m_selectedNotes.rend());
             m_selectedNotes.clear();
@@ -479,8 +484,9 @@ bool PianoRollPanel::handleKeyDown(int key, bool ctrl) {
                 if (idx >= 0 && idx < m_clip->noteCount())
                     m_clip->removeNote(idx);
             }
+            return true;
         }
-        return true;
+        return false;
     }
 
     if (key == kLeft && !m_selectedNotes.empty() && m_clip) {
@@ -622,14 +628,37 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     // Clip name (right-aligned). fw2::Label renders at theme.metrics
     // .fontSize * fontScale — measure at that same size so the label
     // box is wide enough and doesn't clip mid-glyph at the right edge.
+    float clipNameLeft = m_px + m_pw;
     if (m_clip && !m_clip->name().empty()) {
         m_clipNameLabel.setText(m_clip->name());
         const float fs = theme().metrics.fontSize * m_clipNameLabel.fontScale();
         float nameW = tm.textWidth(m_clip->name(), fs);
         if (nameW <= 0) nameW = 100.0f;
         nameW += 4.0f;   // small trailing slack so the last glyph isn't clipped
-        m_clipNameLabel.layout(Rect{m_px + m_pw - nameW - 8, tbY + 2, nameW, btnH}, ctx);
+        clipNameLeft = m_px + m_pw - nameW - 8;
+        m_clipNameLabel.layout(Rect{clipNameLeft, tbY + 2, nameW, btnH}, ctx);
         m_clipNameLabel.render(ctx);
+    }
+
+    // Source badge — pill to the left of the clip name, colored so
+    // "Session" and "Arrangement" clips are unmistakable even when
+    // they share a name.
+    if (m_clip) {
+        const char* sText = (m_source == Source::Arrangement)
+                            ? "Arrangement" : "Session";
+        const Color sBg   = (m_source == Source::Arrangement)
+                            ? Color{60, 120, 200, 220}   // blue-ish
+                            : Color{220, 130, 50, 220};  // orange-ish
+        const float sfs   = theme().metrics.fontSizeSmall;
+        const float textW = tm.textWidth(sText, sfs);
+        const float padX  = 6.0f;
+        const float pillW = textW + padX * 2;
+        const float pillH = btnH - 4;
+        const float pillX = clipNameLeft - pillW - 6;
+        const float pillY = tbY + 2 + (btnH - pillH) * 0.5f;
+        r.drawRoundedRect(pillX, pillY, pillW, pillH, pillH * 0.5f, sBg);
+        const float ty = pillY + (pillH - sfs) * 0.5f;
+        tm.drawText(r, sText, pillX + padX, ty, sfs, Color{255, 255, 255, 255});
     }
 }
 

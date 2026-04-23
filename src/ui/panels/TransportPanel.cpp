@@ -143,15 +143,17 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_metroDotX = lx + metW + 6.0f;
     m_metroDotY = btnY + boxH * 0.5f;
 
-    // ── Center group: Stop | Play | Record ──
-    const float totalBtnW = 3 * btnSize + 2 * btnGap;
+    // ── Center group: Home | Stop | Play | Record ──
+    const float totalBtnW = 4 * btnSize + 3 * btnGap;
     const float centerX = bounds.x + (bounds.w - totalBtnW) * 0.5f;
 
-    m_stopBtnX = centerX;                         m_stopBtnY = btnY;
+    m_homeBtnX = centerX;                          m_homeBtnY = btnY;
+    m_homeBtnW = btnSize;                          m_homeBtnH = btnSize;
+    m_stopBtnX = centerX + btnSize + btnGap;       m_stopBtnY = btnY;
     m_stopBtnW = btnSize;                          m_stopBtnH = btnSize;
-    m_playBtnX = centerX + btnSize + btnGap;       m_playBtnY = btnY;
+    m_playBtnX = centerX + 2 * (btnSize + btnGap); m_playBtnY = btnY;
     m_playBtnW = btnSize;                          m_playBtnH = btnSize;
-    m_recBtnX  = centerX + 2 * (btnSize + btnGap); m_recBtnY  = btnY;
+    m_recBtnX  = centerX + 3 * (btnSize + btnGap); m_recBtnY  = btnY;
     m_recBtnW  = btnSize;                          m_recBtnH  = btnSize;
 }
 
@@ -361,6 +363,25 @@ void TransportPanel::render(UIContext& ctx) {
 void TransportPanel::paintTransportButtons(Renderer2D& r) {
     constexpr float cornerR = 4.0f;
 
+    // Home — return playhead to 0. Icon: a left-pointing triangle plus
+    // a short vertical bar ("⏮") scaled down to fit the button.
+    {
+        const bool hovered = (m_hoveredBtn == 3);
+        const Color bg = hovered ? Color{60,60,65,255} : Color{50,50,55,255};
+        r.drawRoundedRect(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, cornerR, bg);
+        const Color ic{255,255,255,255};
+        const float cx = m_homeBtnX + m_homeBtnW * 0.5f;
+        const float cy = m_homeBtnY + m_homeBtnH * 0.5f;
+        const float triH = 10.0f, triW = 8.0f;
+        // Vertical bar (left side)
+        r.drawRect(cx - triW * 0.6f - 3.0f, cy - triH * 0.5f,
+                   2.0f, triH, ic);
+        // Left-pointing triangle (right of bar)
+        r.drawTriangle(cx + triW * 0.4f, cy - triH * 0.5f,
+                        cx + triW * 0.4f, cy + triH * 0.5f,
+                        cx - triW * 0.6f, cy, ic);
+    }
+
     // Stop
     {
         const bool hovered = (m_hoveredBtn == 0);
@@ -455,6 +476,12 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
     if (rightClick) return false;
 
     // Transport buttons.
+    if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) {
+        // Return-to-zero — leaves play state untouched so a user can
+        // "rewind to start while playing" and keep going.
+        m_engine->sendCommand(audio::TransportSetPositionMsg{0});
+        return true;
+    }
     if (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) {
         m_engine->sendCommand(audio::TransportStopMsg{});
         m_engine->sendCommand(audio::TransportSetPositionMsg{0});
@@ -518,6 +545,7 @@ bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
     if      (hitBtn(m_stopBtnX, m_stopBtnY, m_stopBtnW, m_stopBtnH, mx, my)) m_hoveredBtn = 0;
     else if (hitBtn(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH, mx, my)) m_hoveredBtn = 1;
     else if (hitBtn(m_recBtnX,  m_recBtnY,  m_recBtnW,  m_recBtnH,  mx, my)) m_hoveredBtn = 2;
+    else if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) m_hoveredBtn = 3;
     return (m_hoveredBtn != prev);
 }
 

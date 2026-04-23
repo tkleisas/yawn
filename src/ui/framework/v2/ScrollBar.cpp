@@ -41,7 +41,12 @@ float FwScrollBar::maxScroll() const {
 
 float FwScrollBar::thumbWidth() const {
     const float w = bounds().w;
-    if (w <= 0.0f || m_contentSize <= w) return 0.0f;
+    if (w <= 0.0f) return 0.0f;
+    // When content fits the viewport, fill the whole track so the thumb
+    // stays visible — disappearing on zoom-out or on short clips made
+    // the piano roll feel like the scrollbar was broken. A full-width
+    // thumb communicates "you're seeing everything".
+    if (m_contentSize <= w) return w;
     return std::max(m_minThumbW, w * (w / m_contentSize));
 }
 

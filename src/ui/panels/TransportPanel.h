@@ -275,6 +275,7 @@ private:
     std::string m_posText;
 
     // Centered transport button positions.
+    float m_homeBtnX = 0, m_homeBtnY = 0, m_homeBtnW = 0, m_homeBtnH = 0;
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;
     float m_playBtnX = 0, m_playBtnY = 0, m_playBtnW = 0, m_playBtnH = 0;
     float m_recBtnX  = 0, m_recBtnY  = 0, m_recBtnW  = 0, m_recBtnH  = 0;
@@ -286,7 +287,7 @@ private:
     float m_tsDenBoxX = 0, m_tsDenBoxY = 0, m_tsDenBoxW = 0, m_tsDenBoxH = 0;
 
     // Hover state (transport buttons).
-    int m_hoveredBtn = -1;  // 0=stop, 1=play, 2=record, -1=none
+    int m_hoveredBtn = -1;  // 0=stop, 1=play, 2=record, 3=home, -1=none
 
     static constexpr int kTapHistorySize = 4;
     double m_tapTimes[kTapHistorySize] = {};

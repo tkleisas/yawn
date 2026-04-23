@@ -121,7 +121,7 @@ void ArrangementPanel::render(UIContext& ctx) {
     r.drawRect(x, y, w, h, ::yawn::ui::Theme::background);
 
     float gridX = x + kTrackHeaderW;
-    float gridW = w - kTrackHeaderW;
+    float gridW = w - kTrackHeaderW - kScrollbarW;  // reserve right-side vscroll
     float gridY = y + kRulerH;
     float gridH = h - kRulerH - kScrollbarH;
 
@@ -143,6 +143,28 @@ void ArrangementPanel::render(UIContext& ctx) {
     paintAutoLanes(r, tm, gridX, gridY, gridW, gridH);
     paintPlayhead(r, gridX, gridY, gridW, gridH + kRulerH);
     paintScrollbar(r, gridX, gridY + gridH, gridW);
+    paintVScrollbar(r, gridX + gridW, gridY, gridH);
+
+    // Top-left corner: loop toggle button. Pill labeled "Loop" — green
+    // when active, dim gray when off. Clicking it toggles m_loopEnabled
+    // and, on first enable with no range, seeds a 4-bar loop.
+    {
+        const float btnW = 60.0f, btnH = 18.0f;
+        const float bx = x + (kTrackHeaderW - btnW) * 0.5f;
+        const float by = y + (kRulerH - btnH) * 0.5f;
+        const Color bg = m_loopEnabled ? Color{60, 130, 80, 230}
+                                        : Color{55, 55, 60, 230};
+        r.drawRoundedRect(bx, by, btnW, btnH, btnH * 0.5f, bg);
+        const float fs = theme().metrics.fontSizeSmall;
+        const char* label = "Loop";
+        const float tw = tm.textWidth(label, fs);
+        const Color ic = m_loopEnabled ? Color{240, 255, 240, 255}
+                                        : Color{180, 180, 190, 255};
+        tm.drawText(r, label, bx + (btnW - tw) * 0.5f,
+                     by + (btnH - fs) * 0.5f, fs, ic);
+        m_loopBtnX = bx; m_loopBtnY = by;
+        m_loopBtnW = btnW; m_loopBtnH = btnH;
+    }
 }
 
 #endif // !YAWN_TEST_BUILD
@@ -172,9 +194,63 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
     float x = m_bounds.x, y = m_bounds.y;
     float w = m_bounds.w, h = m_bounds.h;
     float gridX = x + kTrackHeaderW;
-    float gridW = w - kTrackHeaderW;
+    float gridW = w - kTrackHeaderW - kScrollbarW;
     float gridY = y + kRulerH;
     float gridH = h - kRulerH - kScrollbarH;
+
+    // Loop toggle button (top-left corner). Cached rect comes from the
+    // previous paint — so a click before the first render is a no-op.
+    if (m_loopBtnW > 0 && isLeft(e) &&
+        e.x >= m_loopBtnX && e.x < m_loopBtnX + m_loopBtnW &&
+        e.y >= m_loopBtnY && e.y < m_loopBtnY + m_loopBtnH) {
+        bool newEnabled = !m_loopEnabled;
+        double oldStart = m_loopStart, oldEnd = m_loopEnd;
+        if (newEnabled && m_loopEnd <= m_loopStart) {
+            // Seed a 4-bar range starting at the playhead so first-use
+            // is meaningful without requiring a manual drag.
+            int beatsPerBar = m_engine ? m_engine->transport().numerator() : 4;
+            double cur = m_engine ? m_engine->transport().positionInBeats() : 0.0;
+            m_loopStart = std::max(0.0, cur);
+            m_loopEnd   = m_loopStart + 4.0 * beatsPerBar;
+        }
+        m_loopEnabled = newEnabled;
+        if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        if (m_undoManager) {
+            bool oldEn = !newEnabled;
+            double ns = m_loopStart, ne = m_loopEnd;
+            m_undoManager->push({"Toggle Loop",
+                [this, oldEn, oldStart, oldEnd]{
+                    m_loopEnabled = oldEn;
+                    m_loopStart = oldStart; m_loopEnd = oldEnd;
+                    if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+                },
+                [this, newEnabled, ns, ne]{
+                    m_loopEnabled = newEnabled;
+                    m_loopStart = ns; m_loopEnd = ne;
+                    if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+                }, ""});
+        }
+        return true;
+    }
+
+    // Vertical scrollbar drag (right edge of grid). Test before the
+    // generic grid hit-test so clicks on the scrollbar don't select a
+    // track underneath.
+    {
+        float vsbX = gridX + gridW;
+        if (e.x >= vsbX && e.x < vsbX + kScrollbarW &&
+            e.y >= gridY && e.y < gridY + gridH) {
+            int numTracks = m_project->numTracks();
+            float contentH = trackYOffset(numTracks);
+            if (contentH > gridH) {
+                m_vScrollDragging = true;
+                m_vScrollDragStart = e.y;
+                m_vScrollDragBase  = m_scrollY;
+                captureMouse();
+            }
+            return true;
+        }
+    }
 
     // Ruler click → set playhead or loop range
     if (e.x >= gridX && e.x < gridX + gridW &&
@@ -406,6 +482,20 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             m_selClipIdx = hitIdx;
             auto& clip = clips[hitIdx];
 
+            // Right-click → open context menu on this clip, no drag.
+            if (isRight(e)) {
+                if (m_onClipContextMenu)
+                    m_onClipContextMenu(trackIdx, hitIdx, e.x, e.y);
+                return true;
+            }
+
+            // Double-click → host opens piano roll / editor for this clip.
+            if (isDouble(e) && isLeft(e)) {
+                if (m_onClipDoubleClick)
+                    m_onClipDoubleClick(trackIdx, hitIdx);
+                return true;
+            }
+
             float clipLpx = gridX + static_cast<float>(clip.startBeat) * m_pixelsPerBeat - m_scrollX;
             float clipRpx = gridX + static_cast<float>(clip.endBeat()) * m_pixelsPerBeat - m_scrollX;
             constexpr float kEdge = 6.0f;
@@ -511,6 +601,11 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
     }
     if (m_scrollDragging) {
         m_scrollDragging = false;
+        releaseMouse();
+        return true;
+    }
+    if (m_vScrollDragging) {
+        m_vScrollDragging = false;
         releaseMouse();
         return true;
     }
@@ -671,10 +766,20 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
     if (m_scrollDragging) {
         float delta = e.x - m_scrollDragStart;
         float contentW = static_cast<float>(m_project->arrangementLength()) * m_pixelsPerBeat;
-        float gridW = m_bounds.w - kTrackHeaderW;
+        float gridW = m_bounds.w - kTrackHeaderW - kScrollbarW;
         float maxScroll = std::max(0.0f, contentW - gridW);
         float ratio = contentW > gridW ? contentW / gridW : 1.0f;
         m_scrollX = std::clamp(m_scrollDragBase + delta * ratio, 0.0f, maxScroll);
+        return true;
+    }
+
+    if (m_vScrollDragging) {
+        float delta = e.y - m_vScrollDragStart;
+        float gridH = m_bounds.h - kRulerH - kScrollbarH;
+        float contentH = trackYOffset(m_project->numTracks());
+        float maxScroll = std::max(0.0f, contentH - gridH);
+        float ratio = contentH > gridH ? contentH / gridH : 1.0f;
+        m_scrollY = std::clamp(m_vScrollDragBase + delta * ratio, 0.0f, maxScroll);
         return true;
     }
 
@@ -827,7 +932,10 @@ bool ArrangementPanel::onScroll(ScrollEvent& e) {
     }
 
     // Vertical scroll
-    m_scrollY = std::max(0.0f, m_scrollY - e.dy * 30.0f);
+    float gridH = m_bounds.h - kRulerH - kScrollbarH;
+    float contentH = m_project ? trackYOffset(m_project->numTracks()) : 0.0f;
+    float maxScrollY = std::max(0.0f, contentH - gridH);
+    m_scrollY = std::clamp(m_scrollY - e.dy * 30.0f, 0.0f, maxScrollY);
     return true;
 }
 
@@ -1431,6 +1539,20 @@ void ArrangementPanel::paintScrollbar(Renderer2D& r, float x, float y, float w) 
 
     Color thumbCol = m_scrollDragging ? Color{120, 120, 130, 255} : Color{80, 80, 90, 255};
     r.drawRoundedRect(thumbX, y + 1, thumbW, kScrollbarH - 2, 3.0f, thumbCol, 4);
+}
+
+void ArrangementPanel::paintVScrollbar(Renderer2D& r, float x, float y, float h) {
+    r.drawRect(x, y, kScrollbarW, h, Color{40, 40, 45, 255});
+
+    float contentH = trackYOffset(m_project->numTracks());
+    if (contentH <= h) return;
+
+    float thumbH = std::max(20.0f, h * (h / contentH));
+    float scrollFrac = m_scrollY / (contentH - h);
+    float thumbY = y + scrollFrac * (h - thumbH);
+
+    Color thumbCol = m_vScrollDragging ? Color{120, 120, 130, 255} : Color{80, 80, 90, 255};
+    r.drawRoundedRect(x + 1, thumbY, kScrollbarW - 2, thumbH, 3.0f, thumbCol, 4);
 }
 
 #endif // !YAWN_TEST_BUILD

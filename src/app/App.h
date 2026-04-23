@@ -94,6 +94,7 @@ private:
     void showTrackContextMenu(int trackIndex, float mx, float my);
     void showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my);
     void showSceneContextMenu(int sceneIndex, float mx, float my);
+    void showArrangementClipContextMenu(int trackIndex, int clipIdx, float mx, float my);
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
 
     // Shared launch logic for visual clips — routes either a
@@ -254,6 +255,14 @@ private:
         void clear() { type = Type::None; audioClip.reset(); midiClip.reset(); }
     };
     ClipboardData m_clipboard;
+
+    // Arrangement clipboard — separate from session clipboard because
+    // arrangement clips carry timeline metadata (startBeat, lengthBeats,
+    // offsetBeats, type, colorIndex) in addition to the underlying
+    // audio/MIDI/visual payload. hasArrangementClip() tells callers
+    // whether Paste is meaningful.
+    ArrangementClip m_arrangementClipboard;
+    bool            m_arrangementClipboardValid = false;
 
     // Cached system cursors
     SDL_Cursor* m_cursorDefault  = nullptr;

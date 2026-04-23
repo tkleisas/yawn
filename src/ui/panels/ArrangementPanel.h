@@ -47,6 +47,7 @@ public:
     static constexpr float kTrackRowH    = 56.0f;
     static constexpr float kTrackHeaderW = 150.0f;
     static constexpr float kScrollbarH   = 12.0f;
+    static constexpr float kScrollbarW   = 12.0f;  // vertical scrollbar width
     static constexpr float kAutoLaneH    = 28.0f;
     static constexpr float kMinZoom      = 4.0f;
     static constexpr float kMaxZoom      = 120.0f;
@@ -80,11 +81,15 @@ public:
     using PlayheadClickCallback  = std::function<void(double)>;
     using ClipChangeCallback     = std::function<void(int track)>;
     using TrackArrToggleCallback = std::function<void(int track, bool active)>;
+    using ClipContextMenuCallback = std::function<void(int track, int clipIdx, float mx, float my)>;
+    using ClipDoubleClickCallback = std::function<void(int track, int clipIdx)>;
 
     void setOnTrackClick(TrackClickCallback cb)         { m_onTrackClick = std::move(cb); }
     void setOnPlayheadClick(PlayheadClickCallback cb)   { m_onPlayheadClick = std::move(cb); }
     void setOnClipChange(ClipChangeCallback cb)         { m_onClipChange = std::move(cb); }
     void setOnTrackArrToggle(TrackArrToggleCallback cb) { m_onTrackArrToggle = std::move(cb); }
+    void setOnClipContextMenu(ClipContextMenuCallback cb) { m_onClipContextMenu = std::move(cb); }
+    void setOnClipDoubleClick(ClipDoubleClickCallback cb) { m_onClipDoubleClick = std::move(cb); }
 
     // ─── Track rename ─────────────────────────────────────────────────
     using RenameCallback = std::function<void(int track, const std::string& oldName, const std::string& newName)>;
@@ -181,6 +186,10 @@ public:
     int selectedClipTrack() const { return m_selClipTrack; }
     int selectedClipIndex() const { return m_selClipIdx; }
     void clearClipSelection() { m_selClipTrack = -1; m_selClipIdx = -1; }
+    void setSelectedClip(int track, int idx) {
+        m_selClipTrack = track;
+        m_selClipIdx   = idx;
+    }
 
     // ─── Track layout (variable height for automation lanes) ───────────
 
@@ -250,14 +259,22 @@ private:
     bool  m_scrollDragging = false;
     float m_scrollDragStart = 0;
     float m_scrollDragBase  = 0;
+    bool  m_vScrollDragging = false;
+    float m_vScrollDragStart = 0;
+    float m_vScrollDragBase  = 0;
+
+    // Loop toggle button (top-left corner) — cached per-render.
+    float m_loopBtnX = 0, m_loopBtnY = 0, m_loopBtnW = 0, m_loopBtnH = 0;
 
     // Callbacks
-    TrackClickCallback     m_onTrackClick;
-    PlayheadClickCallback  m_onPlayheadClick;
-    ClipChangeCallback     m_onClipChange;
-    TrackArrToggleCallback m_onTrackArrToggle;
-    LoopChangeCallback     m_onLoopChange;
-    RenameCallback         m_onTrackRenamed;
+    TrackClickCallback       m_onTrackClick;
+    PlayheadClickCallback    m_onPlayheadClick;
+    ClipChangeCallback       m_onClipChange;
+    TrackArrToggleCallback   m_onTrackArrToggle;
+    LoopChangeCallback       m_onLoopChange;
+    RenameCallback           m_onTrackRenamed;
+    ClipContextMenuCallback  m_onClipContextMenu;
+    ClipDoubleClickCallback  m_onClipDoubleClick;
 
     // Inline track rename state
     int         m_renameTrack = -1;
@@ -342,6 +359,7 @@ private:
     void paintAutoLanes(::yawn::ui::Renderer2D&, TextMetrics&, float, float, float, float) {}
     void paintPlayhead(::yawn::ui::Renderer2D&, float, float, float, float) {}
     void paintScrollbar(::yawn::ui::Renderer2D&, float, float, float) {}
+    void paintVScrollbar(::yawn::ui::Renderer2D&, float, float, float) {}
 #else
     void paintRuler(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float w);
     void paintTrackHeaders(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float h);
@@ -349,6 +367,7 @@ private:
     void paintAutoLanes(::yawn::ui::Renderer2D& r, TextMetrics& tm, float x, float y, float w, float h);
     void paintPlayhead(::yawn::ui::Renderer2D& r, float x, float y, float w, float h);
     void paintScrollbar(::yawn::ui::Renderer2D& r, float x, float y, float w);
+    void paintVScrollbar(::yawn::ui::Renderer2D& r, float x, float y, float h);
 #endif
 };
 

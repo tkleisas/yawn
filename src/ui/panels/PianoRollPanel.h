@@ -154,13 +154,28 @@ public:
 
     // ─── Public API ─────────────────────────────────────────────────────
 
-    void setClip(midi::MidiClip* clip, int trackIdx) {
+    // Identifies where the currently-edited clip lives, so the piano
+    // roll header can show an unambiguous badge — arrangement clips and
+    // session clips can share names but are distinct data.
+    enum class Source { Session, Arrangement };
+
+    void setClip(midi::MidiClip* clip, int trackIdx, Source source = Source::Session) {
         m_clip = clip;
         m_trackIdx = trackIdx;
+        m_source = source;
         m_selectedNotes.clear();
         m_dragMode = Drag::None;
         if (clip) centerOnContent();
     }
+
+    Source source() const { return m_source; }
+
+    // Fires whenever the edited clip's lengthBeats changes (x2, /2, Clr,
+    // manual loop-drag, autoExtend on note-draw). Arrangement clips use
+    // this to keep their timeline duration in sync with the underlying
+    // MIDI clip length.
+    using LengthChangedCallback = std::function<void()>;
+    void setOnLengthChanged(LengthChangedCallback cb) { m_onLengthChanged = std::move(cb); }
 
     void setTransport(const audio::Transport* t) { m_transport = t; }
 
@@ -564,6 +579,7 @@ private:
             break;
         }
         }
+        if (m_onLengthChanged) m_onLengthChanged();
     }
 
     // ─── Coordinate conversion ──────────────────────────────────────────
@@ -676,8 +692,10 @@ private:
     void autoExtend(const midi::MidiNote& n) {
         if (!m_clip) return;
         double end = n.startBeat + n.duration;
-        if (end > m_clip->lengthBeats())
+        if (end > m_clip->lengthBeats()) {
             m_clip->setLengthBeats(end);
+            if (m_onLengthChanged) m_onLengthChanged();
+        }
     }
 
     // ─── Scroll clamping ────────────────────────────────────────────────
@@ -718,6 +736,8 @@ private:
     midi::MidiClip*          m_clip      = nullptr;
     const audio::Transport*  m_transport = nullptr;
     int   m_trackIdx  = 0;
+    Source m_source   = Source::Session;
+    LengthChangedCallback m_onLengthChanged;
     bool  m_open      = false;
     double m_playBeat  = 0.0;
     bool  m_midiPlaying = false;
