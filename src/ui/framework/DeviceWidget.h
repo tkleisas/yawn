@@ -1,34 +1,31 @@
 #pragma once
-// DeviceWidget — Composite widget for a single audio device in the detail panel.
+// fw::DeviceWidget — v1 wrapper around fw2::DeviceWidget.
 //
-// Composes DeviceHeaderWidget + FwGrid + FwKnob + VisualizerWidget into a
-// self-contained unit. Normal devices show a header bar and a knob grid;
-// visualizer-type effects show a header, an oscilloscope/spectrum display,
-// and a single-row knob strip underneath.
+// The real class lives in ui/framework/v2/DeviceWidget.h. This shim
+// lets DetailPanelWidget (still v1) keep owning m_deviceWidgets with
+// unchanged lifecycle/event code. Two v1-only holdouts remain its own
+// responsibility: the `customPanel` (a v1 Widget* passed in via
+// setCustomPanel) and the `customBody` (a v1 CustomDeviceBody* from
+// InstrumentDisplayWidget). The fw2 impl computes where they go
+// during its own layout pass; the wrapper drives their v1 lifecycle
+// calls at those rects.
+//
+// When InstrumentDisplayWidget migrates to fw2, fold custom panels
+// into the fw2 class and delete this wrapper.
 
-#include "DeviceHeaderWidget.h"
-#include "FwGrid.h"
-#include "InstrumentDisplayWidget.h"
-#include "Primitives.h"
-#include "VisualizerWidget.h"
-#include "v2/Knob.h"
-#include "v2/StepSelector.h"
-#include "v2/Toggle.h"
+#include "Widget.h"
+#include "EventSystem.h"
+#include "DeviceHeaderWidget.h"        // v1 wrapper; re-exposes ToggleCallback etc.
+#include "v2/DeviceWidget.h"
 #include "v2/UIContext.h"
 #include "v2/V1EventBridge.h"
-#include "../../WidgetHint.h"
+#include "InstrumentDisplayWidget.h"   // v1 CustomDeviceBody
 
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
-
-#ifndef YAWN_TEST_BUILD
-#include "../Renderer.h"
-#include "../Font.h"
-#endif
 
 namespace yawn {
 namespace ui {
@@ -36,835 +33,254 @@ namespace fw {
 
 class DeviceWidget : public Widget {
 public:
-    using RemoveCallback     = std::function<void()>;
-    using ParamChangeCallback = std::function<void(int paramIndex, float value)>;
-    using ParamTouchCallback  = std::function<void(int paramIndex, float value, bool touching)>;
-    using ParamRightClickCallback = std::function<void(int paramIndex, float x, float y)>;
-    using CCLabelCallback = std::function<std::string(int paramIndex)>;  // returns label or empty
+    // ─── Type aliases (pass-through to fw2) ─────────────────────────
+    using RemoveCallback          = ::yawn::ui::fw2::DeviceWidget::RemoveCallback;
+    using ParamChangeCallback     = ::yawn::ui::fw2::DeviceWidget::ParamChangeCallback;
+    using ParamTouchCallback      = ::yawn::ui::fw2::DeviceWidget::ParamTouchCallback;
+    using ParamRightClickCallback = ::yawn::ui::fw2::DeviceWidget::ParamRightClickCallback;
+    using CCLabelCallback         = ::yawn::ui::fw2::DeviceWidget::CCLabelCallback;
+    using ParamInfo               = ::yawn::ui::fw2::DeviceWidget::ParamInfo;
+    using ParamSlot               = ::yawn::ui::fw2::DeviceWidget::ParamSlot;
 
-    // Per-parameter descriptor used to (re)build the knob grid.
-    struct ParamInfo {
-        int         index;
-        std::string name;
-        std::string unit;
-        float       minVal, maxVal, defaultVal;
-        bool        isBoolean;
-        WidgetHint  widgetHint = WidgetHint::Knob;
-        std::vector<std::string> valueLabels;  // for StepSelector display
-    };
+    // Layout constants (re-exported for DetailPanelWidget)
+    static constexpr float kKnobSize       = ::yawn::ui::fw2::DeviceWidget::kKnobSize;
+    static constexpr float kKnobSpacing    = ::yawn::ui::fw2::DeviceWidget::kKnobSpacing;
+    static constexpr int   kMaxKnobRows    = ::yawn::ui::fw2::DeviceWidget::kMaxKnobRows;
+    static constexpr float kCollapsedW     = ::yawn::ui::fw2::DeviceWidget::kCollapsedW;
+    static constexpr float kMinExpandedW   = ::yawn::ui::fw2::DeviceWidget::kMinExpandedW;
+    static constexpr float kVisualizerMinW = ::yawn::ui::fw2::DeviceWidget::kVisualizerMinW;
+    static constexpr float kDeviceHeaderH  = ::yawn::ui::fw2::DeviceWidget::kDeviceHeaderH;
 
-    // Type-erased wrapper around different parameter widget types.
-    // After the v2 migration all three knob variants (plain, dented,
-    // 360°/wrap) share the same fw2::FwKnob class — detents and
-    // wrap mode are flags, not subclasses. TKnob / TDentedKnob /
-    // TKnob360 stay as tags so callers can inspect which mode was
-    // requested without sniffing the widget's flags.
-    //
-    // Layout: v2 knobs can't be addChild'd to v1 FwGrid, so the
-    // DeviceWidget computes grid positions itself and applies them
-    // both to v1 children (StepSelector / Toggle) AND v2 knobs in a
-    // single pass. paramIndex is stored here because v2 widgets
-    // don't have a v1 setName() / name() string.
-    struct ParamSlot {
-        enum Type { TKnob, TDentedKnob, TStepSelector, TToggle, TKnob360 };
-        Widget* widget = nullptr;                                // v1 widget (none — all slots are v2 now)
-        ::yawn::ui::fw2::FwKnob*         knob    = nullptr;      // TKnob / TDentedKnob / TKnob360
-        ::yawn::ui::fw2::FwToggle*       toggle  = nullptr;      // TToggle
-        ::yawn::ui::fw2::FwStepSelector* stepSel = nullptr;      // TStepSelector
-        Type type = TKnob;
-        int  paramIndex = -1;                                     // copy of ParamInfo::index (used for CC labels)
-
-        bool isKnob() const {
-            return type == TKnob || type == TDentedKnob || type == TKnob360;
-        }
-        bool isV2() const {
-            return isKnob() || type == TToggle || type == TStepSelector;
-        }
-
-        ::yawn::ui::fw2::Widget* v2Widget() const {
-            if (isKnob())                return knob;
-            if (type == TToggle)         return toggle;
-            if (type == TStepSelector)   return stepSel;
-            return nullptr;
-        }
-
-        void setValue(float v) {
-            if (isKnob())              { knob->setValue(v); return; }
-            if (type == TToggle)       { toggle->setState(v > 0.5f); return; }
-            if (type == TStepSelector) { stepSel->setValue(static_cast<int>(v + 0.5f)); return; }
-        }
-
-        float getValue() const {
-            if (isKnob())              return knob->value();
-            if (type == TToggle)       return toggle->state() ? 1.0f : 0.0f;
-            if (type == TStepSelector) return static_cast<float>(stepSel->value());
-            return 0.0f;
-        }
-
-        // Bounds accessor — all v2 now, no v1 fallback needed.
-        const ::yawn::ui::fw2::Rect& bounds() const {
-            if (auto* w = v2Widget()) return w->bounds();
-            static const ::yawn::ui::fw2::Rect kEmpty{};
-            return kEmpty;
-        }
-
-        bool isEditing() const {
-            return isKnob() && knob->isEditing();
-        }
-
-        bool forwardKeyDown(int key) const {
-            if (!isEditing()) return false;
-            ::yawn::ui::fw2::KeyEvent ke;
-            switch (key) {
-                case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
-                case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
-                case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
-                default:                    return false;
-            }
-            return knob->dispatchKeyDown(ke);
-        }
-
-        bool forwardTextInput(const char* text) const {
-            if (!isEditing()) return false;
-            knob->takeTextInput(text ? text : "");
-            return true;
-        }
-    };
-
-    // ─── Constants (matching DetailPanelWidget) ─────────────────────────
-
-    static constexpr float kKnobSize       = 48.0f;
-    static constexpr float kKnobSpacing    = 16.0f;
-    static constexpr int   kMaxKnobRows    = 2;
-    static constexpr float kCollapsedW     = 60.0f;
-    static constexpr float kMinExpandedW   = 180.0f;
-    static constexpr float kVisualizerMinW = 300.0f;
-    static constexpr float kDeviceHeaderH  = 24.0f;
-
-    // ─── Construction / destruction ─────────────────────────────────────
-
-    DeviceWidget() {
-        setName("DeviceWidget");
-        addChild(&m_header);
-        addChild(&m_knobGrid);
-
-        m_knobGrid.setCellSize(kKnobSize + kKnobSpacing, kKnobSize + 22.0f);
-        m_knobGrid.setMaxRows(kMaxKnobRows);
-        m_knobGrid.setPadding(8);
-
-        // Wire header → DeviceWidget forwarding
-        m_header.setOnExpandToggle([this](bool expanded) {
-            m_expanded = expanded;
-            if (m_onExpandToggle) m_onExpandToggle(expanded);
-        });
-        m_header.setOnBypassToggle([this](bool bypassed) {
-            if (m_onBypassToggle) m_onBypassToggle(bypassed);
-        });
-        m_header.setOnRemove([this]() {
-            if (m_onRemove) m_onRemove();
-        });
-    }
+    DeviceWidget() { setName("DeviceWidget"); }
 
     ~DeviceWidget() {
-        clearKnobs();
-        delete m_visualizer;
-        delete m_vizKnobGrid;
-        if (m_customPanel) { removeChild(m_customPanel); delete m_customPanel; }
+        if (m_customPanel) delete m_customPanel;
         delete m_customBody;
     }
 
-    // Non-copyable (owns heap-allocated children)
     DeviceWidget(const DeviceWidget&) = delete;
     DeviceWidget& operator=(const DeviceWidget&) = delete;
 
-    // ─── Configuration ──────────────────────────────────────────────────
+    // ─── Configuration pass-through ─────────────────────────────────
 
-    void setDeviceName(const std::string& name) {
-        m_deviceName = name;
-        m_header.setDeviceName(name);
+    void setDeviceName(const std::string& n)                { m_impl.setDeviceName(n); }
+    void setDeviceType(DeviceHeaderWidget::DeviceType t)    { m_impl.setDeviceType(t); }
+    void setRemovable(bool r)                                { m_impl.setRemovable(r); }
+    void setVisualizer(bool isViz, const char* vt = "oscilloscope") {
+        m_impl.setVisualizer(isViz, vt);
     }
-
-    void setDeviceType(DeviceHeaderWidget::DeviceType type) {
-        m_header.setDeviceType(type);
-    }
-
-    void setRemovable(bool r) { m_header.setRemovable(r); }
-
-    void setVisualizer(bool isViz, const char* vizType = "oscilloscope") {
-        if (isViz == m_isVisualizer) return;
-        m_isVisualizer = isViz;
-
-        if (isViz) {
-            // Create visualizer and its single-row knob grid
-            auto mode = VisualizerWidget::Mode::Oscilloscope;
-            if (vizType) {
-                std::string vt(vizType);
-                if (vt == "spectrum") mode = VisualizerWidget::Mode::Spectrum;
-                else if (vt == "tuner") mode = VisualizerWidget::Mode::Tuner;
-            }
-            m_visualizer = new VisualizerWidget(mode);
-            m_vizKnobGrid = new FwGrid();
-            m_vizKnobGrid->setCellSize(kKnobSize + kKnobSpacing, kKnobSize + 22.0f);
-            m_vizKnobGrid->setMaxRows(1);
-            m_vizKnobGrid->setPadding(8);
-            addChild(m_visualizer);
-            addChild(m_vizKnobGrid);
-        } else {
-            // Tear down visualizer children
-            if (m_visualizer)  { removeChild(m_visualizer);  delete m_visualizer;  m_visualizer = nullptr; }
-            if (m_vizKnobGrid) { removeChild(m_vizKnobGrid); delete m_vizKnobGrid; m_vizKnobGrid = nullptr; }
-        }
-    }
-
-    // ─── Custom instrument display panel ────────────────────────────────
 
     void setCustomPanel(Widget* panel, float height, float minWidth = 0) {
-        if (m_customPanel) { removeChild(m_customPanel); delete m_customPanel; }
+        if (m_customPanel) { delete m_customPanel; }
         m_customPanel = panel;
-        m_customPanelH = height;
-        m_customMinW = minWidth;
-        if (panel) addChild(panel);
+        m_impl.setCustomPanelRef(panel, height, minWidth);
     }
-
     Widget* customPanel() const { return m_customPanel; }
-
-    // ─── Custom body (replaces knob grid entirely for instruments) ───────
 
     void setCustomBody(CustomDeviceBody* body) {
         delete m_customBody;
         m_customBody = body;
+        m_impl.setCustomBodyRef(body);
+        // NOTE: callers wire body->setOnParamChange / setOnParamTouch
+        // directly (e.g. DetailPanelWidget uses a DeviceRef lambda for
+        // per-device routing). Do NOT overwrite those here.
     }
     CustomDeviceBody* customBody() const { return m_customBody; }
 
-    // ─── State ──────────────────────────────────────────────────────────
+    // ─── State ──────────────────────────────────────────────────────
 
-    bool isExpanded() const { return m_expanded; }
-    void setExpanded(bool e) {
-        m_expanded = e;
-        m_header.setExpanded(e);
-    }
+    bool isExpanded() const                   { return m_impl.isExpanded(); }
+    void setExpanded(bool e)                  { m_impl.setExpanded(e); }
+    bool isBypassed() const                   { return m_impl.isBypassed(); }
+    void setBypassed(bool b)                  { m_impl.setBypassed(b); }
 
-    bool isBypassed() const { return m_header.isBypassed(); }
-    void setBypassed(bool b) { m_header.setBypassed(b); }
+    // ─── Parameters ─────────────────────────────────────────────────
 
-    // ─── Parameters ─────────────────────────────────────────────────────
-
-    void setParameters(const std::vector<ParamInfo>& params) {
-        clearKnobs();
-        if (m_isVisualizer && m_vizKnobGrid) {
-            buildKnobs(params, m_vizKnobs, *m_vizKnobGrid, 1);
-        } else {
-            buildKnobs(params, m_knobs, m_knobGrid, kMaxKnobRows);
-        }
-        // Estimate cell width from label lengths before font is available.
-        // ~10px per char at 9pt monospace is a reasonable approximation.
-        size_t maxLen = 0;
-        for (auto& p : params)
-            maxLen = std::max(maxLen, p.name.size());
-        float estW = maxLen * 10.0f + 8.0f;
-        float minCellW = kKnobSize + kKnobSpacing;
-        m_cachedCellW = std::max(minCellW, estW);
-        m_knobGrid.setCellSize(m_cachedCellW, kKnobSize + 22.0f);
-        if (m_vizKnobGrid)
-            m_vizKnobGrid->setCellSize(m_cachedCellW, kKnobSize + 22.0f);
-    }
+    void setParameters(const std::vector<ParamInfo>& params) { m_impl.setParameters(params); }
 
     void updateParamValue(int index, float value) {
         if (m_customBody) { m_customBody->updateParamValue(index, value); return; }
-        // Skip sync on knobs the user is currently dragging / editing
-        // — an async engine can rubber-band the drag position if we
-        // overwrite m_value mid-gesture. Non-knob slots (toggle /
-        // step selector) have no drag-state to corrupt, so they
-        // always sync.
-        auto shouldSkip = [](const ParamSlot& s) {
-            return s.isKnob() && (s.knob->isDragging() || s.knob->isEditing());
-        };
-        for (auto& s : m_knobs)
-            if (s.paramIndex == index) { if (!shouldSkip(s)) s.setValue(value); return; }
-        for (auto& s : m_vizKnobs)
-            if (s.paramIndex == index) { if (!shouldSkip(s)) s.setValue(value); return; }
+        m_impl.updateParamValue(index, value);
     }
 
-    // ─── Visualizer data feed ───────────────────────────────────────────
+    void setVisualizerData(const float* data, int size) { m_impl.setVisualizerData(data, size); }
 
-    void setVisualizerData(const float* data, int size) {
-        if (m_visualizer) m_visualizer->setData(data, size);
+    // ─── Callbacks ──────────────────────────────────────────────────
+
+    void setOnRemove(RemoveCallback cb)                       { m_impl.setOnRemove(std::move(cb)); }
+    void setOnParamChange(ParamChangeCallback cb)              {
+        m_onParamChange = cb;
+        m_impl.setOnParamChange(std::move(cb));
     }
-
-    // ─── Callbacks ──────────────────────────────────────────────────────
-
-    void setOnRemove(RemoveCallback cb) { m_onRemove = std::move(cb); }
-    void setOnParamChange(ParamChangeCallback cb) { m_onParamChange = std::move(cb); }
-    void setOnParamTouch(ParamTouchCallback cb) { m_onParamTouch = std::move(cb); }
-    void setOnParamRightClick(ParamRightClickCallback cb) { m_onParamRightClick = std::move(cb); }
-    void setCCLabelCallback(CCLabelCallback cb) { m_ccLabelCb = std::move(cb); }
-    void setOnBypassToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onBypassToggle = std::move(cb); }
-    void setOnExpandToggle(DeviceHeaderWidget::ToggleCallback cb) { m_onExpandToggle = std::move(cb); }
-    void setOnDragStart(DeviceHeaderWidget::ActionCallback cb) {
-        m_onDragStart = std::move(cb);
-        m_header.setOnDragStart([this]() {
-            if (m_onDragStart) m_onDragStart();
-        });
+    void setOnParamTouch(ParamTouchCallback cb)                {
+        m_onParamTouch = cb;
+        m_impl.setOnParamTouch(std::move(cb));
     }
-    void setOnPresetClick(DeviceHeaderWidget::PresetClickCallback cb) {
-        m_onPresetClick = std::move(cb);
-        m_header.setOnPresetClick([this](float x, float y) {
-            if (m_onPresetClick) m_onPresetClick(x, y);
-        });
-    }
-    void setPresetName(const std::string& name) { m_header.setPresetName(name); }
+    void setOnParamRightClick(ParamRightClickCallback cb)      { m_impl.setOnParamRightClick(std::move(cb)); }
+    void setCCLabelCallback(CCLabelCallback cb)                { m_impl.setCCLabelCallback(std::move(cb)); }
+    void setOnBypassToggle(DeviceHeaderWidget::ToggleCallback cb) { m_impl.setOnBypassToggle(std::move(cb)); }
+    void setOnExpandToggle(DeviceHeaderWidget::ToggleCallback cb) { m_impl.setOnExpandToggle(std::move(cb)); }
+    void setOnDragStart(DeviceHeaderWidget::ActionCallback cb)    { m_impl.setOnDragStart(std::move(cb)); }
+    void setOnPresetClick(DeviceHeaderWidget::PresetClickCallback cb) { m_impl.setOnPresetClick(std::move(cb)); }
+    void setPresetName(const std::string& name)                { m_impl.setPresetName(name); }
 
-    // ─── Knob text-edit forwarding (for GroupedKnobBody) ────────────────
+    // ─── Knob edit forwarding ───────────────────────────────────────
 
     bool hasEditingKnob() const {
         if (m_customBody) return m_customBody->hasEditingKnob();
-        for (auto& s : m_knobs)    if (s.isEditing()) return true;
-        for (auto& s : m_vizKnobs) if (s.isEditing()) return true;
-        return false;
+        return m_impl.hasEditingKnob();
     }
 
     bool forwardKeyDown(int key) {
         if (m_customBody) return m_customBody->forwardKeyDown(key);
-        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardKeyDown(key);
-        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardKeyDown(key);
-        return false;
+        return m_impl.forwardKeyDown(key);
     }
 
     bool forwardTextInput(const char* text) {
         if (m_customBody) return m_customBody->forwardTextInput(text);
-        for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardTextInput(text);
-        for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardTextInput(text);
-        return false;
+        return m_impl.forwardTextInput(text);
     }
 
     void cancelEditingKnobs() {
         if (m_customBody) { m_customBody->cancelEditingKnobs(); return; }
-        for (auto& s : m_knobs)    if (s.isEditing()) s.knob->endEdit(/*commit*/false);
-        for (auto& s : m_vizKnobs) if (s.isEditing()) s.knob->endEdit(/*commit*/false);
+        m_impl.cancelEditingKnobs();
     }
 
-    // ─── Width calculation (matches DetailPanelWidget::DevicePanel::deviceWidth) ─
+    // ─── Width calculation ──────────────────────────────────────────
 
     float preferredWidth() const {
-        if (!m_expanded) return kCollapsedW;
+        if (!m_impl.isExpanded()) return kCollapsedW;
         if (m_customBody) {
-            float w = m_customBody->preferredBodyWidth() + 16.0f;
+            const float w = m_customBody->preferredBodyWidth() + 16.0f;
             return std::max(kMinExpandedW, w);
         }
-        float cellW = std::max(kKnobSize + kKnobSpacing, m_cachedCellW);
-        int paramCount = static_cast<int>(m_knobs.size() + m_vizKnobs.size());
-        if (m_isVisualizer) {
-            int cols = paramCount == 0 ? 0
-                       : static_cast<int>(std::ceil(static_cast<float>(paramCount) / 1.0f));
-            float knobW = cols * cellW + 16.0f;
-            return std::max(kVisualizerMinW, knobW);
-        }
-        int cols = paramCount == 0 ? 1
-                   : static_cast<int>(std::ceil(static_cast<float>(paramCount)
-                                                / static_cast<float>(kMaxKnobRows)));
-        float w = cols * cellW + 24.0f;
-        if (m_customPanel && m_customMinW > 0)
-            w = std::max(w, m_customMinW);
-        return std::max(kMinExpandedW, w);
+        return m_impl.preferredWidth();
     }
 
-    // ─── Layout lifecycle ───────────────────────────────────────────────
+    // ─── v1 Widget lifecycle (delegate to fw2 + v1 custom children) ─
 
-    Size measure(const Constraints& c, const UIContext& ctx) override {
-        updateCellWidth(ctx);
-        float w = std::min(preferredWidth(), c.maxW);
-        w = std::max(w, c.minW);
-        float h = std::min(c.maxH, std::max(c.minH, c.maxH));
-        return {w, h};
+    Size measure(const Constraints& c, const UIContext&) override {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        ::yawn::ui::fw2::Constraints fc{c.minW, c.minH, c.maxW, c.maxH};
+        auto s = m_impl.measure(fc, v2ctx);
+        // fw2::DeviceWidget can't know the v1 customBody's preferred
+        // width (it's a v1-only type); substitute ours here so the
+        // wrapper advertises the real size to its parent.
+        const float w = std::min(preferredWidth(), c.maxW);
+        return c.constrain({w, s.h});
     }
 
     void layout(const Rect& bounds, const UIContext& ctx) override {
-        m_bounds = bounds;
-        float x = bounds.x;
-        float y = bounds.y;
-        float w = bounds.w;
-        float h = bounds.h;
-
-        m_header.layout({x, y, w, kDeviceHeaderH}, ctx);
-
-        if (!m_expanded) return;
-
-        float bodyY = y + kDeviceHeaderH;
-        float bodyH = h - kDeviceHeaderH;
-
-        if (m_isVisualizer && m_visualizer) {
-            float vizH = bodyH - 68.0f;
-            if (vizH < 0) vizH = 0;
-            m_visualizer->layout({x + 4, bodyY + 2, w - 8, vizH - 4}, ctx);
-            if (m_vizKnobGrid) {
-                m_vizKnobGrid->layout({x + 8, bodyY + vizH + 2, w - 16, 64}, ctx);
-                layoutV2KnobsInGrid(m_vizKnobs, *m_vizKnobGrid, /*maxRows*/1);
-            }
-        } else if (m_customBody) {
-            m_customBody->layout({x + 4, bodyY + 2, w - 8, bodyH - 4}, ctx);
-        } else {
-            if (m_customPanel) {
-                m_customPanel->layout({x + 4, bodyY + 2, w - 8, m_customPanelH}, ctx);
-                float used = m_customPanelH + 4;
-                bodyY += used;
-                bodyH -= used;
-            }
-            m_knobGrid.layout({x + 8, bodyY + 4, w - 16, bodyH - 8}, ctx);
-            layoutV2KnobsInGrid(m_knobs, m_knobGrid, kMaxKnobRows);
-        }
-    }
-
-    // Apply the same grid math FwGrid uses, but to the v2 widgets
-    // living alongside the grid's v1 children. Position in the slot
-    // vector maps to cell position so v1 + v2 widgets share the same
-    // grid regardless of which framework any given slot uses.
-    void layoutV2KnobsInGrid(std::vector<ParamSlot>& slots,
-                              const FwGrid& grid, int maxRows) {
-        int n = static_cast<int>(slots.size());
-        if (n == 0) return;
-        int rows = std::min(n, maxRows);
-        int cols = static_cast<int>(std::ceil(static_cast<float>(n) / maxRows));
-        (void)rows;
-
-        const auto& gb    = grid.bounds();
-        const float pad   = 8.0f;                                // matches setPadding(8)
-        const float cellW = grid.cellWidth();
-        const float cellH = grid.cellHeight();
-        const float gapX  = 0.0f;                                // FwGrid default gap
-        const float gapY  = 0.0f;
-
+        Widget::layout(bounds, ctx);
         auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        for (int i = 0; i < n; ++i) {
-            auto* v2w = slots[i].v2Widget();
-            if (!v2w) continue;
-            int row = i / cols;
-            int col = i % cols;
-            float cellX = gb.x + pad + col * (cellW + gapX);
-            float cellY = gb.y + pad + row * (cellH + gapY);
-            v2w->layout(
-                ::yawn::ui::fw2::Rect{cellX, cellY, cellW, cellH}, v2ctx);
+        auto fc = ::yawn::ui::fw2::Constraints::tight(bounds.w, bounds.h);
+        m_impl.measure(fc, v2ctx);
+        m_impl.layout(::yawn::ui::fw2::Rect{bounds.x, bounds.y, bounds.w, bounds.h},
+                       v2ctx);
+
+        if (m_customPanel) {
+            const auto r = m_impl.customPanelLayoutRect();
+            m_customPanel->layout({r.x, r.y, r.w, r.h}, ctx);
+        }
+        if (m_customBody) {
+            const auto r = m_impl.customBodyLayoutRect();
+            m_customBody->layout({r.x, r.y, r.w, r.h}, ctx);
         }
     }
 
-    // ─── Rendering ──────────────────────────────────────────────────────
-
-    void render(UIContext& ctx) override {
-        if (!m_visible) return;
-        paint(ctx);
-    }
-
-    void paint([[maybe_unused]] UIContext& ctx) override {
-#ifndef YAWN_TEST_BUILD
-        if (!ctx.renderer || !ctx.font) return;
-
-        // Device background
-        Color bg = isBypassed() ? Color{30, 30, 34, 255} : Color{36, 36, 42, 255};
-        ctx.renderer->drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, bg);
-
-        m_header.paint(ctx);
-
-        if (!m_expanded) {
-            // Render device name vertically in collapsed body
-            float ty = m_bounds.y + kDeviceHeaderH + 4;
-            float sml = 10.0f / Theme::kFontSize;
-            const char* nm = m_deviceName.c_str();
-            char buf[2] = {0, 0};
-            for (int ci = 0; nm[ci] && ty < m_bounds.y + m_bounds.h - 10; ++ci) {
-                buf[0] = nm[ci];
-                ctx.font->drawText(*ctx.renderer, buf,
-                                   m_bounds.x + m_bounds.w * 0.5f - 3, ty,
-                                   sml, Theme::textDim);
-                ty += 12;
-            }
-            return;
-        }
-
+    void paint(UIContext& ctx) override {
         auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-
-        // Renders every v2 widget in the slot list — knob, toggle,
-        // or any future v2 param widget. v1 widgets (StepSelector)
-        // are still painted by the FwGrid's child walk above.
-        auto renderV2Knobs = [&](std::vector<ParamSlot>& slots) {
-            for (auto& s : slots)
-                if (auto* v2w = s.v2Widget()) v2w->render(v2ctx);
-        };
-
-        if (m_isVisualizer && m_visualizer) {
-            m_visualizer->paint(ctx);
-            if (m_vizKnobGrid) m_vizKnobGrid->paint(ctx);
-            renderV2Knobs(m_vizKnobs);
-        } else if (m_customBody) {
-            m_customBody->paint(ctx);
-        } else {
+        m_impl.render(v2ctx);
+        if (m_impl.isExpanded()) {
             if (m_customPanel) m_customPanel->paint(ctx);
-            m_knobGrid.paint(ctx);
-            renderV2Knobs(m_knobs);
+            if (m_customBody)  m_customBody->paint(ctx);
         }
-
-        // Draw CC labels on mapped knobs
-        if (m_ccLabelCb) {
-            float ccScale = 7.0f / Theme::kFontSize;
-            Color ccCol{100, 180, 255};
-            auto drawLabels = [&](const std::vector<ParamSlot>& slots) {
-                for (auto& s : slots) {
-                    auto lbl = m_ccLabelCb(s.paramIndex);
-                    if (!lbl.empty()) {
-                        const auto& b = s.bounds();
-                        float tw = ctx.font->textWidth(lbl.c_str(), ccScale);
-                        ctx.font->drawText(*ctx.renderer, lbl.c_str(),
-                            b.x + (b.w - tw) * 0.5f, b.y + b.h - 2,
-                            ccScale, ccCol);
-                    }
-                }
-            };
-            drawLabels(m_knobs);
-            if (m_isVisualizer && m_vizKnobGrid)
-                drawLabels(m_vizKnobs);
-        }
-#endif
     }
 
-    // ─── Event handling ─────────────────────────────────────────────────
+    // ─── v1 event forwarders ────────────────────────────────────────
 
     bool onMouseDown(MouseEvent& e) override {
-        auto& hb = m_header.bounds();
-        LOG_INFO("UI", "DeviceWidget::onMouseDown click=(%g,%g) headerBounds=(%g,%g,%g,%g) contains=%d",
-                 e.x, e.y, hb.x, hb.y, hb.w, hb.h, (int)hb.contains(e.x, e.y));
-        if (hb.contains(e.x, e.y))
-            return m_header.onMouseDown(e);
+        const auto& b = m_impl.bounds();
+        if (e.x < b.x || e.x >= b.x + b.w) return false;
+        if (e.y < b.y || e.y >= b.y + b.h) return false;
 
-        if (!m_expanded) return false;
-
-        auto hitSlot = [&](const ParamSlot& s) {
-            const auto& b = s.bounds();
-            return e.x >= b.x && e.x < b.x + b.w &&
-                   e.y >= b.y && e.y < b.y + b.h;
-        };
-
-        // Intercept right-clicks on knobs for MIDI Learn context menu
-        if (e.button == MouseButton::Right && m_onParamRightClick) {
-            auto tryRightClick = [&](std::vector<ParamSlot>& slots) -> bool {
-                for (auto& s : slots) {
-                    if (hitSlot(s)) {
-                        m_onParamRightClick(s.paramIndex, e.x, e.y);
-                        return true;
-                    }
-                }
-                return false;
-            };
-            if (m_isVisualizer && m_vizKnobGrid) {
-                if (m_vizKnobGrid->bounds().contains(e.x, e.y) && tryRightClick(m_vizKnobs))
-                    return true;
-            } else if (!m_customBody && m_knobGrid.bounds().contains(e.x, e.y)) {
-                if (tryRightClick(m_knobs)) return true;
+        // customBody gets first dibs on its own area — forwarding to
+        // fw2 first lets fw2's gesture state machine auto-capture the
+        // DeviceWidget (because our fw2 onMouseDown returns false over
+        // the customBody region), which would starve the v1 body for
+        // the rest of the drag.
+        if (m_customBody && m_customBody->bounds().contains(e.x, e.y)) {
+            if (m_customBody->onMouseDown(e)) {
+                captureMouse();
+                m_draggingCustomBody = true;
+                return true;
             }
         }
 
-        // Dispatch left-click. Every param slot is a v2 widget now —
-        // route through the fw2 event bridge + m_v2Dragging pointer
-        // so the gesture SM gets its down/up pair via v1 capture.
-        auto dispatchSlot = [&](ParamSlot& s) -> bool {
-            auto* v2w = s.v2Widget();
-            if (!v2w) return false;
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, v2w->bounds());
-            v2w->dispatchMouseDown(ev);
-            m_v2Dragging = v2w;
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        const bool handled = m_impl.dispatchMouseDown(ev);
+        if (handled || ::yawn::ui::fw2::Widget::capturedWidget()) {
             captureMouse();
-            return true;
-        };
-
-        if (m_isVisualizer && m_vizKnobGrid) {
-            if (m_vizKnobGrid->bounds().contains(e.x, e.y)) {
-                for (auto& s : m_vizKnobs) if (hitSlot(s)) return dispatchSlot(s);
-            }
-        } else if (m_customBody) {
-            return m_customBody->onMouseDown(e);
-        } else {
-            if (m_knobGrid.bounds().contains(e.x, e.y)) {
-                for (auto& s : m_knobs) if (hitSlot(s)) return dispatchSlot(s);
-            }
+            return handled;
         }
-        return false;
-    }
-
-    bool onMouseUp(MouseEvent& e) override {
-        if (m_header.bounds().contains(e.x, e.y))
-            return m_header.onMouseUp(e);
-
-        if (!m_expanded) return false;
-
-        // v2 knob drag release — flush the up through the gesture SM,
-        // clear the pointer, drop v1 capture.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseUp(ev);
-            m_v2Dragging = nullptr;
-            releaseMouse();
-            return true;
-        }
-
-        auto hitSlot = [&](const ParamSlot& s) {
-            const auto& b = s.bounds();
-            return e.x >= b.x && e.x < b.x + b.w &&
-                   e.y >= b.y && e.y < b.y + b.h;
-        };
-
-        // All param slots are v2 now — mouseUp already flushed above
-        // via m_v2Dragging. CustomBody may have its own dispatch.
-        if (m_customBody) return m_customBody->onMouseUp(e);
         return false;
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        // v2 widget drag (knob / toggle / step selector) — forward
-        // translated move to the gesture SM.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseMove(ev);
-            return true;
-        }
+        // If customBody is mid-drag, route directly to it — fw2
+        // capture never involved, so dispatchMouseMove would return
+        // false.
+        if (m_draggingCustomBody && m_customBody)
+            return m_customBody->onMouseMove(e);
+
+        const auto& b = m_impl.bounds();
+        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, b);
+        if (m_impl.dispatchMouseMove(ev)) return true;
         if (m_customBody) return m_customBody->onMouseMove(e);
         return false;
     }
 
-private:
-    DeviceHeaderWidget          m_header;
-    FwGrid                      m_knobGrid;
-    std::vector<ParamSlot>      m_knobs;        // owned
-    VisualizerWidget*           m_visualizer   = nullptr;  // owned, null if not visualizer
-    FwGrid*                     m_vizKnobGrid  = nullptr;  // owned, single-row grid for viz knobs
-    std::vector<ParamSlot>      m_vizKnobs;     // owned
-
-    bool        m_isVisualizer = false;
-    bool        m_expanded     = true;
-    std::string m_deviceName;
-
-    Widget*     m_customPanel  = nullptr;  // owned, instrument display panel
-    float       m_customPanelH = 0;
-    float       m_customMinW   = 0;
-
-    CustomDeviceBody* m_customBody = nullptr;  // owned, replaces knob grid for instruments
-    float       m_cachedCellW  = 0;        // computed from label widths during layout
-    // Active v2 knob drag (one of m_knobs or m_vizKnobs entries). Non-
-    // owning; set on mouseDown, cleared on mouseUp. Null = no drag.
-    // Active v2 drag (knob, toggle, or any future v2 param widget).
-    // Non-owning; set on mouseDown, cleared on mouseUp. Null = none.
-    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
-
-    RemoveCallback                    m_onRemove;
-    ParamChangeCallback               m_onParamChange;
-    ParamTouchCallback                m_onParamTouch;
-    ParamRightClickCallback           m_onParamRightClick;
-    CCLabelCallback                   m_ccLabelCb;
-    DeviceHeaderWidget::ToggleCallback m_onBypassToggle;
-    DeviceHeaderWidget::ToggleCallback m_onExpandToggle;
-    DeviceHeaderWidget::ActionCallback m_onDragStart;
-    DeviceHeaderWidget::PresetClickCallback m_onPresetClick;
-
-    // ─── Cell width computation ────────────────────────────────────────
-
-    void updateCellWidth(const UIContext& ctx) {
-#ifndef YAWN_TEST_BUILD
-        if (!ctx.font || !ctx.font->isLoaded()) return;
-
-        float labelScale = 9.0f / Theme::kFontSize;
-        float maxLabelW = 0;
-
-        auto measureSlots = [&](const std::vector<ParamSlot>& slots) {
-            for (auto& s : slots) {
-                std::string lbl;
-                if (s.isKnob())                          lbl = s.knob->label();
-                else if (s.type == ParamSlot::TToggle)       lbl = s.toggle->label();
-                else if (s.type == ParamSlot::TStepSelector) lbl = s.stepSel->label();
-                if (!lbl.empty()) {
-                    float tw = ctx.font->textWidth(lbl, labelScale);
-                    if (tw > maxLabelW) maxLabelW = tw;
-                }
-            }
-        };
-
-        measureSlots(m_knobs);
-        measureSlots(m_vizKnobs);
-
-        float minCellW = kKnobSize + kKnobSpacing;
-        float needed = maxLabelW + 8.0f;  // label + small padding
-        m_cachedCellW = std::max(minCellW, needed);
-
-        m_knobGrid.setCellSize(m_cachedCellW, kKnobSize + 22.0f);
-        if (m_vizKnobGrid)
-            m_vizKnobGrid->setCellSize(m_cachedCellW, kKnobSize + 22.0f);
-#else
-        (void)ctx;
-#endif
-    }
-
-    // ─── Knob management ────────────────────────────────────────────────
-
-    void clearKnobs() {
-        auto freeSlot = [&](ParamSlot& s) {
-            // All param slots are v2 now — knob / toggle / step selector.
-            // The v1 FwGrid is retained as a layout-coordinate source
-            // (see layoutV2KnobsInGrid) but has no children to remove.
-            if (s.knob)    delete s.knob;
-            if (s.toggle)  delete s.toggle;
-            if (s.stepSel) delete s.stepSel;
-        };
-        for (auto& s : m_knobs)    freeSlot(s);
-        m_knobs.clear();
-        for (auto& s : m_vizKnobs) freeSlot(s);
-        m_vizKnobs.clear();
-        m_v2Dragging = nullptr;
-    }
-
-    void buildKnobs(const std::vector<ParamInfo>& params,
-                    std::vector<ParamSlot>& slots, FwGrid& grid, int maxRows) {
-        grid.setMaxRows(maxRows);
-
-        // All three knob variants — plain, dented, 360° — share most
-        // of their setup. This lambda does the common config, then
-        // the switch below flips the one variant-specific flag.
-        auto makeKnob = [this](const ParamInfo& p) {
-            auto* k = new ::yawn::ui::fw2::FwKnob();
-            k->setRange(p.minVal, p.maxVal);
-            k->setDefaultValue(p.defaultVal);
-            k->setValue(p.defaultVal);
-            k->setLabel(p.name);
-            k->setValueFormatter([unit = p.unit, isBool = p.isBoolean](float v) {
-                return formatValue(v, unit, isBool);
-            });
-            const int idx = p.index;
-            k->setOnChange([this, idx](float v) {
-                if (m_onParamChange) m_onParamChange(idx, v);
-            });
-            // v1 FwKnob emitted onTouch(true) at drag-begin and
-            // onTouch(false) at drag-end. v2 collapses this to a
-            // single onDragEnd(start, end); replay as a pair so
-            // existing hosts (undo-snapshotters) see the same shape.
-            k->setOnDragEnd([this, idx](float startV, float endV) {
-                if (!m_onParamTouch) return;
-                m_onParamTouch(idx, startV, /*touching*/true);
-                m_onParamTouch(idx, endV,   /*touching*/false);
-            });
-            return k;
-        };
-
-        for (const auto& p : params) {
-            ParamSlot slot;
-            slot.paramIndex = p.index;
-            WidgetHint hint = p.widgetHint;
-
-            // Auto-resolve: booleans become toggles
-            if (hint == WidgetHint::Knob && p.isBoolean)
-                hint = WidgetHint::Toggle;
-
-            switch (hint) {
-            case WidgetHint::DentedKnob: {
-                auto* dk = makeKnob(p);
-                dk->addDetent(p.defaultVal, 0.04f);
-                slot.knob = dk;
-                slot.type = ParamSlot::TDentedKnob;
-                break;
-            }
-            case WidgetHint::StepSelector: {
-                auto* ss = new ::yawn::ui::fw2::FwStepSelector();
-                ss->setRange(static_cast<int>(p.minVal + 0.5f),
-                             static_cast<int>(p.maxVal + 0.5f));
-                ss->setValue(static_cast<int>(p.defaultVal + 0.5f));
-                ss->setLabel(p.name);
-                if (!p.valueLabels.empty()) {
-                    auto labels = p.valueLabels;
-                    int mn = static_cast<int>(p.minVal + 0.5f);
-                    ss->setFormatter([labels, mn](int v) -> std::string {
-                        int i = v - mn;
-                        if (i >= 0 && i < static_cast<int>(labels.size()))
-                            return labels[i];
-                        return std::to_string(v);
-                    });
-                }
-                // v1 StepSelector emitted onChange + onTouch(begin) +
-                // onTouch(end) around every step. v2 is click-only —
-                // synthesise the touch pair in onChange so existing
-                // undo-capturing hosts keep seeing the v1 shape.
-                ss->setOnChange([this, idx = p.index](int v) {
-                    const float fv = static_cast<float>(v);
-                    if (m_onParamChange) m_onParamChange(idx, fv);
-                    if (m_onParamTouch) {
-                        m_onParamTouch(idx, fv, /*touching*/true);
-                        m_onParamTouch(idx, fv, /*touching*/false);
-                    }
-                });
-                slot.stepSel = ss;
-                slot.type    = ParamSlot::TStepSelector;
-                break;
-            }
-            case WidgetHint::Toggle: {
-                // v2 FwToggle (Switch variant) — pill track with
-                // sliding knob. v1's off/on side labels are dropped;
-                // the param name (above the pill) carries the context.
-                // If a caller wanted the side labels back, we'd add
-                // them as a v2 feature rather than forking a widget.
-                auto* ts = new ::yawn::ui::fw2::FwToggle();
-                ts->setVariant(::yawn::ui::fw2::ToggleVariant::Switch);
-                ts->setState(p.defaultVal > 0.5f);
-                ts->setLabel(p.name);
-                // v1 Toggle fired onChange + onTouch(begin) +
-                // onTouch(end) as separate events. v2 Toggle is a
-                // click-only widget with no drag arc; synthesise the
-                // trio on state flip so undo-capturing hosts keep
-                // their begin/end pair.
-                ts->setOnChange([this, idx = p.index](bool state) {
-                    const float v = state ? 1.0f : 0.0f;
-                    if (m_onParamChange) m_onParamChange(idx, v);
-                    if (m_onParamTouch) {
-                        m_onParamTouch(idx, v, /*touching*/true);
-                        m_onParamTouch(idx, v, /*touching*/false);
-                    }
-                });
-                slot.toggle = ts;
-                slot.type   = ParamSlot::TToggle;
-                break;
-            }
-            case WidgetHint::Knob360: {
-                auto* k360 = makeKnob(p);
-                k360->setWrapMode(true);
-                slot.knob = k360;
-                slot.type = ParamSlot::TKnob360;
-                break;
-            }
-            default: /* WidgetHint::Knob */ {
-                auto* k = makeKnob(p);
-                slot.knob = k;
-                slot.type = ParamSlot::TKnob;
-                break;
-            }
-            }
-            slots.push_back(slot);
-            // All v2 now — no grid.addChild. DeviceWidget lays out +
-            // paints + event-dispatches every slot manually.
+    bool onMouseUp(MouseEvent& e) override {
+        if (m_draggingCustomBody && m_customBody) {
+            m_customBody->onMouseUp(e);
+            m_draggingCustomBody = false;
+            releaseMouse();
+            return true;
         }
+
+        const auto& b = m_impl.bounds();
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        const bool handled = m_impl.dispatchMouseUp(ev);
+        if (!::yawn::ui::fw2::Widget::capturedWidget()) releaseMouse();
+        if (handled) return true;
+        if (m_customBody) return m_customBody->onMouseUp(e);
+        return false;
     }
 
-    // ─── Value formatting (matches DetailPanelWidget::formatValue) ──────
-public:
+    // ─── Value formatting (expose for tests / external use) ─────────
+
     static std::string formatValue(float value, const std::string& unit, bool isBoolean) {
-        if (isBoolean) return value > 0.5f ? "On" : "Off";
-        char buf[32];
-        if (unit == "Hz") {
-            if (value >= 1000.0f)
-                std::snprintf(buf, sizeof(buf), "%.1fk", value / 1000.0f);
-            else
-                std::snprintf(buf, sizeof(buf), "%.0f", value);
-        } else if (unit == "dB") {
-            std::snprintf(buf, sizeof(buf), "%.1f", value);
-        } else if (unit == "ms") {
-            std::snprintf(buf, sizeof(buf), "%.0f", value);
-        } else if (unit == "%") {
-            std::snprintf(buf, sizeof(buf), "%.0f%%", value * 100.0f);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%.2f", value);
-        }
-        return buf;
+        return ::yawn::ui::fw2::DeviceWidget::formatValue(value, unit, isBoolean);
     }
+
+    ::yawn::ui::fw2::DeviceWidget& impl() { return m_impl; }
+
+private:
+    ::yawn::ui::fw2::DeviceWidget m_impl;
+
+    // v1-only children (this wrapper owns them)
+    Widget*           m_customPanel = nullptr;
+    CustomDeviceBody* m_customBody  = nullptr;
+
+    // Shadow copies of param callbacks so we can forward through custom
+    // body wiring.
+    ParamChangeCallback m_onParamChange;
+    ParamTouchCallback  m_onParamTouch;
+
+    // Tracks whether the current drag landed on the v1 customBody so
+    // follow-up move/up calls route there (v1 customBody doesn't use
+    // the fw2 gesture SM, so fw2 capture state wouldn't tell us).
+    bool m_draggingCustomBody = false;
 };
 
 } // namespace fw
