@@ -5,8 +5,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "effects/FreqMap.h"
 #include <vector>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <climits>
 #include <algorithm>
@@ -18,6 +20,13 @@ public:
     static constexpr int kMaxVoices  = 8;
     static constexpr int kMaxBands   = 32;
     static constexpr int kParamCount = 14;
+
+    // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
+    static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
+    static float cutoffHzToNorm(float hz) { return effects::logHzToNorm(hz, 20.0f, 20000.0f); }
+    static void  formatCutoffHz(float v, char* buf, int n) {
+        effects::formatHz(cutoffNormToHz(v), buf, n);
+    }
 
     enum Param {
         kBands = 0,       // 4–32 bands
@@ -32,7 +41,7 @@ public:
         kDryCarrier,      // 0–1 (blend in dry carrier)
         kAmpAttack,       // 1–5000 ms
         kAmpRelease,      // 1–5000 ms
-        kFilterCutoff,    // 200–20000 Hz (output LP filter)
+        kFilterCutoff,    // 0..1 normalized → 20..20000 Hz (log) output LP
         kVolume,          // 0–1
     };
 
@@ -103,7 +112,8 @@ public:
             {"Dry Carrier",   0.0f,    1.0f,   0.0f, "",    false},
             {"Amp Attack",    1.0f, 5000.0f,   5.0f, "ms",  false},
             {"Amp Release",   1.0f, 5000.0f, 200.0f, "ms",  false},
-            {"Output Filter",200.0f,20000.0f,20000.0f,"Hz", false},
+            {"Output Filter",0.0f,1.0f,1.0f,"", false, false,
+                WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Volume",        0.0f,    1.0f,   0.8f, "",    false, false, WidgetHint::DentedKnob},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
@@ -134,7 +144,7 @@ public:
         const float hfTiltDb     = m_params[kHighFreqTilt];
         const float unvoicedSens = m_params[kUnvoicedSens];
         const float dryCarrier   = m_params[kDryCarrier];
-        const float filterCut    = m_params[kFilterCutoff];
+        const float filterCut    = cutoffNormToHz(m_params[kFilterCutoff]);
         const float volume       = m_params[kVolume];
 
         // Envelope follower coefficients

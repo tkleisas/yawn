@@ -200,8 +200,10 @@ TEST(SubtractiveSynth, NoteOffRelease) {
 TEST(SubtractiveSynth, ParameterGetSet) {
     SubtractiveSynth synth;
     synth.init(kSampleRate, kBlockSize);
-    synth.setParameter(SubtractiveSynth::kFilterCutoff, 1000.0f);
-    EXPECT_NEAR(synth.getParameter(SubtractiveSynth::kFilterCutoff), 1000.0f, 1.0f);
+    // Filter cutoff now stored 0..1 (log-mapped to 20..20000 Hz for
+    // uniform LFO modulation). Verify round-trip on a normalized value.
+    synth.setParameter(SubtractiveSynth::kFilterCutoff, 0.6f);
+    EXPECT_NEAR(synth.getParameter(SubtractiveSynth::kFilterCutoff), 0.6f, 0.001f);
     synth.setParameter(SubtractiveSynth::kVolume, 0.5f);
     EXPECT_NEAR(synth.getParameter(SubtractiveSynth::kVolume), 0.5f, 0.01f);
 }
@@ -1284,8 +1286,9 @@ TEST(WavetableSynth, ParameterGetSet) {
     wt.setParameter(WavetableSynth::kPosition, 0.5f);
     EXPECT_FLOAT_EQ(wt.getParameter(WavetableSynth::kPosition), 0.5f);
 
-    wt.setParameter(WavetableSynth::kFilterCutoff, 2000.0f);
-    EXPECT_FLOAT_EQ(wt.getParameter(WavetableSynth::kFilterCutoff), 2000.0f);
+    const float wtCutNorm = WavetableSynth::cutoffHzToNorm(2000.0f);
+    wt.setParameter(WavetableSynth::kFilterCutoff, wtCutNorm);
+    EXPECT_NEAR(wt.getParameter(WavetableSynth::kFilterCutoff), wtCutNorm, 0.001f);
 
     WavetableSynth wt2;
     wt2.init(kSampleRate, kBlockSize);
@@ -1396,8 +1399,9 @@ TEST(GranularSynth, ParameterGetSet) {
     gs.setParameter(GranularSynth::kGrainSize, 200.0f);
     EXPECT_FLOAT_EQ(gs.getParameter(GranularSynth::kGrainSize), 200.0f);
 
-    gs.setParameter(GranularSynth::kFilterCutoff, 5000.0f);
-    EXPECT_FLOAT_EQ(gs.getParameter(GranularSynth::kFilterCutoff), 5000.0f);
+    const float gsCutNorm = GranularSynth::cutoffHzToNorm(5000.0f);
+    gs.setParameter(GranularSynth::kFilterCutoff, gsCutNorm);
+    EXPECT_NEAR(gs.getParameter(GranularSynth::kFilterCutoff), gsCutNorm, 0.001f);
 
     // Out-of-range clamped
     gs.setParameter(GranularSynth::kVolume, 5.0f);
@@ -1659,8 +1663,9 @@ TEST(Multisampler, ParameterGetSet) {
     ms.setParameter(Multisampler::kAmpAttack, 0.5f);
     EXPECT_FLOAT_EQ(ms.getParameter(Multisampler::kAmpAttack), 0.5f);
 
-    ms.setParameter(Multisampler::kFilterCutoff, 5000.0f);
-    EXPECT_FLOAT_EQ(ms.getParameter(Multisampler::kFilterCutoff), 5000.0f);
+    const float msCutNorm = Multisampler::cutoffHzToNorm(5000.0f);
+    ms.setParameter(Multisampler::kFilterCutoff, msCutNorm);
+    EXPECT_NEAR(ms.getParameter(Multisampler::kFilterCutoff), msCutNorm, 0.001f);
 
     // Clamp
     ms.setParameter(Multisampler::kVolume, 5.0f);

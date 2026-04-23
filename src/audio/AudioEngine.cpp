@@ -561,43 +561,93 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         auto& chain = m_midiEffectChains[t];
         for (int e = 0; e < chain.count(); ++e) {
             auto* fx = chain.effect(e);
-            if (!fx || fx->bypassed() || !fx->hasModulationOutput()) continue;
+            if (!fx) continue;
+            // When an LFO stops modulating (bypassed / depth+bias=0),
+            // undo the offset it last applied so the user's base value
+            // isn't left frozen at the last modulation position.
+            if (fx->bypassed() || !fx->hasModulationOutput()) {
+                const float prev = fx->lastAppliedOffset();
+                if (prev != 0.0f) {
+                    const int ttype  = fx->modulationTargetType();
+                    const int tchain = fx->modulationTargetChain();
+                    const int tparam = fx->modulationTargetParam();
+                    switch (ttype) {
+                    case 0:
+                        if (m_instruments[t])
+                            m_instruments[t]->setParameter(
+                                tparam, m_instruments[t]->getParameter(tparam) - prev);
+                        break;
+                    case 1:
+                        if (auto* afx = m_mixer.trackEffects(t).effectAt(tchain))
+                            afx->setParameter(tparam, afx->getParameter(tparam) - prev);
+                        break;
+                    case 2:
+                        if (auto* mfx = chain.effect(tchain); mfx && tchain != e)
+                            mfx->setParameter(tparam, mfx->getParameter(tparam) - prev);
+                        break;
+                    case 3: {
+                        const auto& ch = m_mixer.trackChannel(t);
+                        if (tparam == 0)
+                            m_mixer.setTrackVolume(t, std::clamp(ch.volume - prev, 0.0f, 2.0f));
+                        else if (tparam == 1)
+                            m_mixer.setTrackPan(t, std::clamp(ch.pan - prev, -1.0f, 1.0f));
+                        else if (tparam >= 3 && tparam <= 10)
+                            m_mixer.setSendLevel(t, tparam - 3,
+                                std::clamp(ch.sends[tparam - 3].level - prev, 0.0f, 1.0f));
+                        break;
+                    }
+                    }
+                    fx->setLastAppliedOffset(0.0f);
+                }
+                continue;
+            }
 
             float modVal = fx->modulationValue();
             int tgtType  = fx->modulationTargetType();
             int tgtChain = fx->modulationTargetChain();
             int tgtParam = fx->modulationTargetParam();
+            // Undo last frame's offset before applying new one — the
+            // engine stashes it per-LFO so the effective base value
+            // stays stable across frames (otherwise the previous offset
+            // bakes in and modulation accumulates to the clamp limit).
+            const float prevOffset = fx->lastAppliedOffset();
 
             // Apply modulation as offset on current parameter value
             switch (tgtType) {
             case 0: // Instrument
                 if (m_instruments[t]) {
-                    float cur = m_instruments[t]->getParameter(tgtParam);
                     auto info = m_instruments[t]->parameterInfo(tgtParam);
                     float range = info.maxValue - info.minValue;
-                    float newVal = std::clamp(cur + modVal * range, info.minValue, info.maxValue);
+                    float offset = modVal * range;
+                    float base = m_instruments[t]->getParameter(tgtParam) - prevOffset;
+                    float newVal = std::clamp(base + offset, info.minValue, info.maxValue);
                     m_instruments[t]->setParameter(tgtParam, newVal);
+                    fx->setLastAppliedOffset(newVal - base);
                 }
                 break;
             case 1: { // Audio effect
                 auto* afx = m_mixer.trackEffects(t).effectAt(tgtChain);
                 if (afx) {
-                    float cur = afx->getParameter(tgtParam);
                     auto info = afx->parameterInfo(tgtParam);
                     float range = info.maxValue - info.minValue;
-                    float newVal = std::clamp(cur + modVal * range, info.minValue, info.maxValue);
+                    float offset = modVal * range;
+                    float base = afx->getParameter(tgtParam) - prevOffset;
+                    float newVal = std::clamp(base + offset, info.minValue, info.maxValue);
                     afx->setParameter(tgtParam, newVal);
+                    fx->setLastAppliedOffset(newVal - base);
                 }
                 break;
             }
             case 2: { // MIDI effect (on same track, different slot)
                 auto* mfx = chain.effect(tgtChain);
                 if (mfx && tgtChain != e) { // don't self-modulate
-                    float cur = mfx->getParameter(tgtParam);
                     auto info = mfx->parameterInfo(tgtParam);
                     float range = info.maxValue - info.minValue;
-                    float newVal = std::clamp(cur + modVal * range, info.minValue, info.maxValue);
+                    float offset = modVal * range;
+                    float base = mfx->getParameter(tgtParam) - prevOffset;
+                    float newVal = std::clamp(base + offset, info.minValue, info.maxValue);
                     mfx->setParameter(tgtParam, newVal);
+                    fx->setLastAppliedOffset(newVal - base);
                 }
                 break;
             }
@@ -605,13 +655,24 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                 // tgtParam maps to MixerParam enum: 0=Volume, 1=Pan, 2=Mute, 3-10=SendLevel0-7
                 const auto& ch = m_mixer.trackChannel(t);
                 if (tgtParam == 0) { // Volume
-                    m_mixer.setTrackVolume(t, std::clamp(ch.volume + modVal * 2.0f, 0.0f, 2.0f));
+                    const float offset = modVal * 2.0f;
+                    const float base = ch.volume - prevOffset;
+                    const float newVal = std::clamp(base + offset, 0.0f, 2.0f);
+                    m_mixer.setTrackVolume(t, newVal);
+                    fx->setLastAppliedOffset(newVal - base);
                 } else if (tgtParam == 1) { // Pan
-                    m_mixer.setTrackPan(t, std::clamp(ch.pan + modVal * 2.0f, -1.0f, 1.0f));
+                    const float offset = modVal * 2.0f;
+                    const float base = ch.pan - prevOffset;
+                    const float newVal = std::clamp(base + offset, -1.0f, 1.0f);
+                    m_mixer.setTrackPan(t, newVal);
+                    fx->setLastAppliedOffset(newVal - base);
                 } else if (tgtParam >= 3 && tgtParam <= 10) { // Send levels
                     int sendIdx = tgtParam - 3;
-                    float cur = ch.sends[sendIdx].level;
-                    m_mixer.setSendLevel(t, sendIdx, std::clamp(cur + modVal, 0.0f, 1.0f));
+                    const float offset = modVal;
+                    const float base = ch.sends[sendIdx].level - prevOffset;
+                    const float newVal = std::clamp(base + offset, 0.0f, 1.0f);
+                    m_mixer.setSendLevel(t, sendIdx, newVal);
+                    fx->setLastAppliedOffset(newVal - base);
                 }
                 break;
             }

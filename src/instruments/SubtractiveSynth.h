@@ -5,6 +5,7 @@
 #include "instruments/Oscillator.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #ifndef M_PI
@@ -98,10 +99,13 @@ public:
                           + voice.subOsc.process() * m_subLevel
                           + noiseGen() * m_noiseLevel;
 
-                // Filter with envelope + LFO modulation
+                // Filter with envelope + LFO modulation. Cutoff is 0..1
+                // normalized; log-map to Hz here, then let env/lfo apply
+                // octave-style modulation on top.
                 float filtEnvVal = voice.filtEnv.process();
                 float lfo = (float)std::sin(2.0 * M_PI * m_lfoPhase);
-                float modCutoff = m_filterCutoff *
+                float cutoffHz = cutoffNormToHz(m_filterCutoff);
+                float modCutoff = cutoffHz *
                     std::pow(2.0f, m_filterEnvAmount * filtEnvVal * 4.0f +
                                    lfo * m_lfoDepth);
                 modCutoff = std::clamp(modCutoff, 20.0f, 20000.0f);
@@ -150,6 +154,19 @@ public:
 
     int parameterCount() const override { return kNumParams; }
 
+    // Log map: normalized 0..1 → 20..20000 Hz (3 decades, 20×1000^x).
+    static float cutoffNormToHz(float x) {
+        return 20.0f * std::pow(1000.0f, std::clamp(x, 0.0f, 1.0f));
+    }
+    static float cutoffHzToNorm(float hz) {
+        return std::log(std::max(hz, 20.0f) / 20.0f) / std::log(1000.0f);
+    }
+    static void formatCutoffHz(float v, char* buf, int n) {
+        const float hz = cutoffNormToHz(v);
+        if (hz >= 1000.0f) std::snprintf(buf, n, "%.1fk", hz / 1000.0f);
+        else                std::snprintf(buf, n, "%.0f",  hz);
+    }
+
     const InstrumentParameterInfo& parameterInfo(int index) const override {
         static constexpr const char* kOscWaveLabels[] = {"Sine", "Tri", "Saw", "Sq", "Noise"};
         static constexpr const char* kFilterTypeLabels[] = {"LP", "BP", "HP"};
@@ -162,7 +179,10 @@ public:
             {"Osc2 Octave",  -2,2,0,"",false, false, WidgetHint::StepSelector},
             {"Sub Level",     0,1,0,"",false},
             {"Noise Level",   0,1,0,"",false},
-            {"Filter Cutoff", 20,20000,5000,"Hz",false},
+            // Cutoff stored 0..1 for uniform modulation; displayed in Hz
+            // via the custom formatter (log-mapped 20..20000).
+            {"Filter Cutoff", 0.0f,1.0f,0.8f,"",false, false,
+                WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Filter Reso",   0,1,0,"",false},
             {"Filter Type",   0,2,0,"",false, false, WidgetHint::StepSelector, kFilterTypeLabels, 3},
             {"Filter Env",   -1,1,0.3f,"",false, false, WidgetHint::DentedKnob},
@@ -220,7 +240,7 @@ public:
             case kOsc2Octave:     m_osc2Octave = std::clamp(value, -2.0f, 2.0f); break;
             case kSubLevel:       m_subLevel = std::clamp(value, 0.0f, 1.0f); break;
             case kNoiseLevel:     m_noiseLevel = std::clamp(value, 0.0f, 1.0f); break;
-            case kFilterCutoff:   m_filterCutoff = std::clamp(value, 20.0f, 20000.0f); break;
+            case kFilterCutoff:   m_filterCutoff = std::clamp(value, 0.0f, 1.0f); break;
             case kFilterResonance:m_filterResonance = std::clamp(value, 0.0f, 1.0f); break;
             case kFilterType:     m_filterType = std::clamp(value, 0.0f, 2.0f); break;
             case kFilterEnvAmount:m_filterEnvAmount = std::clamp(value, -1.0f, 1.0f); break;
@@ -313,7 +333,8 @@ private:
     float m_osc1Wave = 1, m_osc1Level = 0.8f;
     float m_osc2Wave = 1, m_osc2Level = 0, m_osc2Detune = 0, m_osc2Octave = 0;
     float m_subLevel = 0, m_noiseLevel = 0;
-    float m_filterCutoff = 5000, m_filterResonance = 0, m_filterType = 0;
+    float m_filterCutoff = 0.8f;  // normalized 0..1 → 20..20000 Hz log-mapped
+    float m_filterResonance = 0, m_filterType = 0;
     float m_filterEnvAmount = 0.3f;
     float m_ampA = 0.01f, m_ampD = 0.1f, m_ampS = 0.7f, m_ampR = 0.3f;
     float m_filtA = 0.01f, m_filtD = 0.3f, m_filtS = 0.3f, m_filtR = 0.3f;

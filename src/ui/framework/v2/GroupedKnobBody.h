@@ -156,6 +156,7 @@ public:
         std::string name, unit;
         float minVal, maxVal, defaultVal;
         bool isBoolean;
+        void (*formatFn)(float, char*, int) = nullptr;
     };
     struct SectionDef {
         std::string label;
@@ -199,7 +200,13 @@ public:
                                          pd.minVal == std::floor(pd.minVal) &&
                                          pd.maxVal == std::floor(pd.maxVal) &&
                                          pd.unit.empty() && !pd.isBoolean);
-                if (isInteger) {
+                if (pd.formatFn) {
+                    k->setValueFormatter([fn = pd.formatFn](float v) {
+                        char buf[24];
+                        fn(v, buf, static_cast<int>(sizeof(buf)));
+                        return std::string(buf);
+                    });
+                } else if (isInteger) {
                     k->setStep(1.0f);
                     k->setPixelsPerFullRange(48.0f);
                     k->setValueFormatter([](float v) {

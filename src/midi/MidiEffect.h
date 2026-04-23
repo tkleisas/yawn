@@ -78,6 +78,15 @@ public:
     virtual int   modulationTargetChain() const { return 0; }
     virtual int   modulationTargetParam() const { return 0; }
 
+    // Additive modulation accumulates over frames because the engine
+    // reads getParameter() (which reflects last frame's modulated value),
+    // adds new modulation, writes back. To prevent drift, the engine
+    // subtracts the previous offset it applied before computing the new
+    // target value. Per-effect storage, scaled to the target param's
+    // raw units (not normalized).
+    float lastAppliedOffset() const          { return m_lastAppliedOffset; }
+    void  setLastAppliedOffset(float v)      { m_lastAppliedOffset = v; }
+
     // --- Phase linking (for LFOs and similar oscillating modulators) ---
     // Links reference the leader's stable instanceId rather than slot indices.
     virtual bool     isLinkedToSource()  const { return false; }
@@ -88,6 +97,7 @@ public:
 protected:
     bool   m_bypassed   = false;
     double m_sampleRate = 44100.0;
+    float  m_lastAppliedOffset = 0.0f;
 
 private:
     static inline std::atomic<uint32_t> s_nextInstanceId{1};

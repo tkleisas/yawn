@@ -433,7 +433,8 @@ public:
 
     void setCutoff(float hz) { m_cutoff = std::clamp(hz, 20.0f, 20000.0f); }
     void setResonance(float q) { m_resonance = std::clamp(q, 0.0f, 1.0f); }
-    void setFilterType(int type) { m_type = std::clamp(type, 0, 2); }
+    // 0=LP, 1=HP, 2=BP, 3=Notch (Notch draws inverted BP).
+    void setFilterType(int type) { m_type = std::clamp(type, 0, 3); }
 
     Size measure(const Constraints& c, const UIContext&) override {
         return c.constrain({100.0f, 48.0f});
@@ -453,7 +454,7 @@ public:
                           Color{50, 50, 60, 255});
 
         float lblScale = 7.0f / Theme::kFontSize;
-        static const char* typeNames[] = {"LP", "HP", "BP"};
+        static const char* typeNames[] = {"LP", "HP", "BP", "Notch"};
         f.drawText(r, typeNames[m_type], m_bounds.x + 3, m_bounds.y + 1,
                    lblScale, Theme::textDim);
 
@@ -490,6 +491,12 @@ public:
                     float bw = 0.12f - m_resonance * 0.08f;
                     if (bw < 0.02f) bw = 0.02f;
                     mag = std::exp(-dist * dist / (2 * bw * bw));
+                    break;
+                }
+                case 3: { // Notch — inverted bandpass
+                    float bw = 0.12f - m_resonance * 0.08f;
+                    if (bw < 0.02f) bw = 0.02f;
+                    mag = 1.0f - std::exp(-dist * dist / (2 * bw * bw));
                     break;
                 }
             }
@@ -1708,126 +1715,6 @@ private:
 // (fw2::AutomationEnvelopeWidget). The v1 version is retired; nothing
 // includes it anymore.
 
-// ═══════════════════════════════════════════════════════════════════════════
-// LFODisplayWidget — Draws LFO waveform shape with animated phase dot.
-// Used as a custom panel inside DeviceWidget for LFO MIDI effects.
-// Shows one full cycle of the current waveform, depth-scaled, with a dot
-// indicating the current output position.
-// ═══════════════════════════════════════════════════════════════════════════
-
-class LFODisplayWidget : public Widget {
-public:
-    LFODisplayWidget() { setName("LFODisplay"); }
-
-    // 0=Sine, 1=Triangle, 2=Saw, 3=Square, 4=S&H
-    void setShape(int s) { m_shape = std::clamp(s, 0, 4); }
-    void setDepth(float d) { m_depth = std::clamp(d, 0.0f, 1.0f); }
-    void setPhaseOffset(float p) { m_phaseOffset = std::clamp(p, 0.0f, 1.0f); }
-    void setCurrentValue(float v) { m_currentValue = std::clamp(v, -1.0f, 1.0f); }
-    void setCurrentPhase(double p) { m_currentPhase = p - std::floor(p); }
-    void setLinked(bool linked) { m_linked = linked; }
-
-    Size measure(const Constraints& c, const UIContext&) override {
-        return c.constrain({c.maxW, 52.0f});
-    }
-    void layout(const Rect& bounds, const UIContext& ctx) override {
-        Widget::layout(bounds, ctx);
-    }
-
-    void paint([[maybe_unused]] UIContext& ctx) override {
-#ifndef YAWN_TEST_BUILD
-        if (!ctx.renderer || !ctx.font) return;
-        auto& r = *ctx.renderer;
-        auto& f = *ctx.font;
-
-        // Background
-        r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h, Color{20, 20, 26, 255});
-        r.drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
-                          Color{50, 50, 60, 255});
-
-        float wx = m_bounds.x + 4;
-        float wy = m_bounds.y + 10;
-        float ww = m_bounds.w - 8;
-        float wh = m_bounds.h - 14;
-        if (ww < 10 || wh < 6) return;
-
-        float midY = wy + wh / 2;
-
-        // Center line
-        r.drawRect(wx, midY, ww, 1, Color{35, 35, 45, 255});
-
-        // Waveform color (dimmer when depth is low)
-        uint8_t alpha = static_cast<uint8_t>(100 + 155 * m_depth);
-        Color waveCol{80, 180, 255, alpha};
-        float amp = wh / 2 * std::max(m_depth, 0.15f);
-
-        // Draw waveform (one full cycle with phase offset applied)
-        int steps = static_cast<int>(ww);
-        float prevX = wx, prevY = midY;
-        for (int i = 0; i <= steps; ++i) {
-            float t = static_cast<float>(i) / steps;
-            float phase = t + m_phaseOffset;
-            phase = phase - std::floor(phase);
-            float val = computeShape(phase);
-            float curX = wx + static_cast<float>(i);
-            float curY = midY - val * amp;
-            if (i > 0)
-                r.drawLine(prevX, prevY, curX, curY, waveCol, 1.5f);
-            prevX = curX;
-            prevY = curY;
-        }
-
-        // Animated phase dot — shows current position on the waveform
-        float dotPhase = static_cast<float>(m_currentPhase) + m_phaseOffset;
-        dotPhase = dotPhase - std::floor(dotPhase);
-        float dotX = wx + dotPhase * ww;
-        float dotVal = computeShape(dotPhase);
-        float dotY = midY - dotVal * amp;
-        Color dotCol{255, 200, 60, 255};
-        r.drawRect(dotX - 3, dotY - 3, 6, 6, dotCol);
-
-        // Shape label (top-left)
-        float lblScale = 7.0f / Theme::kFontSize;
-        static const char* shapeNames[] = {"Sin", "Tri", "Saw", "Sqr", "S&H"};
-        const char* sn = (m_shape >= 0 && m_shape <= 4) ? shapeNames[m_shape] : "?";
-        f.drawText(r, sn, m_bounds.x + 3, m_bounds.y + 1, lblScale,
-                   Color{180, 180, 200, 200});
-
-        // Link indicator (top-right)
-        if (m_linked) {
-            float tw = f.textWidth("Link", lblScale);
-            f.drawText(r, "Link", m_bounds.x + m_bounds.w - tw - 3, m_bounds.y + 1,
-                       lblScale, Color{100, 220, 140, 200});
-        }
-#endif
-    }
-
-private:
-    float computeShape(float phase) const {
-        switch (m_shape) {
-            case 0: return std::sin(phase * 6.283185307f);
-            case 1: // Triangle
-                if (phase < 0.25f) return phase * 4.0f;
-                if (phase < 0.75f) return 2.0f - phase * 4.0f;
-                return phase * 4.0f - 4.0f;
-            case 2: return 2.0f * phase - 1.0f;           // Saw
-            case 3: return (phase < 0.5f) ? 1.0f : -1.0f; // Square
-            case 4: { // S&H — pseudo-random per 1/8 segments
-                int seg = static_cast<int>(phase * 8.0f);
-                uint32_t hash = static_cast<uint32_t>(seg) * 1664525u + 1013904223u;
-                return (static_cast<float>(hash & 0xFFFF) / 32767.5f) - 1.0f;
-            }
-            default: return 0.0f;
-        }
-    }
-
-    int    m_shape        = 0;
-    float  m_depth        = 0.5f;
-    float  m_phaseOffset  = 0.0f;
-    float  m_currentValue = 0.0f;
-    double m_currentPhase = 0.0;
-    bool   m_linked       = false;
-};
 
 // CustomDeviceBody has migrated to fw2 — see
 // ui/framework/v2/GroupedKnobBody.h. The abstract base + GroupedKnobBody

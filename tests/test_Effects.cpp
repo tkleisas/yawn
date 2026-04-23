@@ -290,7 +290,7 @@ TEST(Filter, Init) {
 TEST(Filter, LowPassCutsHigh) {
     Filter flt;
     flt.init(kSampleRate, kBlockSize);
-    flt.setParameter(Filter::kCutoff, 300.0f);
+    flt.setParameter(Filter::kCutoff, Filter::cutoffHzToNorm(300.0f));
     flt.setParameter(Filter::kType, static_cast<float>(Filter::LP));
 
     std::vector<float> buf(kBlockSize * 2);
@@ -393,7 +393,7 @@ TEST(EffectChain, AppendAndProcess) {
     chain.init(kSampleRate, kBlockSize);
 
     auto flt = std::make_unique<Filter>();
-    flt->setParameter(Filter::kCutoff, 200.0f);
+    flt->setParameter(Filter::kCutoff, Filter::cutoffHzToNorm(200.0f));
     flt->setParameter(Filter::kType, static_cast<float>(Filter::LP));
     chain.append(std::move(flt));
 
@@ -441,7 +441,7 @@ TEST(EffectChain, BypassedEffectSkipped) {
     chain.init(kSampleRate, kBlockSize);
 
     auto flt = std::make_unique<Filter>();
-    flt->setParameter(Filter::kCutoff, 200.0f);
+    flt->setParameter(Filter::kCutoff, Filter::cutoffHzToNorm(200.0f));
     flt->setBypassed(true);
     chain.append(std::move(flt));
 

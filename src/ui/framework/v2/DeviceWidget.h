@@ -23,7 +23,6 @@
 #include "ui/framework/v2/StepSelector.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/V1EventBridge.h"
-#include "ui/framework/Widget.h"   // v1 Widget (for m_customPanel)
 #include "ui/Theme.h"
 #include "util/Logger.h"
 #include "WidgetHint.h"
@@ -61,6 +60,10 @@ public:
         bool        isBoolean;
         ::yawn::WidgetHint widgetHint = ::yawn::WidgetHint::Knob;
         std::vector<std::string> valueLabels;
+        // Optional: formatter that maps the raw stored value to a
+        // display string. Overrides the unit-based default when set
+        // (used for log-scaled params that store 0..1 but show Hz).
+        void (*formatFn)(float, char*, int) = nullptr;
     };
 
     struct ParamSlot {
@@ -222,13 +225,13 @@ public:
     // through the v1 lifecycle bridge driven by the panel hosting this
     // DeviceWidget.
 
-    void setCustomPanel(::yawn::ui::fw::Widget* panel, float h, float minW = 0.0f) {
+    void setCustomPanel(Widget* panel, float h, float minW = 0.0f) {
         if (m_customPanel != panel) delete m_customPanel;
         m_customPanel  = panel;
         m_customPanelH = h;
         m_customMinW   = minW;
     }
-    ::yawn::ui::fw::Widget* customPanel() const { return m_customPanel; }
+    Widget* customPanel() const { return m_customPanel; }
 
     void setCustomBody(CustomDeviceBody* body) {
         if (m_customBody != body) delete m_customBody;
@@ -414,6 +417,9 @@ public:
         } else {
             if (m_customPanel) {
                 m_customPanelRect = {x + 4, bodyY + 2, w - 8, m_customPanelH};
+                m_customPanel->measure(
+                    Constraints::tight(m_customPanelRect.w, m_customPanelRect.h), ctx);
+                m_customPanel->layout(m_customPanelRect, ctx);
                 const float used = m_customPanelH + 4;
                 bodyY += used;
                 bodyH -= used;
@@ -467,8 +473,7 @@ public:
         } else if (m_customBody) {
             m_customBody->render(ctx);
         } else {
-            // m_customPanel (v1) is painted by the hosting panel after
-            // fw2 renders its own content — we leave space for it here.
+            if (m_customPanel) m_customPanel->render(ctx);
             m_knobGrid.render(ctx);
             renderV2Knobs(m_knobs);
         }
@@ -627,7 +632,7 @@ private:
     std::string m_deviceName;
 
     // v1 cross-framework slots (non-owning)
-    ::yawn::ui::fw::Widget*           m_customPanel = nullptr;
+    Widget*                           m_customPanel = nullptr;
     float                              m_customPanelH = 0;
     float                              m_customMinW   = 0;
     CustomDeviceBody* m_customBody = nullptr;
@@ -738,7 +743,14 @@ private:
                                      p.minVal == std::floor(p.minVal) &&
                                      p.maxVal == std::floor(p.maxVal) &&
                                      !p.isBoolean);
-            if (isInteger) {
+            if (p.formatFn) {
+                // Param-supplied custom formatter (e.g. log-mapped Hz).
+                k->setValueFormatter([fn = p.formatFn](float v) {
+                    char buf[24];
+                    fn(v, buf, static_cast<int>(sizeof(buf)));
+                    return std::string(buf);
+                });
+            } else if (isInteger) {
                 k->setStep(1.0f);
                 // ~2 px per integer step — snap stays clean across large
                 // ranges (Semitones is -48..+48 → 96 steps). A fixed 48

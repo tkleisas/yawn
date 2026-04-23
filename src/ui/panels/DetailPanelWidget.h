@@ -10,8 +10,10 @@
 
 #include "ui/framework/Widget.h"
 #include "ui/framework/InstrumentDisplayWidget.h"
+#include "ui/framework/v2/FilterDisplayWidget.h"
 #include "ui/framework/v2/DeviceHeaderWidget.h"
 #include "ui/framework/v2/DeviceWidget.h"
+#include "ui/framework/v2/LFODisplayWidget.h"
 #include "ui/framework/v2/SnapScrollContainer.h"
 #include "ui/framework/v2/WaveformWidget.h"
 #include "ui/framework/v2/AutomationEnvelope.h"
@@ -36,6 +38,7 @@
 #include "instruments/Vocoder.h"
 #include "effects/AudioEffect.h"
 #include "effects/EffectChain.h"
+#include "effects/Filter.h"
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/LFO.h"
@@ -373,7 +376,8 @@ public:
                 if (fx->isVisualizer())
                     dw->setVisualizer(true, fx->visualizerType());
 
-                configureDeviceWidget(dw, ref);
+                if (!setupAudioEffectDisplay(dw, fx, ref))
+                    configureDeviceWidget(dw, ref);
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
@@ -550,7 +554,8 @@ public:
                 if (fx->isVisualizer())
                     dw->setVisualizer(true, fx->visualizerType());
 
-                configureDeviceWidget(dw, ref);
+                if (!setupAudioEffectDisplay(dw, fx, ref))
+                    configureDeviceWidget(dw, ref);
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
@@ -908,6 +913,7 @@ private:
                 pi.minVal = info.minValue; pi.maxVal = info.maxValue;
                 pi.defaultVal = info.defaultValue; pi.isBoolean = info.isBoolean;
                 pi.widgetHint = info.widgetHint;
+                pi.formatFn = info.formatFn;
                 if (info.valueLabels && info.valueLabelCount > 0)
                     pi.valueLabels.assign(info.valueLabels, info.valueLabels + info.valueLabelCount);
             } else if (ref.audioEffect) {
@@ -916,6 +922,7 @@ private:
                 pi.minVal = info.minValue; pi.maxVal = info.maxValue;
                 pi.defaultVal = info.defaultValue; pi.isBoolean = info.isBoolean;
                 pi.widgetHint = info.widgetHint;
+                pi.formatFn = info.formatFn;
                 if (info.valueLabels && info.valueLabelCount > 0)
                     pi.valueLabels.assign(info.valueLabels, info.valueLabels + info.valueLabelCount);
             }
@@ -1060,10 +1067,15 @@ private:
                 {"LFO",      {20, 21, 22}},
             };
             m_displayUpdaters.push_back([panel, inst]() {
+                // Param 8 (Filter Cutoff) is 0..1 normalized → convert
+                // to Hz for the display's filter-curve widget.
+                const float cutoffHz =
+                    instruments::SubtractiveSynth::cutoffNormToHz(
+                        inst->getParameter(8));
                 panel->updateFromParams(
                     inst->getParameter(0),  inst->getParameter(1),
                     inst->getParameter(2),  inst->getParameter(3),
-                    inst->getParameter(8),  inst->getParameter(9),
+                    cutoffHz,               inst->getParameter(9),
                     inst->getParameter(10),
                     inst->getParameter(12), inst->getParameter(13),
                     inst->getParameter(14), inst->getParameter(15),
@@ -1325,7 +1337,8 @@ private:
         for (int p = 0; p < count; ++p) {
             auto& info = inst->parameterInfo(p);
             params[p] = {p, info.name, info.unit ? info.unit : "",
-                         info.minValue, info.maxValue, info.defaultValue, info.isBoolean};
+                         info.minValue, info.maxValue, info.defaultValue,
+                         info.isBoolean, info.formatFn};
         }
 
         auto* body = new ::yawn::ui::fw2::GroupedKnobBody();
@@ -1347,6 +1360,35 @@ private:
         return true;
     }
 
+    // ── Build custom display for audio effects (currently Filter) ──
+    bool setupAudioEffectDisplay(::yawn::ui::fw2::DeviceWidget* dw, effects::AudioEffect* fx,
+                                 const DeviceRef& ref) {
+        if (!fx) return false;
+        std::string id = fx->id();
+
+        if (id == "filter") {
+            auto* disp = new ::yawn::ui::fw2::FilterDisplayWidget();
+            dw->setCustomPanel(disp, 52.0f, 200.0f);
+            configureDeviceWidget(dw, ref);
+
+            m_displayUpdaters.push_back([disp, fx]() {
+                auto* flt = static_cast<effects::Filter*>(fx);
+                // Cutoff is stored 0..1 → convert to Hz for the display.
+                disp->setCutoff(effects::Filter::cutoffNormToHz(
+                    flt->getParameter(effects::Filter::kCutoff)));
+                // Resonance stored 0.1..20 biquad Q → rough 0..1 normalize
+                // so the curve bump scales sensibly.
+                const float q = flt->getParameter(effects::Filter::kResonance);
+                disp->setResonance(std::clamp((q - 0.1f) / 5.0f, 0.0f, 1.0f));
+                disp->setFilterType(
+                    static_cast<int>(flt->getParameter(effects::Filter::kType)));
+            });
+            return true;
+        }
+
+        return false;
+    }
+
     // ── Build custom display for MIDI effects (currently LFO) ──
     bool setupMidiEffectDisplay(::yawn::ui::fw2::DeviceWidget* dw, midi::MidiEffect* fx,
                                 const DeviceRef& ref) {
@@ -1354,7 +1396,7 @@ private:
         std::string nm = fx->id();
 
         if (nm == "lfo") {
-            auto* lfoDisp = new LFODisplayWidget();
+            auto* lfoDisp = new ::yawn::ui::fw2::LFODisplayWidget();
             dw->setCustomPanel(lfoDisp, 52.0f, 200.0f);
             configureDeviceWidget(dw, ref);
 
@@ -1362,6 +1404,7 @@ private:
                 auto* lfo = static_cast<midi::LFO*>(fx);
                 lfoDisp->setShape(static_cast<int>(lfo->getParameter(midi::LFO::kShape)));
                 lfoDisp->setDepth(lfo->getParameter(midi::LFO::kDepth));
+                lfoDisp->setBias(lfo->getParameter(midi::LFO::kBias));
                 lfoDisp->setPhaseOffset(lfo->getParameter(midi::LFO::kPhase));
                 lfoDisp->setCurrentValue(lfo->currentValue());
                 lfoDisp->setCurrentPhase(lfo->currentPhase());

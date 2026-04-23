@@ -21,6 +21,13 @@ struct ParameterInfo {
     WidgetHint widgetHint = WidgetHint::Knob;
     const char* const* valueLabels = nullptr;
     int valueLabelCount = 0;
+
+    // Optional custom display formatter. When set, overrides the unit-
+    // based default in the knob UI. Used for log-mapped params that store
+    // 0..1 for uniform modulation but are displayed in natural units
+    // (e.g. filter cutoff 0..1 shown as "5.0k Hz").
+    using FormatFn = void (*)(float value, char* buf, int bufSize);
+    FormatFn formatFn = nullptr;
 };
 
 class AudioEffect {

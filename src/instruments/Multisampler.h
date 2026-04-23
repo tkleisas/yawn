@@ -5,8 +5,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "effects/FreqMap.h"
 #include <vector>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <climits>
 #include <algorithm>
@@ -20,12 +22,19 @@ public:
     static constexpr int kMaxZones  = 128;
     static constexpr int kParamCount = 14;
 
+    // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
+    static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
+    static float cutoffHzToNorm(float hz) { return effects::logHzToNorm(hz, 20.0f, 20000.0f); }
+    static void  formatCutoffHz(float v, char* buf, int n) {
+        effects::formatHz(cutoffNormToHz(v), buf, n);
+    }
+
     enum Param {
         kAmpAttack = 0,    // 0.001–5 s
         kAmpDecay,         // 0.001–5 s
         kAmpSustain,       // 0–1
         kAmpRelease,       // 0.001–10 s
-        kFilterCutoff,     // 20–20000 Hz
+        kFilterCutoff,     // 0..1 normalized → 20..20000 Hz (log)
         kFilterReso,       // 0–1
         kFiltEnvAmount,    // -10000 to +10000 Hz
         kFiltAttack,       // 0.001–5 s
@@ -116,7 +125,8 @@ public:
             {"Amp Decay",     0.001f,  5.0f,  0.1f,   "s",   false},
             {"Amp Sustain",   0.0f,    1.0f,  1.0f,   "",    false, false, WidgetHint::DentedKnob},
             {"Amp Release",   0.001f, 10.0f,  0.3f,   "s",   false},
-            {"Filter Cut",   20.0f, 20000.0f, 20000.0f, "Hz", false},
+            {"Filter Cut",   0.0f, 1.0f, 1.0f, "", false, false,
+                WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Filter Reso",   0.0f,    1.0f,  0.0f,   "",    false},
             {"Filt Env Amt",-10000.0f,10000.0f,0.0f,   "Hz",  false, false, WidgetHint::DentedKnob},
             {"Filt Attack",   0.001f,  5.0f,  0.01f,  "s",   false},
@@ -146,7 +156,8 @@ public:
         if (m_bypassed || m_zoneCount == 0) return;
 
         const float volume     = m_params[kVolume];
-        const float filterCut  = m_params[kFilterCutoff];
+        // filterCut is stored normalized 0..1 → convert to Hz for filter math.
+        const float filterCut  = cutoffNormToHz(m_params[kFilterCutoff]);
         const float filterReso = m_params[kFilterReso];
         const float filtEnvAmt = m_params[kFiltEnvAmount];
         const float velXfade   = m_params[kVelCrossfade];

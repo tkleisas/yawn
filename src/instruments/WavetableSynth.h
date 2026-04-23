@@ -25,8 +25,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "effects/FreqMap.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 
@@ -44,10 +46,17 @@ public:
     static constexpr int kMaxFrames   = 16;      // max frames per wavetable
     static constexpr int kNumTables   = 5;       // number of built-in wavetables
 
+    // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
+    static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
+    static float cutoffHzToNorm(float hz) { return effects::logHzToNorm(hz, 20.0f, 20000.0f); }
+    static void  formatCutoffHz(float v, char* buf, int n) {
+        effects::formatHz(cutoffNormToHz(v), buf, n);
+    }
+
     enum Param {
         kTable,           // 0–4: wavetable selection
         kPosition,        // 0–1: position within wavetable (frame morph)
-        kFilterCutoff,    // 20–20000 Hz
+        kFilterCutoff,    // 0..1 normalized → 20..20000 Hz (log)
         kFilterResonance, // 0–1
         kFilterEnvAmount, // -1 to +1
         kAmpAttack,       // 0.001–5s
@@ -111,7 +120,7 @@ public:
 
         int tableIdx = std::clamp(static_cast<int>(m_params[kTable]), 0, kNumTables - 1);
         float position = m_params[kPosition];
-        float cutoff = m_params[kFilterCutoff];
+        float cutoff = cutoffNormToHz(m_params[kFilterCutoff]);
         float reso = m_params[kFilterResonance];
         float filtEnvAmt = m_params[kFilterEnvAmount];
         float subLevel = m_params[kSubLevel];
@@ -218,7 +227,9 @@ public:
         static const InstrumentParameterInfo infos[] = {
             {"Table",       0.0f,  4.0f,   0.0f,  "",   false, false, WidgetHint::StepSelector, kTableLabels, 5},
             {"Position",    0.0f,  1.0f,   0.0f,  "",   false},
-            {"Filter Cut",  20.0f, 20000.0f, 5000.0f, "Hz", false},
+            // Cutoff default 0.799 ≈ 5 kHz in 20..20000
+            {"Filter Cut",  0.0f, 1.0f, 0.799f, "", false, false,
+                WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Filter Res",  0.0f,  1.0f,   0.0f,  "",   false},
             {"Filter Env", -1.0f,  1.0f,   0.3f,  "",   false, false, WidgetHint::DentedKnob},
             {"Amp Atk",     0.001f, 5.0f,  0.01f, "s",  false},

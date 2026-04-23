@@ -74,15 +74,6 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
         m_scroll.measure(::yawn::ui::fw2::Constraints::loose(bounds.w, bodyH), v2ctx);
         m_scroll.layout(::yawn::ui::fw2::Rect{bounds.x, bodyY, bounds.w, bodyH}, v2ctx);
     }
-
-    // After fw2 lays out the device widgets, drive the remaining v1
-    // customPanels at the rects fw2::DeviceWidget computed.
-    for (auto* dw : m_deviceWidgets) {
-        if (auto* panel = dw->customPanel()) {
-            auto r = dw->customPanelLayoutRect();
-            panel->layout({r.x, r.y, r.w, r.h}, ctx);
-        }
-    }
 }
 
 void DetailPanelWidget::paint(UIContext& ctx) {
@@ -132,14 +123,6 @@ void DetailPanelWidget::paint(UIContext& ctx) {
             }
 
             m_scroll.render(::yawn::ui::fw2::UIContext::global());
-
-            // Paint remaining v1 custom panels (LFO display etc.) at
-            // the rects fw2::DeviceWidget reserved for them. customBody
-            // rendered through m_scroll above already.
-            for (auto* dw : m_deviceWidgets) {
-                if (!dw->isExpanded()) continue;
-                if (auto* panel = dw->customPanel()) panel->paint(ctx);
-            }
 
             // Draw drag-to-reorder insertion indicator
             if (m_dragReorderActive && m_dragInsertIdx >= 0 &&
@@ -578,10 +561,6 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
             }
         }
         m_scroll.render(::yawn::ui::fw2::UIContext::global());
-        for (auto* dw : m_deviceWidgets) {
-            if (!dw->isExpanded()) continue;
-            if (auto* panel = dw->customPanel()) panel->paint(ctx);
-        }
     } else {
         float noFxY = fxLabelY + 14.0f;
         font.drawText(renderer, "No effects", sectionX + 80.0f, noFxY,

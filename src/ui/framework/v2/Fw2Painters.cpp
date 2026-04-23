@@ -592,29 +592,47 @@ static void paintToggle(Widget& w, UIContext& ctx) {
     const Color accent = tog.accentColor().value_or(p.accent);
 
     if (tog.variant() == ToggleVariant::Switch) {
-        // Pill track + knob.
-        const float trackH = b.h * 0.55f;
-        const float trackY = b.y + (b.h - trackH) * 0.5f;
-        const float radius = trackH * 0.5f;
+        // Pill track + knob + optional label below. Compact: pill is a
+        // fixed ~18 px tall so it reads the same as a knob disc in a
+        // device knob-grid cell instead of stretching to fill the
+        // whole cell height.
+        const float kTrackH   = 18.0f;
+        const float kTrackW   = std::min(b.w, 34.0f);  // horizontal pill, not full-width
+        const bool  hasLabel  = !tog.label().empty() && ctx.textMetrics;
+        const float labelLh   = hasLabel ? ctx.textMetrics->lineHeight(m.fontSize) : 0.0f;
+        // Vertically center the pill, leaving room for the label below
+        // if there is one.
+        const float vContent  = kTrackH + (hasLabel ? labelLh + m.baseUnit * 0.5f : 0.0f);
+        const float topPad    = std::max(0.0f, (b.h - vContent) * 0.5f);
+        const float trackX    = b.x + (b.w - kTrackW) * 0.5f;
+        const float trackY    = b.y + topPad;
+        const float radius    = kTrackH * 0.5f;
 
         Color trackCol = tog.state() ? accent : p.controlBg;
         if (!tog.isEnabled()) trackCol = Color{50, 50, 53, 255};
         else if (tog.isPressed())  trackCol = tog.state() ? p.accentActive : p.controlActive;
         else if (tog.isHovered())  trackCol = tog.state() ? p.accentHover  : p.controlHover;
 
-        ctx.renderer->drawRoundedRect(b.x, trackY, b.w, trackH, radius, trackCol);
-        ctx.renderer->drawRectOutline(b.x, trackY, b.w, trackH, p.border, m.borderWidth);
+        ctx.renderer->drawRoundedRect(trackX, trackY, kTrackW, kTrackH, radius, trackCol);
+        ctx.renderer->drawRectOutline(trackX, trackY, kTrackW, kTrackH, p.border, m.borderWidth);
 
-        // Knob — circle on left (off) or right (on). Slight inset so
-        // it doesn't kiss the outline.
-        const float knobR   = trackH * 0.45f;
-        const float knobCY  = trackY + trackH * 0.5f;
-        const float inset   = trackH * 0.1f;
-        const float knobCX  = tog.state()
-            ? (b.x + b.w - inset - knobR)
-            : (b.x + inset + knobR);
+        const float knobR  = kTrackH * 0.45f;
+        const float knobCY = trackY + kTrackH * 0.5f;
+        const float inset  = kTrackH * 0.1f;
+        const float knobCX = tog.state()
+            ? (trackX + kTrackW - inset - knobR)
+            : (trackX + inset + knobR);
         const Color knobCol = tog.isEnabled() ? p.elevated : p.textDim;
         ctx.renderer->drawFilledCircle(knobCX, knobCY, knobR, knobCol, 16);
+
+        if (hasLabel) {
+            const float fontSize = m.fontSize;
+            const float tw       = ctx.textMetrics->textWidth(tog.label(), fontSize);
+            const float tx       = b.x + (b.w - tw) * 0.5f;
+            const float ty       = trackY + kTrackH + m.baseUnit * 0.5f - labelLh * 0.15f;
+            const Color tc       = tog.isEnabled() ? p.textPrimary : p.textDim;
+            ctx.textMetrics->drawText(*ctx.renderer, tog.label(), tx, ty, fontSize, tc);
+        }
         return;
     }
 

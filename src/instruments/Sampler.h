@@ -2,8 +2,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "effects/FreqMap.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 namespace yawn {
@@ -21,6 +23,13 @@ public:
         kLoopStart, kLoopEnd, kReverse, kSampleGain,
         kNumParams
     };
+
+    // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
+    static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
+    static float cutoffHzToNorm(float hz) { return effects::logHzToNorm(hz, 20.0f, 20000.0f); }
+    static void  formatCutoffHz(float v, char* buf, int n) {
+        effects::formatHz(cutoffNormToHz(v), buf, n);
+    }
 
     void init(double sampleRate, int maxBlockSize) override {
         m_sampleRate = sampleRate;
@@ -141,7 +150,8 @@ public:
                 sR *= m_sampleGain;
 
                 // SVF filter
-                float f = std::min(2.0f * m_filterCutoff / (float)m_sampleRate, 0.99f);
+                const float cutoffHz = cutoffNormToHz(m_filterCutoff);
+                float f = std::min(2.0f * cutoffHz / (float)m_sampleRate, 0.99f);
                 float q = 1.0f - m_filterResonance * 0.98f;
                 float highL = sL - voice.filterLow - q * voice.filterBand;
                 voice.filterBand += f * highL;
@@ -182,7 +192,8 @@ public:
             {"Decay",       0.001f, 5, 0.1f, "s", false},
             {"Sustain",     0, 1, 1, "", false, false, WidgetHint::DentedKnob},
             {"Release",     0.001f, 5, 0.1f, "s", false},
-            {"Filter Cut",  20, 20000, 20000, "Hz", false},
+            {"Filter Cut",  0.0f, 1.0f, 1.0f, "", false, false,
+                WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Filter Reso", 0, 1, 0, "", false},
             {"Volume",      0, 1, 0.8f, "", false, false, WidgetHint::DentedKnob},
             {"Loop Start",  0, 1, 0, "", false},
@@ -218,7 +229,7 @@ public:
             case kDecay:           m_decay = value; break;
             case kSustain:         m_sustain = std::clamp(value, 0.0f, 1.0f); break;
             case kRelease:         m_release = value; break;
-            case kFilterCutoff:    m_filterCutoff = std::clamp(value, 20.0f, 20000.0f); break;
+            case kFilterCutoff:    m_filterCutoff = std::clamp(value, 0.0f, 1.0f); break;
             case kFilterResonance: m_filterResonance = std::clamp(value, 0.0f, 1.0f); break;
             case kVolume:          m_volume = std::clamp(value, 0.0f, 1.0f); break;
             case kLoopStart:       m_loopStart = std::clamp(value, 0.0f, m_loopEnd - 0.001f); break;
@@ -287,7 +298,7 @@ private:
     int m_rootNote        = 60;
 
     float m_attack = 0.005f, m_decay = 0.1f, m_sustain = 1.0f, m_release = 0.1f;
-    float m_filterCutoff = 20000.0f, m_filterResonance = 0.0f;
+    float m_filterCutoff = 1.0f, m_filterResonance = 0.0f;
     float m_volume = 0.8f;
     float m_loopStart = 0.0f, m_loopEnd = 1.0f;
     bool  m_reverse = false;

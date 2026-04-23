@@ -20,6 +20,14 @@ struct InstrumentParameterInfo {
     WidgetHint widgetHint = WidgetHint::Knob;
     const char* const* valueLabels = nullptr;
     int valueLabelCount = 0;
+
+    // Optional custom display formatter. When set, overrides the unit-
+    // based default in the knob UI. Used for exponentially-scaled params
+    // that are stored 0..1 for uniform modulation but displayed in their
+    // natural units (e.g. filter cutoff stored 0..1, shown as "5.0k Hz").
+    // Writes a null-terminated string into the provided buffer.
+    using FormatFn = void (*)(float value, char* buf, int bufSize);
+    FormatFn formatFn = nullptr;
 };
 
 inline float noteToFreq(int note) {

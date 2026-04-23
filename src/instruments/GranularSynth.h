@@ -5,8 +5,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "effects/FreqMap.h"
 #include <vector>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <climits>
 #include <algorithm>
@@ -20,6 +22,13 @@ public:
     static constexpr int kParamCount = 17;
     static constexpr int kSidechainRingSeconds = 2;
 
+    // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
+    static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
+    static float cutoffHzToNorm(float hz) { return effects::logHzToNorm(hz, 20.0f, 20000.0f); }
+    static void  formatCutoffHz(float v, char* buf, int n) {
+        effects::formatHz(cutoffNormToHz(v), buf, n);
+    }
+
     enum Param {
         kPosition = 0,   // 0–1, position in sample
         kGrainSize,      // 10–500 ms
@@ -29,7 +38,7 @@ public:
         kSpray,          // 0–100 ms, random time jitter
         kShape,          // 0=Hanning, 1=Triangle, 2=Gaussian, 3=Tukey
         kScan,           // -1 to +1, auto-advance rate
-        kFilterCutoff,   // 200–20000 Hz
+        kFilterCutoff,   // 0..1 normalized → 20..20000 Hz (log)
         kFilterReso,     // 0–1
         kAttack,         // 1–5000 ms
         kRelease,        // 1–5000 ms
@@ -105,7 +114,8 @@ public:
             {"Spray",         0.0f, 100.0f,  10.0f,  "ms",  false},
             {"Shape",         0.0f,   3.0f,   0.0f,  "",    false, false, WidgetHint::StepSelector, kShapeLabels, 4},
             {"Scan",         -1.0f,   1.0f,   0.0f,  "",    false, false, WidgetHint::DentedKnob},
-            {"Filter Cut",  200.0f, 20000.0f, 20000.0f, "Hz", false},
+            {"Filter Cut",  0.0f, 1.0f, 1.0f, "", false, false,
+                WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Filter Reso",   0.0f,   1.0f,   0.0f,  "",    false},
             {"Attack",        1.0f, 5000.0f,  10.0f, "ms",  false},
             {"Release",       1.0f, 5000.0f, 200.0f, "ms",  false},
@@ -156,7 +166,7 @@ public:
         const float sprayMs     = m_params[kSpray];
         const int   shape       = static_cast<int>(m_params[kShape]);
         const float scan        = m_params[kScan];
-        const float filterCut   = m_params[kFilterCutoff];
+        const float filterCut   = cutoffNormToHz(m_params[kFilterCutoff]);
         const float filterReso  = m_params[kFilterReso];
         const float stereoW     = m_params[kStereoWidth];
         const bool  reverse     = m_params[kReverse] > 0.5f;
