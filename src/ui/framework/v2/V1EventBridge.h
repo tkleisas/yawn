@@ -82,6 +82,20 @@ inline MouseMoveEvent toFw2MouseMove(const ::yawn::ui::fw::MouseMoveEvent& e,
     return out;
 }
 
+inline ScrollEvent toFw2Scroll(const ::yawn::ui::fw::ScrollEvent& e,
+                                Rect widgetBounds) {
+    ScrollEvent out{};
+    out.x  = e.x;
+    out.y  = e.y;
+    out.lx = e.x - widgetBounds.x;
+    out.ly = e.y - widgetBounds.y;
+    out.dx = e.dx;
+    out.dy = e.dy;
+    out.modifiers = toFw2Modifiers(e.mods);
+    out.timestampMs = v1BridgeNowMs();
+    return out;
+}
+
 // ─── fw2 → v1 converters ────────────────────────────────────────────
 //
 // Opposite direction: a fw2::Widget panel that needs to call into a
