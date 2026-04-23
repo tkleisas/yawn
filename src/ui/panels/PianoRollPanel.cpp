@@ -1,20 +1,27 @@
-// PianoRollPanel.cpp — rendering and event implementations.
+// PianoRollPanel.cpp — rendering and event implementations (fw2).
 // Split from PianoRollPanel.h to keep rendering code out of the header.
 // This file is only compiled in the main exe build (not test builds).
+//
+// Migrated from v1 fw::Widget to fw2::Widget. Paint helpers take
+// fw2::TextMetrics instead of v1 Font; mouse/scroll events use fw2
+// types directly; capturedWidget() is the single source of truth for
+// drag routing (no more m_v2Dragging shadow pointer).
 
 #include "PianoRollPanel.h"
 #include "../Renderer.h"
-#include "../Font.h"
+#include "ui/framework/v2/Theme.h"
 #include "util/Logger.h"
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
-void PianoRollPanel::paint(UIContext& ctx) {
+void PianoRollPanel::render(UIContext& ctx) {
+    if (!isVisible()) return;
     if (m_animatedHeight < 1.0f || !m_clip) return;
-    auto& r = *ctx.renderer;
-    auto& f = *ctx.font;
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
 
     m_px = m_bounds.x; m_py = m_bounds.y; m_pw = m_bounds.w;
     m_pianoX = m_px + kClipOpsW;
@@ -58,7 +65,7 @@ void PianoRollPanel::paint(UIContext& ctx) {
 
     renderToolbar(ctx);
 
-    renderRuler(r, f);
+    renderRuler(r, tm);
 
     r.pushClip(m_gx, m_gy, m_gw, m_gh);
     renderGrid(r);
@@ -69,14 +76,14 @@ void PianoRollPanel::paint(UIContext& ctx) {
     r.popClip();
 
     r.pushClip(m_pianoX, m_gy, kPianoW, m_gh);
-    renderPianoKeys(r, f);
+    renderPianoKeys(r, tm);
     r.popClip();
-    renderPianoKeyLabels(r, f);
+    renderPianoKeyLabels(r, tm);
 
     if (m_showVelocityLane)
-        renderVelocityLane(r, f);
+        renderVelocityLane(r, tm);
     renderScrollbar(ctx);
-    renderClipOps(r, f);
+    renderClipOps(r, tm);
 
     r.drawRect(m_px, m_py, m_pw, 1, Color{60, 60, 65});
 
@@ -108,7 +115,7 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
     if (my >= m_py + kHandleHeight && my < m_py + kHandleHeight + kToolbarH) {
         LOG_DEBUG("UI", "PianoRoll toolbar click at (%.0f, %.0f) py=%.0f toolbarH=%.0f",
                     mx, my, m_py, kToolbarH);
-        return handleToolbarClick(mx, my);
+        return handleToolbarClick(e);
     }
 
     {
@@ -122,11 +129,20 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
         return handleClipOpsClick(mx, my);
     }
 
-    // Piano key vertical zoom drag
+    // Piano-keys column:
+    //   Ctrl+drag → vertical zoom (row height)
+    //   plain drag → vertical scroll (for users without a scrollwheel)
     if (mx >= m_pianoX && mx < m_pianoX + kPianoW && my >= m_gy && my < m_gy + m_gh) {
-        m_pianoKeyDragging = true;
-        m_pianoKeyDragStartY = my;
-        m_pianoKeyDragStartRowH = m_rowH;
+        const bool ctrl = (e.modifiers & ModifierKey::Ctrl) != 0;
+        if (ctrl) {
+            m_pianoKeyDragging      = true;
+            m_pianoKeyDragStartY    = my;
+            m_pianoKeyDragStartRowH = m_rowH;
+        } else {
+            m_pianoKeyScrolling          = true;
+            m_pianoKeyScrollStartY       = my;
+            m_pianoKeyScrollStartScrollY = m_scrollY;
+        }
         captureMouse();
         return true;
     }
@@ -141,12 +157,13 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
         float velH = m_showVelocityLane ? kVelLaneH : 0.0f;
         float sbY = m_gy + m_gh + velH;
         if (my >= sbY && my < sbY + kScrollbarH && mx >= m_gx && mx < m_gx + m_gw) {
-            // v2 scrollbar — route through the gesture SM.
+            // fw2 scrollbar — dispatch through its own gesture SM, which
+            // calls captureMouse() itself if the thumb is grabbed.
             const auto& sb = m_scrollbar.bounds();
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
-            m_scrollbar.dispatchMouseDown(ev);
-            m_v2Dragging = &m_scrollbar;
-            captureMouse();
+            MouseEvent se = e;
+            se.lx = e.x - sb.x;
+            se.ly = e.y - sb.y;
+            m_scrollbar.dispatchMouseDown(se);
             return true;
         }
     }
@@ -218,17 +235,20 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
     if (!m_open || !m_clip) return false;
     float mx = e.x, my = e.y;
 
-    // v2 button/toggle drag in progress — forward translated events to
-    // the gesture SM. Handled BEFORE v1 capture because v2 widgets
-    // don't participate in v1's capturedWidget() mechanism.
-    if (m_v2Dragging) {
-        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-        m_v2Dragging->dispatchMouseMove(ev);
-        return true;
-    }
-
-    if (Widget::capturedWidget() && Widget::capturedWidget() != this) {
-        return Widget::capturedWidget()->onMouseMove(e);
+    // Some fw2 child (toolbar button/toggle, scrollbar thumb) captured
+    // the mouse — forward the move to it with child-local coords so its
+    // gesture SM can continue the drag across our bounds.
+    if (Widget* cap = capturedWidget(); cap && cap != this) {
+        const Rect& cb = cap->bounds();
+        bool inside = cb.x >= m_bounds.x && cb.x + cb.w <= m_bounds.x + m_bounds.w
+                   && cb.y >= m_bounds.y && cb.y + cb.h <= m_bounds.y + m_bounds.h;
+        if (inside) {
+            MouseMoveEvent ce = e;
+            ce.lx = e.x - cb.x;
+            ce.ly = e.y - cb.y;
+            cap->dispatchMouseMove(ce);
+            return true;
+        }
     }
 
     if (m_handleDragActive) {
@@ -242,6 +262,16 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
     if (m_pianoKeyDragging) {
         float delta = m_pianoKeyDragStartY - my;  // drag up = increase
         m_rowH = std::clamp(m_pianoKeyDragStartRowH + delta * 0.05f, kMinRowH, kMaxRowH);
+        return true;
+    }
+
+    if (m_pianoKeyScrolling) {
+        // Pointer moves down → content should follow the hand, revealing
+        // higher pitches (i.e. m_scrollY decreases). 1:1 drag-to-scroll
+        // feels natural for panning.
+        float delta = my - m_pianoKeyScrollStartY;
+        m_scrollY = m_pianoKeyScrollStartScrollY - delta;
+        clampScroll();
         return true;
     }
 
@@ -268,7 +298,10 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
         return true;
     }
 
-    if (m_dragMode == Drag::None) return false;
+    // Velocity-lane drag lives outside the m_dragMode enum (it has its
+    // own m_velDragging flag) so check it BEFORE the early-out below
+    // — otherwise dragging a velocity bar after initial click does
+    // nothing.
     if (m_velDragging && m_clip) {
         float velFrac = 1.0f - std::clamp((my - m_velY - 2.0f) / (kVelLaneH - 4.0f), 0.0f, 1.0f);
         uint16_t newVel = static_cast<uint16_t>(std::clamp(velFrac * 65535.0f, 1.0f, 65535.0f));
@@ -329,19 +362,19 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
 }
 
 bool PianoRollPanel::onMouseUp(MouseEvent& e) {
-    // v2 button/toggle release — flush the down/up pair to the fw2
-    // gesture SM and release v1 capture. Must come BEFORE the v1
-    // capturedWidget() path for the same reason as onMouseMove.
-    if (m_v2Dragging) {
-        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-        m_v2Dragging->dispatchMouseUp(ev);
-        m_v2Dragging = nullptr;
-        releaseMouse();
-        return true;
-    }
-
-    if (Widget::capturedWidget() && Widget::capturedWidget() != this) {
-        return Widget::capturedWidget()->onMouseUp(e);
+    // fw2 child capture — forward the release with child-local coords
+    // so the captured gesture SM can end its drag and release capture.
+    if (Widget* cap = capturedWidget(); cap && cap != this) {
+        const Rect& cb = cap->bounds();
+        bool inside = cb.x >= m_bounds.x && cb.x + cb.w <= m_bounds.x + m_bounds.w
+                   && cb.y >= m_bounds.y && cb.y + cb.h <= m_bounds.y + m_bounds.h;
+        if (inside) {
+            MouseEvent ce = e;
+            ce.lx = e.x - cb.x;
+            ce.ly = e.y - cb.y;
+            cap->dispatchMouseUp(ce);
+            return true;
+        }
     }
 
     if (m_handleDragActive) {
@@ -357,6 +390,11 @@ bool PianoRollPanel::onMouseUp(MouseEvent& e) {
     }
     if (m_pianoKeyDragging) {
         m_pianoKeyDragging = false;
+        releaseMouse();
+        return true;
+    }
+    if (m_pianoKeyScrolling) {
+        m_pianoKeyScrolling = false;
         releaseMouse();
         return true;
     }
@@ -517,6 +555,7 @@ void PianoRollPanel::finalizeRubberBand() {
 
 void PianoRollPanel::renderToolbar(UIContext& ctx) {
     auto& r = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
     float tbY = m_py + kHandleHeight;
     r.drawRect(m_px, tbY, m_pw, kToolbarH, Color{35, 35, 38});
     float x = m_px + 4;
@@ -524,22 +563,21 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     float gap = 4.0f;
     float sectionGap = 12.0f;
 
-    // v2 toggles/buttons — setState drives the accent-fill visual; no
-    // per-paint colour juggling needed. Sync state from the panel's
-    // bools each paint (cheap no-op when unchanged).
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-
     // Tool radio group — exactly one toggle lit, corresponding to m_tool.
+    // Use Automation source so the sync setState doesn't fire onChange
+    // (which would otherwise feed back through the radio-clamp callback
+    // and make the group behave like independent toggles).
     for (int i = 0; i < 3; ++i) {
-        m_toolBtns[i].setState(static_cast<int>(m_tool) == i);
-        m_toolBtns[i].layout(Rect{x, tbY + 2, kToolBtnW, btnH}, v2ctx);
-        m_toolBtns[i].render(v2ctx);
+        m_toolBtns[i].setState(static_cast<int>(m_tool) == i,
+                               ValueChangeSource::Automation);
+        m_toolBtns[i].layout(Rect{x, tbY + 2, kToolBtnW, btnH}, ctx);
+        m_toolBtns[i].render(ctx);
         x += kToolBtnW + gap;
     }
 
     x += sectionGap;
     m_snapLabel.layout(Rect{x, tbY + 2, 40, btnH}, ctx);
-    m_snapLabel.paint(ctx);
+    m_snapLabel.render(ctx);
     x += 44;
 
     // Snap radio group. Triplet buttons (indices 4..6) get an orange
@@ -549,48 +587,53 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     for (int i = 0; i < 7; ++i) {
         m_snapBtns[i].setAccentColor(i >= 4 ? Color{255, 160, 60}
                                             : Color{100, 180, 255});
-        m_snapBtns[i].setState(static_cast<int>(m_snap) == i);
-        m_snapBtns[i].layout(Rect{x, tbY + 2, snapW[i], btnH}, v2ctx);
-        m_snapBtns[i].render(v2ctx);
+        m_snapBtns[i].setState(static_cast<int>(m_snap) == i,
+                               ValueChangeSource::Automation);
+        m_snapBtns[i].layout(Rect{x, tbY + 2, snapW[i], btnH}, ctx);
+        m_snapBtns[i].render(ctx);
         x += snapW[i] + gap;
     }
 
     x += sectionGap;
     bool loopOn = m_clip && m_clip->loop();
-    m_loopBtn.setState(loopOn);
-    m_loopBtn.layout(Rect{x, tbY + 2, kLoopBtnW, btnH}, v2ctx);
-    m_loopBtn.render(v2ctx);
+    m_loopBtn.setState(loopOn, ValueChangeSource::Automation);
+    m_loopBtn.layout(Rect{x, tbY + 2, kLoopBtnW, btnH}, ctx);
+    m_loopBtn.render(ctx);
     x += kLoopBtnW + gap;
 
-    m_velBtn.setState(m_showVelocityLane);
-    m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, v2ctx);
-    m_velBtn.render(v2ctx);
+    m_velBtn.setState(m_showVelocityLane, ValueChangeSource::Automation);
+    m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, ctx);
+    m_velBtn.render(ctx);
     x += kVelBtnW + gap;
 
-    m_followBtn.setState(m_followPlayhead);
-    m_followBtn.layout(Rect{x, tbY + 2, kFollowBtnW, btnH}, v2ctx);
-    m_followBtn.render(v2ctx);
+    m_followBtn.setState(m_followPlayhead, ValueChangeSource::Automation);
+    m_followBtn.layout(Rect{x, tbY + 2, kFollowBtnW, btnH}, ctx);
+    m_followBtn.render(ctx);
     x += kFollowBtnW + sectionGap;
 
     // Zoom buttons — plain v2 FwButton, default look.
-    m_zoomOutBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, v2ctx);
-    m_zoomOutBtn.render(v2ctx);
+    m_zoomOutBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, ctx);
+    m_zoomOutBtn.render(ctx);
     x += kZoomBtnW + 2;
 
-    m_zoomInBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, v2ctx);
-    m_zoomInBtn.render(v2ctx);
+    m_zoomInBtn.layout(Rect{x, tbY + 2, kZoomBtnW, btnH}, ctx);
+    m_zoomInBtn.render(ctx);
 
-    // Clip name (right-aligned)
+    // Clip name (right-aligned). fw2::Label renders at theme.metrics
+    // .fontSize * fontScale — measure at that same size so the label
+    // box is wide enough and doesn't clip mid-glyph at the right edge.
     if (m_clip && !m_clip->name().empty()) {
         m_clipNameLabel.setText(m_clip->name());
-        float nameW = ctx.font ? ctx.font->textWidth(m_clip->name(),
-            Theme::kSmallFontSize / Theme::kFontSize * 0.6f) : 100.0f;
+        const float fs = theme().metrics.fontSize * m_clipNameLabel.fontScale();
+        float nameW = tm.textWidth(m_clip->name(), fs);
+        if (nameW <= 0) nameW = 100.0f;
+        nameW += 4.0f;   // small trailing slack so the last glyph isn't clipped
         m_clipNameLabel.layout(Rect{m_px + m_pw - nameW - 8, tbY + 2, nameW, btnH}, ctx);
-        m_clipNameLabel.paint(ctx);
+        m_clipNameLabel.render(ctx);
     }
 }
 
-void PianoRollPanel::renderPianoKeys(Renderer2D& r, Font& f) {
+void PianoRollPanel::renderPianoKeys(::yawn::ui::Renderer2D& r, TextMetrics& /*tm*/) {
     for (int p = 127; p >= 0; --p) {
         float y = pitchToY(p);
         if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
@@ -604,9 +647,9 @@ void PianoRollPanel::renderPianoKeys(Renderer2D& r, Font& f) {
     r.drawRect(m_pianoX + kPianoW - 1, m_gy, 1, m_gh, Color{70, 70, 75});
 }
 
-void PianoRollPanel::renderPianoKeyLabels(Renderer2D& r, Font& f) {
-    float sc = 12.0f / f.pixelHeight();
-    float textH = 12.0f;
+void PianoRollPanel::renderPianoKeyLabels(::yawn::ui::Renderer2D& r, TextMetrics& tm) {
+    const float fs = theme().metrics.fontSizeSmall;
+    const float textH = fs;
     for (int p = 127; p >= 0; --p) {
         float y = pitchToY(p);
         if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
@@ -617,12 +660,12 @@ void PianoRollPanel::renderPianoKeyLabels(Renderer2D& r, Font& f) {
             bool black = isBlack(p);
             Color fg = black ? Color{180, 180, 180} : Color{30, 30, 30};
             float textY = std::clamp(y + 1.0f, m_gy, m_gy + m_gh - textH);
-            f.drawText(r, buf, m_pianoX + 2, textY, sc, fg);
+            tm.drawText(r, buf, m_pianoX + 2, textY, fs, fg);
         }
     }
 }
 
-void PianoRollPanel::renderGrid(Renderer2D& r) {
+void PianoRollPanel::renderGrid(::yawn::ui::Renderer2D& r) {
     for (int p = 127; p >= 0; --p) {
         float y = pitchToY(p);
         if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
@@ -661,9 +704,9 @@ void PianoRollPanel::renderGrid(Renderer2D& r) {
     }
 }
 
-void PianoRollPanel::renderNotes(Renderer2D& r) {
+void PianoRollPanel::renderNotes(::yawn::ui::Renderer2D& r) {
     if (!m_clip) return;
-    Color trackCol = Theme::trackColors[m_trackIdx % Theme::kNumTrackColors];
+    Color trackCol = ::yawn::ui::Theme::trackColors[m_trackIdx % ::yawn::ui::Theme::kNumTrackColors];
 
     double visStart = xToBeat(m_gx);
     double visEnd   = xToBeat(m_gx + m_gw);
@@ -694,7 +737,7 @@ void PianoRollPanel::renderNotes(Renderer2D& r) {
     }
 }
 
-void PianoRollPanel::renderClipBound(Renderer2D& r) {
+void PianoRollPanel::renderClipBound(::yawn::ui::Renderer2D& r) {
     if (!m_clip) return;
 
     bool loopOn = m_clip->loop();
@@ -733,7 +776,7 @@ void PianoRollPanel::renderClipBound(Renderer2D& r) {
     }
 }
 
-void PianoRollPanel::renderRubberBand(Renderer2D& r) {
+void PianoRollPanel::renderRubberBand(::yawn::ui::Renderer2D& r) {
     if (m_dragMode != Drag::RubberBand) return;
     float rx = std::min(m_rubberStartX, m_rubberEndX);
     float ry = std::min(m_rubberStartY, m_rubberEndY);
@@ -743,7 +786,7 @@ void PianoRollPanel::renderRubberBand(Renderer2D& r) {
     r.drawRectOutline(rx, ry, rw, rh, Color{100, 180, 255, 180}, 1.0f);
 }
 
-void PianoRollPanel::renderPlayhead(Renderer2D& r) {
+void PianoRollPanel::renderPlayhead(::yawn::ui::Renderer2D& r) {
     if (!m_midiPlaying || !m_clip) return;
     double clipLen = m_clip->lengthBeats();
     if (clipLen <= 0) return;
@@ -754,9 +797,8 @@ void PianoRollPanel::renderPlayhead(Renderer2D& r) {
     r.drawRect(px, m_gy, 2.0f, m_gh, Color{255, 255, 255, 220});
 }
 
-void PianoRollPanel::renderRuler(Renderer2D& r, Font& f) {
+void PianoRollPanel::renderRuler(::yawn::ui::Renderer2D& r, TextMetrics& tm) {
     float rulerY = m_py + kHandleHeight + kToolbarH;
-    float sc = 11.0f / f.pixelHeight();
 
     r.drawRect(m_gx, rulerY, m_gw, kRulerH, Color{38, 38, 42});
     r.drawRect(m_px, rulerY, kClipOpsW + kPianoW, kRulerH, Color{38, 38, 42});
@@ -771,7 +813,13 @@ void PianoRollPanel::renderRuler(Renderer2D& r, Font& f) {
         int barNum = static_cast<int>(b / bpb) + 1;
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%d", barNum);
-        f.drawText(r, buf, x + 2, rulerY + 1, sc, Color{140, 140, 145});
+        // The ruler is only 16 px tall with a 1-px separator on its
+        // bottom edge. stbtt's em-box top anchor sits above the
+        // rasterised ascender, so shifting the Y anchor 4 px above the
+        // ruler top lets a fontSizeSmall (13 px) glyph fit cleanly
+        // inside the ruler strip without clipping the separator.
+        const float fs = theme().metrics.fontSizeSmall;
+        tm.drawText(r, buf, x + 2, rulerY - 4.0f, fs, Color{140, 140, 145});
         r.drawRect(x, rulerY, 1, kRulerH, Color{60, 60, 65});
     }
 
@@ -823,8 +871,7 @@ void PianoRollPanel::renderRuler(Renderer2D& r, Font& f) {
     }
 }
 
-void PianoRollPanel::renderClipOps(Renderer2D& r, Font& f) {
-    float sc = 11.0f / f.pixelHeight();
+void PianoRollPanel::renderClipOps(::yawn::ui::Renderer2D& r, TextMetrics& tm) {
     float x = m_px;
     float y = m_gy;
     float w = kClipOpsW;
@@ -850,20 +897,21 @@ void PianoRollPanel::renderClipOps(Renderer2D& r, Font& f) {
         m_clipOpsBtnY[i] = by;
         r.drawRect(x + 3, by, w - 6, btnH, Color{50, 50, 55});
         r.drawRect(x + 3, by, 3, btnH, btnColors[i]);
-        f.drawText(r, labels[i], x + 10, by + 3, sc, Theme::textPrimary);
+        tm.drawText(r, labels[i], x + 10, by + 3, theme().metrics.fontSizeSmall,
+                    ::yawn::ui::Theme::textPrimary);
     }
 
     r.drawRect(x + w - 1, y, 1, m_gh, Color{55, 55, 60});
 }
 
-void PianoRollPanel::renderVelocityLane(Renderer2D& r, Font& f) {
+void PianoRollPanel::renderVelocityLane(::yawn::ui::Renderer2D& r, TextMetrics& tm) {
     if (!m_clip) return;
-    Color trackCol = Theme::trackColors[m_trackIdx % Theme::kNumTrackColors];
-    float sc = 10.0f / f.pixelHeight();
+    Color trackCol = ::yawn::ui::Theme::trackColors[m_trackIdx % ::yawn::ui::Theme::kNumTrackColors];
 
     r.drawRect(m_gx, m_velY, m_gw, kVelLaneH, Color{28, 28, 32});
     r.drawRect(m_px, m_velY, kClipOpsW + kPianoW, kVelLaneH, Color{32, 32, 36});
-    f.drawText(r, "Vel", m_px + 6, m_velY + kVelLaneH * 0.5f - 5, sc, Theme::textSecondary);
+    tm.drawText(r, "Vel", m_px + 6, m_velY + kVelLaneH * 0.5f - 6,
+                theme().metrics.fontSizeSmall, ::yawn::ui::Theme::textSecondary);
     r.drawRect(m_px + kClipOpsW + kPianoW - 1, m_velY, 1, kVelLaneH, Color{55, 55, 60});
     r.drawRect(m_gx, m_velY, m_gw, 1, Color{50, 50, 55});
 
@@ -915,13 +963,10 @@ void PianoRollPanel::renderScrollbar(UIContext& ctx) {
     float contentW = maxBeats() * m_pxBeat;
     m_scrollbar.setContentSize(contentW);
     m_scrollbar.setScrollPos(m_scrollX);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_scrollbar.layout(Rect{m_gx, sbY, m_gw, kScrollbarH}, v2ctx);
-        m_scrollbar.render(v2ctx);
-    }
+    m_scrollbar.layout(Rect{m_gx, sbY, m_gw, kScrollbarH}, ctx);
+    m_scrollbar.render(ctx);
 }
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

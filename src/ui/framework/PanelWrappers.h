@@ -20,6 +20,7 @@
 #include "ui/panels/VisualParamsPanel.h"
 #include "ui/panels/BrowserPanel.h"
 #include "ui/panels/SessionPanel.h"
+#include "ui/panels/PianoRollPanel.h"
 
 namespace yawn {
 namespace ui {
@@ -604,6 +605,75 @@ public:
 
 private:
     ::yawn::ui::fw2::ContentGrid& m_grid;
+};
+
+// ─── PianoRollPanelWrapper ──────────────────────────────────────────
+//
+// v1 shim around the fw2 PianoRollPanel so the piano roll can live
+// inside the v1 rootLayout. Same pattern as the other panel wrappers:
+// measure/layout/render forward to the inner fw2 widget via the v2
+// UIContext, and mouse/scroll events convert through the v1↔fw2 bridge
+// before dispatching.
+
+class PianoRollPanelWrapper : public Widget {
+public:
+    explicit PianoRollPanelWrapper(::yawn::ui::fw2::PianoRollPanel& panel)
+        : m_panel(panel) {}
+
+    Size measure(const Constraints& c, const UIContext&) override {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        auto fc = ::yawn::ui::fw2::Constraints::loose(c.maxW, c.maxH);
+        auto s = m_panel.measure(fc, v2ctx);
+        return c.constrain({s.w, s.h});
+    }
+
+    void layout(const Rect& bounds, const UIContext&) override {
+        m_bounds = bounds;
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        auto fc = ::yawn::ui::fw2::Constraints::tight(bounds.w, bounds.h);
+        m_panel.measure(fc, v2ctx);
+        m_panel.layout(::yawn::ui::fw2::Rect{bounds.x, bounds.y, bounds.w, bounds.h},
+                       v2ctx);
+    }
+
+    void paint(UIContext&) override {
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_panel.render(v2ctx);
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        const auto& b = m_panel.bounds();
+        if (e.x < b.x || e.x >= b.x + b.w) return false;
+        if (e.y < b.y || e.y >= b.y + b.h) return false;
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        const bool handled = m_panel.dispatchMouseDown(ev);
+        if (handled || ::yawn::ui::fw2::Widget::capturedWidget()) {
+            captureMouse();
+        }
+        return handled;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        const auto& b = m_panel.bounds();
+        auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, b);
+        m_panel.dispatchMouseMove(ev);
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent& e) override {
+        const auto& b = m_panel.bounds();
+        auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
+        m_panel.dispatchMouseUp(ev);
+        if (!::yawn::ui::fw2::Widget::capturedWidget()) {
+            releaseMouse();
+        }
+        return true;
+    }
+
+    ::yawn::ui::fw2::PianoRollPanel& panel() { return m_panel; }
+
+private:
+    ::yawn::ui::fw2::PianoRollPanel& m_panel;
 };
 
 } // namespace fw

@@ -425,7 +425,8 @@ void App::buildWidgetTree() {
     auto detailP    = std::make_unique<DetailPanelWidget>();
     auto visualPP   = std::make_unique<ui::fw2::VisualParamsPanel>();
     auto visualPW   = std::make_unique<VisualParamsPanelWrapper>(*visualPP);
-    auto pianoP     = std::make_unique<PianoRollPanel>();
+    auto pianoP     = std::make_unique<ui::fw2::PianoRollPanel>();
+    auto pianoW     = std::make_unique<PianoRollPanelWrapper>(*pianoP);
     // v1 AboutDialog retired — fw2::Dialog drives the Help → About
     // prompt inline from the menu handler.
     // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog handles
@@ -451,6 +452,7 @@ void App::buildWidgetTree() {
     m_visualParamsPanel  = visualPP.get();
     m_visualParamsPanelW = visualPW.get();
     m_pianoRoll         = pianoP.get();
+    m_pianoRollW        = pianoW.get();
 
     m_preferencesDialog.setOnResult([this](ui::fw2::PreferencesResult result) {
         if (result == ui::fw2::PreferencesResult::OK) {
@@ -557,7 +559,7 @@ void App::buildWidgetTree() {
     m_rootLayout->addChild(m_visualParamsPanelW);
     m_visualParamsPanelW->setVisible(false);
     m_visualParamsPanel->setDetailPanel(m_detailPanel);
-    m_rootLayout->addChild(m_pianoRoll);
+    m_rootLayout->addChild(m_pianoRollW);
 
     // When a custom-named knob on the panel is turned, update both the
     // live VisualEngine layer and the clip's persistent store.
@@ -695,7 +697,9 @@ void App::buildWidgetTree() {
     // in m_wrappers.
     m_visualParamsPanelOwner = std::move(visualPP);
     m_wrappers.push_back(std::move(visualPW));
-    m_wrappers.push_back(std::move(pianoP));
+    // PianoRollPanel is fw2 — panel in dedicated owner, v1 wrapper in m_wrappers.
+    m_pianoRollOwner = std::move(pianoP);
+    m_wrappers.push_back(std::move(pianoW));
 
     m_uiContext.renderer = &m_renderer;
     m_uiContext.font     = &m_font;
@@ -728,6 +732,9 @@ void App::computeLayout() {
     m_detailPanel->setVisible(m_showDetailPanel && !selectedIsVisual);
     // Visibility goes to the wrapper (the v1 rootLayout measures it).
     m_visualParamsPanelW->setVisible(m_showDetailPanel && selectedIsVisual);
+    // PianoRoll is fw2 — wrapper visibility drives v1 rootLayout, inner
+    // panel visibility drives fw2 render/hit-test.
+    m_pianoRollW->setVisible(m_pianoRoll->isOpen());
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
     // ContentGrid manages session + mixer + browser + returns visibility
@@ -4868,7 +4875,13 @@ void App::processEvents() {
                     }
                 }
 
-                // Piano roll click handling
+                // Piano roll click handling. Route through the v1
+                // wrapper (not directly to the fw2 panel) so the wrapper
+                // takes v1 capture when a child widget captures fw2
+                // mouse. Otherwise v1 mouseMoves wouldn't flow back to
+                // the wrapper and in-panel drags (toolbar toggles,
+                // scrollbar, loop handles, etc.) would stall after
+                // down.
                 if (m_pianoRoll->isOpen()) {
                     if (rightClick) {
                         if (m_pianoRoll->handleRightClick(mx, my)) break;
@@ -4876,7 +4889,15 @@ void App::processEvents() {
                         ui::fw::MouseEvent me;
                         me.x = mx; me.y = my;
                         me.button = ui::fw::MouseButton::Left;
-                        if (m_pianoRoll->onMouseDown(me)) {
+                        me.clickCount = event.button.clicks;
+                        // Carry Ctrl / Shift / Alt through to the panel
+                        // so in-grid gestures (Ctrl+drag = piano-key
+                        // zoom, Shift-click-select, …) can see them.
+                        auto sdlMod = SDL_GetModState();
+                        me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
+                        me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
+                        me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
+                        if (m_pianoRollW->dispatchMouseDown(me)) {
                             markDirty();
                             break;
                         }

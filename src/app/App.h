@@ -169,7 +169,10 @@ private:
     std::unique_ptr<ui::fw::FlexBox> m_rootLayout;
     ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
     ui::fw::DetailPanelWidget* m_detailPanel = nullptr;
-    ui::fw::PianoRollPanel*    m_pianoRoll   = nullptr;
+    // PianoRollPanel — fw2; owner holds it, wrapper goes in m_rootLayout.
+    std::unique_ptr<ui::fw2::PianoRollPanel> m_pianoRollOwner;
+    ui::fw2::PianoRollPanel*                 m_pianoRoll   = nullptr;
+    ui::fw::Widget*                          m_pianoRollW  = nullptr;
     // MixerPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::MixerPanel> m_mixerPanelOwner;
     ui::fw2::MixerPanel*                 m_mixerPanel  = nullptr;

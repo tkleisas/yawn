@@ -1,20 +1,22 @@
 #pragma once
-// PianoRollPanel — Framework widget replacement for PianoRoll.
+// PianoRollPanel — fw2 widget for the MIDI piano roll editor.
 //
-// fw::Widget that renders the MIDI piano roll editor and handles mouse
-// events internally.  Replaces the standalone PianoRoll class.
+// fw2::Widget that renders the MIDI piano roll editor and handles mouse
+// events internally. Replaces the standalone PianoRoll class.
 // Only included from App.cpp — never compiled in test builds.
+//
+// Migrated from v1 fw::Widget to fw2::Widget: paint helpers now take
+// fw2::TextMetrics instead of v1 Font; mouse events use fw2 types;
+// capturedWidget() is the single source of truth for drag routing.
 
-#include "ui/framework/Widget.h"
-#include "ui/framework/Primitives.h"
+#include "ui/framework/v2/Widget.h"
+#include "ui/framework/v2/Label.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/ScrollBar.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
-#include "ui/Font.h"
 #endif
 #include "ui/Theme.h"
 #include "midi/MidiClip.h"
@@ -35,7 +37,12 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+
+// Forward-decl v1 Renderer2D so paint helpers can take it by reference
+// without pulling the full Renderer header into every consumer.
+class Renderer2D;
+
+namespace fw2 {
 
 class PianoRollPanel : public Widget {
 public:
@@ -104,7 +111,7 @@ public:
         m_snapBtns[static_cast<int>(m_snap)].setState(true);
 
         m_snapLabel.setText("Snap:");
-        m_snapLabel.setColor(Theme::textSecondary);
+        m_snapLabel.setColor(::yawn::ui::Theme::textSecondary);
 
         // Loop — v2 FwToggle. Green accent carries the loop-on state.
         m_loopBtn.setLabel("Loop");
@@ -138,7 +145,7 @@ public:
             m_pxBeat = std::max(kMinPxBeat, m_pxBeat / 1.3f);
         });
 
-        m_clipNameLabel.setColor(Theme::textPrimary);
+        m_clipNameLabel.setColor(::yawn::ui::Theme::textPrimary);
 
         m_scrollbar.setOnScroll([this](float pos) {
             m_scrollX = pos;
@@ -176,21 +183,21 @@ public:
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
-    Size measure(const Constraints& c, const UIContext&) override {
+    Size onMeasure(Constraints c, UIContext&) override {
         updateAnimation();
         return c.constrain({c.maxW, m_animatedHeight});
     }
 
-    void layout(const Rect& bounds, const UIContext&) override {
+    void onLayout(Rect bounds, UIContext&) override {
         m_bounds = bounds;
     }
 
     // ─── Rendering ──────────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
+    void render(UIContext&) override {}
 #else
-    void paint(UIContext& ctx) override;
+    void render(UIContext& ctx) override;
 #endif
 
     // ─── Mouse events ───────────────────────────────────────────────────
@@ -279,63 +286,63 @@ private:
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderPianoKeys(Renderer2D&, Font&) {}
+    void renderPianoKeys(::yawn::ui::Renderer2D&, TextMetrics&) {}
 #else
-    void renderPianoKeys(Renderer2D& r, Font& f);
+    void renderPianoKeys(::yawn::ui::Renderer2D& r, TextMetrics& tm);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderPianoKeyLabels(Renderer2D&, Font&) {}
+    void renderPianoKeyLabels(::yawn::ui::Renderer2D&, TextMetrics&) {}
 #else
-    void renderPianoKeyLabels(Renderer2D& r, Font& f);
+    void renderPianoKeyLabels(::yawn::ui::Renderer2D& r, TextMetrics& tm);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderGrid(Renderer2D&) {}
+    void renderGrid(::yawn::ui::Renderer2D&) {}
 #else
-    void renderGrid(Renderer2D& r);
+    void renderGrid(::yawn::ui::Renderer2D& r);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderNotes(Renderer2D&) {}
+    void renderNotes(::yawn::ui::Renderer2D&) {}
 #else
-    void renderNotes(Renderer2D& r);
+    void renderNotes(::yawn::ui::Renderer2D& r);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderClipBound(Renderer2D&) {}
+    void renderClipBound(::yawn::ui::Renderer2D&) {}
 #else
-    void renderClipBound(Renderer2D& r);
+    void renderClipBound(::yawn::ui::Renderer2D& r);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderRubberBand(Renderer2D&) {}
+    void renderRubberBand(::yawn::ui::Renderer2D&) {}
 #else
-    void renderRubberBand(Renderer2D& r);
+    void renderRubberBand(::yawn::ui::Renderer2D& r);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderPlayhead(Renderer2D&) {}
+    void renderPlayhead(::yawn::ui::Renderer2D&) {}
 #else
-    void renderPlayhead(Renderer2D& r);
+    void renderPlayhead(::yawn::ui::Renderer2D& r);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderRuler(Renderer2D&, Font&) {}
+    void renderRuler(::yawn::ui::Renderer2D&, TextMetrics&) {}
 #else
-    void renderRuler(Renderer2D& r, Font& f);
+    void renderRuler(::yawn::ui::Renderer2D& r, TextMetrics& tm);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderClipOps(Renderer2D&, Font&) {}
+    void renderClipOps(::yawn::ui::Renderer2D&, TextMetrics&) {}
 #else
-    void renderClipOps(Renderer2D& r, Font& f);
+    void renderClipOps(::yawn::ui::Renderer2D& r, TextMetrics& tm);
 #endif
 
 #ifdef YAWN_TEST_BUILD
-    void renderVelocityLane(Renderer2D&, Font&) {}
+    void renderVelocityLane(::yawn::ui::Renderer2D&, TextMetrics&) {}
 #else
-    void renderVelocityLane(Renderer2D& r, Font& f);
+    void renderVelocityLane(::yawn::ui::Renderer2D& r, TextMetrics& tm);
 #endif
 
     bool handleVelocityLaneClick(float mx, float my) {
@@ -385,21 +392,18 @@ private:
 
     // ─── Toolbar click ──────────────────────────────────────────────────
 
-    bool handleToolbarClick(float mx, float my) {
-        // All toolbar buttons are v2 widgets now. Route through the
-        // fw2 gesture SM via m_v2Dragging + v1 capture so the down/up
-        // pair reaches the widget even if the user drags off-button.
-        auto routeV2Btn = [&](::yawn::ui::fw2::Widget& w) -> bool {
+    bool handleToolbarClick(MouseEvent& e) {
+        // All toolbar buttons are fw2 widgets. Dispatch the fw2 event
+        // directly with child-local lx/ly; the widget's gesture SM
+        // handles capture via fw2::Widget::captureMouse().
+        auto routeV2Btn = [&](Widget& w) -> bool {
             const auto& b = w.bounds();
-            if (mx < b.x || mx >= b.x + b.w) return false;
-            if (my < b.y || my >= b.y + b.h) return false;
-            MouseEvent src;
-            src.x = mx; src.y = my;
-            src.button = MouseButton::Left;
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(src, b);
-            w.dispatchMouseDown(ev);
-            m_v2Dragging = &w;
-            captureMouse();
+            if (e.x < b.x || e.x >= b.x + b.w) return false;
+            if (e.y < b.y || e.y >= b.y + b.h) return false;
+            MouseEvent ce = e;
+            ce.lx = e.x - b.x;
+            ce.ly = e.y - b.y;
+            w.dispatchMouseDown(ce);
             return true;
         };
 
@@ -775,21 +779,17 @@ private:
     static constexpr float kVelBtnW     = 40.0f;
     static constexpr float kZoomBtnW    = 28.0f;
 
-    ::yawn::ui::fw2::FwToggle m_toolBtns[3];
-    ::yawn::ui::fw2::FwToggle m_snapBtns[7];
-    Label     m_snapLabel;
-    ::yawn::ui::fw2::FwToggle m_loopBtn;
-    ::yawn::ui::fw2::FwToggle m_velBtn;
-    ::yawn::ui::fw2::FwToggle m_followBtn;
-    ::yawn::ui::fw2::FwButton m_zoomInBtn;
-    ::yawn::ui::fw2::FwButton m_zoomOutBtn;
+    FwToggle m_toolBtns[3];
+    FwToggle m_snapBtns[7];
+    Label    m_snapLabel;
+    FwToggle m_loopBtn;
+    FwToggle m_velBtn;
+    FwToggle m_followBtn;
+    FwButton m_zoomInBtn;
+    FwButton m_zoomOutBtn;
 
-    // v2 widget that currently holds mouse capture (button/toggle
-    // press in progress). onMouseMove/onMouseUp flush translated events
-    // to this pointer before falling through to v1 capture handling.
-    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
-    Label     m_clipNameLabel;
-    ::yawn::ui::fw2::FwScrollBar m_scrollbar;
+    Label        m_clipNameLabel;
+    FwScrollBar  m_scrollbar;
 
     // Clip ops button Y positions
     float m_clipOpsBtnY[6] = {};
@@ -797,10 +797,15 @@ private:
     // Follow playhead
     bool  m_followPlayhead = false;
 
-    // Piano key vertical zoom drag
+    // Piano-keys column drag gestures:
+    //   Ctrl+drag   → vertical zoom (row height)
+    //   Plain drag  → vertical scroll (pan the note grid up / down)
     bool  m_pianoKeyDragging = false;
     float m_pianoKeyDragStartY = 0;
     float m_pianoKeyDragStartRowH = 0;
+    bool  m_pianoKeyScrolling = false;
+    float m_pianoKeyScrollStartY = 0;
+    float m_pianoKeyScrollStartScrollY = 0;
 
     // Velocity lane
     bool  m_showVelocityLane = true;
@@ -810,6 +815,6 @@ private:
     float m_velDragStartVel = 0;
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn
