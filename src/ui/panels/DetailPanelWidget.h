@@ -1029,7 +1029,7 @@ private:
         if (!inst) return false;
         std::string nm = inst->name();
 
-        GroupedKnobBody::Config config;
+        ::yawn::ui::fw2::GroupedKnobBody::Config config;
 
         if (nm == "FM Synth") {
             auto* algoW = new FMAlgorithmWidget();
@@ -1321,14 +1321,14 @@ private:
 
         // Build param descriptors
         int count = inst->parameterCount();
-        std::vector<GroupedKnobBody::ParamDesc> params(count);
+        std::vector<::yawn::ui::fw2::GroupedKnobBody::ParamDesc> params(count);
         for (int p = 0; p < count; ++p) {
             auto& info = inst->parameterInfo(p);
             params[p] = {p, info.name, info.unit ? info.unit : "",
                          info.minValue, info.maxValue, info.defaultValue, info.isBoolean};
         }
 
-        auto* body = new GroupedKnobBody();
+        auto* body = new ::yawn::ui::fw2::GroupedKnobBody();
         body->configure(config, params);
         body->setOnParamChange([ref](int idx, float v) {
             DeviceRef r = ref; r.setParam(idx, v);

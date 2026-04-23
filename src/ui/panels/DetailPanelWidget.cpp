@@ -40,6 +40,18 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
 
     auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
+    // Prime v1 UIContext on every GroupedKnobBody so its v1 display
+    // sub-widget (SubSynthDisplayPanel / SamplerDisplayPanel / etc.)
+    // gets driven by this layout pass.
+    for (auto* dw : m_deviceWidgets) {
+        if (auto* body = dw->customBody()) {
+            if (auto* grouped =
+                    dynamic_cast<::yawn::ui::fw2::GroupedKnobBody*>(body)) {
+                grouped->setV1Ctx(&ctx);
+            }
+        }
+    }
+
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
         // Match paint's dynamic layout: title + waveform(fills space) + control strip + effects
         float overviewExtra = ::yawn::ui::fw2::WaveformWidget::kOverviewH
@@ -63,18 +75,12 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
         m_scroll.layout(::yawn::ui::fw2::Rect{bounds.x, bodyY, bounds.w, bodyH}, v2ctx);
     }
 
-    // After fw2 lays out the device widgets, drive the v1 custom
-    // panels / bodies at the rects fw2::DeviceWidget computed — they
-    // live in the still-v1 InstrumentDisplayWidget cluster so only the
-    // v1 UIContext can layout them.
+    // After fw2 lays out the device widgets, drive the remaining v1
+    // customPanels at the rects fw2::DeviceWidget computed.
     for (auto* dw : m_deviceWidgets) {
         if (auto* panel = dw->customPanel()) {
             auto r = dw->customPanelLayoutRect();
             panel->layout({r.x, r.y, r.w, r.h}, ctx);
-        }
-        if (auto* body = dw->customBody()) {
-            auto r = dw->customBodyLayoutRect();
-            body->layout({r.x, r.y, r.w, r.h}, ctx);
         }
     }
 }
@@ -113,15 +119,26 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         } else {
             updateParamValues();
             updateVisualizerData();
+
+            // Prime v1 UIContext on each GroupedKnobBody so their v1
+            // display sub-widgets paint during fw2 render.
+            for (auto* dw : m_deviceWidgets) {
+                if (auto* body = dw->customBody()) {
+                    if (auto* grouped =
+                            dynamic_cast<::yawn::ui::fw2::GroupedKnobBody*>(body)) {
+                        grouped->setV1Ctx(&ctx);
+                    }
+                }
+            }
+
             m_scroll.render(::yawn::ui::fw2::UIContext::global());
 
-            // After fw2 renders the device headers + knob grids, paint
-            // any v1 custom panels / bodies (instrument display widgets
-            // from InstrumentDisplayWidget.h — still-v1 cluster).
+            // Paint remaining v1 custom panels (LFO display etc.) at
+            // the rects fw2::DeviceWidget reserved for them. customBody
+            // rendered through m_scroll above already.
             for (auto* dw : m_deviceWidgets) {
                 if (!dw->isExpanded()) continue;
                 if (auto* panel = dw->customPanel()) panel->paint(ctx);
-                if (auto* body  = dw->customBody())  body->paint(ctx);
             }
 
             // Draw drag-to-reorder insertion indicator
@@ -552,11 +569,18 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     if (!m_deviceWidgets.empty()) {
         updateParamValues();
         updateVisualizerData();
+        for (auto* dw : m_deviceWidgets) {
+            if (auto* body = dw->customBody()) {
+                if (auto* grouped =
+                        dynamic_cast<::yawn::ui::fw2::GroupedKnobBody*>(body)) {
+                    grouped->setV1Ctx(&ctx);
+                }
+            }
+        }
         m_scroll.render(::yawn::ui::fw2::UIContext::global());
         for (auto* dw : m_deviceWidgets) {
             if (!dw->isExpanded()) continue;
             if (auto* panel = dw->customPanel()) panel->paint(ctx);
-            if (auto* body  = dw->customBody())  body->paint(ctx);
         }
     } else {
         float noFxY = fxLabelY + 14.0f;

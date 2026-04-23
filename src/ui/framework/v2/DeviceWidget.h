@@ -4,30 +4,26 @@
 // Migrated from v1 fw::DeviceWidget. Owns a fw2::DeviceHeaderWidget +
 // optional fw2::VisualizerWidget + fw2::FwGrid (as a layout-coord
 // helper) + a vector of ParamSlot (each wrapping a fw2 knob / toggle /
-// step selector).
+// step selector) + an optional fw2::CustomDeviceBody (for instruments
+// that need grouped knob layouts, like Subtractive Synth).
 //
-// The custom-body / custom-panel hooks still take v1 types
-// (fw::CustomDeviceBody*, fw::Widget*) because InstrumentDisplayWidget
-// is still v1. Ownership of those v1 objects stays with the v1
-// fw::DeviceWidget wrapper; this class only tracks their rects +
-// forwards state. The wrapper handles their v1 layout/paint/event
-// plumbing after the fw2 impl computes the rects.
+// The custom-panel slot is still a v1 `fw::Widget*` because the small
+// auxiliary display widgets (LFODisplayWidget etc.) live in the
+// still-v1 InstrumentDisplayWidget.h. The hosting panel (DetailPanel
+// for now) drives its v1 lifecycle with a cached v1 UIContext; fw2
+// DeviceWidget just tracks the rect + delegates through toFw1Mouse.
 
 #include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/DeviceHeaderWidget.h"
 #include "ui/framework/v2/VisualizerWidget.h"
 #include "ui/framework/v2/FwGrid.h"
+#include "ui/framework/v2/GroupedKnobBody.h"  // fw2 CustomDeviceBody
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/StepSelector.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/V1EventBridge.h"
-// Pulls in full definitions for v1 CustomDeviceBody + auxiliary v1
-// display panels (InstrumentDisplayWidget cluster). This DeviceWidget
-// hosts such v1 widgets as customPanel / customBody and calls v1
-// Widget methods on them (layout / paint / onMouseDown); the forward
-// declaration below isn't enough for those bodies.
-#include "ui/framework/InstrumentDisplayWidget.h"
+#include "ui/framework/Widget.h"   // v1 Widget (for m_customPanel)
 #include "ui/Theme.h"
 #include "util/Logger.h"
 #include "WidgetHint.h"
@@ -234,11 +230,11 @@ public:
     }
     ::yawn::ui::fw::Widget* customPanel() const { return m_customPanel; }
 
-    void setCustomBody(::yawn::ui::fw::CustomDeviceBody* body) {
+    void setCustomBody(CustomDeviceBody* body) {
         if (m_customBody != body) delete m_customBody;
         m_customBody = body;
     }
-    ::yawn::ui::fw::CustomDeviceBody* customBody() const { return m_customBody; }
+    CustomDeviceBody* customBody() const { return m_customBody; }
 
     Rect customPanelLayoutRect() const { return m_customPanelRect; }
     Rect customBodyLayoutRect() const  { return m_customBodyRect; }
@@ -275,7 +271,7 @@ public:
     }
 
     void updateParamValue(int index, float value) {
-        if (m_customBody) { /* v1 wrapper handles */ return; }
+        if (m_customBody) { m_customBody->updateParamValue(index, value); return; }
         auto shouldSkip = [](const ParamSlot& s) {
             return s.isKnob() && (s.knob->isDragging() || s.knob->isEditing());
         };
@@ -412,6 +408,9 @@ public:
             }
         } else if (m_customBody) {
             m_customBodyRect = {x + 4, bodyY + 2, w - 8, bodyH - 4};
+            m_customBody->measure(
+                Constraints::tight(m_customBodyRect.w, m_customBodyRect.h), ctx);
+            m_customBody->layout(m_customBodyRect, ctx);
         } else {
             if (m_customPanel) {
                 m_customPanelRect = {x + 4, bodyY + 2, w - 8, m_customPanelH};
@@ -465,13 +464,14 @@ public:
             m_visualizer->render(ctx);
             if (m_vizKnobGrid) m_vizKnobGrid->render(ctx);
             renderV2Knobs(m_vizKnobs);
-        } else if (!m_customBody) {
-            // Custom panel (if present) is painted by the v1 wrapper
-            // after fw2 renders — we just leave a gap here.
+        } else if (m_customBody) {
+            m_customBody->render(ctx);
+        } else {
+            // m_customPanel (v1) is painted by the hosting panel after
+            // fw2 renders its own content — we leave space for it here.
             m_knobGrid.render(ctx);
             renderV2Knobs(m_knobs);
         }
-        // If m_customBody is set the v1 wrapper paints it.
 
         // CC labels on mapped knobs
         if (m_ccLabelCb && ctx.textMetrics) {
@@ -549,18 +549,11 @@ public:
                 for (auto& s : m_vizKnobs) if (hitSlot(s)) return dispatchSlot(s);
             }
         } else if (m_customBody) {
-            // v1 custom body owns the click area below the header.
-            // Convert to v1 event and forward; track drag so follow-up
-            // moves / up route there directly.
+            // fw2 custom body owns the click area below the header.
             const auto& cb = m_customBody->bounds();
             if (e.x >= cb.x && e.x < cb.x + cb.w &&
                 e.y >= cb.y && e.y < cb.y + cb.h) {
-                auto v1ev = ::yawn::ui::fw2::toFw1Mouse(e);
-                if (m_customBody->onMouseDown(v1ev)) {
-                    m_draggingCustomBody = true;
-                    captureMouse();
-                    return true;
-                }
+                if (m_customBody->dispatchMouseDown(e)) return true;
             }
         } else {
             if (rectContains(m_knobGrid.bounds(), e.x, e.y)) {
@@ -576,14 +569,6 @@ public:
 
         if (!m_expanded) return false;
 
-        if (m_draggingCustomBody && m_customBody) {
-            auto v1ev = ::yawn::ui::fw2::toFw1Mouse(e);
-            m_customBody->onMouseUp(v1ev);
-            m_draggingCustomBody = false;
-            releaseMouse();
-            return true;
-        }
-
         if (m_v2Dragging) {
             MouseEvent ev = e;
             ev.lx = e.x - m_v2Dragging->bounds().x;
@@ -597,11 +582,6 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (m_draggingCustomBody && m_customBody) {
-            auto v1ev = ::yawn::ui::fw2::toFw1MouseMove(e);
-            m_customBody->onMouseMove(v1ev);
-            return true;
-        }
         if (m_v2Dragging) {
             MouseMoveEvent ev = e;
             ev.lx = e.x - m_v2Dragging->bounds().x;
@@ -650,7 +630,7 @@ private:
     ::yawn::ui::fw::Widget*           m_customPanel = nullptr;
     float                              m_customPanelH = 0;
     float                              m_customMinW   = 0;
-    ::yawn::ui::fw::CustomDeviceBody* m_customBody = nullptr;
+    CustomDeviceBody* m_customBody = nullptr;
 
     // Layout rects for v1 children (filled by onLayout; read by wrapper)
     Rect m_customPanelRect{};
@@ -658,7 +638,6 @@ private:
 
     float m_cachedCellW = 0;
     Widget* m_v2Dragging = nullptr;
-    bool    m_draggingCustomBody = false;
 
     RemoveCallback                          m_onRemove;
     ParamChangeCallback                     m_onParamChange;
