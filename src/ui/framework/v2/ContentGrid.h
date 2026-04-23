@@ -38,7 +38,8 @@ public:
     }
 
     // Swap just the top-left child (session ↔ arrangement view switch).
-    void setTopLeft(Widget* w) { m_tl = w; }
+    // Calls invalidate() so the next layout pass repositions the new child.
+    void setTopLeft(Widget* w) { m_tl = w; invalidate(); }
 
     void setDividerRatios(float hRatio, float vRatio) {
         m_hRatio = std::clamp(hRatio, 0.1f, 0.9f);

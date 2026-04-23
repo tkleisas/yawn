@@ -354,9 +354,7 @@ void App::setupMenuBar() {
             M::separator(),
             makeDeleteTrack(),
             M::item("Rename Track", [this]() {
-                // SessionPanel is fw2 — use the wrapper's v1 visible()
-                // (what ContentGrid checks) since visibility is
-                // SessionPanel is fw2 — check its own visibility directly.
+                // SessionPanel is fw2 — check visibility directly.
                 if (m_sessionPanel->isVisible()) {
                     m_sessionPanel->startTrackRename(m_selectedTrack);
                 } else {
