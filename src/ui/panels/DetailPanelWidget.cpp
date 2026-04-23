@@ -85,7 +85,7 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         float bodyH = m_animatedHeight - kHandleHeight;
         renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
 
-        float hScale = 14.0f / Theme::kFontSize;
+        float hScale = 9.0f / Theme::kFontSize;  // ~14.8 px (paired with clip-name title)
 
         if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
             paintAudioClipView(renderer, font, x, bodyY, w, bodyH, hScale, ctx);
@@ -343,7 +343,10 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
 
     // ── Title row: clip name (left) + info (right) ──
     float headerY = bodyY + 4.0f;
-    float titleScale = 15.0f / Theme::kFontSize;
+    // v1 scale arg: `pt / Theme::kFontSize(=26)` against a 48-px bake,
+    // so 8/26 * 48 ≈ 14.8 px — a touch larger than the Mixer track
+    // header for emphasis.
+    float titleScale = 9.0f / Theme::kFontSize;
     font.drawText(renderer, clip.name.empty() ? "Audio Clip" : clip.name.c_str(),
                    sectionX, headerY, titleScale, Theme::textPrimary);
 
