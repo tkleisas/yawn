@@ -63,7 +63,7 @@ public:
     void layout(const Rect& bounds, const UIContext& ctx) override {
         Widget::layout(bounds, ctx);
         auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        ::yawn::ui::fw2::Constraints fc{bounds.w, bounds.w, bounds.h, bounds.h};
+        auto fc = ::yawn::ui::fw2::Constraints::tight(bounds.w, bounds.h);
         m_impl.measure(fc, v2ctx);
         m_impl.layout(::yawn::ui::fw2::Rect{bounds.x, bounds.y, bounds.w, bounds.h},
                        v2ctx);

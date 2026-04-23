@@ -36,7 +36,7 @@ public:
         // Forward to the fw2 widget so its m_bounds match when render
         // runs. Constraints are tight to the bounds.
         auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        ::yawn::ui::fw2::Constraints c{bounds.w, bounds.w, bounds.h, bounds.h};
+        auto c = ::yawn::ui::fw2::Constraints::tight(bounds.w, bounds.h);
         m_impl.measure(c, v2ctx);
         m_impl.layout(::yawn::ui::fw2::Rect{bounds.x, bounds.y, bounds.w, bounds.h},
                        v2ctx);
