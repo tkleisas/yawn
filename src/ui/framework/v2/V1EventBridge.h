@@ -24,6 +24,9 @@
 #include "Widget.h"                     // fw2::MouseEvent, MouseMoveEvent
 #include "ui/framework/EventSystem.h"   // v1::MouseEvent, MouseMoveEvent, MouseButton
 
+#include <chrono>
+#include <cstdint>
+
 namespace yawn {
 namespace ui {
 namespace fw2 {
