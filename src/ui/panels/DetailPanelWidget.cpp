@@ -162,9 +162,23 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
             e.ly = my - wb.y;
             if (m_waveformWidget.onMouseDown(e)) return true;
         }
-        // Automation envelope editor
-        if (hitWidget(m_autoEnvelopeWidget, mx, my))
-            return m_autoEnvelopeWidget.onMouseDown(e);
+        // Automation envelope editor — fw2 widget; bridge the v1 event
+        // and hook into m_v2Dragging so subsequent moves/ups flow back
+        // through the gesture SM (the envelope captures fw2 mouse when
+        // a point drag starts).
+        {
+            const auto& eb = m_autoEnvelopeWidget.bounds();
+            if (mx >= eb.x && mx < eb.x + eb.w &&
+                my >= eb.y && my < eb.y + eb.h) {
+                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, eb);
+                bool consumed = m_autoEnvelopeWidget.dispatchMouseDown(ev);
+                if (::yawn::ui::fw2::Widget::capturedWidget() == &m_autoEnvelopeWidget) {
+                    m_v2Dragging = &m_autoEnvelopeWidget;
+                    captureMouse();
+                }
+                return consumed;
+            }
+        }
         // Automation target dropdown — v2 toggles directly on mouseDown
         // (same pattern as BrowserPresetsTab; v1 App loop doesn't route
         // mouseUp to v2 widgets so the gesture state machine can't fire).
@@ -367,8 +381,13 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         // Position envelope over the main waveform area (below overview bar)
         float envY = waveY + overviewExtra;
         float envH = waveH - overviewExtra;
-        m_autoEnvelopeWidget.layout(Rect{sectionX, envY, sectionW, envH}, ctx);
-        m_autoEnvelopeWidget.paint(ctx);
+        // m_autoEnvelopeWidget is fw2 — layout + render through the fw2 context.
+        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
+        m_autoEnvelopeWidget.measure(
+            ::yawn::ui::fw2::Constraints::tight(sectionW, envH), v2ctx);
+        m_autoEnvelopeWidget.layout(
+            ::yawn::ui::fw2::Rect{sectionX, envY, sectionW, envH}, v2ctx);
+        m_autoEnvelopeWidget.render(v2ctx);
     }
 
     // Sync widget values from clip each frame. Skip the sync on any

@@ -147,13 +147,23 @@ public:
             return true;
         }
 
-        // If a child captured fw2 mouse (e.g. SessionPanel scrollbar drag,
-        // MixerPanel fader drag), forward moves to it. ContentGrid isn't in
-        // a fw2 parent tree so no one else routes this for us.
+        // Something captured fw2 mouse (panel scrollbar drag, fader drag,
+        // knob drag, envelope point drag, …). Forward the move so the
+        // captured widget sees its drag continue. ContentGrid isn't in
+        // a fw2 parent tree so no one else routes this for us. The
+        // captured widget can be a deep descendant of any of the four
+        // quadrants — check by visual containment rather than by
+        // direct-child identity, otherwise controls inside mixer /
+        // browser / return panels (faders, knobs, dropdowns) never
+        // receive drag updates.
         if (Widget* cap = capturedWidget()) {
-            if (cap == m_tl || cap == m_tr || cap == m_bl || cap == m_br) {
+            const Rect& cb = cap->bounds();
+            bool inside = cb.x >= m_bounds.x
+                       && cb.x + cb.w <= m_bounds.x + m_bounds.w
+                       && cb.y >= m_bounds.y
+                       && cb.y + cb.h <= m_bounds.y + m_bounds.h;
+            if (inside) {
                 MouseMoveEvent ce = e;
-                const Rect& cb = cap->bounds();
                 ce.lx = e.x - cb.x;
                 ce.ly = e.y - cb.y;
                 cap->dispatchMouseMove(ce);
@@ -171,14 +181,17 @@ public:
     bool onMouseUp(MouseEvent& e) override {
         bool wasDragging = m_dragH || m_dragV;
         m_dragH = m_dragV = false;
-        // Forward mouseUp to a captured child so its gesture SM can end
-        // its drag + release capture. Without this the child stays
-        // "pressed" forever and fw2 capture sticks, locking subsequent
-        // mouse events.
+        // Forward mouseUp to the captured widget (descendant at any
+        // depth) so its gesture SM can end its drag + release capture.
+        // Same bounds-check rationale as onMouseMove above.
         if (Widget* cap = capturedWidget()) {
-            if (cap == m_tl || cap == m_tr || cap == m_bl || cap == m_br) {
+            const Rect& cb = cap->bounds();
+            bool inside = cb.x >= m_bounds.x
+                       && cb.x + cb.w <= m_bounds.x + m_bounds.w
+                       && cb.y >= m_bounds.y
+                       && cb.y + cb.h <= m_bounds.y + m_bounds.h;
+            if (inside) {
                 MouseEvent ce = e;
-                const Rect& cb = cap->bounds();
                 ce.lx = e.x - cb.x;
                 ce.ly = e.y - cb.y;
                 cap->dispatchMouseUp(ce);

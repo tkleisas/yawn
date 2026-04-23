@@ -16,15 +16,13 @@
 // through `fw::BrowserPanelWrapper` in PanelWrappers.h (owned by App).
 
 #include "ui/framework/v2/Widget.h"
+#include "ui/framework/v2/AutomationEnvelope.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/Crossfader.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/V1EventBridge.h"
-#include "ui/framework/Widget.h"                 // v1 Widget (for AutomationEnvelopeWidget member)
-#include "ui/framework/UIContext.h"              // v1 UIContext (for v1 sub-tab paint)
-#include "ui/framework/InstrumentDisplayWidget.h"  // AutomationEnvelopeWidget
 #include "ui/Renderer.h"
 #include "ui/Font.h"
 #include "ui/Theme.h"
@@ -52,13 +50,6 @@ public:
         setFocusable(false);
         setRelayoutBoundary(true);
     }
-
-    // App wires this once at startup so the v1 sub-tabs
-    // (BrowserFilesTab / BrowserPresetsTab / AutomationEnvelopeWidget)
-    // have a proper UIContext for their paint / hit-test needs. Stored
-    // as a pointer so the App's UIContext remains the single source of
-    // truth for font, renderer, animator, scale.
-    void setV1Context(::yawn::ui::fw::UIContext* ctx) { m_v1Ctx = ctx; }
 
     // ── Follow action API ──
     // Set which visual clip's automation lanes the "Clip" tab edits.
@@ -276,9 +267,12 @@ protected:
                     return true;
                 }
             }
-            if (hitWidgetV1(m_clipEnvelope, mx, my)) {
-                auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
-                return m_clipEnvelope.onMouseDown(v1e);
+            {
+                const auto& eb = m_clipEnvelope.bounds();
+                if (mx >= eb.x && mx < eb.x + eb.w &&
+                    my >= eb.y && my < eb.y + eb.h) {
+                    return m_clipEnvelope.dispatchMouseDown(e);
+                }
             }
         }
         return false;
@@ -302,17 +296,8 @@ protected:
             return true;
         }
         // v2 dropdowns handle open-state mouseMove via LayerStack;
-        // v2 crossfader routes moves through capturedWidget above.
-        // Clip envelope drag (point move): the envelope widget
-        // captures on mouse-down (v1), so we route moves to it while
-        // it reports a drag in progress.
-        if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
-            if (m_clipEnvelope.dragIndex() >= 0) {
-                auto v1e = ::yawn::ui::fw2::toFw1MouseMove(e);
-                m_clipEnvelope.onMouseMove(v1e);
-                return true;
-            }
-        }
+        // v2 crossfader and clip envelope point drags both route via
+        // capturedWidget above now that the envelope is fw2.
         return false;
     }
 
@@ -332,10 +317,6 @@ protected:
             ev.ly = e.y - b.y;
             cap->dispatchMouseUp(ev);
             return true;
-        }
-        if (m_activeTab == Tab::Clip && m_clipAutoLanes) {
-            auto v1e = ::yawn::ui::fw2::toFw1Mouse(e);
-            if (m_clipEnvelope.onMouseUp(v1e)) return true;
         }
         return false;
     }
@@ -436,7 +417,6 @@ private:
     static constexpr float kTabPad = 16.0f; // horizontal padding per tab
 
     Tab m_activeTab = Tab::Files;
-    ::yawn::ui::fw::UIContext* m_v1Ctx = nullptr;
     float m_tabWidths[4] = {55, 55, 55, 55}; // computed in render
 
     // Files and Presets tabs — fw2 widgets; bounds driven by our render().
@@ -473,16 +453,11 @@ private:
     std::vector<ClipTargetEntry> m_clipTargets;
     std::vector<std::string>     m_clipShaderParamNames;
     int      m_clipSelectedTarget = 0;
-    FwDropDown                       m_clipTargetDropdown;
-    ::yawn::ui::fw::AutomationEnvelopeWidget m_clipEnvelope;
-    FwDropDown                       m_faActionADropdown;
-    FwDropDown                       m_faActionBDropdown;
-    FwCrossfader                     m_faCrossfader;
-
-    static bool hitWidgetV1(::yawn::ui::fw::Widget& w, float mx, float my) {
-        auto& b = w.bounds();
-        return mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h;
-    }
+    FwDropDown                 m_clipTargetDropdown;
+    AutomationEnvelopeWidget   m_clipEnvelope;
+    FwDropDown                 m_faActionADropdown;
+    FwDropDown                 m_faActionBDropdown;
+    FwCrossfader               m_faCrossfader;
 
     // Build the dropdown list: A..H followed by every shader @range
     // uniform the current clip exposes. Called whenever the set of
@@ -796,14 +771,13 @@ private:
         }
         rowY += 24.0f;
 
-        // Envelope drawing area — still a v1 widget; hand it the v1
-        // UIContext the App wired to us via setV1Context.
-        if (m_v1Ctx) {
+        // Envelope drawing area — fw2 widget, dispatches directly.
+        {
             m_clipEnvelope.setTimeRange(0.0, m_clipAutoLength);
             m_clipEnvelope.setValueRange(0.0f, 1.0f);
-            ::yawn::ui::fw::Rect envRect{sx, rowY, sw, 80.0f};
-            m_clipEnvelope.layout(envRect, *m_v1Ctx);
-            m_clipEnvelope.paint(*m_v1Ctx);
+            m_clipEnvelope.measure(Constraints::tight(sw, 80.0f), ctx);
+            m_clipEnvelope.layout(Rect{sx, rowY, sw, 80.0f}, ctx);
+            m_clipEnvelope.render(ctx);
         }
     }
 

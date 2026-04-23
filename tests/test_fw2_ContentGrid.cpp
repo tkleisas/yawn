@@ -171,6 +171,50 @@ TEST(Fw2ContentGrid, MouseMoveForwardsToCapturedChild) {
     tl.releaseMouse();
 }
 
+// Regression: a fader / knob / button *inside* one of the four panels
+// is not one of m_tl..m_br, but its bounds are visually inside the
+// grid. Forwarding must still reach it — otherwise mixer faders and
+// return-bus controls stop responding to drags.
+TEST(Fw2ContentGrid, MouseMoveForwardsToDeepDescendantByBounds) {
+    Harness h;
+    RecordingChild tl, tr, bl, br;
+
+    ContentGrid grid;
+    grid.setChildren(&tl, &tr, &bl, &br);
+    grid.measure(Constraints::tight(1000, 800), h.ctx);
+    grid.layout(Rect{0, 0, 1000, 800}, h.ctx);
+
+    // Simulate a control living inside bl (mixer fader, say). It is
+    // not one of the grid's direct children but its bounds are inside
+    // the grid.
+    RecordingChild innerFader;
+    innerFader.layout(Rect{20, 550, 30, 120}, h.ctx);
+
+    innerFader.captureMouse();
+
+    MouseMoveEvent mv{};
+    mv.x = 35; mv.y = 600;
+    grid.dispatchMouseMove(mv);
+
+    EXPECT_GE(innerFader.mouseMoves, 1)
+        << "Grid must forward moves to captured descendants, not just direct children.";
+
+    // A captured widget *outside* the grid's area should NOT receive
+    // forwarded moves — otherwise the transport panel's dragged knob
+    // would get double-dispatched.
+    innerFader.releaseMouse();
+    RecordingChild outside;
+    outside.layout(Rect{100, -200, 30, 20}, h.ctx);   // above grid (y < 0)
+    outside.captureMouse();
+
+    int before = outside.mouseMoves;
+    grid.dispatchMouseMove(mv);
+    EXPECT_EQ(outside.mouseMoves, before)
+        << "Widgets outside grid bounds should NOT receive grid-forwarded moves.";
+
+    outside.releaseMouse();
+}
+
 // When no divider drag is in progress and no child is captured, an arbitrary
 // mouseMove shouldn't reach any child — only hover state updates.
 TEST(Fw2ContentGrid, MouseMoveWithoutDragOrCaptureIsInert) {

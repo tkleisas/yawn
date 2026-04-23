@@ -14,6 +14,7 @@
 #include "ui/framework/Primitives.h"
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/WaveformWidget.h"
+#include "ui/framework/v2/AutomationEnvelope.h"
 #include "ui/framework/v2/Button.h"
 #include "ui/framework/v2/DropDown.h"
 #include "ui/framework/v2/Knob.h"
@@ -1467,7 +1468,7 @@ private:
 
     // Automation lane editor
     ::yawn::ui::fw2::FwDropDown m_autoTargetDropdown;
-    AutomationEnvelopeWidget m_autoEnvelopeWidget;
+    ::yawn::ui::fw2::AutomationEnvelopeWidget m_autoEnvelopeWidget;
     int m_autoSelectedLaneIdx = -1;
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
     int m_autoTrackIndex = -1;
