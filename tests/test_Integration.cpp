@@ -12,7 +12,6 @@
 #include "ui/framework/SnapScrollContainer.h"
 #include "ui/framework/VisualizerWidget.h"
 #include "ui/framework/FwGrid.h"
-#include "ui/framework/Dialog.h"
 
 // Panels (only those that compile under YAWN_TEST_BUILD)
 #include "ui/panels/DetailPanelWidget.h"
@@ -718,78 +717,10 @@ TEST_F(IntegrationDPITest, ScaledLayoutConstants) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 7. DialogIntegration — Dialog with content and event handling
+// 7. CrossPanelInteraction — layout accommodating multiple animated panels
 // ═════════════════════════════════════════════════════════════════════════════
-
-TEST(IntegrationDialog, EscapeClosesWithCancel) {
-    Dialog dlg("Settings", 400, 300);
-    DialogResult captured = DialogResult::None;
-    dlg.setOnResult([&](DialogResult r) { captured = r; });
-
-    KeyEvent e;
-    e.keyCode = 27; // Escape
-    dlg.onKeyDown(e);
-
-    EXPECT_EQ(captured, DialogResult::Cancel);
-    EXPECT_FALSE(dlg.visible());
-}
-
-TEST(IntegrationDialog, EnterConfirmsWithOKCancel) {
-    Dialog dlg("Settings", 400, 300);
-    dlg.setShowOKCancel(true);
-    DialogResult captured = DialogResult::None;
-    dlg.setOnResult([&](DialogResult r) { captured = r; });
-
-    KeyEvent e;
-    e.keyCode = 13; // Enter
-    dlg.onKeyDown(e);
-
-    EXPECT_EQ(captured, DialogResult::OK);
-}
-
-TEST(IntegrationDialog, ContentWidgetLaidOutInsideDialog) {
-    Dialog dlg("Test", 400, 300);
-    FixedPanelWidget content(350, 200);
-    dlg.setContent(&content);
-
-    UIContext ctx{};
-    dlg.measure(Constraints::loose(800, 600), ctx);
-    dlg.layout(Rect{100, 50, 400, 300}, ctx);
-
-    // Content should be below the title bar
-    EXPECT_GT(content.bounds().y, 50.0f);
-    EXPECT_GE(content.bounds().x, 100.0f);
-}
-
-TEST(IntegrationDialog, TitleBarAndFooterGeometry) {
-    Dialog dlg("Test", 400, 300);
-    dlg.setShowOKCancel(true);
-
-    UIContext ctx{};
-    dlg.measure(Constraints::loose(800, 600), ctx);
-    dlg.layout(Rect{0, 0, 400, 300}, ctx);
-
-    Rect tb = dlg.titleBarRect();
-    EXPECT_FLOAT_EQ(tb.h, Dialog::kTitleBarHeight);
-    EXPECT_FLOAT_EQ(tb.w, 400.0f);
-
-    Rect footer = dlg.footerRect();
-    EXPECT_FLOAT_EQ(footer.h, Dialog::kFooterHeight);
-    EXPECT_FLOAT_EQ(footer.y, 300.0f - Dialog::kFooterHeight);
-}
-
-TEST(IntegrationDialog, CloseMethodSetsResult) {
-    Dialog dlg("Test");
-    EXPECT_EQ(dlg.result(), DialogResult::None);
-
-    dlg.close(DialogResult::OK);
-    EXPECT_EQ(dlg.result(), DialogResult::OK);
-    EXPECT_FALSE(dlg.visible());
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 8. CrossPanelInteraction — layout accommodating multiple animated panels
-// ═════════════════════════════════════════════════════════════════════════════
+// (Dialog integration tests retired along with v1 Dialog.h — see
+//  tests/test_fw2_Dialog.cpp for the fw2 equivalents.)
 
 TEST(IntegrationCrossPanel, DetailPanelInFlexBoxLayout) {
     FlexBox root(Direction::Column);
