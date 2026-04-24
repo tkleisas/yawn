@@ -40,18 +40,6 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
 
     auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
 
-    // Prime v1 UIContext on every GroupedKnobBody so its v1 display
-    // sub-widget (SubSynthDisplayPanel / SamplerDisplayPanel / etc.)
-    // gets driven by this layout pass.
-    for (auto* dw : m_deviceWidgets) {
-        if (auto* body = dw->customBody()) {
-            if (auto* grouped =
-                    dynamic_cast<::yawn::ui::fw2::GroupedKnobBody*>(body)) {
-                grouped->setV1Ctx(&ctx);
-            }
-        }
-    }
-
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
         // Match paint's dynamic layout: title + waveform(fills space) + control strip + effects
         float overviewExtra = ::yawn::ui::fw2::WaveformWidget::kOverviewH
@@ -110,17 +98,6 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         } else {
             updateParamValues();
             updateVisualizerData();
-
-            // Prime v1 UIContext on each GroupedKnobBody so their v1
-            // display sub-widgets paint during fw2 render.
-            for (auto* dw : m_deviceWidgets) {
-                if (auto* body = dw->customBody()) {
-                    if (auto* grouped =
-                            dynamic_cast<::yawn::ui::fw2::GroupedKnobBody*>(body)) {
-                        grouped->setV1Ctx(&ctx);
-                    }
-                }
-            }
 
             m_scroll.render(::yawn::ui::fw2::UIContext::global());
 
@@ -552,14 +529,6 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     if (!m_deviceWidgets.empty()) {
         updateParamValues();
         updateVisualizerData();
-        for (auto* dw : m_deviceWidgets) {
-            if (auto* body = dw->customBody()) {
-                if (auto* grouped =
-                        dynamic_cast<::yawn::ui::fw2::GroupedKnobBody*>(body)) {
-                    grouped->setV1Ctx(&ctx);
-                }
-            }
-        }
         m_scroll.render(::yawn::ui::fw2::UIContext::global());
     } else {
         float noFxY = fxLabelY + 14.0f;

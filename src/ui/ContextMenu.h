@@ -11,6 +11,7 @@
 // header can be deleted together.
 
 #include "ui/Widget.h"
+#include "ui/Font.h"
 #include "ui/Theme.h"
 #include <functional>
 #include <string>

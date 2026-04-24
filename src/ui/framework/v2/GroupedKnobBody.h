@@ -1,23 +1,14 @@
 #pragma once
 // fw2::CustomDeviceBody + fw2::GroupedKnobBody — instrument-custom
 // device body, migrated from v1 fw::CustomDeviceBody /
-// fw::GroupedKnobBody (InstrumentDisplayWidget.h).
+// fw::GroupedKnobBody.
 //
 // GroupedKnobBody composes (optional) left-side display widget + N
-// knob-grid sections. The knobs are native fw2::FwKnob; section layout
-// is computed in onLayout. The display slot still points at v1
-// `fw::Widget*` (the instrument-specific *DisplayPanel classes live in
-// the still-v1 InstrumentDisplayWidget.h) — GroupedKnobBody owns it
-// and drives its lifecycle by caching a v1 `fw::UIContext*` that the
-// hosting panel sets before each lifecycle call. When the display
-// panels migrate to fw2, drop the cache and the toFw1* helpers.
+// knob-grid sections. Display and knobs are all native fw2::Widget.
 
 #include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Knob.h"
-#include "ui/framework/v2/V1EventBridge.h"
-#include "ui/framework/Widget.h"          // v1 Widget
-#include "ui/framework/UIContext.h"       // v1 UIContext
 #include "ui/Theme.h"
 
 #ifndef YAWN_TEST_BUILD
@@ -163,9 +154,9 @@ public:
         std::vector<int> paramIndices;
     };
     struct Config {
-        // Optional left-side display widget — v1 fw::Widget for now.
+        // Optional left-side display widget (instrument-specific viz).
         // GroupedKnobBody takes ownership on configure().
-        ::yawn::ui::fw::Widget* display = nullptr;
+        Widget* display = nullptr;
         float displayWidth = 0;
         std::vector<SectionDef> sections;
     };
@@ -265,9 +256,7 @@ public:
     // The hosting panel stashes its v1 UIContext here before calling
     // render()/onLayout() so we can drive the v1 display widget's
     // lifecycle. Non-owning; valid only for the duration of the call.
-    void setV1Ctx(const ::yawn::ui::fw::UIContext* ctx) { m_v1Ctx = ctx; }
-
-    ::yawn::ui::fw::Widget* display() const { return m_display; }
+    Widget* display() const { return m_display; }
 
     // ─── fw2 Widget overrides ───────────────────────────────────────
 
@@ -281,20 +270,15 @@ public:
         const float y = bounds.y;
         const float h = bounds.h;
 
-        if (m_display && m_v1Ctx) {
+        if (m_display) {
             // Ask the display what height it prefers at the slot width;
             // cap to our body height so it never overflows. Keeps sub-
             // displays (OSC / Filter / AMP / FILT envelopes) at their
             // intended ~4:3 aspect instead of stretching vertically.
             auto ps = m_display->measure(
-                ::yawn::ui::fw::Constraints::loose(m_displayWidth, h),
-                *m_v1Ctx);
+                Constraints::loose(m_displayWidth, h), ctx);
             const float displayH = std::min(h, std::max(48.0f, ps.h));
-            m_display->layout(
-                ::yawn::ui::fw::Rect{x, y, m_displayWidth, displayH},
-                *m_v1Ctx);
-            x += m_displayWidth + kSectionGap;
-        } else if (m_display) {
+            m_display->layout({x, y, m_displayWidth, displayH}, ctx);
             x += m_displayWidth + kSectionGap;
         }
 
@@ -329,9 +313,8 @@ public:
         auto& r = *ctx.renderer;
         auto* tm = ctx.textMetrics;
 
-        // v1 display paints through v1 UIContext (Font/Renderer path).
-        if (m_display && m_v1Ctx)
-            m_display->paint(*const_cast<::yawn::ui::fw::UIContext*>(m_v1Ctx));
+        if (m_display)
+            m_display->render(ctx);
 
         // 8/26 ≈ 14.8 px actual (matches v1 look, fits within kLabelRowH).
         const float lblFs = 8.0f * (48.0f / 26.0f);
@@ -356,13 +339,16 @@ public:
     // ─── Events ─────────────────────────────────────────────────────
 
     bool onMouseDown(MouseEvent& e) override {
-        // Forward to v1 display first (e.g. DrumSlop pad grid).
+        // Forward clicks into the display slot first (e.g. DrumSlop pad
+        // grid, DrumRack pad / page nav, InstrumentRack chain rows).
         if (m_display) {
             const auto& db = m_display->bounds();
             if (e.x >= db.x && e.x < db.x + db.w &&
                 e.y >= db.y && e.y < db.y + db.h) {
-                auto v1ev = ::yawn::ui::fw2::toFw1Mouse(e);
-                if (m_display->onMouseDown(v1ev)) {
+                MouseEvent ev = e;
+                ev.lx = e.x - db.x;
+                ev.ly = e.y - db.y;
+                if (m_display->dispatchMouseDown(ev)) {
                     m_draggingDisplay = true;
                     captureMouse();
                     return true;
@@ -389,8 +375,10 @@ public:
 
     bool onMouseMove(MouseMoveEvent& e) override {
         if (m_draggingDisplay && m_display) {
-            auto v1ev = ::yawn::ui::fw2::toFw1MouseMove(e);
-            m_display->onMouseMove(v1ev);
+            MouseMoveEvent ev = e;
+            ev.lx = e.x - m_display->bounds().x;
+            ev.ly = e.y - m_display->bounds().y;
+            m_display->dispatchMouseMove(ev);
             return true;
         }
         if (m_draggingKnob) {
@@ -405,8 +393,10 @@ public:
 
     bool onMouseUp(MouseEvent& e) override {
         if (m_draggingDisplay && m_display) {
-            auto v1ev = ::yawn::ui::fw2::toFw1Mouse(e);
-            m_display->onMouseUp(v1ev);
+            MouseEvent ev = e;
+            ev.lx = e.x - m_display->bounds().x;
+            ev.ly = e.y - m_display->bounds().y;
+            m_display->dispatchMouseUp(ev);
             m_draggingDisplay = false;
             releaseMouse();
             return true;
@@ -475,11 +465,9 @@ private:
         float x = 0, w = 0;
     };
 
-    ::yawn::ui::fw::Widget*          m_display      = nullptr;
+    Widget*                           m_display      = nullptr;
     float                             m_displayWidth = 0;
     std::vector<InternalSection>      m_sections;
-
-    const ::yawn::ui::fw::UIContext* m_v1Ctx = nullptr;
 
     FwKnob*                           m_draggingKnob    = nullptr;
     bool                              m_draggingDisplay = false;

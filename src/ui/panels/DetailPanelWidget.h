@@ -9,8 +9,16 @@
 // tree doesn't dispatch right-click events yet.
 
 #include "ui/framework/Widget.h"
-#include "ui/framework/InstrumentDisplayWidget.h"
 #include "ui/framework/v2/FilterDisplayWidget.h"
+#include "ui/framework/v2/SubSynthDisplayPanel.h"
+#include "ui/framework/v2/FMAlgorithmWidget.h"
+#include "ui/framework/v2/SamplerDisplayPanel.h"
+#include "ui/framework/v2/WavetableDisplayPanel.h"
+#include "ui/framework/v2/GranularDisplayPanel.h"
+#include "ui/framework/v2/VocoderDisplayPanel.h"
+#include "ui/framework/v2/DrumSlopDisplayPanel.h"
+#include "ui/framework/v2/DrumRackDisplayPanel.h"
+#include "ui/framework/v2/InstrumentRackDisplayPanel.h"
 #include "ui/framework/v2/DeviceHeaderWidget.h"
 #include "ui/framework/v2/DeviceWidget.h"
 #include "ui/framework/v2/LFODisplayWidget.h"
@@ -1039,7 +1047,7 @@ private:
         ::yawn::ui::fw2::GroupedKnobBody::Config config;
 
         if (nm == "FM Synth") {
-            auto* algoW = new FMAlgorithmWidget();
+            auto* algoW = new ::yawn::ui::fw2::FMAlgorithmWidget();
             config.display = algoW;
             config.displayWidth = 130;
             config.sections = {
@@ -1056,7 +1064,7 @@ private:
                                    inst->getParameter(10), inst->getParameter(14));
             });
         } else if (nm == "Subtractive Synth") {
-            auto* panel = new SubSynthDisplayPanel();
+            auto* panel = new ::yawn::ui::fw2::SubSynthDisplayPanel();
             config.display = panel;
             config.displayWidth = 150;
             config.sections = {
@@ -1083,7 +1091,7 @@ private:
                     inst->getParameter(18), inst->getParameter(19));
             });
         } else if (nm == "Sampler") {
-            auto* samplerPanel = new SamplerDisplayPanel();
+            auto* samplerPanel = new ::yawn::ui::fw2::SamplerDisplayPanel();
             config.display = samplerPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1109,7 +1117,7 @@ private:
                 }
             });
         } else if (nm == "DrumSlop") {
-            auto* dsPanel = new DrumSlopDisplayPanel();
+            auto* dsPanel = new ::yawn::ui::fw2::DrumSlopDisplayPanel();
             config.display = dsPanel;
             config.displayWidth = 160;
             config.sections = {
@@ -1148,7 +1156,7 @@ private:
                     dsPanel->setPadPlaying(i, ds->isPadPlaying(i));
             });
         } else if (nm == "Wavetable Synth") {
-            auto* wtPanel = new WavetableDisplayPanel();
+            auto* wtPanel = new ::yawn::ui::fw2::WavetableDisplayPanel();
             config.display = wtPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1188,7 +1196,7 @@ private:
                     wtPanel->setTableName(tableNames[table]);
             });
         } else if (nm == "Granular Synth") {
-            auto* grPanel = new GranularDisplayPanel();
+            auto* grPanel = new ::yawn::ui::fw2::GranularDisplayPanel();
             config.display = grPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1215,7 +1223,7 @@ private:
                 grPanel->setGrainSize(grainMs / totalMs);
             });
         } else if (nm == "Vocoder") {
-            auto* vocPanel = new VocoderDisplayPanel();
+            auto* vocPanel = new ::yawn::ui::fw2::VocoderDisplayPanel();
             config.display = vocPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1238,7 +1246,7 @@ private:
                     static_cast<int>(voc->getParameter(instruments::Vocoder::kBands)));
             });
         } else if (nm == "Drum Rack") {
-            auto* drPanel = new DrumRackDisplayPanel();
+            auto* drPanel = new ::yawn::ui::fw2::DrumRackDisplayPanel();
             config.display = drPanel;
             config.displayWidth = 160;
             config.sections = {
@@ -1276,7 +1284,7 @@ private:
                     drPanel->setSelectedPadWaveform(nullptr, 0, 1);
             });
         } else if (nm == "Instrument Rack") {
-            auto* irPanel = new InstrumentRackDisplayPanel();
+            auto* irPanel = new ::yawn::ui::fw2::InstrumentRackDisplayPanel();
             config.display = irPanel;
             config.displayWidth = 160;
             config.sections = {
@@ -1316,7 +1324,7 @@ private:
 
                 for (int i = 0; i < ir->chainCount(); ++i) {
                     const auto& ch = ir->chain(i);
-                    InstrumentRackDisplayPanel::ChainInfo ci;
+                    ::yawn::ui::fw2::InstrumentRackDisplayPanel::ChainInfo ci;
                     ci.name    = ch.instrument ? ch.instrument->name() : "Empty";
                     ci.keyLow  = ch.keyLow;
                     ci.keyHigh = ch.keyHigh;
