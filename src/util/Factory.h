@@ -23,6 +23,7 @@
 #include "effects/Delay.h"
 #include "effects/EQ.h"
 #include "effects/Compressor.h"
+#include "effects/Limiter.h"
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
@@ -80,6 +81,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"delay",       [] { return std::make_unique<effects::Delay>(); }},
         {"eq",          [] { return std::make_unique<effects::EQ>(); }},
         {"compressor",  [] { return std::make_unique<effects::Compressor>(); }},
+        {"limiter",     [] { return std::make_unique<effects::Limiter>(); }},
         {"filter",      [] { return std::make_unique<effects::Filter>(); }},
         {"chorus",      [] { return std::make_unique<effects::Chorus>(); }},
         {"distortion",  [] { return std::make_unique<effects::Distortion>(); }},

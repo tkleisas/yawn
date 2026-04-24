@@ -6,6 +6,7 @@
 #include "effects/Delay.h"
 #include "effects/EQ.h"
 #include "effects/Compressor.h"
+#include "effects/Limiter.h"
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
@@ -274,6 +275,61 @@ TEST(Compressor, ReducesLoudSignal) {
     float afterRMS = computeRMS(buf.data() + 128, kBlockSize - 64, 2);
 
     EXPECT_LT(afterRMS, beforeRMS); // Should be quieter
+}
+
+// ===========================================================================
+// Limiter Tests
+// ===========================================================================
+
+TEST(Limiter, Init) {
+    Limiter lim;
+    lim.init(kSampleRate, kBlockSize);
+    EXPECT_STREQ(lim.name(), "Limiter");
+    EXPECT_EQ(lim.parameterCount(), 3);
+}
+
+TEST(Limiter, CeilingHoldsUnderLoudSignal) {
+    Limiter lim;
+    lim.init(kSampleRate, kBlockSize);
+    lim.setParameter(Limiter::kCeiling, -1.0f);   // ≈ 0.891 linear
+    lim.setParameter(Limiter::kRelease, 50.0f);
+    lim.setParameter(Limiter::kLookahead, 5.0f);
+
+    // Hot sine well above the ceiling — after the attack settles the
+    // limiter must hold the peak at (or below) the ceiling.
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 1.5f, kSampleRate);
+    lim.process(buf.data(), kBlockSize, 2);
+
+    const float ceilLin = std::pow(10.0f, -1.0f / 20.0f);
+    // Skip the initial attack region — lookahead + attack takes a few ms.
+    float peak = 0.0f;
+    for (int i = kBlockSize / 2; i < kBlockSize; ++i) {
+        peak = std::max(peak, std::abs(buf[i * 2]));
+        peak = std::max(peak, std::abs(buf[i * 2 + 1]));
+    }
+    EXPECT_LT(peak, ceilLin + 0.01f);
+}
+
+TEST(Limiter, PassesQuietSignalUnchanged) {
+    Limiter lim;
+    lim.init(kSampleRate, kBlockSize);
+    lim.setParameter(Limiter::kCeiling, -1.0f);
+    lim.setParameter(Limiter::kLookahead, 5.0f);
+
+    // Input at 0.3 — well below the ceiling. Process a warmup block
+    // first so the lookahead delay line fills, then measure the
+    // second block (steady-state: just the lookahead delay applied).
+    std::vector<float> buf(kBlockSize * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.3f, kSampleRate);
+    lim.process(buf.data(), kBlockSize, 2);  // warmup
+
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.3f, kSampleRate);
+    const float beforeRMS = computeRMS(buf.data(), kBlockSize, 2);
+    lim.process(buf.data(), kBlockSize, 2);
+    const float afterRMS = computeRMS(buf.data(), kBlockSize, 2);
+
+    EXPECT_NEAR(afterRMS, beforeRMS, beforeRMS * 0.05f);
 }
 
 // ===========================================================================

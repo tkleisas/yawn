@@ -24,6 +24,7 @@
 #include "effects/Delay.h"
 #include "effects/EQ.h"
 #include "effects/Compressor.h"
+#include "effects/Limiter.h"
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Distortion.h"
@@ -121,6 +122,7 @@ static std::unique_ptr<effects::AudioEffect> makeAudioEffectByName(const std::st
     if (n == "Delay")             return std::make_unique<effects::Delay>();
     if (n == "EQ")                return std::make_unique<effects::EQ>();
     if (n == "Compressor")        return std::make_unique<effects::Compressor>();
+    if (n == "Limiter")           return std::make_unique<effects::Limiter>();
     if (n == "Filter")            return std::make_unique<effects::Filter>();
     if (n == "Chorus")            return std::make_unique<effects::Chorus>();
     if (n == "Distortion")        return std::make_unique<effects::Distortion>();
@@ -984,6 +986,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Delay",       [](){ return std::make_unique<effects::Delay>(); });
     addFxItem("EQ",          [](){ return std::make_unique<effects::EQ>(); });
     addFxItem("Compressor",  [](){ return std::make_unique<effects::Compressor>(); });
+    addFxItem("Limiter",     [](){ return std::make_unique<effects::Limiter>(); });
     addFxItem("Filter",      [](){ return std::make_unique<effects::Filter>(); });
     addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
@@ -3289,6 +3292,7 @@ bool App::init() {
         addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
         addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
         addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
+        addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
         addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
         addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });

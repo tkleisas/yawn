@@ -307,14 +307,31 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
     if (!m_masterFx.empty())
         m_masterFx.process(output, numFrames, numChannels);
 
-    // --- Master volume + metering ---
+    // --- Master volume, metering, always-on soft-clip ---
+    //
+    // Tanh-style soft-clipper at the very end of the chain prevents
+    // harsh digital clipping when cumulative track output pushes the
+    // master hot. Linear below kClipThresh (transparent for normal
+    // signals); above it, smoothly curves toward ±1.0. Peak meters
+    // read PRE-clip so the user still sees that they're overloading
+    // instead of the clipper hiding the problem.
+    auto softClip = [](float x) -> float {
+        constexpr float t = 0.95f;
+        constexpr float range = 1.0f - t;
+        if (x >  t) return t + std::tanh((x - t) / range) * range;
+        if (x < -t) return -(t + std::tanh((-x - t) / range) * range);
+        return x;
+    };
+
     float mPeakL = 0.0f, mPeakR = 0.0f;
     for (int i = 0; i < numFrames; ++i) {
-        output[i * nc + 0] *= m_master.volume;
-        mPeakL = std::max(mPeakL, std::abs(output[i * nc + 0]));
+        const float l = output[i * nc + 0] * m_master.volume;
+        mPeakL = std::max(mPeakL, std::abs(l));
+        output[i * nc + 0] = softClip(l);
         if (nc > 1) {
-            output[i * nc + 1] *= m_master.volume;
-            mPeakR = std::max(mPeakR, std::abs(output[i * nc + 1]));
+            const float r = output[i * nc + 1] * m_master.volume;
+            mPeakR = std::max(mPeakR, std::abs(r));
+            output[i * nc + 1] = softClip(r);
         }
     }
 
