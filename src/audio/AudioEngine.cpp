@@ -204,9 +204,13 @@ bool AudioEngine::start() {
 }
 
 void AudioEngine::stop() {
-    if (m_stream && m_running.load(std::memory_order_acquire)) {
+    m_running.store(false, std::memory_order_release);
+    // Use PA's own active-state check rather than m_running, which
+    // suspend() flips independently — calling Pa_StopStream on an
+    // already-stopped (or never-started) stream returns an error but
+    // nothing catastrophic.
+    if (m_stream && Pa_IsStreamActive(m_stream) == 1) {
         Pa_StopStream(m_stream);
-        m_running.store(false, std::memory_order_release);
         LOG_INFO("Audio", "Audio engine stopped");
     }
 }
@@ -225,6 +229,23 @@ void AudioEngine::shutdown() {
     }
 }
 
+void AudioEngine::handleDeviceLost() {
+    // Called from the UI thread when SDL reports the current audio
+    // device disappeared. The PA stream is almost certainly in an
+    // error state — stop and close it so a subsequent init() (with a
+    // new device config from Preferences) can open fresh, without
+    // leaving a dead stream behind. Leaves Pa_Initialize in place.
+    m_running.store(false, std::memory_order_release);
+    if (m_stream) {
+        // Pa_StopStream may fail (stream already broken); ignore
+        // errors — we're just trying to close cleanly.
+        Pa_StopStream(m_stream);
+        Pa_CloseStream(m_stream);
+        m_stream = nullptr;
+    }
+    LOG_WARN("Audio", "Device lost — stream closed, engine suspended");
+}
+
 void AudioEngine::sendCommand(const AudioCommand& cmd) {
     m_commandQueue.push(cmd);
 }
@@ -240,23 +261,49 @@ int AudioEngine::paCallback(
     void* outputBuffer,
     unsigned long framesPerBuffer,
     const PaStreamCallbackTimeInfo* /*timeInfo*/,
-    PaStreamCallbackFlags /*statusFlags*/,
+    PaStreamCallbackFlags statusFlags,
     void* userData)
 {
     auto* engine = static_cast<AudioEngine*>(userData);
     auto* output = static_cast<float*>(outputBuffer);
     auto* input = static_cast<const float*>(inputBuffer);
 
+    // Fill helper — defensive, safe on null output (which can happen if
+    // the device disappeared mid-stream on some PortAudio backends).
+    auto fillSilence = [&]() {
+        if (!output || !engine) return;
+        const size_t n = static_cast<size_t>(framesPerBuffer)
+                          * static_cast<size_t>(engine->m_config.outputChannels);
+        std::memset(output, 0, n * sizeof(float));
+    };
+
+    // Nothing we can do without both the engine pointer and a writable
+    // output buffer; ask PA to keep going rather than crash.
+    if (!engine || !output) return paContinue;
+
+    // Record xrun / device-failure status flags so higher layers can
+    // surface them (e.g. auto-suspend on repeated paOutputUnderflow).
+    if (statusFlags != 0)
+        engine->m_callbackStatusFlags.fetch_or(static_cast<uint32_t>(statusFlags),
+                                                std::memory_order_relaxed);
+
+    // Suspended: output silence and skip all processing. start()/stop()
+    // toggle m_running; the flag is read with acquire ordering to pair
+    // with the release store in start/stop.
+    if (!engine->m_running.load(std::memory_order_acquire)) {
+        fillSilence();
+        return paContinue;
+    }
+
     try {
         engine->processAudio(input, output, framesPerBuffer);
     } catch (const std::exception& e) {
         LOG_ERROR("Audio", "CRASH in audio callback: %s", e.what());
-        // Silence output to prevent noise
-        std::memset(output, 0, framesPerBuffer * engine->m_config.outputChannels * sizeof(float));
+        fillSilence();
         return paContinue;
     } catch (...) {
         LOG_ERROR("Audio", "CRASH in audio callback: unknown exception");
-        std::memset(output, 0, framesPerBuffer * engine->m_config.outputChannels * sizeof(float));
+        fillSilence();
         return paContinue;
     }
     return paContinue;

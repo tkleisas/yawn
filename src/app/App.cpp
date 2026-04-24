@@ -473,6 +473,10 @@ void App::buildWidgetTree() {
                                  s.bufferSize != oldCfg.framesPerBuffer ||
                                  s.selectedOutputDevice != oldCfg.outputDevice ||
                                  s.selectedInputDevice != oldCfg.inputDevice);
+            // Also restart when the engine is currently disconnected
+            // (device was unplugged) — user might be re-picking the
+            // same config to recover, so no change-detection hit.
+            if (!m_audioEngine.hasStream()) audioChanged = true;
             if (audioChanged) {
                 audio::AudioEngineConfig newCfg = oldCfg;
                 newCfg.sampleRate = s.sampleRate;
@@ -4304,6 +4308,23 @@ void App::processEvents() {
         switch (event.type) {
             case SDL_EVENT_QUIT:
                 m_running = false;
+                break;
+
+            case SDL_EVENT_AUDIO_DEVICE_REMOVED:
+                // Device lost — fully tear down the PA stream so the
+                // user can pick a new device in Preferences (stop +
+                // close + null m_stream). The callback already guards
+                // against null output, so any in-flight callbacks
+                // return silence until the stream actually closes.
+                m_audioEngine.handleDeviceLost();
+                break;
+
+            case SDL_EVENT_AUDIO_DEVICE_ADDED:
+                // New device appeared — don't auto-resume (surprises
+                // the user mid-session). Leave it to the toggle / the
+                // Preferences dialog.
+                LOG_INFO("Audio", "Device added (id=%u)",
+                         static_cast<unsigned>(event.adevice.which));
                 break;
 
             case SDL_EVENT_KEY_DOWN: {

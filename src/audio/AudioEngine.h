@@ -54,6 +54,26 @@ public:
     void stop();
     void shutdown();
 
+    // Hot-unplug / device-lost handler: closes the PA stream so the
+    // next init() can open fresh with a new device config, without
+    // leaving the old (dead) stream leaking a thread. Leaves PA itself
+    // initialized so re-init is cheap. Safe to call from the UI thread.
+    void handleDeviceLost();
+
+    // Suspend / resume — cheaper than stop/shutdown because the
+    // PortAudio stream stays open. Used by the "Audio Engine" toggle in
+    // the transport bar and by device-removal auto-suspend: the callback
+    // keeps getting called (so PA doesn't error out) but returns
+    // silence and skips all processing. isRunning() is declared below.
+    void suspend() { m_running.store(false, std::memory_order_release); }
+    void resume()  { m_running.store(true,  std::memory_order_release); }
+
+    // Status flags collected by the PA callback — xruns, output
+    // underflow, priming. UI polls this to surface device trouble.
+    uint32_t consumeCallbackStatusFlags() {
+        return m_callbackStatusFlags.exchange(0, std::memory_order_relaxed);
+    }
+
     static std::vector<AudioDevice> enumerateDevices();
     static int defaultOutputDevice();
     static int defaultInputDevice();
@@ -63,6 +83,10 @@ public:
 
     // CPU load as reported by PortAudio (0.0 – 1.0)
     double cpuLoad() const { return m_stream ? Pa_GetStreamCpuLoad(m_stream) : 0.0; }
+
+    // True when the PA stream is live. False after handleDeviceLost()
+    // or shutdown() — callers should treat this as "needs re-init".
+    bool hasStream() const { return m_stream != nullptr; }
 
     Transport& transport() { return m_transport; }
     const Transport& transport() const { return m_transport; }
@@ -267,6 +291,7 @@ private:
 
     PaStream* m_stream = nullptr;
     std::atomic<bool> m_running{false};
+    std::atomic<uint32_t> m_callbackStatusFlags{0};
     bool m_paInitialized = false;
 
     TestTone m_testTone;

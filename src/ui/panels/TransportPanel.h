@@ -274,6 +274,9 @@ private:
     // Cached label text (generated per-frame).
     std::string m_posText;
 
+    // Audio-engine toggle (far-left of the transport bar).
+    float m_audioBtnX = 0, m_audioBtnY = 0, m_audioBtnW = 0, m_audioBtnH = 0;
+
     // Centered transport button positions.
     float m_homeBtnX = 0, m_homeBtnY = 0, m_homeBtnW = 0, m_homeBtnH = 0;
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;

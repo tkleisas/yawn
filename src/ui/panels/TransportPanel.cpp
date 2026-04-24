@@ -95,8 +95,19 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     const float btnY = y + (h - btnSize) * 0.5f;
     const float boxH = btnSize;
 
+    // Audio-engine toggle — far-left pill that suspends/resumes the
+    // PortAudio stream without tearing it down. Red when the engine is
+    // suspended (device lost or manually off), green when running.
+    {
+        constexpr float audioW = 54.0f;
+        m_audioBtnX = bounds.x + 12.0f;
+        m_audioBtnY = btnY;
+        m_audioBtnW = audioW;
+        m_audioBtnH = boxH;
+    }
+
     // ── Left group: BPM + TimeSig + TAP ──
-    float lx = bounds.x + 12.0f;
+    float lx = bounds.x + 12.0f + m_audioBtnW + 12.0f;
 
     // BPM input
     const float bpmW = 80.0f;
@@ -173,6 +184,28 @@ void TransportPanel::render(UIContext& ctx) {
     // Background
     r.drawRect(x, y, w, h, ::yawn::ui::Theme::transportBg);
     r.drawRect(x, y + h - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
+
+    // Audio-engine toggle (far-left pill). Green when running, red when
+    // suspended. Label "AUDIO". Click to flip — auto-suspends on
+    // device-removed events from SDL; manual resume tells the engine
+    // to start processing again (assumes the stream is still open).
+    {
+        const bool running = m_engine->isRunning();
+        const bool hovered = (m_hoveredBtn == 4);
+        const Color bg = running
+            ? (hovered ? Color{50, 130, 60, 255} : Color{40, 110, 50, 255})
+            : (hovered ? Color{180, 60, 60, 255} : Color{150, 50, 50, 255});
+        r.drawRoundedRect(m_audioBtnX, m_audioBtnY, m_audioBtnW, m_audioBtnH,
+                           4.0f, bg);
+        const float fs = theme().metrics.fontSizeSmall;
+        const char* lbl = "AUDIO";
+        const float tw = tm.textWidth(lbl, fs);
+        const float lh = tm.lineHeight(fs);
+        tm.drawText(r, lbl,
+                     m_audioBtnX + (m_audioBtnW - tw) * 0.5f,
+                     m_audioBtnY + (m_audioBtnH - lh) * 0.5f - lh * 0.15f,
+                     fs, Color{240, 240, 245, 255});
+    }
 
     // Transport buttons (center)
     paintTransportButtons(r);
@@ -475,6 +508,13 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
 
     if (rightClick) return false;
 
+    // Audio-engine toggle.
+    if (hitBtn(m_audioBtnX, m_audioBtnY, m_audioBtnW, m_audioBtnH, mx, my)) {
+        if (m_engine->isRunning()) m_engine->suspend();
+        else                        m_engine->resume();
+        return true;
+    }
+
     // Transport buttons.
     if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) {
         // Return-to-zero — leaves play state untouched so a user can
@@ -546,6 +586,7 @@ bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
     else if (hitBtn(m_playBtnX, m_playBtnY, m_playBtnW, m_playBtnH, mx, my)) m_hoveredBtn = 1;
     else if (hitBtn(m_recBtnX,  m_recBtnY,  m_recBtnW,  m_recBtnH,  mx, my)) m_hoveredBtn = 2;
     else if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) m_hoveredBtn = 3;
+    else if (hitBtn(m_audioBtnX, m_audioBtnY, m_audioBtnW, m_audioBtnH, mx, my)) m_hoveredBtn = 4;
     return (m_hoveredBtn != prev);
 }
 
