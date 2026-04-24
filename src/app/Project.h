@@ -40,7 +40,6 @@ struct Track {
     MonitorMode monitorMode = MonitorMode::Auto;
     VisualBlendMode visualBlendMode = VisualBlendMode::Normal;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
-    int recordLengthBars = 0;  // 0 = unlimited (free recording)
 
     // Default clip: last-launched scene index per track (-1 = none)
     // When transport plays, clips at defaultScene are re-launched.
@@ -98,6 +97,14 @@ struct ClipSlot {
     std::unique_ptr<midi::MidiClip> midiClip;
     std::unique_ptr<visual::VisualClip> visualClip;
     audio::QuantizeMode launchQuantize = audio::QuantizeMode::NextBar;
+
+    // Fixed-length recording settings — per-slot so each clip can have
+    // its own loop duration. 0 = unlimited (free recording).
+    int  recordLengthBars = 0;
+    // When fixed-length recording completes, should the resulting clip
+    // loop on playback? Default true matches the old behaviour; clear
+    // it for one-shot sampling into a slot.
+    bool recordLoop = true;
 
     // Follow action — triggers after clip plays for N bars
     FollowAction followAction;

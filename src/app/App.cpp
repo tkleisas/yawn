@@ -2380,18 +2380,25 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
 
     items.push_back({"", nullptr, true}); // separator
 
-    // Record length setting for this track
+    // Record length setting — per-slot. Clicking this slot to start a
+    // recording uses this length (0 = unlimited). Does nothing once
+    // the slot is occupied by a clip.
     {
-        int curRL = m_project.track(trackIndex).recordLengthBars;
+        auto* rlSlot = m_project.getSlot(trackIndex, sceneIndex);
+        int curRL = rlSlot ? rlSlot->recordLengthBars : 0;
         std::string rlLabel = "Record Length: ";
         rlLabel += (curRL == 0) ? "Unlimited" : (std::to_string(curRL) + (curRL == 1 ? " Bar" : " Bars"));
         std::vector<ui::ContextMenu::Item> rlItems;
+        auto setRL = [this, trackIndex, sceneIndex](int bars) {
+            auto* s = m_project.getSlot(trackIndex, sceneIndex);
+            if (s) s->recordLengthBars = bars;
+        };
         auto addRLItem = [&](const char* label, int bars) {
-            rlItems.push_back({label, [this, trackIndex, curRL, bars]() {
-                m_project.track(trackIndex).recordLengthBars = bars;
+            rlItems.push_back({label, [this, setRL, curRL, bars]() {
+                setRL(bars);
                 m_undoManager.push({"Change Record Length",
-                    [this, trackIndex, curRL]{ m_project.track(trackIndex).recordLengthBars = curRL; },
-                    [this, trackIndex, bars]{ m_project.track(trackIndex).recordLengthBars = bars; },
+                    [setRL, curRL]{ setRL(curRL); },
+                    [setRL, bars]{ setRL(bars); },
                     ""});
                 markDirty();
             }, false, curRL != bars});
@@ -2403,24 +2410,44 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         addRLItem("8 Bars", 8);
         addRLItem("16 Bars", 16);
         rlItems.push_back({"", nullptr, true}); // separator
-        rlItems.push_back({"Custom...", [this, trackIndex, curRL]() {
+        rlItems.push_back({"Custom...", [this, setRL, curRL]() {
             std::string def = (curRL > 0) ? std::to_string(curRL) : "4";
             SDL_StartTextInput(m_mainWindow.getHandle());
             m_textInputDialog.prompt("Record Length (bars)", def,
-                [this, trackIndex, curRL](const std::string& text) {
+                [this, setRL, curRL](const std::string& text) {
                     SDL_StopTextInput(m_mainWindow.getHandle());
                     int bars = 0;
                     try { bars = std::stoi(text); } catch (...) { return; }
                     if (bars < 0) bars = 0;
-                    m_project.track(trackIndex).recordLengthBars = bars;
+                    setRL(bars);
                     m_undoManager.push({"Change Record Length",
-                        [this, trackIndex, curRL]{ m_project.track(trackIndex).recordLengthBars = curRL; },
-                        [this, trackIndex, bars]{ m_project.track(trackIndex).recordLengthBars = bars; },
+                        [setRL, curRL]{ setRL(curRL); },
+                        [setRL, bars]{ setRL(bars); },
                         ""});
                     markDirty();
                 });
         }});
         items.push_back({rlLabel.c_str(), nullptr, false, true, std::move(rlItems)});
+
+        // Loop-on-playback toggle for future recordings into this slot.
+        const bool curLoop = rlSlot ? rlSlot->recordLoop : true;
+        std::string loopLabel = "Record Loop: ";
+        loopLabel += curLoop ? "On" : "Off";
+        items.push_back({loopLabel.c_str(), [this, trackIndex, sceneIndex, curLoop]() {
+            auto* s = m_project.getSlot(trackIndex, sceneIndex);
+            if (!s) return;
+            s->recordLoop = !curLoop;
+            m_undoManager.push({"Toggle Record Loop",
+                [this, trackIndex, sceneIndex, curLoop]{
+                    auto* ss = m_project.getSlot(trackIndex, sceneIndex);
+                    if (ss) ss->recordLoop = curLoop;
+                },
+                [this, trackIndex, sceneIndex, curLoop]{
+                    auto* ss = m_project.getSlot(trackIndex, sceneIndex);
+                    if (ss) ss->recordLoop = !curLoop;
+                }, ""});
+            markDirty();
+        }});
     }
 
     ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
@@ -5791,8 +5818,11 @@ void App::update() {
                             if (data.lengthBeats > existingClip->lengthBeats())
                                 existingClip->setLengthBeats(data.lengthBeats);
                         } else {
+                            auto* recSlot0 = m_project.getSlot(ti, si);
+                            const bool shouldLoop = recSlot0 ? recSlot0->recordLoop : true;
                             auto newClip = std::make_unique<midi::MidiClip>(data.lengthBeats);
                             newClip->setName("Rec " + std::to_string(ti + 1));
+                            newClip->setLoop(shouldLoop);
                             for (auto& note : data.notes)
                                 newClip->addNote(note);
                             for (auto& cc : data.ccs)
@@ -5852,11 +5882,15 @@ void App::update() {
                             LOG_INFO("Audio", "Audio overdub: Track %d, Scene %d, %d frames mixed",
                                         ti + 1, si + 1, mixFrames);
                         } else {
-                            // New recording: create clip
+                            // New recording: create clip. Loop flag
+                            // comes from the slot's recordLoop (user
+                            // decision per-slot) — defaults to true.
+                            auto* recSlot0 = m_project.getSlot(ti, si);
+                            const bool shouldLoop = recSlot0 ? recSlot0->recordLoop : true;
                             auto clip = std::make_unique<audio::Clip>();
                             clip->name = "Rec " + std::to_string(ti + 1) + "-" + std::to_string(si + 1);
                             clip->buffer = audioBuffer;
-                            clip->looping = true;
+                            clip->looping = shouldLoop;
                             clip->gain = 1.0f;
                             clip->originalBPM = m_audioEngine.transport().bpm();
                             m_project.setClip(ti, si, std::move(clip));

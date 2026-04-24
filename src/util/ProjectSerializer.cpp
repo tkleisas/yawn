@@ -836,7 +836,6 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["defaultScene"] = tr.defaultScene;
         tj["sidechainSource"] = tr.sidechainSource;
         tj["resampleSource"] = tr.resampleSource;
-        tj["recordLengthBars"] = tr.recordLengthBars;
 
         // Visual blend mode — only meaningful for Visual tracks but always
         // written for round-trip safety.
@@ -1023,7 +1022,6 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.defaultScene = tj.value("defaultScene", -1);
             tr.sidechainSource = tj.value("sidechainSource", -1);
             tr.resampleSource = tj.value("resampleSource", -1);
-            tr.recordLengthBars = tj.value("recordLengthBars", 0);
 
             {
                 std::string bm = tj.value("visualBlendMode", "Normal");

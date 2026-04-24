@@ -682,7 +682,8 @@ static int l_start_record(lua_State* L) {
     bool overdub = lua_toboolean(L, 3);
     if (t < 0 || t >= mgr->project()->numTracks()) return 0;
 
-    int rlb = mgr->project()->track(t).recordLengthBars;
+    auto* slot = mgr->project()->getSlot(t, s);
+    const int rlb = slot ? slot->recordLengthBars : 0;
     auto trackType = mgr->project()->track(t).type;
 
     if (trackType == Track::Type::Midi)
@@ -737,16 +738,21 @@ static int l_set_session_focus(lua_State* L) {
     return 0;
 }
 
-// ── Lua API: yawn.get_record_length_bars(track) → int (0=unlimited) ──────
+// ── Lua API: yawn.get_record_length_bars(track, scene) → int (0=unlimited)
+// Record-length is per-slot (each cell can target a different loop
+// length). The API signature changed when we moved the field — scripts
+// now pass both track and scene indices.
 
 static int l_get_record_length_bars(lua_State* L) {
     auto* mgr = getManager(L);
     int t = static_cast<int>(luaL_checkinteger(L, 1));
-    if (!mgr || !mgr->project() || t < 0 || t >= mgr->project()->numTracks()) {
+    int s = static_cast<int>(luaL_optinteger(L, 2, 0));
+    if (!mgr || !mgr->project()) {
         lua_pushinteger(L, 0);
         return 1;
     }
-    lua_pushinteger(L, mgr->project()->track(t).recordLengthBars);
+    auto* slot = mgr->project()->getSlot(t, s);
+    lua_pushinteger(L, slot ? slot->recordLengthBars : 0);
     return 1;
 }
 

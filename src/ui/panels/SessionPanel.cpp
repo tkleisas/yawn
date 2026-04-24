@@ -73,42 +73,11 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
         return true;
     }
 
-    // Track header click — select track (or double-click to rename),
-    // or cycle fixed-length recording bars when the pill is clicked.
+    // Track header click — select track (or double-click to rename).
     if (my >= headerY && my < gridY && mx >= gridX) {
         float cmx = mx + m_scrollX;
         int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
         if (ti >= 0 && ti < m_project->numTracks()) {
-            // Length pill hit-test (matches paintTrackHeaders geometry).
-            const float pillW = 24.0f, pillH = 12.0f;
-            const float tx = gridX + ti * ::yawn::ui::Theme::kTrackWidth;
-            const float px = tx + ::yawn::ui::Theme::kTrackWidth - pillW - 4.0f
-                              - m_scrollX;
-            const float py = headerY + ::yawn::ui::Theme::kTrackHeaderHeight
-                              - pillH - 4.0f;
-            if (!rightClick && clickCount == 1 &&
-                mx >= px && mx < px + pillW &&
-                my >= py && my < py + pillH) {
-                static constexpr int kCycle[] = {0, 1, 2, 4, 8, 16};
-                const int cur = m_project->track(ti).recordLengthBars;
-                int idx = 0;
-                for (int i = 0; i < 6; ++i) if (kCycle[i] == cur) { idx = i; break; }
-                const int next = kCycle[(idx + 1) % 6];
-                if (m_undoManager) {
-                    m_undoManager->push({"Set Record Length",
-                        [this, ti, cur]{
-                            if (ti < m_project->numTracks())
-                                m_project->track(ti).recordLengthBars = cur;
-                        },
-                        [this, ti, next]{
-                            if (ti < m_project->numTracks())
-                                m_project->track(ti).recordLengthBars = next;
-                        }, ""});
-                }
-                m_project->track(ti).recordLengthBars = next;
-                return true;
-            }
-
             m_selectedTrack = ti;
             m_lastClickTrack = ti;
             if (clickCount >= 2) {
@@ -186,6 +155,61 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
 
             const auto trackType = m_project->track(ti).type;
 
+            // Record-setting pills — empty slots only. Length pill
+            // cycles ∞ / 1 / 2 / 4 / 8 / 16; loop pill toggles. Both
+            // hit-tested before the record-trigger click so clicking a
+            // pill doesn't also start recording.
+            if (!hasClip && slot && !rightClick && !isSlotRecording) {
+                const float pad = ::yawn::ui::Theme::kSlotPadding;
+                const float cellIX = cmx - gridX - ti * ::yawn::ui::Theme::kTrackWidth;
+                const float cellIY = cmy - gridY - si * ::yawn::ui::Theme::kClipSlotHeight;
+                const float iwLocal = ::yawn::ui::Theme::kTrackWidth - pad * 2;
+                const float ihLocal = ::yawn::ui::Theme::kClipSlotHeight - pad * 2;
+                const float pillH = 12.0f, lenW = 24.0f, loopW = 16.0f, gap = 3.0f;
+                const float py  = pad + ihLocal - pillH - 4.0f;
+                const float lenPx  = pad + iwLocal - lenW - 4.0f;
+                const float loopPx = lenPx - loopW - gap;
+
+                if (cellIY >= py && cellIY < py + pillH) {
+                    if (cellIX >= lenPx && cellIX < lenPx + lenW) {
+                        static constexpr int kCycle[] = {0, 1, 2, 4, 8, 16};
+                        const int cur = slot->recordLengthBars;
+                        int idx = 0;
+                        for (int k = 0; k < 6; ++k) if (kCycle[k] == cur) { idx = k; break; }
+                        const int next = kCycle[(idx + 1) % 6];
+                        if (m_undoManager) {
+                            m_undoManager->push({"Set Record Length",
+                                [this, ti, si, cur]{
+                                    auto* s = m_project->getSlot(ti, si);
+                                    if (s) s->recordLengthBars = cur;
+                                },
+                                [this, ti, si, next]{
+                                    auto* s = m_project->getSlot(ti, si);
+                                    if (s) s->recordLengthBars = next;
+                                }, ""});
+                        }
+                        slot->recordLengthBars = next;
+                        return true;
+                    }
+                    if (cellIX >= loopPx && cellIX < loopPx + loopW) {
+                        const bool was = slot->recordLoop;
+                        if (m_undoManager) {
+                            m_undoManager->push({"Toggle Record Loop",
+                                [this, ti, si, was]{
+                                    auto* s = m_project->getSlot(ti, si);
+                                    if (s) s->recordLoop = was;
+                                },
+                                [this, ti, si, was]{
+                                    auto* s = m_project->getSlot(ti, si);
+                                    if (s) s->recordLoop = !was;
+                                }, ""});
+                        }
+                        slot->recordLoop = !was;
+                        return true;
+                    }
+                }
+            }
+
             if (isSlotRecording) {
                 // Any click on a recording slot stops recording (takes priority over context menu)
                 auto recQ = m_project->track(ti).recordQuantize;
@@ -216,7 +240,7 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                         m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
                     m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
-                    int rlb = m_project->track(ti).recordLengthBars;
+                    int rlb = slot ? slot->recordLengthBars : 0;
                     if (trackType == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true, rlb});
                     else if (trackType == Track::Type::Audio)
@@ -239,7 +263,7 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     m_clipDragCompleted = false;
                     captureMouse();  // ensure we receive mouse move events
                 } else if (trackArmed) {
-                    int rlb = m_project->track(ti).recordLengthBars;
+                    int rlb = slot ? slot->recordLengthBars : 0;
                     if (trackType == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !shift, rlb});
                     else if (trackType == Track::Type::Audio)
@@ -474,30 +498,6 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm, float x, fl
                                barW, bh, iconCol);
                 }
             }
-        }
-
-        // Fixed-length recording pill (bottom-right corner of the
-        // header). Cycles 0 (∞) → 1 → 2 → 4 → 8 → 16 → 0 bars. When
-        // non-zero, recording into a slot on this track auto-stops at
-        // that length and the slot starts playing back immediately.
-        if (t != m_renameTrack) {
-            const int bars = m_project->track(t).recordLengthBars;
-            const float pillW = 24.0f, pillH = 12.0f;
-            const float px = tx + tw - pillW - 4.0f;
-            const float py = y + h - pillH - 4.0f;
-            const ::yawn::ui::Color pillBg = bars > 0
-                ? ::yawn::ui::Color{200, 60, 60, 220}     // red = fixed
-                : ::yawn::ui::Color{55, 55, 60, 200};     // dim = off
-            r.drawRoundedRect(px, py, pillW, pillH, pillH * 0.5f, pillBg);
-            char buf[4];
-            if (bars == 0) std::snprintf(buf, sizeof(buf), "%s", "\xe2\x88\x9e");  // ∞
-            else           std::snprintf(buf, sizeof(buf), "%d", bars);
-            const float fs = theme().metrics.fontSizeSmall;
-            const float tw2 = tm.textWidth(buf, fs);
-            const float lh = tm.lineHeight(fs);
-            tm.drawText(r, buf, px + (pillW - tw2) * 0.5f,
-                         py + (pillH - lh) * 0.5f - lh * 0.15f, fs,
-                         ::yawn::ui::Color{240, 240, 245, 255});
         }
 
         r.drawRect(tx + tw - 1, y, 1, h, ::yawn::ui::Theme::clipSlotBorder);
@@ -877,6 +877,46 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
         float pipCY = iy + 9.0f;
         r.drawFilledCircle(pipCX, pipCY, 5.0f, ::yawn::ui::Color{0, 0, 0, 180}, 16);
         r.drawFilledCircle(pipCX, pipCY, 4.0f, pipCol, 16);
+    }
+
+    // Record-setting pills (only on empty slots — they configure
+    // future recordings into this slot). Bottom-right has the bar
+    // count; immediately to its left is a "L" loop indicator.
+    if (!hasClip && slot) {
+        const float pillH = 12.0f;
+        const float lenPillW = 24.0f;
+        const float loopPillW = 16.0f;
+        const float gap = 3.0f;
+        const float py = iy + ih - pillH - 4.0f;
+
+        // Length pill
+        const int bars = slot->recordLengthBars;
+        const float lenPx = ix + iw - lenPillW - 4.0f;
+        const ::yawn::ui::Color lenBg = bars > 0
+            ? ::yawn::ui::Color{200, 60, 60, 220}
+            : ::yawn::ui::Color{55, 55, 60, 200};
+        r.drawRoundedRect(lenPx, py, lenPillW, pillH, pillH * 0.5f, lenBg);
+        char buf[4];
+        if (bars == 0) std::snprintf(buf, sizeof(buf), "%s", "\xe2\x88\x9e"); // ∞
+        else           std::snprintf(buf, sizeof(buf), "%d", bars);
+        const float fs = theme().metrics.fontSizeSmall;
+        const float lh = tm.lineHeight(fs);
+        const float tw2 = tm.textWidth(buf, fs);
+        tm.drawText(r, buf, lenPx + (lenPillW - tw2) * 0.5f,
+                     py + (pillH - lh) * 0.5f - lh * 0.15f, fs,
+                     ::yawn::ui::Color{240, 240, 245, 255});
+
+        // Loop pill — dim "L" when off, bright green "L" when on.
+        const bool loop = slot->recordLoop;
+        const float loopPx = lenPx - loopPillW - gap;
+        const ::yawn::ui::Color loopBg = loop
+            ? ::yawn::ui::Color{60, 130, 80, 220}
+            : ::yawn::ui::Color{55, 55, 60, 200};
+        r.drawRoundedRect(loopPx, py, loopPillW, pillH, pillH * 0.5f, loopBg);
+        const float ltw = tm.textWidth("L", fs);
+        tm.drawText(r, "L", loopPx + (loopPillW - ltw) * 0.5f,
+                     py + (pillH - lh) * 0.5f - lh * 0.15f, fs,
+                     ::yawn::ui::Color{240, 240, 245, 255});
     }
 
     r.drawRect(x + w - 1, y, 1, h, ::yawn::ui::Theme::clipSlotBorder);
