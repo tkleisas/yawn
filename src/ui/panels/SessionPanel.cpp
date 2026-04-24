@@ -73,11 +73,42 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
         return true;
     }
 
-    // Track header click — select track (or double-click to rename)
+    // Track header click — select track (or double-click to rename),
+    // or cycle fixed-length recording bars when the pill is clicked.
     if (my >= headerY && my < gridY && mx >= gridX) {
         float cmx = mx + m_scrollX;
         int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
         if (ti >= 0 && ti < m_project->numTracks()) {
+            // Length pill hit-test (matches paintTrackHeaders geometry).
+            const float pillW = 24.0f, pillH = 12.0f;
+            const float tx = gridX + ti * ::yawn::ui::Theme::kTrackWidth;
+            const float px = tx + ::yawn::ui::Theme::kTrackWidth - pillW - 4.0f
+                              - m_scrollX;
+            const float py = headerY + ::yawn::ui::Theme::kTrackHeaderHeight
+                              - pillH - 4.0f;
+            if (!rightClick && clickCount == 1 &&
+                mx >= px && mx < px + pillW &&
+                my >= py && my < py + pillH) {
+                static constexpr int kCycle[] = {0, 1, 2, 4, 8, 16};
+                const int cur = m_project->track(ti).recordLengthBars;
+                int idx = 0;
+                for (int i = 0; i < 6; ++i) if (kCycle[i] == cur) { idx = i; break; }
+                const int next = kCycle[(idx + 1) % 6];
+                if (m_undoManager) {
+                    m_undoManager->push({"Set Record Length",
+                        [this, ti, cur]{
+                            if (ti < m_project->numTracks())
+                                m_project->track(ti).recordLengthBars = cur;
+                        },
+                        [this, ti, next]{
+                            if (ti < m_project->numTracks())
+                                m_project->track(ti).recordLengthBars = next;
+                        }, ""});
+                }
+                m_project->track(ti).recordLengthBars = next;
+                return true;
+            }
+
             m_selectedTrack = ti;
             m_lastClickTrack = ti;
             if (clickCount >= 2) {
@@ -443,6 +474,30 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm, float x, fl
                                barW, bh, iconCol);
                 }
             }
+        }
+
+        // Fixed-length recording pill (bottom-right corner of the
+        // header). Cycles 0 (∞) → 1 → 2 → 4 → 8 → 16 → 0 bars. When
+        // non-zero, recording into a slot on this track auto-stops at
+        // that length and the slot starts playing back immediately.
+        if (t != m_renameTrack) {
+            const int bars = m_project->track(t).recordLengthBars;
+            const float pillW = 24.0f, pillH = 12.0f;
+            const float px = tx + tw - pillW - 4.0f;
+            const float py = y + h - pillH - 4.0f;
+            const ::yawn::ui::Color pillBg = bars > 0
+                ? ::yawn::ui::Color{200, 60, 60, 220}     // red = fixed
+                : ::yawn::ui::Color{55, 55, 60, 200};     // dim = off
+            r.drawRoundedRect(px, py, pillW, pillH, pillH * 0.5f, pillBg);
+            char buf[4];
+            if (bars == 0) std::snprintf(buf, sizeof(buf), "%s", "\xe2\x88\x9e");  // ∞
+            else           std::snprintf(buf, sizeof(buf), "%d", bars);
+            const float fs = theme().metrics.fontSizeSmall;
+            const float tw2 = tm.textWidth(buf, fs);
+            const float lh = tm.lineHeight(fs);
+            tm.drawText(r, buf, px + (pillW - tw2) * 0.5f,
+                         py + (pillH - lh) * 0.5f - lh * 0.15f, fs,
+                         ::yawn::ui::Color{240, 240, 245, 255});
         }
 
         r.drawRect(tx + tw - 1, y, 1, h, ::yawn::ui::Theme::clipSlotBorder);

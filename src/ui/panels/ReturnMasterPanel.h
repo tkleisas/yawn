@@ -267,7 +267,7 @@ private:
 
     std::string  m_returnNames[kMaxReturnBuses];
 
-    bool m_showReturns = true;
+    bool m_showReturns = false;
     midi::MidiLearnManager* m_learnManager = nullptr;
     std::function<void(int)> m_onReturnClick;
     std::function<void()>    m_onMasterClick;

@@ -149,6 +149,8 @@ private:
     void openExportDialog();
     void startExportRender(const std::string& filePath);
     void syncTracksToEngine();
+    void setupDefaultTracks();
+    void insertSceneAtSelection();
     void updateWindowTitle();
     void markDirty() { m_projectDirty = true; updateWindowTitle(); }
 
@@ -236,7 +238,7 @@ private:
     uint64_t m_lastFrameTicks = 0;
     GLuint m_iconTexture = 0;
     bool m_showMixer = true;
-    bool m_showReturns = true;
+    bool m_showReturns = false;
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
     int m_selectedScene = 0;

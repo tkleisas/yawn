@@ -657,7 +657,8 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
         const float pillX = clipNameLeft - pillW - 6;
         const float pillY = tbY + 2 + (btnH - pillH) * 0.5f;
         r.drawRoundedRect(pillX, pillY, pillW, pillH, pillH * 0.5f, sBg);
-        const float ty = pillY + (pillH - sfs) * 0.5f;
+        const float lh = tm.lineHeight(sfs);
+        const float ty = pillY + (pillH - lh) * 0.5f - lh * 0.15f;
         tm.drawText(r, sText, pillX + padX, ty, sfs, Color{255, 255, 255, 255});
     }
 }

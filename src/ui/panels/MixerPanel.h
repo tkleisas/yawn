@@ -253,7 +253,7 @@ private:
     float m_scrollX       = 0.0f;
     bool  m_showIO        = false;
     bool  m_showSends     = false;
-    bool  m_showReturns   = true;
+    bool  m_showReturns   = false;
 
     static constexpr float kMeterWidth   = 6.0f;
     static constexpr float kFaderWidth   = 20.0f;

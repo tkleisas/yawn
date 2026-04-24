@@ -22,7 +22,10 @@ static constexpr int kMaxMidiMessagesPerBuffer = 1024;
 static constexpr int kMaxMidiPorts             = 16;
 
 // --- Defaults ---
-static constexpr int kDefaultNumTracks = 8;
-static constexpr int kDefaultNumScenes = 8;
+// 5 tracks = 2 Audio + 2 MIDI + 1 Visual (track types assigned by the
+// host after init — Project::init creates them all as Audio and then
+// App's setupDefaultTrackTypes() mutates the MIDI / Visual slots).
+static constexpr int kDefaultNumTracks = 5;
+static constexpr int kDefaultNumScenes = 4;
 
 } // namespace yawn

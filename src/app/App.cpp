@@ -367,6 +367,15 @@ void App::setupMenuBar() {
         });
     }
 
+    // Scene menu — mirrors the scene-label right-click actions but
+    // keyboard-accessible. Right-click on a scene label offers the
+    // full Insert/Duplicate/Delete/Rename set.
+    m_menuBar.addMenu("Scene", {
+        M::item("Insert Scene\tIns", [this]() {
+            insertSceneAtSelection();
+        }),
+    });
+
     // MIDI menu — all three items are currently no-op placeholders.
     {
         auto disabled = [](std::string label) -> MenuEntry {
@@ -3211,7 +3220,8 @@ bool App::init() {
 
     loadFont();
 
-    m_project.init(8, 8);
+    m_project.init();  // uses kDefaultNumTracks / kDefaultNumScenes
+    setupDefaultTracks();
     m_virtualKeyboard.init(&m_audioEngine);
     setupMenuBar();
     buildWidgetTree();
@@ -4728,6 +4738,12 @@ void App::processEvents() {
                         }
                         break;
 
+                    case SDLK_INSERT:
+                        // Insert a new scene below the selection (session view).
+                        // Mirrors the Scene → Insert Scene menu item.
+                        insertSceneAtSelection();
+                        break;
+
                     case SDLK_M:
                         if (!shift) m_showMixer = !m_showMixer;
                         break;
@@ -6043,15 +6059,58 @@ void App::render() {
 // Project file operations
 // ---------------------------------------------------------------------------
 
+// Insert a new empty scene just below the currently selected one
+// (Ableton convention). Shared by the Scene menu item and the
+// Ctrl+I keyboard shortcut.
+void App::insertSceneAtSelection() {
+    const int insertAt = std::clamp(m_selectedScene + 1,
+                                     0, m_project.numScenes());
+    m_project.insertScene(insertAt);
+    markDirty();
+    m_undoManager.push({"Insert Scene",
+        [this, insertAt]{ m_project.deleteScene(insertAt); markDirty(); },
+        [this, insertAt]{ m_project.insertScene(insertAt); markDirty(); },
+        ""});
+    // Move the selection to the new scene so repeated Ctrl+I keeps
+    // stacking fresh scenes below.
+    m_selectedScene = insertAt;
+}
+
+// Starter track mix for fresh / new projects. Leaves tracks created by
+// Project::init() in place but renames + retypes the first few to
+// "Audio 1/2 | MIDI 1/2 | Visual 1". MIDI slots get a stock
+// SubtractiveSynth so they're audible out of the box. Engine sync is
+// the caller's responsibility (syncTracksToEngine / startup flow).
+void App::setupDefaultTracks() {
+    struct Default { const char* name; Track::Type type; };
+    static constexpr Default defaults[] = {
+        {"Audio 1",  Track::Type::Audio},
+        {"Audio 2",  Track::Type::Audio},
+        {"MIDI 1",   Track::Type::Midi},
+        {"MIDI 2",   Track::Type::Midi},
+        {"Visual 1", Track::Type::Visual},
+    };
+    const int n = std::min(m_project.numTracks(),
+                           static_cast<int>(std::size(defaults)));
+    for (int i = 0; i < n; ++i) {
+        m_project.track(i).name = defaults[i].name;
+        m_project.track(i).type = defaults[i].type;
+        if (defaults[i].type == Track::Type::Midi)
+            m_audioEngine.setInstrument(i,
+                std::make_unique<instruments::SubtractiveSynth>());
+    }
+}
+
 void App::newProject() {
     auto doNew = [this]() {
         m_audioEngine.sendCommand(audio::TransportStopMsg{});
 
         // Reset project to defaults
         m_project = Project();
-        m_project.init(4, 4);
+        m_project.init();
 
-        // Reset audio engine state (instruments, effects, mixer)
+        // Reset audio engine state (instruments, effects, mixer).
+        // setupDefaultTracks below will reinstall default MIDI synths.
         for (int i = 0; i < 16; ++i) {
             m_audioEngine.setInstrument(i, nullptr);
             m_audioEngine.midiEffectChain(i).clear();
@@ -6071,6 +6130,7 @@ void App::newProject() {
         m_audioEngine.mixer().setMasterVolume(1.0f);
         m_audioEngine.sendCommand(audio::TransportSetBPMMsg{120.0});
 
+        setupDefaultTracks();
         syncTracksToEngine();
 
         m_projectPath.clear();
