@@ -679,6 +679,25 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
     if (!vc.modelPath.empty())        j["modelPath"]       = vc.modelPath;
     if (!vc.modelSourcePath.empty())  j["modelSourcePath"] = vc.modelSourcePath;
     if (!vc.scenePath.empty())        j["scenePath"]       = vc.scenePath;
+
+    // Additional shader passes (chain). Pass 0 stays in the legacy
+    // shaderPath/params fields for round-trip compat with old YAWN
+    // builds; passes 1..N go into "additionalPasses". The full chain
+    // is reconstructed by deserializeVisualClipFields() below.
+    if (!vc.additionalPasses.empty()) {
+        json arr = json::array();
+        for (auto& p : vc.additionalPasses) {
+            json pj;
+            pj["shaderPath"] = p.shaderPath;
+            if (!p.paramValues.empty()) {
+                json params = json::object();
+                for (auto& kv : p.paramValues) params[kv.first] = kv.second;
+                pj["params"] = params;
+            }
+            arr.push_back(std::move(pj));
+        }
+        j["additionalPasses"] = std::move(arr);
+    }
 }
 
 std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val) {
@@ -717,6 +736,19 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
             s.rate    = lj.value("rate",  1.0f);
             s.depth   = lj.value("depth", 0.3f);
             s.sync    = lj.value("sync",  true);
+        }
+    }
+    // Shader chain — passes after the first. Older project files
+    // simply omit this key, keeping single-pass behaviour.
+    if (val.contains("additionalPasses") && val["additionalPasses"].is_array()) {
+        for (const auto& pj : val["additionalPasses"]) {
+            visual::ShaderPass p;
+            p.shaderPath = pj.value("shaderPath", "");
+            if (pj.contains("params") && pj["params"].is_object()) {
+                for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
+                    p.paramValues.emplace_back(it.key(), it.value().get<float>());
+            }
+            vc->additionalPasses.push_back(std::move(p));
         }
     }
     return vc;
