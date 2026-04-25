@@ -134,6 +134,13 @@ private:
     void pollVisualFollowActions();
     int  resolveFollowActionScene(int track, int currentScene,
                                    FollowActionType action) const;
+
+    // Phase 4.1 — apply per-track macro mappings each frame. Walks
+    // every track's MacroDevice, lerps each mapping's macro value
+    // through its [rangeMin, rangeMax], and pushes the result into
+    // the appropriate engine API (visual source / chain only in
+    // 4.1; audio + MIDI targets land in 4.2).
+    void applyMacroMappings();
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
     void updateDetailForSelectedTrack();
     void updateDetailForReturnBus(int bus);

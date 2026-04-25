@@ -2,6 +2,7 @@
 
 #include "core/Constants.h"
 #include "app/ArrangementClip.h"
+#include "app/Macros.h"
 #include "audio/Clip.h"
 #include "audio/ClipEngine.h"
 #include "audio/FollowAction.h"
@@ -55,6 +56,12 @@ struct Track {
     // currently playing on this track. Empty = source renders alone.
     // Only meaningful for type == Visual; ignored otherwise.
     std::vector<visual::ShaderPass> visualEffectChain;
+
+    // Per-track macro device — always present, regardless of track
+    // type. Owns the 8 always-on knob values, their LFO modulators,
+    // and the list of mappings that route them to instrument / FX /
+    // shader parameters. Phase 4.1: visual-track mappings only.
+    MacroDevice macros;
 
     // Arrangement clips (sorted by startBeat)
     std::vector<ArrangementClip> arrangementClips;

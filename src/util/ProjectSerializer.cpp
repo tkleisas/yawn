@@ -662,20 +662,10 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
         j["source"] = std::move(sj);
     }
 
-    // LFO state — sparse: only write slots that are enabled.
-    json lfos = json::object();
-    static const char* kNames[8] = { "A","B","C","D","E","F","G","H" };
-    for (int i = 0; i < 8; ++i) {
-        const auto& s = vc.knobLFOs[i];
-        if (!s.enabled) continue;
-        json lj;
-        lj["shape"] = s.shape;
-        lj["rate"]  = s.rate;
-        lj["depth"] = s.depth;
-        lj["sync"]  = s.sync;
-        lfos[kNames[i]] = lj;
-    }
-    if (!lfos.empty()) j["lfos"] = lfos;
+    // (Per-clip "lfos" no longer written — LFO state migrated to the
+    // track-level MacroDevice in Phase 4.1. Legacy "lfos" entries on
+    // load are silently dropped; there's no reasonable per-track
+    // mapping when one track has many clips with different LFO sets.)
     if (!vc.text.empty())             j["text"]            = vc.text;
     if (!vc.videoPath.empty())        j["videoPath"]       = vc.videoPath;
     if (!vc.thumbnailPath.empty())    j["thumbnailPath"]   = vc.thumbnailPath;
@@ -738,19 +728,8 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
     vc->modelPath       = val.value("modelPath",       std::string());
     vc->modelSourcePath = val.value("modelSourcePath", std::string());
     vc->scenePath       = val.value("scenePath",       std::string());
-    if (val.contains("lfos") && val["lfos"].is_object()) {
-        static const char* kNames[8] = { "A","B","C","D","E","F","G","H" };
-        for (int i = 0; i < 8; ++i) {
-            if (!val["lfos"].contains(kNames[i])) continue;
-            const auto& lj = val["lfos"][kNames[i]];
-            auto& s = vc->knobLFOs[i];
-            s.enabled = true;
-            s.shape   = lj.value("shape", 0);
-            s.rate    = lj.value("rate",  1.0f);
-            s.depth   = lj.value("depth", 0.3f);
-            s.sync    = lj.value("sync",  true);
-        }
-    }
+    // Legacy "lfos" key on the clip — silently ignored. LFOs now
+    // live on the track's MacroDevice (see deserialize for tracks).
     return vc;
 }
 
@@ -898,6 +877,57 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                 chain.push_back(std::move(pj));
             }
             tj["visualEffectChain"] = std::move(chain);
+        }
+
+        // Macro device — always present on every track, but the JSON
+        // representation is sparse: omit defaulted values, labels,
+        // LFOs, and skip the whole block entirely if everything is
+        // at default. Saves stay clean for fresh tracks.
+        {
+            json mj;
+            // Values — only written when not at the 0.5 default.
+            json vals = json::object();
+            for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
+                if (std::abs(tr.macros.values[i] - 0.5f) > 1e-6f)
+                    vals[std::to_string(i)] = tr.macros.values[i];
+            }
+            if (!vals.empty()) mj["values"] = vals;
+            // Labels — only non-empty entries.
+            json labs = json::object();
+            for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
+                if (!tr.macros.labels[i].empty())
+                    labs[std::to_string(i)] = tr.macros.labels[i];
+            }
+            if (!labs.empty()) mj["labels"] = labs;
+            // LFOs — only enabled slots.
+            json lfos = json::object();
+            for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
+                const auto& s = tr.macros.lfos[i];
+                if (!s.enabled) continue;
+                json lj;
+                lj["shape"] = s.shape;
+                lj["rate"]  = s.rate;
+                lj["depth"] = s.depth;
+                lj["sync"]  = s.sync;
+                lfos[std::to_string(i)] = lj;
+            }
+            if (!lfos.empty()) mj["lfos"] = lfos;
+            // Mappings — written as an ordered array.
+            if (!tr.macros.mappings.empty()) {
+                json maps = json::array();
+                for (const auto& m : tr.macros.mappings) {
+                    json mp;
+                    mp["macro"] = m.macroIdx;
+                    mp["kind"]  = static_cast<int>(m.target.kind);
+                    if (m.target.index != 0)         mp["index"]    = m.target.index;
+                    if (!m.target.paramName.empty()) mp["param"]    = m.target.paramName;
+                    if (m.rangeMin != 0.0f)          mp["rangeMin"] = m.rangeMin;
+                    if (m.rangeMax != 1.0f)          mp["rangeMax"] = m.rangeMax;
+                    maps.push_back(std::move(mp));
+                }
+                mj["mappings"] = std::move(maps);
+            }
+            if (!mj.empty()) tj["macros"] = std::move(mj);
         }
 
         // Automation mode and lanes
@@ -1094,6 +1124,56 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                             p.paramValues.emplace_back(it.key(),
                                                         it.value().get<float>());
                     tr.visualEffectChain.push_back(std::move(p));
+                }
+            }
+
+            // Macro device — sparse on disk; defaults already in
+            // place from the Track ctor, so we only overwrite the
+            // fields the JSON explicitly carries.
+            if (tj.contains("macros") && tj["macros"].is_object()) {
+                const auto& mj = tj["macros"];
+                if (mj.contains("values") && mj["values"].is_object()) {
+                    for (auto it = mj["values"].begin();
+                         it != mj["values"].end(); ++it) {
+                        int i = std::stoi(it.key());
+                        if (i >= 0 && i < MacroDevice::kNumMacros)
+                            tr.macros.values[i] = it.value().get<float>();
+                    }
+                }
+                if (mj.contains("labels") && mj["labels"].is_object()) {
+                    for (auto it = mj["labels"].begin();
+                         it != mj["labels"].end(); ++it) {
+                        int i = std::stoi(it.key());
+                        if (i >= 0 && i < MacroDevice::kNumMacros)
+                            tr.macros.labels[i] = it.value().get<std::string>();
+                    }
+                }
+                if (mj.contains("lfos") && mj["lfos"].is_object()) {
+                    for (auto it = mj["lfos"].begin();
+                         it != mj["lfos"].end(); ++it) {
+                        int i = std::stoi(it.key());
+                        if (i < 0 || i >= MacroDevice::kNumMacros) continue;
+                        const auto& lj = it.value();
+                        auto& s = tr.macros.lfos[i];
+                        s.enabled = true;
+                        s.shape   = lj.value("shape", 0);
+                        s.rate    = lj.value("rate",  1.0f);
+                        s.depth   = lj.value("depth", 0.3f);
+                        s.sync    = lj.value("sync",  true);
+                    }
+                }
+                if (mj.contains("mappings") && mj["mappings"].is_array()) {
+                    for (const auto& mp : mj["mappings"]) {
+                        MacroMapping m;
+                        m.macroIdx        = mp.value("macro", 0);
+                        m.target.kind     = static_cast<MacroTarget::Kind>(
+                                                mp.value("kind", 0));
+                        m.target.index    = mp.value("index", 0);
+                        m.target.paramName= mp.value("param", std::string{});
+                        m.rangeMin        = mp.value("rangeMin", 0.0f);
+                        m.rangeMax        = mp.value("rangeMax", 1.0f);
+                        tr.macros.mappings.push_back(std::move(m));
+                    }
                 }
             }
 

@@ -8,21 +8,10 @@
 #include <memory>
 #include <vector>
 #include <utility>
-#include <array>
 #include <cstdint>
 
 namespace yawn {
 namespace visual {
-
-// Persisted per-knob LFO state. Parallel to VisualLFO but without the
-// per-frame evaluation state, so it can be serialised cleanly.
-struct SavedKnobLFO {
-    bool    enabled = false;
-    uint8_t shape   = 0;     // VisualLFO::Shape
-    float   rate    = 1.0f;
-    float   depth   = 0.3f;
-    bool    sync    = true;
-};
 
 // ShaderPass — a single shader stage with its own param overrides.
 // Used for both the clip's source and each entry in the track's
@@ -74,9 +63,6 @@ struct VisualClip {
             firstPassParamValues() const {
         return source.paramValues;
     }
-
-    // Per-A..H-knob LFO state (8 slots, index = knob index 0..7).
-    std::array<SavedKnobLFO, 8> knobLFOs{};
 
     // Text strip — rendered to an R8 texture and bound as iChannel1.
     // Shaders sample texture(iChannel1, uv).r as alpha and compose freely.
@@ -141,7 +127,6 @@ struct VisualClip {
         c->colorIndex    = colorIndex;
         c->lengthBeats   = lengthBeats;
         c->audioSource   = audioSource;
-        c->knobLFOs      = knobLFOs;
         c->text          = text;
         c->videoPath       = videoPath;
         c->thumbnailPath   = thumbnailPath;

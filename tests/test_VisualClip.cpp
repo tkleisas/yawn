@@ -27,9 +27,8 @@ TEST(VisualClipTest, DefaultsAreSane) {
     EXPECT_TRUE(c.modelPath.empty());
     EXPECT_TRUE(c.modelSourcePath.empty());
     EXPECT_TRUE(c.scenePath.empty());
-    for (auto& l : c.knobLFOs) {
-        EXPECT_FALSE(l.enabled);
-    }
+    // knobLFOs moved off VisualClip onto the track-level MacroDevice
+    // in Phase 4.1 — no per-clip LFO state to verify here anymore.
 }
 
 TEST(VisualClipTest, ClonePreservesAllFields) {
@@ -53,11 +52,6 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     c.modelPath        = "models/robot.glb";
     c.modelSourcePath  = "/orig/robot.glb";
     c.scenePath        = "scripts/kick_ring.lua";
-    c.knobLFOs[0].enabled = true;
-    c.knobLFOs[0].shape   = 2;
-    c.knobLFOs[0].rate    = 1.0f;
-    c.knobLFOs[0].depth   = 0.5f;
-    c.knobLFOs[0].sync    = true;
 
     auto clone = c.clone();
     ASSERT_NE(clone, nullptr);
@@ -87,11 +81,4 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     EXPECT_EQ   (clone->modelPath,       c.modelPath);
     EXPECT_EQ   (clone->modelSourcePath, c.modelSourcePath);
     EXPECT_EQ   (clone->scenePath,       c.scenePath);
-    EXPECT_TRUE (clone->knobLFOs[0].enabled);
-    EXPECT_EQ   (clone->knobLFOs[0].shape, 2);
-    EXPECT_FLOAT_EQ(clone->knobLFOs[0].rate,  c.knobLFOs[0].rate);
-    EXPECT_FLOAT_EQ(clone->knobLFOs[0].depth, c.knobLFOs[0].depth);
-    EXPECT_TRUE (clone->knobLFOs[0].sync);
-    // Unchanged slots stay disabled.
-    EXPECT_FALSE(clone->knobLFOs[1].enabled);
 }

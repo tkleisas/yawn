@@ -628,15 +628,20 @@ void App::buildWidgetTree() {
             persistParamValue(name, v);
         });
 
-    // A..H knob row: indexed 0..7, persisted under reserved names "knobA".."knobH".
+    // A..H knob row writes the per-track macro device. The per-frame
+    // pump in update() then propagates the value into the visual
+    // engine's knob[idx] and walks the macro's mapping list. The
+    // panel's A..H knobs are visually the macros 0..7.
     m_visualParamsPanel->setOnKnobChanged(
-        [this, persistParamValue](int idx, float v) {
-            static const char* names[8] = {
-                "knobA","knobB","knobC","knobD","knobE","knobF","knobG","knobH"
-            };
+        [this](int idx, float v) {
+            if (m_selectedTrack < 0 ||
+                m_selectedTrack >= m_project.numTracks()) return;
+            if (idx < 0 || idx >= MacroDevice::kNumMacros) return;
+            m_project.track(m_selectedTrack).macros.values[idx] = v;
+            // Push to the engine right away so the visual output
+            // reacts on the same frame as the click.
             m_visualEngine.setLayerKnob(m_selectedTrack, idx, v);
-            if (idx >= 0 && idx < 8)
-                persistParamValue(names[idx], v);
+            markDirty();
         });
 
     // Right-click on an A..H knob → LFO configuration context menu.
@@ -1317,15 +1322,23 @@ void App::launchVisualClipData(int track,
         m_visualEngine.setLayerAdditionalPasses(track, extras);
     }
 
-    for (int i = 0; i < 8; ++i) {
-        const auto& s = vc.knobLFOs[i];
-        visual::VisualLFO lfo;
-        lfo.enabled = s.enabled;
-        lfo.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
-        lfo.rate    = s.rate;
-        lfo.depth   = s.depth;
-        lfo.sync    = s.sync;
-        m_visualEngine.setLayerKnobLFO(track, i, lfo);
+    // Macro values + LFO config flow from the *track*, not the clip.
+    // Phase 4.1 — track.macros owns the 8 knob values and modulators;
+    // launching a clip just re-pushes the current track-level state
+    // into the freshly loaded layer so visuals start in sync.
+    if (track >= 0 && track < m_project.numTracks()) {
+        const auto& macros = m_project.track(track).macros;
+        for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
+            m_visualEngine.setLayerKnob(track, i, macros.values[i]);
+            const auto& s = macros.lfos[i];
+            visual::VisualLFO lfo;
+            lfo.enabled = s.enabled;
+            lfo.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
+            lfo.rate    = s.rate;
+            lfo.depth   = s.depth;
+            lfo.sync    = s.sync;
+            m_visualEngine.setLayerKnobLFO(track, i, lfo);
+        }
     }
     m_visualEngine.setLayerText(track, vc.text);
 
@@ -1530,6 +1543,56 @@ void App::stopAllVisualLayers() {
         m_visualLaunchBeat[t]     = kNoVisualLaunch;
         m_visualLaunchScene[t]    = -1;
         m_sessionPanel->updateClipState(t, false, 0, -1);
+    }
+}
+
+void App::applyMacroMappings() {
+    // Phase 4.1 — visual-track mappings only. Walks every track's
+    // MacroDevice once per frame; each mapping reads the live
+    // (LFO-modulated) macro value the engine displays for that knob,
+    // lerps it through [rangeMin, rangeMax], and pushes the result
+    // into the appropriate engine API. Inverted ranges (rangeMin >
+    // rangeMax) drop straight out of the lerp arithmetic.
+    //
+    // Reading the engine's *display* value (rather than the raw
+    // value from track.macros.values) keeps the mapped target in
+    // lock-step with what the same macro is doing to the shader's
+    // knob[macroIdx] uniform — so an LFO modulating the macro
+    // breathes both the shader output and the mapped chain knob
+    // identically.
+    const int nTracks = m_project.numTracks();
+    for (int t = 0; t < nTracks; ++t) {
+        auto& track = m_project.track(t);
+        if (track.macros.mappings.empty()) continue;
+        // Audio + MIDI mapping kinds aren't wired yet (4.2). Skip
+        // non-visual tracks early so the inner loop only runs work
+        // we know how to dispatch.
+        if (track.type != Track::Type::Visual) continue;
+
+        for (const auto& m : track.macros.mappings) {
+            if (m.macroIdx < 0 ||
+                m.macroIdx >= MacroDevice::kNumMacros) continue;
+            const float macroV =
+                m_visualEngine.getLayerKnobDisplayValue(t, m.macroIdx);
+            const float v = m.rangeMin + (m.rangeMax - m.rangeMin) * macroV;
+            switch (m.target.kind) {
+                case MacroTarget::Kind::VisualSourceParam:
+                    m_visualEngine.setLayerParam(t, m.target.paramName, v);
+                    break;
+                case MacroTarget::Kind::VisualChainParam:
+                    m_visualEngine.setLayerChainPassParam(
+                        t, m.target.index, m.target.paramName, v);
+                    break;
+                case MacroTarget::Kind::None:
+                case MacroTarget::Kind::AudioInstrumentParam:
+                case MacroTarget::Kind::AudioEffectParam:
+                case MacroTarget::Kind::MidiEffectParam:
+                case MacroTarget::Kind::TrackVolume:
+                case MacroTarget::Kind::TrackPan:
+                    // Phase 4.2 territory — fall through.
+                    break;
+            }
+        }
     }
 }
 
@@ -2886,11 +2949,13 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
 
     auto apply = [this, knobIdx](visual::VisualLFO lfo) {
         m_visualEngine.setLayerKnobLFO(m_selectedTrack, knobIdx, lfo);
-        // Mirror into the clip for persistence.
-        int scene = m_project.track(m_selectedTrack).defaultScene;
-        auto* slot = m_project.getSlot(m_selectedTrack, scene);
-        if (slot && slot->visualClip) {
-            auto& saved = slot->visualClip->knobLFOs[knobIdx];
+        // Mirror into the track-level macro device for persistence.
+        // (Phase 4.1: LFO state moved off VisualClip — modulators
+        // belong with the macro values they drive.)
+        if (m_selectedTrack >= 0 &&
+            m_selectedTrack < m_project.numTracks() &&
+            knobIdx >= 0 && knobIdx < MacroDevice::kNumMacros) {
+            auto& saved = m_project.track(m_selectedTrack).macros.lfos[knobIdx];
             saved.enabled = lfo.enabled;
             saved.shape   = static_cast<uint8_t>(lfo.shape);
             saved.rate    = lfo.rate;
@@ -3289,10 +3354,18 @@ void App::updateDetailForSelectedTrack() {
             if (slot && slot->visualClip) shaderLabel = slot->visualClip->name;
         }
         m_visualParamsPanel->rebuildCustom(params, shaderLabel);
-        float knobs[8];
-        for (int i = 0; i < 8; ++i)
-            knobs[i] = m_visualEngine.getLayerKnob(m_selectedTrack, i);
-        m_visualParamsPanel->setKnobValues(knobs);
+        // A..H values come from the track-level macro device — that's
+        // the persistent source of truth in Phase 4.1. The engine's
+        // per-layer knobValues mirror this each frame; reading from
+        // the project here keeps the panel correct even when no clip
+        // has been launched (no engine layer exists yet).
+        {
+            const auto& macros = m_project.track(m_selectedTrack).macros;
+            float knobs[8];
+            for (int i = 0; i < MacroDevice::kNumMacros; ++i)
+                knobs[i] = macros.values[i];
+            m_visualParamsPanel->setKnobValues(knobs);
+        }
 
         // Build the post-fx chain snapshot: (displayName, params) per effect.
         std::vector<std::pair<std::string,
@@ -5889,6 +5962,12 @@ void App::update() {
     // than on the audio thread (visuals don't need that precision).
     pollVisualKnobAutomation();
 
+    // Per-track macro mappings — same once-per-frame cadence as
+    // automation. Pulls each macro's live LFO-modulated value from
+    // the engine and pushes through to every mapped target so
+    // shader / chain params follow the macro in lock-step.
+    applyMacroMappings();
+
     // Session-view follow actions for visual clips. Fires Next /
     // Random / etc. once barCount bars have elapsed since launch.
     pollVisualFollowActions();
@@ -5914,33 +5993,25 @@ void App::update() {
     }
 
     // Pull any fresh MIDI CC values for visual-knob targets off the bus
-    // and apply them to the layer + clip. Audio thread writes, UI thread
-    // reads once per frame.
+    // and apply them to the layer + the track-level macro device.
+    // Audio thread writes, UI thread reads once per frame. Hardware
+    // controllers (Push / Move encoders 1..8) feed straight into the
+    // track macros via this path.
     for (int t = 0; t < m_project.numTracks() && t < kMaxTracks; ++t) {
         if (m_project.track(t).type != Track::Type::Visual) continue;
-        for (int k = 0; k < 8; ++k) {
+        for (int k = 0; k < MacroDevice::kNumMacros; ++k) {
             float v;
             if (!visual::VisualKnobBus::instance().readIfChanged(
                     t, k, m_visualKnobBusVersions[t][k], &v)) continue;
+            m_project.track(t).macros.values[k] = v;
             m_visualEngine.setLayerKnob(t, k, v);
-            // Persist into the active clip on this track (if any).
-            int scene = m_project.track(t).defaultScene;
-            auto* slot = m_project.getSlot(t, scene);
-            if (slot && slot->visualClip) {
-                static const char* names[8] = {
-                    "knobA","knobB","knobC","knobD","knobE","knobF","knobG","knobH"};
-                bool found = false;
-                for (auto& kv : slot->visualClip->firstPassParamValues()) {
-                    if (kv.first == names[k]) { kv.second = v; found = true; break; }
-                }
-                if (!found) slot->visualClip->firstPassParamValues().emplace_back(names[k], v);
-                markDirty();
-            }
-            // Reflect into the panel immediately if this is the selected track.
+            markDirty();
+            // Reflect into the panel immediately if this is the
+            // selected visual track.
             if (t == m_selectedTrack) {
                 float knobs[8];
-                for (int i = 0; i < 8; ++i)
-                    knobs[i] = m_visualEngine.getLayerKnob(t, i);
+                for (int i = 0; i < MacroDevice::kNumMacros; ++i)
+                    knobs[i] = m_project.track(t).macros.values[i];
                 m_visualParamsPanel->setKnobValues(knobs);
             }
         }
