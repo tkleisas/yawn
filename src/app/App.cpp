@@ -766,6 +766,29 @@ void App::buildWidgetTree() {
             showShaderLibraryMenu(mx, my);
         });
 
+    // Right-click on a source-shader (clip-custom) knob → open the
+    // "Map to Macro N" context menu rooted at the click position.
+    m_visualParamsPanel->setOnCustomKnobRightClick(
+        [this](const std::string& paramName, float mx, float my) {
+            MacroTarget t;
+            t.kind      = MacroTarget::Kind::VisualSourceParam;
+            t.paramName = paramName;
+            showMacroMappingMenu(t, mx, my);
+        });
+
+    // Right-click on a chain-pass knob → same menu, with the chain
+    // slot index baked into the target so the mapping survives clip
+    // switches and chain reorders.
+    m_visualParamsPanel->setOnChainPassKnobRightClick(
+        [this](int passIdx, const std::string& paramName,
+               float mx, float my) {
+            MacroTarget t;
+            t.kind      = MacroTarget::Kind::VisualChainParam;
+            t.index     = passIdx;
+            t.paramName = paramName;
+            showMacroMappingMenu(t, mx, my);
+        });
+
     // Synchronized horizontal scrolling between session clips and mixer strips
     m_sessionPanel->setOnScrollChanged([this](float sx) {
         m_mixerPanel->setScrollX(sx);
@@ -2931,6 +2954,89 @@ void App::showShaderLibraryMenu(float mx, float my) {
                 updateDetailForSelectedTrack();
             }, false, true});
         }
+    }
+
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
+}
+
+void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
+    if (m_selectedTrack < 0 ||
+        m_selectedTrack >= m_project.numTracks()) return;
+    auto& macros = m_project.track(m_selectedTrack).macros;
+
+    // Find current mapping (if any) for this exact target. Targets
+    // match on (kind, index, paramName); a parameter can only be
+    // mapped to one macro at a time — picking a new macro replaces.
+    auto matches = [&](const MacroMapping& m) {
+        return m.target.kind      == target.kind  &&
+               m.target.index     == target.index &&
+               m.target.paramName == target.paramName;
+    };
+    int currentMacro = -1;
+    for (size_t i = 0; i < macros.mappings.size(); ++i) {
+        if (matches(macros.mappings[i])) {
+            currentMacro = macros.mappings[i].macroIdx;
+            break;
+        }
+    }
+
+    auto setMapping = [this, target](int macroIdx) {
+        if (m_selectedTrack < 0 ||
+            m_selectedTrack >= m_project.numTracks()) return;
+        auto& chain = m_project.track(m_selectedTrack).macros.mappings;
+        // Replace any existing mapping for this exact target before
+        // adding the new one — one macro per parameter.
+        chain.erase(std::remove_if(chain.begin(), chain.end(),
+            [&](const MacroMapping& m) {
+                return m.target.kind      == target.kind  &&
+                       m.target.index     == target.index &&
+                       m.target.paramName == target.paramName;
+            }), chain.end());
+        MacroMapping nm;
+        nm.macroIdx = macroIdx;
+        nm.target   = target;
+        nm.rangeMin = 0.0f;     // sub-range editing arrives in 4.4
+        nm.rangeMax = 1.0f;
+        chain.push_back(std::move(nm));
+        markDirty();
+    };
+
+    auto unmap = [this, target]() {
+        if (m_selectedTrack < 0 ||
+            m_selectedTrack >= m_project.numTracks()) return;
+        auto& chain = m_project.track(m_selectedTrack).macros.mappings;
+        chain.erase(std::remove_if(chain.begin(), chain.end(),
+            [&](const MacroMapping& m) {
+                return m.target.kind      == target.kind  &&
+                       m.target.index     == target.index &&
+                       m.target.paramName == target.paramName;
+            }), chain.end());
+        markDirty();
+    };
+
+    std::vector<ui::ContextMenu::Item> items;
+    // Header row — disabled, just shows what we're mapping.
+    {
+        std::string title = "Map '" + target.paramName + "' to:";
+        items.push_back({title, nullptr, false, false});
+        items.push_back({"", nullptr, true});  // separator
+    }
+
+    // 8 macros — show "Macro N" + custom label if any. Currently
+    // mapped macro carries a "✓" prefix (cheap visual hint pre-4.4).
+    for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
+        std::string label = (i == currentMacro ? "✓ Macro " : "   Macro ")
+                             + std::to_string(i + 1);
+        if (!macros.labels[i].empty())
+            label += ": " + macros.labels[i];
+        items.push_back({label, [setMapping, i]() { setMapping(i); },
+                          false, true});
+    }
+
+    if (currentMacro >= 0) {
+        items.push_back({"", nullptr, true});  // separator
+        items.push_back({"Unmap", [unmap]() { unmap(); }, false, true});
     }
 
     ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),

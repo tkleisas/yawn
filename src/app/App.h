@@ -98,6 +98,13 @@ private:
     void showArrangementClipContextMenu(int trackIndex, int clipIdx, float mx, float my);
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
     void showShaderLibraryMenu(float mx, float my);
+    // Right-click menu for "Map to Macro N" on a parameter knob.
+    // Builds a context menu showing each of the 8 macros as a target;
+    // if the same target is already mapped, also offers "Unmap" and
+    // dims the macro it's currently routed through. Sets the new
+    // mapping to the macro's full 0..1 range — sub-range editing
+    // arrives in phase 4.4 alongside the macro device card UI.
+    void showMacroMappingMenu(const MacroTarget& target, float mx, float my);
 
     // Shared launch logic for visual clips — routes either a
     // session-grid clip (via its source slot) or an arrangement clip

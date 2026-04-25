@@ -56,6 +56,16 @@ public:
                                                         float value)>;
     using ChainPassRemoveCallback = std::function<void(int passIndex)>;
     using ChainPassBypassCallback = std::function<void(int passIndex, bool bypassed)>;
+    // Right-click on a source-shader (clip-custom) knob — fires with
+    // the param's @range name and screen-space click position so the
+    // App can pop a "Map to Macro N" context menu rooted there.
+    using CustomKnobRightClickCallback =
+        std::function<void(const std::string& paramName, float mx, float my)>;
+    // Right-click on a chain-pass knob — same, plus the pass index so
+    // the macro mapping target carries the chain slot too.
+    using ChainPassKnobRightClickCallback =
+        std::function<void(int passIndex, const std::string& paramName,
+                            float mx, float my)>;
     // Called when the user drag-reorders a chain card. `from` is the
     // original index, `to` is the slot it should end up at. `to` is
     // always in [0, chain.size()] — caller should remove `from` then
@@ -131,6 +141,12 @@ public:
     void setOnChainPassRemove(ChainPassRemoveCallback cb)  { m_onChainPassRemove  = std::move(cb); }
     void setOnChainPassBypassToggle(ChainPassBypassCallback cb) { m_onChainPassBypass = std::move(cb); }
     void setOnChainPassReorder(ChainPassReorderCallback cb) { m_onChainPassReorder = std::move(cb); }
+    void setOnCustomKnobRightClick(CustomKnobRightClickCallback cb) {
+        m_onCustomKnobRightClick = std::move(cb);
+    }
+    void setOnChainPassKnobRightClick(ChainPassKnobRightClickCallback cb) {
+        m_onChainPassKnobRightClick = std::move(cb);
+    }
     void setOnChainAdd(ChainAddCallback cb)               { m_onChainAdd        = std::move(cb); }
 
     // Link to the v1 DetailPanelWidget so our height mirrors it and
@@ -555,6 +571,15 @@ protected:
         }
         for (auto& k : m_customKnobs) {
             if (!hitWidgetV2(*k, e.x, e.y)) continue;
+            // Right-click → "Map to Macro N" context menu (App-side
+            // helper). We intercept BEFORE forwarding to the knob so
+            // the knob's default reset-on-right-click behaviour
+            // doesn't fire and clobber the value.
+            if (rightClick) {
+                if (m_onCustomKnobRightClick)
+                    m_onCustomKnobRightClick(k->label(), e.x, e.y);
+                return true;
+            }
             forwardTo(*k);
             return true;
         }
@@ -582,6 +607,13 @@ protected:
             }
             for (auto& k : m_chain[i].knobs) {
                 if (!hitWidgetV2(*k, e.x, e.y)) continue;
+                if (rightClick) {
+                    if (m_onChainPassKnobRightClick)
+                        m_onChainPassKnobRightClick(static_cast<int>(i),
+                                                      k->label(),
+                                                      e.x, e.y);
+                    return true;
+                }
                 forwardTo(*k);
                 return true;
             }
@@ -991,11 +1023,13 @@ private:
     std::vector<Rect>           m_chainCardRects;     // full-card outline per card
     Rect                        m_chainAddRect{};
     float                       m_chainSectionY = 0.0f;
-    ChainPassChangeCallback     m_onChainPassChanged;
-    ChainPassRemoveCallback     m_onChainPassRemove;
-    ChainPassBypassCallback     m_onChainPassBypass;
-    ChainPassReorderCallback    m_onChainPassReorder;
-    ChainAddCallback            m_onChainAdd;
+    ChainPassChangeCallback        m_onChainPassChanged;
+    ChainPassRemoveCallback        m_onChainPassRemove;
+    ChainPassBypassCallback        m_onChainPassBypass;
+    ChainPassReorderCallback       m_onChainPassReorder;
+    CustomKnobRightClickCallback   m_onCustomKnobRightClick;
+    ChainPassKnobRightClickCallback m_onChainPassKnobRightClick;
+    ChainAddCallback               m_onChainAdd;
 
     // Drag-to-reorder state for the Shader Chain cards. -1 = no
     // gesture. Goes "armed" on a header press, becomes "active" once
