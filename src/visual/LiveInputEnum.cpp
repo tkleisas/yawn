@@ -1,11 +1,20 @@
 #include "visual/LiveInputEnum.h"
+#include "util/Logger.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
+
+#if defined(_WIN32) && defined(YAWN_HAS_AVDEVICE) && YAWN_HAS_AVDEVICE
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavdevice/avdevice.h>
+}
+#endif
 
 namespace yawn {
 namespace visual {
@@ -72,9 +81,96 @@ std::vector<LiveInputDevice> enumerateLiveInputDevices() {
     return out;
 }
 
-#else   // macOS, Windows, other — stubbed for now
+#elif defined(_WIN32) && defined(YAWN_HAS_AVDEVICE) && YAWN_HAS_AVDEVICE
+
+// Windows: enumerate DirectShow capture devices through libavdevice's
+// avdevice_list_input_sources API. Each entry's device_name is what
+// dshow expects in avformat_open_input ("video=NAME"); we wrap it in
+// our standard dshow:// scheme so LiveVideoSource::start() routes
+// through the existing libav path with no special-casing.
+std::vector<LiveInputDevice> enumerateLiveInputDevices() {
+    // Self-register libavdevice — the static init in VideoDecoder.cpp
+    // may not fire if the linker drops that TU under /OPT:REF. Idempotent.
+    static std::once_flag s_initOnce;
+    std::call_once(s_initOnce, []{ avdevice_register_all(); });
+
+    std::vector<LiveInputDevice> out;
+    const AVInputFormat* fmt = av_find_input_format("dshow");
+    if (!fmt) {
+        LOG_INFO("LiveVideo", "DirectShow input format not registered");
+        return out;
+    }
+
+    AVDeviceInfoList* list = nullptr;
+    int n = avdevice_list_input_sources(fmt, nullptr, nullptr, &list);
+    if (n < 0) {
+        char errBuf[128] = {};
+        av_strerror(n, errBuf, sizeof(errBuf));
+        LOG_INFO("LiveVideo",
+                  "avdevice_list_input_sources(dshow) failed: %s", errBuf);
+        if (list) avdevice_free_list_devices(&list);
+        return out;
+    }
+    if (!list) {
+        LOG_INFO("LiveVideo", "avdevice_list_input_sources returned null list");
+        return out;
+    }
+
+    LOG_INFO("LiveVideo", "DirectShow reports %d device(s)", list->nb_devices);
+
+    for (int i = 0; i < list->nb_devices; ++i) {
+        AVDeviceInfo* d = list->devices[i];
+        if (!d) continue;
+        // Skip audio-only devices — avdevice tags them in media_types.
+        bool hasVideo = false;
+        if (d->media_types && d->nb_media_types > 0) {
+            for (int m = 0; m < d->nb_media_types; ++m) {
+                if (d->media_types[m] == AVMEDIA_TYPE_VIDEO) {
+                    hasVideo = true;
+                    break;
+                }
+            }
+        } else {
+            // No media-type info — assume video so we don't drop
+            // legitimate webcams on older ffmpeg builds.
+            hasVideo = true;
+        }
+        if (!hasVideo) continue;
+
+        const char* name = d->device_name ? d->device_name : "";
+        const char* desc = d->device_description ? d->device_description : name;
+        if (!name || !*name) continue;
+
+        LiveInputDevice dev;
+        dev.url   = std::string("dshow://video=") + name;
+        dev.label = (desc && *desc) ? desc : name;
+        out.push_back(std::move(dev));
+    }
+    avdevice_free_list_devices(&list);
+
+    std::sort(out.begin(), out.end(),
+              [](const LiveInputDevice& a, const LiveInputDevice& b) {
+                  return a.label < b.label;
+              });
+    return out;
+}
+
+#else   // macOS / Windows-without-avdevice / other — stubbed for now
 
 std::vector<LiveInputDevice> enumerateLiveInputDevices() {
+#if defined(_WIN32)
+  #if defined(YAWN_HAS_AVDEVICE)
+    LOG_INFO("LiveVideo",
+              "enum stub: _WIN32 set, YAWN_HAS_AVDEVICE=%d "
+              "(needs to be 1 for dshow enum)", YAWN_HAS_AVDEVICE);
+  #else
+    LOG_INFO("LiveVideo",
+              "enum stub: _WIN32 set, YAWN_HAS_AVDEVICE not defined "
+              "(libavdevice not linked into this build)");
+  #endif
+#else
+    LOG_INFO("LiveVideo", "enum stub: no platform impl");
+#endif
     return {};
 }
 

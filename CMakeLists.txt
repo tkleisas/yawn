@@ -301,6 +301,21 @@ if(YAWN_HAS_AVDEVICE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_AVDEVICE=1)
 endif()
 
+# Windows: shared FFmpeg ships .dlls in <FFMPEG_ROOT>/bin. Copy them
+# next to YAWN.exe after each link so launching from the build tree
+# Just Works (no PATH munging required). No-op if FFMPEG_ROOT/bin
+# doesn't exist (system-installed FFmpeg, or non-Windows builds).
+if(WIN32 AND YAWN_HAS_VIDEO AND FFMPEG_ROOT AND
+   EXISTS "${FFMPEG_ROOT}/bin")
+    file(GLOB YAWN_FFMPEG_DLLS "${FFMPEG_ROOT}/bin/*.dll")
+    if(YAWN_FFMPEG_DLLS)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${YAWN_FFMPEG_DLLS} $<TARGET_FILE_DIR:${PROJECT_NAME}>
+            COMMENT "Copying FFmpeg DLLs next to YAWN.exe")
+    endif()
+endif()
+
 # Platform-specific
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)

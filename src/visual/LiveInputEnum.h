@@ -6,9 +6,10 @@
 // Intentionally shallow: we return just a short list of (url, label)
 // pairs for the right-click submenu. Platform coverage:
 //   • Linux   — globs /dev/video*, reads sysfs for friendly names.
+//   • Windows — enumerates DirectShow video devices via libavdevice's
+//                avdevice_list_input_sources (when YAWN_HAS_AVDEVICE).
 //   • macOS   — not yet (returns empty; user still has the Custom URL
 //                text prompt).
-//   • Windows — not yet (same fallback).
 
 #include <string>
 #include <vector>
