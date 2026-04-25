@@ -3048,10 +3048,30 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
     if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
     if (m_project.track(m_selectedTrack).type != Track::Type::Visual) return;
 
-    const visual::VisualLFO* cur =
-        m_visualEngine.getLayerKnobLFO(m_selectedTrack, knobIdx);
-    if (!cur) return;  // layer doesn't exist yet (no clip launched)
-    visual::VisualLFO snapshot = *cur;
+    // Pull current LFO state — prefer the engine's live copy when a
+    // layer exists (already kept in sync with the macro device on
+    // every launch), otherwise fall back to the track's macros.lfos
+    // directly. The fallback path is what makes the menu open even
+    // when no clip has been launched on this track yet — useful for
+    // configuring a tempo-synced LFO before pressing play.
+    visual::VisualLFO snapshot;
+    if (const visual::VisualLFO* live =
+            m_visualEngine.getLayerKnobLFO(m_selectedTrack, knobIdx)) {
+        snapshot = *live;
+    } else {
+        const auto& s =
+            m_project.track(m_selectedTrack).macros.lfos[knobIdx];
+        snapshot.enabled = s.enabled;
+        snapshot.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
+        snapshot.rate    = s.rate;
+        snapshot.depth   = s.depth;
+        snapshot.sync    = s.sync;
+    }
+    // `cur` is kept as a const ref to `snapshot` so the rest of this
+    // function (which inspects `cur->...` to mark menu items checked)
+    // stays unchanged whether we sourced from the engine or the
+    // project model.
+    const visual::VisualLFO* cur = &snapshot;
 
     auto apply = [this, knobIdx](visual::VisualLFO lfo) {
         m_visualEngine.setLayerKnobLFO(m_selectedTrack, knobIdx, lfo);
