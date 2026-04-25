@@ -642,16 +642,26 @@ void deserializeMixer(audio::Mixer& mixer, const json& j,
 // ---------------------------------------------------------------------------
 
 void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
-    j["shaderPath"]  = vc.shaderPath;
     j["name"]        = vc.name;
     j["colorIndex"]  = vc.colorIndex;
     j["lengthBeats"] = vc.lengthBeats;
     j["audioSource"] = vc.audioSource;
-    if (!vc.paramValues.empty()) {
-        json pj = json::object();
-        for (auto& kv : vc.paramValues) pj[kv.first] = kv.second;
-        j["params"] = pj;
+
+    // Shader chain — every pass writes shaderPath + (sparse) params.
+    // Empty array == no shader (clip is video / model / live only).
+    json chain = json::array();
+    for (const auto& p : vc.shaderChain) {
+        json pj;
+        pj["shaderPath"] = p.shaderPath;
+        if (!p.paramValues.empty()) {
+            json params = json::object();
+            for (auto& kv : p.paramValues) params[kv.first] = kv.second;
+            pj["params"] = params;
+        }
+        chain.push_back(std::move(pj));
     }
+    j["shaderChain"] = std::move(chain);
+
     // LFO state — sparse: only write slots that are enabled.
     json lfos = json::object();
     static const char* kNames[8] = { "A","B","C","D","E","F","G","H" };
@@ -679,39 +689,50 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
     if (!vc.modelPath.empty())        j["modelPath"]       = vc.modelPath;
     if (!vc.modelSourcePath.empty())  j["modelSourcePath"] = vc.modelSourcePath;
     if (!vc.scenePath.empty())        j["scenePath"]       = vc.scenePath;
-
-    // Additional shader passes (chain). Pass 0 stays in the legacy
-    // shaderPath/params fields for round-trip compat with old YAWN
-    // builds; passes 1..N go into "additionalPasses". The full chain
-    // is reconstructed by deserializeVisualClipFields() below.
-    if (!vc.additionalPasses.empty()) {
-        json arr = json::array();
-        for (auto& p : vc.additionalPasses) {
-            json pj;
-            pj["shaderPath"] = p.shaderPath;
-            if (!p.paramValues.empty()) {
-                json params = json::object();
-                for (auto& kv : p.paramValues) params[kv.first] = kv.second;
-                pj["params"] = params;
-            }
-            arr.push_back(std::move(pj));
-        }
-        j["additionalPasses"] = std::move(arr);
-    }
 }
 
 std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val) {
     auto vc = std::make_unique<visual::VisualClip>();
-    vc->shaderPath  = val.value("shaderPath", "");
     vc->name        = val.value("name", "");
     vc->colorIndex  = val.value("colorIndex", 0);
     vc->lengthBeats = val.value("lengthBeats", 4.0);
     vc->audioSource = val.value("audioSource", -1);
-    if (val.contains("params") && val["params"].is_object()) {
-        for (auto it = val["params"].begin(); it != val["params"].end(); ++it) {
-            vc->paramValues.emplace_back(it.key(), it.value().get<float>());
+
+    // Shader chain. New format is a single "shaderChain" array; we
+    // also accept the prior single-pass format ("shaderPath" + "params"
+    // and the brief "additionalPasses" array used during phase 1) so
+    // mid-development project files don't get stranded.
+    if (val.contains("shaderChain") && val["shaderChain"].is_array()) {
+        for (const auto& pj : val["shaderChain"]) {
+            visual::ShaderPass p;
+            p.shaderPath = pj.value("shaderPath", "");
+            if (pj.contains("params") && pj["params"].is_object())
+                for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
+                    p.paramValues.emplace_back(it.key(), it.value().get<float>());
+            vc->shaderChain.push_back(std::move(p));
+        }
+    } else {
+        std::string legacyPath = val.value("shaderPath", std::string{});
+        if (!legacyPath.empty()) {
+            visual::ShaderPass p;
+            p.shaderPath = std::move(legacyPath);
+            if (val.contains("params") && val["params"].is_object())
+                for (auto it = val["params"].begin(); it != val["params"].end(); ++it)
+                    p.paramValues.emplace_back(it.key(), it.value().get<float>());
+            vc->shaderChain.push_back(std::move(p));
+        }
+        if (val.contains("additionalPasses") && val["additionalPasses"].is_array()) {
+            for (const auto& pj : val["additionalPasses"]) {
+                visual::ShaderPass p;
+                p.shaderPath = pj.value("shaderPath", "");
+                if (pj.contains("params") && pj["params"].is_object())
+                    for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
+                        p.paramValues.emplace_back(it.key(), it.value().get<float>());
+                vc->shaderChain.push_back(std::move(p));
+            }
         }
     }
+
     vc->text            = val.value("text",            std::string());
     vc->videoPath       = val.value("videoPath",       std::string());
     vc->thumbnailPath   = val.value("thumbnailPath",   std::string());
@@ -736,19 +757,6 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
             s.rate    = lj.value("rate",  1.0f);
             s.depth   = lj.value("depth", 0.3f);
             s.sync    = lj.value("sync",  true);
-        }
-    }
-    // Shader chain — passes after the first. Older project files
-    // simply omit this key, keeping single-pass behaviour.
-    if (val.contains("additionalPasses") && val["additionalPasses"].is_array()) {
-        for (const auto& pj : val["additionalPasses"]) {
-            visual::ShaderPass p;
-            p.shaderPath = pj.value("shaderPath", "");
-            if (pj.contains("params") && pj["params"].is_object()) {
-                for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
-                    p.paramValues.emplace_back(it.key(), it.value().get<float>());
-            }
-            vc->additionalPasses.push_back(std::move(p));
         }
     }
     return vc;

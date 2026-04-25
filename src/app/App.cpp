@@ -614,11 +614,11 @@ void App::buildWidgetTree() {
         auto* slot = m_project.getSlot(track, m_project.track(track).defaultScene);
         if (!slot || !slot->visualClip) return;
         bool found = false;
-        for (auto& kv : slot->visualClip->paramValues) {
+        for (auto& kv : slot->visualClip->firstPassParamValues()) {
             if (kv.first == name) { kv.second = v; found = true; break; }
         }
         if (!found)
-            slot->visualClip->paramValues.emplace_back(name, v);
+            slot->visualClip->firstPassParamValues().emplace_back(name, v);
         markDirty();
     };
 
@@ -1192,22 +1192,24 @@ void App::launchVisualClipData(int track,
         static_cast<visual::VisualEngine::BlendMode>(
             m_project.track(track).visualBlendMode));
 
-    m_visualEngine.applyLayerParamValues(track, vc.paramValues);
+    m_visualEngine.applyLayerParamValues(track, vc.firstPassParamValues());
 
-    // Shader chain — additional passes after pass 0. Each pass's shader
-    // resolves through resolveShaderPath the same way pass 0 does.
-    // Empty additionalPasses (the common case) clears any prior chain
+    // Shader chain — additional passes (1..N) after pass 0. Pass 0
+    // is whatever loadLayer compiled above; the chain here covers the
+    // rest. Empty chain (single-pass clip) clears any prior extras
     // so a clip switch doesn't carry stale stages.
     {
-        std::vector<visual::VisualEngine::ChainPassSpec> chain;
-        chain.reserve(vc.additionalPasses.size());
-        for (const auto& p : vc.additionalPasses) {
-            visual::VisualEngine::ChainPassSpec spec;
-            spec.shaderPath  = resolveShaderPath(p.shaderPath);
-            spec.paramValues = p.paramValues;
-            chain.push_back(std::move(spec));
+        std::vector<visual::VisualEngine::ChainPassSpec> extras;
+        if (vc.shaderChain.size() > 1) {
+            extras.reserve(vc.shaderChain.size() - 1);
+            for (size_t i = 1; i < vc.shaderChain.size(); ++i) {
+                visual::VisualEngine::ChainPassSpec spec;
+                spec.shaderPath  = resolveShaderPath(vc.shaderChain[i].shaderPath);
+                spec.paramValues = vc.shaderChain[i].paramValues;
+                extras.push_back(std::move(spec));
+            }
         }
-        m_visualEngine.setLayerAdditionalPasses(track, chain);
+        m_visualEngine.setLayerAdditionalPasses(track, extras);
     }
 
     for (int i = 0; i < 8; ++i) {
@@ -1281,7 +1283,7 @@ void App::pollArrangementVisualPlayback() {
             const auto& nc = track.arrangementClips[activeIdx];
             if (nc.visualClip) {
                 launchVisualClipData(t, *nc.visualClip,
-                                      resolveShaderPath(nc.visualClip->shaderPath));
+                                      resolveShaderPath(nc.visualClip->firstShaderPath()));
                 // Arrangement clips use transport-driven clock so
                 // scrubbing the playhead seeks the visuals. Origin =
                 // the clip's start beat on the arrangement timeline.
@@ -1400,7 +1402,7 @@ void App::pollVisualFollowActions() {
         if (!tslot || !tslot->visualClip) continue;
 
         launchVisualClipData(t, *tslot->visualClip,
-                              resolveShaderPath(tslot->visualClip->shaderPath));
+                              resolveShaderPath(tslot->visualClip->firstShaderPath()));
         m_visualEngine.setLayerWallClock(t);
         m_project.track(t).defaultScene = target;
         m_visualLaunchBeat[t]  = beat;
@@ -1528,7 +1530,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     // Copy the source into <project>/shaders/<stem>.frag
                     // and store the project-relative path. Bundled
                     // shaders and pre-save loads pass through untouched.
-                    vc->shaderPath = self->localizeShader(filelist[0]);
+                    vc->ensurePass0().shaderPath = self->localizeShader(filelist[0]);
                     std::filesystem::path p(filelist[0]);
                     vc->name       = p.stem().string();
                     vc->colorIndex = self->m_project.track(ti).colorIndex;
@@ -1595,7 +1597,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         if (!s) return;
                         if (!s->visualClip)
                             s->visualClip = std::make_unique<visual::VisualClip>();
-                        s->visualClip->shaderPath =
+                        s->visualClip->ensurePass0().shaderPath =
                             "shaders/" + target.filename().string();
                         s->visualClip->name = target.stem().string();
                         s->visualClip->colorIndex =
@@ -1603,7 +1605,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         // Reload live layer if this is the launched clip.
                         if (m_project.track(trackIndex).defaultScene == sceneIndex) {
                             m_visualEngine.loadLayer(trackIndex,
-                                resolveShaderPath(s->visualClip->shaderPath),
+                                resolveShaderPath(s->visualClip->firstShaderPath()),
                                 s->visualClip->audioSource);
                         }
                         markDirty();
@@ -1613,7 +1615,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         // "Fork Shader" — duplicate the current shader file to a new
         // <stem>_fork_N.frag so the user can edit it without touching
         // shaders shared by other clips.
-        if (hasVisualClip && !slot->visualClip->shaderPath.empty()) {
+        if (hasVisualClip && !slot->visualClip->firstShaderPath().empty()) {
             items.push_back({"Fork Shader",
                 [this, trackIndex, sceneIndex]() {
                     if (m_projectPath.empty()) {
@@ -1625,7 +1627,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s || !s->visualClip) return;
                     namespace fs = std::filesystem;
-                    fs::path source = resolveShaderPath(s->visualClip->shaderPath);
+                    fs::path source = resolveShaderPath(s->visualClip->firstShaderPath());
                     if (!fs::exists(source)) {
                         LOG_ERROR("Shader", "Cannot fork — source missing: %s",
                                   source.string().c_str());
@@ -1651,12 +1653,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     LOG_INFO("Shader", "Forked %s → %s",
                              source.string().c_str(),
                              target.string().c_str());
-                    s->visualClip->shaderPath =
+                    s->visualClip->ensurePass0().shaderPath =
                         "shaders/" + target.filename().string();
                     s->visualClip->name = target.stem().string();
                     if (m_project.track(trackIndex).defaultScene == sceneIndex) {
                         m_visualEngine.loadLayer(trackIndex,
-                            resolveShaderPath(s->visualClip->shaderPath),
+                            resolveShaderPath(s->visualClip->firstShaderPath()),
                             s->visualClip->audioSource);
                     }
                     markDirty();
@@ -1666,8 +1668,8 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         // "Localize Shader" — copy an external/bundled shader into
         // <project>/shaders/ so the project is self-contained. Only
         // offered when the current path isn't already project-relative.
-        if (hasVisualClip && !slot->visualClip->shaderPath.empty()) {
-            const std::string& sp = slot->visualClip->shaderPath;
+        if (hasVisualClip && !slot->visualClip->firstShaderPath().empty()) {
+            const std::string& sp = slot->visualClip->firstShaderPath();
             const bool alreadyLocal =
                 sp.compare(0, 8, "shaders/") == 0;
             if (!alreadyLocal) {
@@ -1681,10 +1683,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         auto* s = m_project.getSlot(trackIndex, sceneIndex);
                         if (!s || !s->visualClip) return;
                         std::string resolved =
-                            resolveShaderPath(s->visualClip->shaderPath);
+                            resolveShaderPath(s->visualClip->firstShaderPath());
                         std::string newPath = localizeShader(resolved);
                         if (newPath == resolved) return; // nothing changed
-                        s->visualClip->shaderPath = newPath;
+                        s->visualClip->ensurePass0().shaderPath = newPath;
                         if (m_project.track(trackIndex).defaultScene == sceneIndex) {
                             m_visualEngine.loadLayer(trackIndex,
                                 resolveShaderPath(newPath),
@@ -3076,7 +3078,7 @@ void App::updateDetailForSelectedTrack() {
         if (params.empty() && scene >= 0) {
             auto* slot = m_project.getSlot(m_selectedTrack, scene);
             if (slot && slot->visualClip) {
-                std::string shaderPath = slot->visualClip->shaderPath;
+                std::string shaderPath = slot->visualClip->firstShaderPath();
                 // Same passthrough fallbacks the launch path uses, so
                 // the pre-launch preview shows the same knob set the
                 // clip will actually get.
@@ -3093,7 +3095,7 @@ void App::updateDetailForSelectedTrack() {
                     // show the user's last saved positions, not the
                     // bare @range defaults.
                     for (auto& info : params) {
-                        for (auto& kv : slot->visualClip->paramValues) {
+                        for (auto& kv : slot->visualClip->firstPassParamValues()) {
                             if (kv.first == info.name) {
                                 info.value = kv.second; break;
                             }
@@ -5717,10 +5719,10 @@ void App::update() {
                 static const char* names[8] = {
                     "knobA","knobB","knobC","knobD","knobE","knobF","knobG","knobH"};
                 bool found = false;
-                for (auto& kv : slot->visualClip->paramValues) {
+                for (auto& kv : slot->visualClip->firstPassParamValues()) {
                     if (kv.first == names[k]) { kv.second = v; found = true; break; }
                 }
-                if (!found) slot->visualClip->paramValues.emplace_back(names[k], v);
+                if (!found) slot->visualClip->firstPassParamValues().emplace_back(names[k], v);
                 markDirty();
             }
             // Reflect into the panel immediately if this is the selected track.

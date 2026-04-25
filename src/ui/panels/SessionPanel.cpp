@@ -110,7 +110,7 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     m_project->track(t).defaultScene = si;
                 } else if (slot && slot->visualClip) {
                     if (m_onLaunchVisualClip)
-                        m_onLaunchVisualClip(t, si, slot->visualClip->shaderPath);
+                        m_onLaunchVisualClip(t, si, slot->visualClip->firstShaderPath());
                     m_project->track(t).defaultScene = si;
                     // Reflect play state so the grid shows a stop
                     // square (not a play triangle) on the active slot.
@@ -237,7 +237,7 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     else if (slot->midiClip)
                         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation, slot->followAction});
                     else if (slot->visualClip && m_onLaunchVisualClip)
-                        m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
+                        m_onLaunchVisualClip(ti, si, slot->visualClip->firstShaderPath());
                     m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
                     int rlb = slot ? slot->recordLengthBars : 0;
@@ -316,7 +316,7 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
         m_project->track(ti).defaultScene = si;
     } else if (slot && slot->visualClip) {
         if (m_onLaunchVisualClip)
-            m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
+            m_onLaunchVisualClip(ti, si, slot->visualClip->firstShaderPath());
         m_project->track(ti).defaultScene = si;
         // Reflect play state so the grid shows a stop square on this
         // slot. Click again to stop via the isPlaying branch above.
@@ -349,7 +349,7 @@ void SessionPanel::launchSlotAt(int ti, int si) {
         m_project->track(ti).defaultScene = si;
     } else if (slot && slot->visualClip) {
         if (m_onLaunchVisualClip)
-            m_onLaunchVisualClip(ti, si, slot->visualClip->shaderPath);
+            m_onLaunchVisualClip(ti, si, slot->visualClip->firstShaderPath());
         m_project->track(ti).defaultScene = si;
         m_trackStates[ti].playing      = true;
         m_trackStates[ti].playingScene = si;
@@ -371,7 +371,7 @@ void SessionPanel::launchScene(int scene) {
             m_project->track(t).defaultScene = scene;
         } else if (slot && slot->visualClip) {
             if (m_onLaunchVisualClip)
-                m_onLaunchVisualClip(t, scene, slot->visualClip->shaderPath);
+                m_onLaunchVisualClip(t, scene, slot->visualClip->firstShaderPath());
             m_project->track(t).defaultScene = scene;
             m_trackStates[t].playing      = true;
             m_trackStates[t].playingScene = scene;

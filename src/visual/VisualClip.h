@@ -24,23 +24,23 @@ struct SavedKnobLFO {
     bool    sync    = true;
 };
 
-// ShaderPass — one stage in a clip's shader chain. The first pass
-// reads the clip's iChannel0..3 inputs (audio / text / video / dummy)
-// and a black `iPrev`. Each subsequent pass receives the previous
-// pass's output via `iPrev` while still seeing the original iChannel
-// inputs unchanged. paramValues are scoped to the pass — only this
-// pass's @range uniforms are looked up here.
+// ShaderPass — one stage in a clip's shader chain. Pass 0 reads the
+// clip's iChannel0..3 inputs (audio / text / video / dummy) and a
+// black `iPrev`. Each subsequent pass receives the previous pass's
+// output via `iPrev` while still seeing the original iChannel inputs
+// unchanged. paramValues are scoped to the pass — only this pass's
+// @range uniforms are looked up here.
 struct ShaderPass {
     std::string shaderPath;
     std::vector<std::pair<std::string, float>> paramValues;
 };
 
 struct VisualClip {
-    // Pass-0 storage. Kept as plain fields (rather than tucking them
-    // into shaderChain[0]) so the dozens of existing call sites that
-    // read or write `vc->shaderPath` / `vc->paramValues` keep working
-    // verbatim. Additional passes go in `additionalPasses` below.
-    std::string shaderPath;         // filesystem path to the .frag
+    // Shader chain — every pass is equal. Empty chain means the layer
+    // has no compiled shader (typically a clip that's only a video /
+    // model placeholder before the user picks an effect).
+    std::vector<ShaderPass> shaderChain;
+
     std::string name;               // display name (defaults to filename stem)
     int         colorIndex = 0;     // UI accent colour
     double      lengthBeats = 4.0;  // nominal length (for future arrangement use)
@@ -50,38 +50,29 @@ struct VisualClip {
     //   0..N-1 = track index
     int audioSource = -1;
 
-    // Persisted shader parameter values (by uniform name) for pass 0.
-    // Looked up by name when the clip is launched — any param names
-    // not in this list start at their shader-declared default.
-    std::vector<std::pair<std::string, float>> paramValues;
-
-    // Extra shader passes after pass 0. The full conceptual chain is
-    // {shaderPath, paramValues} ++ additionalPasses. Empty (default)
-    // means single-pass behaviour, identical to what existed before
-    // chains were added. The engine + UI iterate this via the
-    // shaderChain() helper below.
-    std::vector<ShaderPass> additionalPasses;
-
-    // Conceptual full chain — pass 0 inlined from the legacy fields,
-    // then any extras. Returned by value to keep the API consistent
-    // regardless of where each pass lives. Cheap (small vector).
-    std::vector<ShaderPass> shaderChain() const {
-        std::vector<ShaderPass> out;
-        out.reserve(1 + additionalPasses.size());
-        if (!shaderPath.empty() || !paramValues.empty()) {
-            out.push_back(ShaderPass{shaderPath, paramValues});
-        } else if (!additionalPasses.empty()) {
-            // Legacy field is empty but extras exist (unusual but
-            // possible during in-flight edits) — emit an empty pass
-            // 0 so chain indices stay stable.
-            out.push_back(ShaderPass{});
-        }
-        for (auto& p : additionalPasses) out.push_back(p);
-        return out;
+    // Convenience accessors.
+    int  passCount() const { return static_cast<int>(shaderChain.size()); }
+    bool hasPasses() const { return !shaderChain.empty(); }
+    const std::string& firstShaderPath() const {
+        static const std::string empty;
+        return shaderChain.empty() ? empty : shaderChain.front().shaderPath;
     }
-    int passCount() const {
-        if (!shaderPath.empty()) return 1 + (int)additionalPasses.size();
-        return additionalPasses.empty() ? 0 : 1 + (int)additionalPasses.size();
+    // Ensure pass 0 exists (creating an empty one if not) so callers
+    // that want to assign into it can do so unconditionally.
+    ShaderPass& ensurePass0() {
+        if (shaderChain.empty()) shaderChain.emplace_back();
+        return shaderChain.front();
+    }
+    // Mutable ref to pass-0 paramValues (the engine reads these by
+    // name when launching the layer). Auto-creates pass 0 to keep
+    // sites that just want to push a value tidy.
+    std::vector<std::pair<std::string, float>>& firstPassParamValues() {
+        return ensurePass0().paramValues;
+    }
+    const std::vector<std::pair<std::string, float>>&
+            firstPassParamValues() const {
+        static const std::vector<std::pair<std::string, float>> empty;
+        return shaderChain.empty() ? empty : shaderChain.front().paramValues;
     }
 
     // Per-A..H-knob LFO state (8 slots, index = knob index 0..7).
@@ -145,13 +136,12 @@ struct VisualClip {
 
     std::unique_ptr<VisualClip> clone() const {
         auto c = std::make_unique<VisualClip>();
-        c->shaderPath  = shaderPath;
-        c->name        = name;
-        c->colorIndex  = colorIndex;
-        c->lengthBeats = lengthBeats;
-        c->audioSource = audioSource;
-        c->paramValues = paramValues;
-        c->knobLFOs    = knobLFOs;
+        c->shaderChain   = shaderChain;
+        c->name          = name;
+        c->colorIndex    = colorIndex;
+        c->lengthBeats   = lengthBeats;
+        c->audioSource   = audioSource;
+        c->knobLFOs      = knobLFOs;
         c->text          = text;
         c->videoPath       = videoPath;
         c->thumbnailPath   = thumbnailPath;
@@ -165,7 +155,6 @@ struct VisualClip {
         c->modelPath       = modelPath;
         c->modelSourcePath = modelSourcePath;
         c->scenePath       = scenePath;
-        c->additionalPasses = additionalPasses;
         return c;
     }
 };
