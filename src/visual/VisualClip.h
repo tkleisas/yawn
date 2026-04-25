@@ -28,9 +28,15 @@ struct SavedKnobLFO {
 // Used for both the clip's source and each entry in the track's
 // effect chain. paramValues are scoped to this pass — only its
 // @range uniforms are looked up here.
+//
+// `bypassed` only applies to track-level effect-chain entries — when
+// true the engine compiles the shader (so re-enabling is instant)
+// but skips it during render, threading the previous pass's output
+// straight through to the next active pass. Source passes ignore it.
 struct ShaderPass {
     std::string shaderPath;
     std::vector<std::pair<std::string, float>> paramValues;
+    bool bypassed = false;
 };
 
 struct VisualClip {

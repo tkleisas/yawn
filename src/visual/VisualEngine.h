@@ -88,6 +88,7 @@ public:
     struct ChainPassSpec {
         std::string shaderPath;
         std::vector<std::pair<std::string, float>> paramValues;
+        bool bypassed = false;
     };
     bool setLayerAdditionalPasses(int track,
                                    const std::vector<ChainPassSpec>& passes);
@@ -100,6 +101,13 @@ public:
     // the track / pass / param name doesn't resolve.
     void setLayerChainPassParam(int track, int passIdx,
                                   const std::string& name, float value);
+
+    // Cheap bypass toggle — flips the per-pass bypassed flag without
+    // touching GL state. The render loop skips bypassed passes and
+    // threads the previous output through, so toggling on a chain
+    // pass is instant whether on or off (no recompile). No-op on
+    // bad track / pass index.
+    void setLayerChainPassBypass(int track, int passIdx, bool bypassed);
 
     void setLayerAudioSource(int track, int audioSource);
     void setLayerBlendMode(int track, BlendMode mode);
@@ -359,6 +367,10 @@ private:
             std::string shaderPath;
             std::filesystem::file_time_type mtime{};
             bool mtimeValid = false;
+            // When true, render loop skips this pass and threads
+            // iPrev straight to the next active pass. Toggleable
+            // cheaply via setLayerChainPassBypass — no recompile.
+            bool bypassed = false;
 
             // Same uniform location cache layout as Layer — chain
             // passes can use every standard uniform pass 0 can, plus

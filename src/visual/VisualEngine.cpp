@@ -1235,6 +1235,16 @@ void VisualEngine::setLayerChainPassParam(int track, int passIdx,
     }
 }
 
+void VisualEngine::setLayerChainPassBypass(int track, int passIdx,
+                                             bool bypassed) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    if (passIdx < 0 || passIdx >= static_cast<int>(L.additionalPasses.size()))
+        return;
+    L.additionalPasses[passIdx].bypassed = bypassed;
+}
+
 bool VisualEngine::setLayerAdditionalPasses(int track,
         const std::vector<ChainPassSpec>& passes) {
     auto it = m_layers.find(track);
@@ -1260,6 +1270,7 @@ bool VisualEngine::setLayerAdditionalPasses(int track,
         buf << f.rdbuf();
         Layer::ChainPass cp;
         cp.shaderPath = spec.shaderPath;
+        cp.bypassed   = spec.bypassed;
         std::error_code ec;
         auto mt = std::filesystem::last_write_time(spec.shaderPath, ec);
         if (!ec) { cp.mtime = mt; cp.mtimeValid = true; }
@@ -1993,14 +2004,32 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         // something rather than blanking the layer.
         renderPass(L.program, L, L.fbo, 0, L.params);
     } else {
-        renderPass(L.program, L, L.pingFBO[0], 0, L.params);
-        for (size_t i = 0; i < L.additionalPasses.size(); ++i) {
-            const int prevSlot = static_cast<int>(i) % 2;
-            const int currSlot = (static_cast<int>(i) + 1) % 2;
-            const bool isLast  = (i + 1 == L.additionalPasses.size());
-            const GLuint target = isLast ? L.fbo : L.pingFBO[currSlot];
-            auto& cp = L.additionalPasses[i];
-            renderPass(cp.program, cp, target, L.pingTex[prevSlot], cp.params);
+        // Count active (non-bypassed) passes up front so we know
+        // which one is "last" (writes into L.fbo) when some are
+        // bypassed. activeI counts only non-bypassed passes encountered
+        // so far, keeping ping-pong slot alternation stable across
+        // bypass holes.
+        size_t activeCount = 0;
+        for (const auto& cp : L.additionalPasses)
+            if (!cp.bypassed) ++activeCount;
+
+        if (activeCount == 0) {
+            // Every chain pass bypassed → behaves like a single-pass
+            // render. Write directly into L.fbo.
+            renderPass(L.program, L, L.fbo, 0, L.params);
+        } else {
+            renderPass(L.program, L, L.pingFBO[0], 0, L.params);
+            size_t activeI = 0;
+            for (size_t i = 0; i < L.additionalPasses.size(); ++i) {
+                auto& cp = L.additionalPasses[i];
+                if (cp.bypassed) continue;
+                const int prevSlot = static_cast<int>(activeI) % 2;
+                const int currSlot = (static_cast<int>(activeI) + 1) % 2;
+                const bool isLast  = (activeI + 1 == activeCount);
+                const GLuint target = isLast ? L.fbo : L.pingFBO[currSlot];
+                renderPass(cp.program, cp, target, L.pingTex[prevSlot], cp.params);
+                ++activeI;
+            }
         }
     }
 

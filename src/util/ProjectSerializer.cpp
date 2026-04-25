@@ -894,6 +894,7 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                     for (auto& kv : p.paramValues) params[kv.first] = kv.second;
                     pj["params"] = params;
                 }
+                if (p.bypassed) pj["bypassed"] = true;
                 chain.push_back(std::move(pj));
             }
             tj["visualEffectChain"] = std::move(chain);
@@ -1086,6 +1087,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 for (const auto& pj : tj["visualEffectChain"]) {
                     visual::ShaderPass p;
                     p.shaderPath = pj.value("shaderPath", "");
+                    p.bypassed   = pj.value("bypassed", false);
                     if (pj.contains("params") && pj["params"].is_object())
                         for (auto it = pj["params"].begin();
                              it != pj["params"].end(); ++it)

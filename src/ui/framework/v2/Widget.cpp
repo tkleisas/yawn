@@ -322,6 +322,24 @@ bool Widget::dispatchMouseDown(MouseEvent& e) {
 
     // Capture so we receive follow-up moves + release regardless of
     // pointer position.
+    //
+    // GOTCHA — self-dispatch / stack overflow:
+    // This unconditional capture means *any* widget whose onMouseDown
+    // returns false (e.g. clicks landing on dead space inside a
+    // container) ends up as Widget::capturedWidget(). A panel that
+    // overrides onMouseMove/onMouseUp to forward events to whatever
+    // capturedWidget() returns MUST guard against self-dispatch:
+    //
+    //   if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
+    //       cap->dispatchMouseMove(ev);
+    //   }
+    //
+    // Without the `cap != this` check, the panel re-enters its own
+    // dispatchMouseMove → onMouseMove → … forever, the stack runs
+    // out, and the process is killed before any signal handler / SEH
+    // filter / crash logger has a chance to write anything to disk
+    // (the failure presents as a *silent* exit). VisualParamsPanel
+    // hit this when clicking empty card space in 0.41.x dev.
     captureMouse();
     return true;
 }

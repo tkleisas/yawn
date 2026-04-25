@@ -55,12 +55,28 @@ public:
                                                         const std::string& name,
                                                         float value)>;
     using ChainPassRemoveCallback = std::function<void(int passIndex)>;
+    using ChainPassBypassCallback = std::function<void(int passIndex, bool bypassed)>;
+    // Called when the user drag-reorders a chain card. `from` is the
+    // original index, `to` is the slot it should end up at. `to` is
+    // always in [0, chain.size()] — caller should remove `from` then
+    // insert at `to`, adjusting if `to > from`.
+    using ChainPassReorderCallback = std::function<void(int from, int to)>;
     using ChainAddCallback        = std::function<void(float screenX, float screenY)>;
+
+    // Snapshot entry for a single chain pass — fed in by App.cpp on
+    // each updateDetailForSelectedTrack tick. The struct keeps the
+    // bypass flag adjacent to name + params so the panel doesn't need
+    // a parallel sidecar vector for it.
+    struct ChainPassSnap {
+        std::string                                   name;
+        bool                                          bypassed = false;
+        std::vector<visual::VisualEngine::LayerParamInfo> params;
+    };
 
     static constexpr float kPanelHeight = 160.0f;
     static constexpr float kHandleH     = 8.0f;
     static constexpr float kTitleH      = 22.0f;
-    static constexpr float kLabelW      = 84.0f;
+    static constexpr float kLabelW      = 84.0f;   // legacy — narrow remaining uses
     static constexpr float kRemoveW     = 16.0f;
     static constexpr float kKnobW       = 60.0f;
     static constexpr float kKnobH       = 78.0f;
@@ -68,6 +84,17 @@ public:
     static constexpr float kKnobGapY    = 6.0f;
     static constexpr float kPad         = 10.0f;
     static constexpr float kRowGap      = 6.0f;
+
+    // Card chrome — matches DeviceHeaderWidget visual language so
+    // chain effects read like audio devices to the user.
+    static constexpr float kCardStripeH = 3.0f;          // colored top stripe
+    static constexpr float kCardHeaderH = 24.0f;         // bypass + name + × strip
+    static constexpr float kCardPadX    = 6.0f;          // horizontal inset
+    static constexpr float kCardBypassW = 28.0f;         // "On"/"Off" pill width
+    static constexpr float kCardBtnH    = 16.0f;
+    static constexpr float kCardCloseW  = 16.0f;
+    // Total card height = stripe + header + knob row + bottom pad.
+    static constexpr float kCardH       = kCardStripeH + kCardHeaderH + kKnobH + 4.0f;
 
     VisualParamsPanel() {
         for (int i = 0; i < 8; ++i) {
@@ -102,6 +129,8 @@ public:
     void setOnPostFXRemove(PostFXRemoveCallback cb)  { m_onPostFXRemove  = std::move(cb); }
     void setOnChainPassChanged(ChainPassChangeCallback cb) { m_onChainPassChanged = std::move(cb); }
     void setOnChainPassRemove(ChainPassRemoveCallback cb)  { m_onChainPassRemove  = std::move(cb); }
+    void setOnChainPassBypassToggle(ChainPassBypassCallback cb) { m_onChainPassBypass = std::move(cb); }
+    void setOnChainPassReorder(ChainPassReorderCallback cb) { m_onChainPassReorder = std::move(cb); }
     void setOnChainAdd(ChainAddCallback cb)               { m_onChainAdd        = std::move(cb); }
 
     // Link to the v1 DetailPanelWidget so our height mirrors it and
@@ -151,6 +180,10 @@ public:
         m_customKnobs.clear();
         m_customSig.clear();
         m_customSig.reserve(params.size());
+        // Custom-knob set changed — bust the measure cache so the
+        // panel can grow if more knobs were added (same reasoning as
+        // rebuildShaderChain).
+        invalidate();
         for (const auto& p : params) {
             auto k = std::make_unique<FwKnob>();
             k->setLabel(p.name);
@@ -178,34 +211,33 @@ public:
 
     // Per-pass card in the Shader Chain section. Mirror of PostFXEntry
     // but addressing the visual clip's chain (not the engine's master
-    // post-FX chain).
+    // post-FX chain). Tracks the bypass flag so render can grey the
+    // card out without an extra parallel vector.
     struct ChainPassEntry {
         std::string name;
+        bool        bypassed = false;
         std::vector<std::unique_ptr<FwKnob>> knobs;
     };
 
-    // Rebuild the shader-chain section. `chain` is one entry per pass
-    // (pass index 0..N-1), each holding the shader display name + the
-    // pass's @range parameters with their current live values. Mirrors
-    // rebuildPostFX's diff-and-reuse strategy so dragging a knob doesn't
-    // get clobbered by every redraw.
-    void rebuildShaderChain(
-        const std::vector<std::pair<std::string,
-            std::vector<visual::VisualEngine::LayerParamInfo>>>& chain) {
+    // Rebuild the shader-chain section. One ChainPassSnap per pass
+    // (index 0..N-1). The matches-and-reuse fast path is what keeps
+    // continuous knob drags smooth — only mutated values get pushed,
+    // no widget churn.
+    void rebuildShaderChain(const std::vector<ChainPassSnap>& chain) {
         bool matches = (m_chainSig.size() == chain.size()) &&
                         (m_chain.size()    == chain.size());
         if (matches) {
             for (size_t i = 0; i < chain.size(); ++i) {
                 const auto& sig  = m_chainSig[i];
                 const auto& incoming = chain[i];
-                if (sig.name != incoming.first ||
-                    sig.params.size() != incoming.second.size()) {
+                if (sig.name != incoming.name ||
+                    sig.params.size() != incoming.params.size()) {
                     matches = false;
                     break;
                 }
-                for (size_t j = 0; j < incoming.second.size(); ++j) {
+                for (size_t j = 0; j < incoming.params.size(); ++j) {
                     const auto& sp = sig.params[j];
-                    const auto& p  = incoming.second[j];
+                    const auto& p  = incoming.params[j];
                     if (sp.name != p.name || sp.min != p.min ||
                         sp.max  != p.max  || sp.defVal != p.defaultValue) {
                         matches = false;
@@ -218,8 +250,9 @@ public:
 
         if (matches) {
             for (size_t i = 0; i < chain.size(); ++i) {
-                const auto& incoming = chain[i].second;
+                const auto& incoming = chain[i].params;
                 auto& entry = m_chain[i];
+                entry.bypassed = chain[i].bypassed;
                 for (size_t j = 0; j < incoming.size(); ++j) {
                     entry.knobs[j]->setValue(incoming[j].value,
                                               ValueChangeSource::Automation);
@@ -231,19 +264,27 @@ public:
         m_chain.clear();
         m_chainSig.clear();
         m_chainSig.reserve(chain.size());
-        // Keep the remove-button rect vector paired with m_chain at
-        // every mutation. onLayout() recomputes the actual positions
-        // each time, but render() can run between rebuild and the
-        // next layout (the v1 wrapper only re-layouts on bounds
-        // change). Without this, an OOB read fires when render walks
-        // m_chain and indexes m_chainRemoveRects in lockstep.
+        // Keep the per-card rect vectors paired with m_chain at every
+        // mutation. onLayout() recomputes the actual positions each
+        // time, but render() can run between rebuild and the next
+        // layout (the v1 wrapper only re-layouts on bounds change).
+        // Without this, an OOB read fires when render walks m_chain
+        // and indexes either rect array in lockstep.
         m_chainRemoveRects.assign(chain.size(), Rect{0, 0, 0, 0});
+        m_chainBypassRects.assign(chain.size(), Rect{0, 0, 0, 0});
+        m_chainCardRects.assign(chain.size(), Rect{0, 0, 0, 0});
+        // Bump the measure cache so the auto-grow side effect in
+        // onMeasure actually runs next frame — without this the v1
+        // wrapper happily reuses the old smaller measured size and
+        // the new card lands clipped off the bottom of the panel.
+        invalidate();
         for (size_t i = 0; i < chain.size(); ++i) {
             ChainPassEntry entry;
-            entry.name = chain[i].first;
+            entry.name     = chain[i].name;
+            entry.bypassed = chain[i].bypassed;
             PostFXSig sig;
-            sig.name = chain[i].first;
-            for (const auto& p : chain[i].second) {
+            sig.name = chain[i].name;
+            for (const auto& p : chain[i].params) {
                 auto k = std::make_unique<FwKnob>();
                 k->setLabel(p.name);
                 k->setRange(p.min, p.max);
@@ -308,10 +349,13 @@ public:
         m_postFX.clear();
         m_postFXSig.clear();
         m_postFXSig.reserve(chain.size());
-        // Same invariant as m_chainRemoveRects: keep the remove-button
-        // rect vector paired with m_postFX so render can index it
-        // safely even if it runs before the next layout.
+        // Same paired-vector invariant as the chain side.
         m_removeRects.assign(chain.size(), Rect{0, 0, 0, 0});
+        m_postFXCardRects.assign(chain.size(), Rect{0, 0, 0, 0});
+        // Same auto-grow trigger as rebuildShaderChain — structural
+        // change must invalidate the measure cache or the v1 wrapper
+        // keeps the panel at its old smaller size.
+        invalidate();
         for (size_t i = 0; i < chain.size(); ++i) {
             PostFXEntry entry;
             entry.name = chain[i].first;
@@ -347,7 +391,16 @@ protected:
     Size onMeasure(Constraints c, UIContext& ctx) override {
         float configuredH = m_detail ? m_detail->panelHeight() : kPanelHeight;
         float minH = computeRequiredHeight(c.maxW, ctx);
-        float h    = std::max(configuredH, minH);
+        // Auto-grow: when adding a chain pass / post-fx / custom knob
+        // pushes content past the user's manually-set panel height,
+        // bump panelHeight so the new card is actually visible. We
+        // never shrink — manual taller drags are respected. Without
+        // this the wrapper's tight constraint clips off-screen rows.
+        if (m_detail && minH > configuredH) {
+            m_detail->setPanelHeight(minH);
+            configuredH = minH;
+        }
+        float h = std::max(configuredH, minH);
         return c.constrain({c.maxW, h});
     }
 
@@ -379,62 +432,92 @@ protected:
         // a discoverable starting point.
         m_chainSectionY = y + (m_customKnobs.empty() ? 0.0f : kKnobH) + 14.0f;
         m_chainRemoveRects.assign(m_chain.size(), Rect{0, 0, 0, 0});
+        m_chainBypassRects.assign(m_chain.size(), Rect{0, 0, 0, 0});
+        m_chainCardRects  .assign(m_chain.size(), Rect{0, 0, 0, 0});
 
+        // Card layout reproduces DeviceHeaderWidget's strip + header
+        // pattern so chain effects read like audio devices: stripe at
+        // top, then a header row with bypass pill + name + × button,
+        // then the knob row underneath.
+        const float cardWMin = std::max(120.0f,
+            kCardPadX * 2 + kCardBypassW + 60.0f + kCardCloseW + 12.0f);
         float cy = m_chainSectionY + 18.0f;
         float cx = x0;
         for (size_t i = 0; i < m_chain.size(); ++i) {
             auto& entry = m_chain[i];
-            float cardW = kLabelW + kRemoveW + kKnobGapX
-                         + static_cast<float>(entry.knobs.size())
-                         * (kKnobW + kKnobGapX);
-            if (cardW < kLabelW + kRemoveW + 20.0f)
-                cardW = kLabelW + kRemoveW + 20.0f;
+            float knobsW = static_cast<float>(entry.knobs.size())
+                            * (kKnobW + kKnobGapX);
+            float cardW = std::max(cardWMin,
+                                    knobsW + kCardPadX * 2 - kKnobGapX);
             if (cx + cardW > bounds.x + bounds.w - kPad && cx > x0) {
                 cx = x0;
-                cy += kKnobH + kKnobGapY;
+                cy += kCardH + kKnobGapY;
             }
-            m_chainRemoveRects[i] = Rect{cx, cy, kRemoveW, kKnobH * 0.35f};
-            float kx = cx + kLabelW + kRemoveW + kKnobGapX;
+            m_chainCardRects[i] = Rect{cx, cy, cardW, kCardH};
+
+            const float headerY = cy + kCardStripeH;
+            // Bypass pill on the left (after a small inset).
+            m_chainBypassRects[i] = Rect{cx + kCardPadX,
+                                          headerY + (kCardHeaderH - kCardBtnH) * 0.5f,
+                                          kCardBypassW, kCardBtnH};
+            // Remove × on the right.
+            m_chainRemoveRects[i] = Rect{cx + cardW - kCardPadX - kCardCloseW,
+                                          headerY + (kCardHeaderH - kCardBtnH) * 0.5f,
+                                          kCardCloseW, kCardBtnH};
+
+            // Knob row sits below the header with a small inset.
+            const float knobsY = cy + kCardStripeH + kCardHeaderH + 2.0f;
+            float kx = cx + kCardPadX;
             for (auto& k : entry.knobs) {
                 k->measure(Constraints::tight(kKnobW, kKnobH), ctx);
-                k->layout(Rect{kx, cy, kKnobW, kKnobH}, ctx);
+                k->layout(Rect{kx, knobsY, kKnobW, kKnobH}, ctx);
                 kx += kKnobW + kKnobGapX;
             }
-            cx += cardW + 18.0f;
+            cx += cardW + 8.0f;
         }
-        // "+ Add Pass" button
+        // "+ Add Pass" button — vertically centred on the card row.
         constexpr float kAddBtnW = 72.0f, kAddBtnH = 22.0f;
         if (cx + kAddBtnW > bounds.x + bounds.w - kPad && cx > x0) {
             cx = x0;
-            cy += kKnobH + kKnobGapY;
+            cy += kCardH + kKnobGapY;
         }
-        m_chainAddRect = Rect{cx, cy + (kKnobH - kAddBtnH) * 0.5f,
+        m_chainAddRect = Rect{cx, cy + (kCardH - kAddBtnH) * 0.5f,
                               kAddBtnW, kAddBtnH};
 
         // ── Post-FX section ─────────────────────────────────────────
-        const float chainBottom = cy + (m_chain.empty() ? kAddBtnH : kKnobH);
+        // Post-FX cards mirror the chain card geometry (stripe +
+        // header + knob row) for visual consistency, minus the bypass
+        // pill since the engine's master post-FX chain doesn't track
+        // bypass per stage today.
+        const float chainBottom = cy + (m_chain.empty() ? kAddBtnH : kCardH);
         m_postFXSectionY = chainBottom + 14.0f;
-        m_removeRects.assign(m_postFX.size(), Rect{0, 0, 0, 0});
+        m_removeRects     .assign(m_postFX.size(), Rect{0, 0, 0, 0});
+        m_postFXCardRects .assign(m_postFX.size(), Rect{0, 0, 0, 0});
 
         float py = m_postFXSectionY + 18.0f;
         float px = x0;
         for (size_t i = 0; i < m_postFX.size(); ++i) {
             auto& entry = m_postFX[i];
-            float cardW = kLabelW + kRemoveW + kKnobGapX
-                         + static_cast<float>(entry.knobs.size())
-                         * (kKnobW + kKnobGapX);
+            float knobsW = static_cast<float>(entry.knobs.size())
+                            * (kKnobW + kKnobGapX);
+            float cardW  = std::max(cardWMin, knobsW + kCardPadX * 2 - kKnobGapX);
             if (px + cardW > bounds.x + bounds.w - kPad && px > x0) {
                 px = x0;
-                py += kKnobH + kKnobGapY;
+                py += kCardH + kKnobGapY;
             }
-            m_removeRects[i] = Rect{px, py, kRemoveW, kKnobH * 0.35f};
-            float kx = px + kLabelW + kRemoveW + kKnobGapX;
+            m_postFXCardRects[i] = Rect{px, py, cardW, kCardH};
+            const float headerY = py + kCardStripeH;
+            m_removeRects[i] = Rect{px + cardW - kCardPadX - kCardCloseW,
+                                     headerY + (kCardHeaderH - kCardBtnH) * 0.5f,
+                                     kCardCloseW, kCardBtnH};
+            const float knobsY = py + kCardStripeH + kCardHeaderH + 2.0f;
+            float kx = px + kCardPadX;
             for (auto& k : entry.knobs) {
                 k->measure(Constraints::tight(kKnobW, kKnobH), ctx);
-                k->layout(Rect{kx, py, kKnobW, kKnobH}, ctx);
+                k->layout(Rect{kx, knobsY, kKnobW, kKnobH}, ctx);
                 kx += kKnobW + kKnobGapX;
             }
-            px += cardW + 18.0f;
+            px += cardW + 8.0f;
         }
     }
 
@@ -475,18 +558,52 @@ protected:
             forwardTo(*k);
             return true;
         }
-        // Shader chain: remove button + per-pass knobs.
+        // Shader chain: bypass pill + remove × + per-pass knobs +
+        // drag-to-reorder if the press lands on the header background.
+        auto inRect = [](const Rect& rr, float x, float y) {
+            return x >= rr.x && x < rr.x + rr.w &&
+                   y >= rr.y && y < rr.y + rr.h;
+        };
         for (size_t i = 0; i < m_chain.size(); ++i) {
-            const Rect& xr = m_chainRemoveRects[i];
-            if (e.x >= xr.x + kLabelW && e.x < xr.x + kLabelW + xr.w &&
-                e.y >= xr.y && e.y < xr.y + xr.h) {
-                if (!rightClick && m_onChainPassRemove)
+            if (!rightClick &&
+                inRect(m_chainBypassRects[i], e.x, e.y)) {
+                if (m_onChainPassBypass) {
+                    m_chain[i].bypassed = !m_chain[i].bypassed;
+                    m_onChainPassBypass(static_cast<int>(i),
+                                          m_chain[i].bypassed);
+                }
+                return true;
+            }
+            if (!rightClick &&
+                inRect(m_chainRemoveRects[i], e.x, e.y)) {
+                if (m_onChainPassRemove)
                     m_onChainPassRemove(static_cast<int>(i));
                 return true;
             }
             for (auto& k : m_chain[i].knobs) {
                 if (!hitWidgetV2(*k, e.x, e.y)) continue;
                 forwardTo(*k);
+                return true;
+            }
+            // Header background drag — anything inside the card's
+            // top stripe + header strip that isn't the bypass pill or
+            // × button arms a reorder gesture. Capturing the mouse
+            // means subsequent move/up events route here, not to
+            // whatever lives behind the panel — that prevents the
+            // fall-through-to-parent crash and lets us track the drop
+            // target until release.
+            const Rect& cr = m_chainCardRects[i];
+            const float headerBottom = cr.y + kCardStripeH + kCardHeaderH;
+            if (!rightClick &&
+                e.x >= cr.x && e.x < cr.x + cr.w &&
+                e.y >= cr.y && e.y < headerBottom) {
+                m_chainDragFrom    = static_cast<int>(i);
+                m_chainDragActive  = false;
+                m_chainDragOriginX = e.x;
+                m_chainDragOriginY = e.y;
+                m_chainDragCurX    = e.x;
+                m_chainDragCurY    = e.y;
+                captureMouse();
                 return true;
             }
         }
@@ -498,10 +615,9 @@ protected:
             return true;
         }
         for (size_t i = 0; i < m_postFX.size(); ++i) {
-            const Rect& xr = m_removeRects[i];
-            if (e.x >= xr.x + kLabelW && e.x < xr.x + kLabelW + xr.w &&
-                e.y >= xr.y && e.y < xr.y + xr.h) {
-                if (!rightClick && m_onPostFXRemove)
+            if (!rightClick &&
+                inRect(m_removeRects[i], e.x, e.y)) {
+                if (m_onPostFXRemove)
                     m_onPostFXRemove(static_cast<int>(i));
                 return true;
             }
@@ -520,7 +636,25 @@ protected:
             m_detail->setPanelHeight(m_handleStartH + delta);
             return true;
         }
-        if (Widget* cap = Widget::capturedWidget()) {
+        if (m_chainDragFrom >= 0) {
+            m_chainDragCurX = e.x;
+            m_chainDragCurY = e.y;
+            // Promote the gesture to active once the cursor leaves a
+            // small dead-zone around the press point. Until then,
+            // releasing snaps back to a no-op (so a normal click on
+            // the header doesn't accidentally rearrange anything).
+            const float dx = e.x - m_chainDragOriginX;
+            const float dy = e.y - m_chainDragOriginY;
+            if (!m_chainDragActive && (dx * dx + dy * dy) > 25.0f)
+                m_chainDragActive = true;
+            return true;
+        }
+        // CRITICAL: skip self-dispatch. fw2::Widget::dispatchMouseDown
+        // captures the mouse to *us* whenever onMouseDown returns
+        // false (which happens for any click on empty card space),
+        // and naively forwarding here would re-enter dispatchMouseMove
+        // → onMouseMove → … → stack overflow → silent process kill.
+        if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
             const auto& b = cap->bounds();
             MouseMoveEvent ev = e;
             ev.lx = e.x - b.x;
@@ -537,7 +671,24 @@ protected:
             releaseMouse();
             return true;
         }
-        if (Widget* cap = Widget::capturedWidget()) {
+        if (m_chainDragFrom >= 0) {
+            int   from   = m_chainDragFrom;
+            bool  active = m_chainDragActive;
+            float upX    = e.x;
+            m_chainDragFrom   = -1;
+            m_chainDragActive = false;
+            releaseMouse();
+            if (active && m_onChainPassReorder) {
+                int target = computeChainReorderTarget(upX);
+                if (target >= 0 && target != from && target != from + 1) {
+                    m_onChainPassReorder(from, target);
+                }
+            }
+            return true;
+        }
+        // Same self-dispatch guard as onMouseMove — never re-enter
+        // ourselves via Widget::capturedWidget().
+        if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
             const auto& b = cap->bounds();
             MouseEvent ev = e;
             ev.lx = e.x - b.x;
@@ -586,20 +737,89 @@ public:
         tm.drawText(r, "Shader Chain",
                     m_bounds.x + kPad, m_chainSectionY + 14.0f,
                     titleSize, ::yawn::ui::Theme::textSecondary);
+        // Card chrome — match DeviceHeaderWidget visual language.
+        // Magenta-ish stripe matches the AudioEffect device colour
+        // since chain effects play the same conceptual role.
+        const Color kCardStripe   {180,  80, 200, 255};
+        const Color kCardStripeBp { 90,  40, 100, 255};   // dimmed when bypassed
+        const Color kCardBg       { 36,  36,  42, 255};
+        const Color kCardBgBp     { 30,  30,  34, 255};
+        const Color kCardBorder   { 60,  60,  68, 255};
+        const Color kBypassOnBg   { 40, 100,  40, 255};
+        const Color kBypassOffBg  {100,  40,  40, 255};
+        const Color kBypassOnTxt  {120, 220, 120, 255};
+        const Color kBypassOffTxt {220, 120, 120, 255};
+        const Color kRemoveBg     { 60,  30,  30, 255};
+        const Color kRemoveTxt    {200, 100, 100, 255};
         for (size_t i = 0; i < m_chain.size(); ++i) {
             auto& entry = m_chain[i];
+            const Rect& cr = m_chainCardRects[i];
+            const bool bp = entry.bypassed;
+            const bool dragging = (m_chainDragActive &&
+                                    m_chainDragFrom == static_cast<int>(i));
+
+            // Card body + outline. Dim while being drag-reordered so
+            // the user can see where the source card lifts from.
+            const Color bodyC   = dragging ? Color{20, 20, 24, 255}
+                                            : (bp ? kCardBgBp : kCardBg);
+            const Color borderC = dragging ? Color{200, 160, 80, 255}
+                                            : kCardBorder;
+            r.drawRect(cr.x, cr.y, cr.w, cr.h, bodyC);
+            r.drawRect(cr.x, cr.y, cr.w, kCardStripeH,
+                        bp ? kCardStripeBp : kCardStripe);
+            r.drawRectOutline(cr.x, cr.y, cr.w, cr.h, borderC);
+
+            // Bypass pill (on/off).
+            const Rect& bypass = m_chainBypassRects[i];
+            r.drawRect(bypass.x, bypass.y, bypass.w, bypass.h,
+                        bp ? kBypassOffBg : kBypassOnBg);
+            const char* bpLabel = bp ? "Off" : "On";
+            const float bpLabelW = tm.textWidth(bpLabel, titleSize);
+            tm.drawText(r, bpLabel,
+                         bypass.x + (bypass.w - bpLabelW) * 0.5f,
+                         bypass.y + 2.0f,
+                         titleSize, bp ? kBypassOffTxt : kBypassOnTxt);
+
+            // Pass index + name in the header, between bypass and ×.
             std::string label = std::to_string(i + 1) + ". " + entry.name;
+            const float nameX = bypass.x + bypass.w + 6.0f;
+            tm.drawText(r, label, nameX, bypass.y + 2.0f, titleSize,
+                         bp ? ::yawn::ui::Theme::textDim
+                            : ::yawn::ui::Theme::textPrimary);
+
+            // Remove × on the right.
             const Rect& xr = m_chainRemoveRects[i];
-            tm.drawText(r, label,
-                        xr.x, xr.y + 11.0f,
-                        titleSize, ::yawn::ui::Theme::textPrimary);
-            r.drawRect(xr.x + kLabelW, xr.y, xr.w, xr.h,
-                        Color{160, 50, 50, 220});
-            tm.drawText(r, "×",
-                        xr.x + kLabelW + xr.w * 0.5f - 4.0f,
-                        xr.y + xr.h * 0.5f + 5.0f,
-                        titleSize * 1.1f, ::yawn::ui::Theme::textPrimary);
+            r.drawRect(xr.x, xr.y, xr.w, xr.h, kRemoveBg);
+            const float xLabelW = tm.textWidth("X", titleSize);
+            tm.drawText(r, "X",
+                         xr.x + (xr.w - xLabelW) * 0.5f,
+                         xr.y + 2.0f, titleSize, kRemoveTxt);
+
             for (auto& k : entry.knobs) k->render(ctx);
+        }
+        // Drop indicator while a card is being drag-reordered. Drawn
+        // as a vertical bar in the gap between cards (or at the
+        // trailing edge for end-of-list drops). Only shown once the
+        // gesture has crossed the dead-zone, to avoid flicker on
+        // every header click.
+        if (m_chainDragActive && !m_chain.empty()) {
+            int target = computeChainReorderTarget(m_chainDragCurX);
+            if (target >= 0 && target != m_chainDragFrom &&
+                target != m_chainDragFrom + 1) {
+                float ix;
+                if (target == 0) {
+                    ix = m_chainCardRects[0].x - 4.0f;
+                } else if (target >= static_cast<int>(m_chain.size())) {
+                    const Rect& last = m_chainCardRects.back();
+                    ix = last.x + last.w + 4.0f;
+                } else {
+                    const Rect& cr = m_chainCardRects[target];
+                    ix = cr.x - 4.0f;
+                }
+                const float iy = m_chainCardRects[0].y;
+                r.drawRect(ix - 1.0f, iy, 3.0f, kCardH,
+                            Color{220, 180, 80, 255});
+            }
         }
         // "+ Add Pass" pill
         r.drawRoundedRect(m_chainAddRect.x, m_chainAddRect.y,
@@ -624,18 +844,21 @@ public:
 
             for (size_t i = 0; i < m_postFX.size(); ++i) {
                 auto& entry = m_postFX[i];
-                std::string label = std::to_string(i + 1) + ". " + entry.name;
+                const Rect& cr = m_postFXCardRects[i];
+                r.drawRect(cr.x, cr.y, cr.w, cr.h, kCardBg);
+                r.drawRect(cr.x, cr.y, cr.w, kCardStripeH, kCardStripe);
+                r.drawRectOutline(cr.x, cr.y, cr.w, cr.h, kCardBorder);
+
                 const Rect& xr = m_removeRects[i];
+                std::string label = std::to_string(i + 1) + ". " + entry.name;
                 tm.drawText(r, label,
-                            xr.x, xr.y + 11.0f,
-                            titleSize, ::yawn::ui::Theme::textPrimary);
-                r.drawRect(xr.x + kLabelW, xr.y,
-                            xr.w, xr.h,
-                            Color{160, 50, 50, 220});
-                tm.drawText(r, "×",
-                            xr.x + kLabelW + xr.w * 0.5f - 4.0f,
-                            xr.y + xr.h * 0.5f + 5.0f,
-                            titleSize * 1.1f, ::yawn::ui::Theme::textPrimary);
+                             cr.x + kCardPadX, xr.y + 2.0f,
+                             titleSize, ::yawn::ui::Theme::textPrimary);
+                r.drawRect(xr.x, xr.y, xr.w, xr.h, kRemoveBg);
+                const float xLabelW = tm.textWidth("X", titleSize);
+                tm.drawText(r, "X",
+                             xr.x + (xr.w - xLabelW) * 0.5f,
+                             xr.y + 2.0f, titleSize, kRemoveTxt);
 
                 for (auto& k : entry.knobs) k->render(ctx);
             }
@@ -651,6 +874,22 @@ private:
         return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
     }
 
+    // Map a horizontal cursor position to an insertion slot in the
+    // chain. Returns a slot index in [0, m_chain.size()] — slot N
+    // means "drop here as the new last entry". If the cursor sits
+    // past the last card, returns the last slot. Returns -1 when the
+    // chain is empty (no valid drop targets).
+    int computeChainReorderTarget(float cursorX) const {
+        if (m_chain.empty()) return -1;
+        for (size_t i = 0; i < m_chainCardRects.size(); ++i) {
+            const Rect& cr = m_chainCardRects[i];
+            const float mid = cr.x + cr.w * 0.5f;
+            if (cursorX < mid)
+                return static_cast<int>(i);
+        }
+        return static_cast<int>(m_chain.size());
+    }
+
     float columnWidthFor(const FwKnob& k, const UIContext& ctx) const {
         if (!ctx.textMetrics) return kKnobW;
         const float labelSize = 9.0f;
@@ -660,7 +899,8 @@ private:
 
     float computeRequiredHeight(float panelW, const UIContext& ctx) const {
         float topY   = kHandleH + kTitleH + 22.0f;
-        float rowH   = kKnobH + kKnobGapY;
+        float rowH   = kKnobH + kKnobGapY;       // custom-knob row height
+        float cardRowH = kCardH + kKnobGapY;     // card-row height (taller)
         float y      = topY + kKnobH + kRowGap;
         float xLimit = panelW - kPad;
         float x      = kPad;
@@ -676,30 +916,32 @@ private:
         }
         float customBottom = lastY + (m_customKnobs.empty() ? 0.0f : kKnobH);
 
-        // Shader Chain row(s) — same flow geometry as Post-FX, plus the
-        // trailing "+ Add Pass" button.
+        const float cardWMin = std::max(120.0f,
+            kCardPadX * 2 + kCardBypassW + 60.0f + kCardCloseW + 12.0f);
+
+        // Shader Chain row(s) — taller card geometry to match the new
+        // header strip + bypass + name + × layout, plus the trailing
+        // "+ Add Pass" button.
         float chainBottom = customBottom;
         {
             float cy = customBottom + 18.0f;
             float cx = kPad;
             for (auto& entry : m_chain) {
-                float cardW = kLabelW + kRemoveW + kKnobGapX +
-                               static_cast<float>(entry.knobs.size()) *
-                               (kKnobW + kKnobGapX);
-                if (cardW < kLabelW + kRemoveW + 20.0f)
-                    cardW = kLabelW + kRemoveW + 20.0f;
+                float knobsW = static_cast<float>(entry.knobs.size())
+                                * (kKnobW + kKnobGapX);
+                float cardW  = std::max(cardWMin, knobsW + kCardPadX * 2 - kKnobGapX);
                 if (cx + cardW > panelW - kPad && cx > kPad) {
                     cx = kPad;
-                    cy += rowH;
+                    cy += cardRowH;
                 }
-                cx += cardW + 18.0f;
+                cx += cardW + 8.0f;
             }
             constexpr float kAddBtnW = 72.0f;
             if (cx + kAddBtnW > panelW - kPad && cx > kPad) {
                 cx = kPad;
-                cy += rowH;
+                cy += cardRowH;
             }
-            chainBottom = cy + kKnobH;
+            chainBottom = cy + kCardH;
         }
 
         float fxBottom = chainBottom + 14.0f;
@@ -707,16 +949,16 @@ private:
             float py = chainBottom + 18.0f;
             float px = kPad;
             for (auto& entry : m_postFX) {
-                float cardW = kLabelW + kRemoveW + kKnobGapX +
-                               static_cast<float>(entry.knobs.size()) *
-                               (kKnobW + kKnobGapX);
+                float knobsW = static_cast<float>(entry.knobs.size())
+                                * (kKnobW + kKnobGapX);
+                float cardW  = std::max(cardWMin, knobsW + kCardPadX * 2 - kKnobGapX);
                 if (px + cardW > panelW - kPad && px > kPad) {
                     px = kPad;
-                    py += rowH;
+                    py += cardRowH;
                 }
-                px += cardW + 18.0f;
+                px += cardW + 8.0f;
             }
-            fxBottom = py + kKnobH;
+            fxBottom = py + kCardH;
         }
         return fxBottom + kPad;
     }
@@ -741,15 +983,33 @@ private:
     PostFXChangeCallback     m_onPostFXChanged;
     PostFXRemoveCallback     m_onPostFXRemove;
 
-    // Shader Chain (per-clip).
+    // Shader Chain (per-track).
     std::vector<ChainPassEntry> m_chain;
     std::vector<PostFXSig>      m_chainSig;
-    std::vector<Rect>           m_chainRemoveRects;
+    std::vector<Rect>           m_chainRemoveRects;   // × button hit-rect per card
+    std::vector<Rect>           m_chainBypassRects;   // On/Off pill hit-rect per card
+    std::vector<Rect>           m_chainCardRects;     // full-card outline per card
     Rect                        m_chainAddRect{};
     float                       m_chainSectionY = 0.0f;
     ChainPassChangeCallback     m_onChainPassChanged;
     ChainPassRemoveCallback     m_onChainPassRemove;
+    ChainPassBypassCallback     m_onChainPassBypass;
+    ChainPassReorderCallback    m_onChainPassReorder;
     ChainAddCallback            m_onChainAdd;
+
+    // Drag-to-reorder state for the Shader Chain cards. -1 = no
+    // gesture. Goes "armed" on a header press, becomes "active" once
+    // the cursor moves past a small dead-zone so quick clicks on the
+    // header don't accidentally rearrange the chain.
+    int   m_chainDragFrom    = -1;
+    bool  m_chainDragActive  = false;
+    float m_chainDragOriginX = 0.0f;
+    float m_chainDragOriginY = 0.0f;
+    float m_chainDragCurX    = 0.0f;
+    float m_chainDragCurY    = 0.0f;
+
+    // Post-FX card outlines (paired with m_postFX, like the chain side).
+    std::vector<Rect>           m_postFXCardRects;
 
     ::yawn::ui::fw::DetailPanelWidget* m_detail = nullptr;
     bool  m_handleDrag   = false;

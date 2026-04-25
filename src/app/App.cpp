@@ -702,6 +702,47 @@ void App::buildWidgetTree() {
             markDirty();
         });
 
+    m_visualParamsPanel->setOnChainPassBypassToggle(
+        [this](int passIdx, bool bypassed) {
+            if (m_selectedTrack < 0 ||
+                m_selectedTrack >= m_project.numTracks()) return;
+            auto& chain = m_project.track(m_selectedTrack).visualEffectChain;
+            if (passIdx < 0 || passIdx >= (int)chain.size()) return;
+            chain[passIdx].bypassed = bypassed;
+            // Cheap engine-side flip — no recompile, no relink. The
+            // render loop just starts/stops including this pass.
+            m_visualEngine.setLayerChainPassBypass(m_selectedTrack,
+                                                     passIdx, bypassed);
+            markDirty();
+        });
+
+    m_visualParamsPanel->setOnChainPassReorder(
+        [this, chainTargetSlot, reloadVisualLayer](int from, int to) {
+            if (m_selectedTrack < 0 ||
+                m_selectedTrack >= m_project.numTracks()) return;
+            auto& chain = m_project.track(m_selectedTrack).visualEffectChain;
+            const int n = static_cast<int>(chain.size());
+            if (from < 0 || from >= n) return;
+            // `to` is an insertion slot in [0, n] — when `to > from`
+            // the slot index shifts down by one after we erase the
+            // source, which the panel guarantees by skipping
+            // no-op cases (target == from / target == from + 1).
+            int dst = (to > from) ? to - 1 : to;
+            if (dst < 0) dst = 0;
+            if (dst >= n) dst = n - 1;
+            if (dst == from) return;
+            visual::ShaderPass p = std::move(chain[from]);
+            chain.erase(chain.begin() + from);
+            chain.insert(chain.begin() + dst, std::move(p));
+            // Re-launch to push the new chain order into the engine.
+            // Reorders are infrequent (user gesture) so the recompile
+            // cost is acceptable.
+            auto* slot = chainTargetSlot();
+            if (slot) reloadVisualLayer(slot);
+            markDirty();
+            updateDetailForSelectedTrack();
+        });
+
     m_visualParamsPanel->setOnChainPassRemove(
         [this, chainTargetSlot, reloadVisualLayer](int passIdx) {
             if (m_selectedTrack < 0 ||
@@ -1257,7 +1298,9 @@ void App::launchVisualClipData(int track,
     // Effect chain — additional passes after the source. The chain
     // lives on the *track* (audio-FX-style) so it persists across
     // clip switches; we just re-push it here whenever the layer is
-    // re-launched. Empty chain clears any prior extras.
+    // re-launched. Empty chain clears any prior extras. Bypassed
+    // passes are still pushed (and compiled) so toggling them on is
+    // instant; the engine skips them at render time.
     {
         std::vector<visual::VisualEngine::ChainPassSpec> extras;
         if (track >= 0 && track < m_project.numTracks()) {
@@ -1267,6 +1310,7 @@ void App::launchVisualClipData(int track,
                 visual::VisualEngine::ChainPassSpec spec;
                 spec.shaderPath  = resolveShaderPath(p.shaderPath);
                 spec.paramValues = p.paramValues;
+                spec.bypassed    = p.bypassed;
                 extras.push_back(std::move(spec));
             }
         }
@@ -3262,10 +3306,11 @@ void App::updateDetailForSelectedTrack() {
 
         // Build the effect-chain snapshot for the panel — one entry
         // per effect on the selected *track* (chain-on-track, not on
-        // clip). Each entry shows the shader's @range uniforms
-        // overlaid with the saved per-pass values.
-        std::vector<std::pair<std::string,
-            std::vector<visual::VisualEngine::LayerParamInfo>>> shaderChainSnap;
+        // clip). Each entry carries name + bypass state + the
+        // shader's @range uniforms overlaid with the saved per-pass
+        // values, so the panel can render the audio-FX-style card
+        // (bypass pill + name + × + knobs) without sidecar lookups.
+        std::vector<ui::fw2::VisualParamsPanel::ChainPassSnap> shaderChainSnap;
         {
             const auto& trkChain =
                 m_project.track(m_selectedTrack).visualEffectChain;
@@ -3281,7 +3326,11 @@ void App::updateDetailForSelectedTrack() {
                         }
                     }
                 }
-                shaderChainSnap.emplace_back(pp.stem().string(), std::move(pParams));
+                ui::fw2::VisualParamsPanel::ChainPassSnap snap;
+                snap.name     = pp.stem().string();
+                snap.bypassed = pass.bypassed;
+                snap.params   = std::move(pParams);
+                shaderChainSnap.push_back(std::move(snap));
             }
         }
         m_visualParamsPanel->rebuildShaderChain(shaderChainSnap);
