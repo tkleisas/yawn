@@ -2973,20 +2973,42 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
                m.target.index     == target.index &&
                m.target.paramName == target.paramName;
     };
-    int currentMacro = -1;
+    int   currentMacro = -1;
+    float currentMin   = 0.0f;
+    float currentMax   = 1.0f;
     for (size_t i = 0; i < macros.mappings.size(); ++i) {
         if (matches(macros.mappings[i])) {
             currentMacro = macros.mappings[i].macroIdx;
+            currentMin   = macros.mappings[i].rangeMin;
+            currentMax   = macros.mappings[i].rangeMax;
             break;
         }
     }
 
-    auto setMapping = [this, target](int macroIdx) {
+    // Helper: locate the live mapping in the chain (or nullptr) so
+    // the range-edit lambdas don't re-search every fire.
+    auto findMapping = [this, target]() -> MacroMapping* {
+        if (m_selectedTrack < 0 ||
+            m_selectedTrack >= m_project.numTracks()) return nullptr;
+        auto& chain = m_project.track(m_selectedTrack).macros.mappings;
+        for (auto& m : chain) {
+            if (m.target.kind      == target.kind  &&
+                m.target.index     == target.index &&
+                m.target.paramName == target.paramName) {
+                return &m;
+            }
+        }
+        return nullptr;
+    };
+
+    auto setMapping = [this, target, currentMin, currentMax](int macroIdx) {
         if (m_selectedTrack < 0 ||
             m_selectedTrack >= m_project.numTracks()) return;
         auto& chain = m_project.track(m_selectedTrack).macros.mappings;
         // Replace any existing mapping for this exact target before
-        // adding the new one — one macro per parameter.
+        // adding the new one — one macro per parameter. We carry the
+        // existing range across so re-routing to a different macro
+        // doesn't silently widen the user's carefully-set sub-range.
         chain.erase(std::remove_if(chain.begin(), chain.end(),
             [&](const MacroMapping& m) {
                 return m.target.kind      == target.kind  &&
@@ -2996,8 +3018,8 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
         MacroMapping nm;
         nm.macroIdx = macroIdx;
         nm.target   = target;
-        nm.rangeMin = 0.0f;     // sub-range editing arrives in 4.4
-        nm.rangeMax = 1.0f;
+        nm.rangeMin = currentMin;
+        nm.rangeMax = currentMax;
         chain.push_back(std::move(nm));
         markDirty();
     };
@@ -3024,7 +3046,8 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
     }
 
     // 8 macros — show "Macro N" + custom label if any. Currently
-    // mapped macro carries a "✓" prefix (cheap visual hint pre-4.4).
+    // mapped macro carries a "✓" prefix (cheap visual hint pre-4.2
+    // proper card UI).
     for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
         std::string label = (i == currentMacro ? "✓ Macro " : "   Macro ")
                              + std::to_string(i + 1);
@@ -3035,6 +3058,76 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
     }
 
     if (currentMacro >= 0) {
+        items.push_back({"", nullptr, true});  // separator
+
+        // Sub-range section. Header shows the live range (lets the
+        // user verify in one glance without typing). The five action
+        // items below cover the common edits — typed bounds for
+        // precision, presets for speed, invert as a one-click flip.
+        {
+            char rangeLabel[64];
+            std::snprintf(rangeLabel, sizeof(rangeLabel),
+                           "Range: %.2f .. %.2f", currentMin, currentMax);
+            items.push_back({rangeLabel, nullptr, false, false});
+        }
+
+        items.push_back({"Set min…", [this, findMapping]() {
+            auto* m = findMapping();
+            if (!m) return;
+            char def[16];
+            std::snprintf(def, sizeof(def), "%.3f", m->rangeMin);
+            m_textInputDialog.prompt("Range min", def,
+                [this, findMapping](const std::string& text) {
+                    SDL_StopTextInput(m_mainWindow.getHandle());
+                    auto* mm = findMapping();
+                    if (!mm) return;
+                    try { mm->rangeMin = std::stof(text); }
+                    catch (...) { return; }
+                    markDirty();
+                });
+        }, false, true});
+
+        items.push_back({"Set max…", [this, findMapping]() {
+            auto* m = findMapping();
+            if (!m) return;
+            char def[16];
+            std::snprintf(def, sizeof(def), "%.3f", m->rangeMax);
+            m_textInputDialog.prompt("Range max", def,
+                [this, findMapping](const std::string& text) {
+                    SDL_StopTextInput(m_mainWindow.getHandle());
+                    auto* mm = findMapping();
+                    if (!mm) return;
+                    try { mm->rangeMax = std::stof(text); }
+                    catch (...) { return; }
+                    markDirty();
+                });
+        }, false, true});
+
+        items.push_back({"Invert range",
+            [this, findMapping]() {
+                auto* m = findMapping();
+                if (!m) return;
+                std::swap(m->rangeMin, m->rangeMax);
+                markDirty();
+            },
+            false,
+            // Only meaningful when min != max — disable on a
+            // pinched mapping so a stray click can't no-op visibly.
+            std::abs(currentMax - currentMin) > 1e-6f});
+
+        items.push_back({"Reset range (0..1)",
+            [this, findMapping]() {
+                auto* m = findMapping();
+                if (!m) return;
+                m->rangeMin = 0.0f;
+                m->rangeMax = 1.0f;
+                markDirty();
+            }, false,
+            // Disabled when already at the default — same logic the
+            // LFO menu uses for its preset checkmarks.
+            std::abs(currentMin) > 1e-6f ||
+            std::abs(currentMax - 1.0f) > 1e-6f});
+
         items.push_back({"", nullptr, true});  // separator
         items.push_back({"Unmap", [unmap]() { unmap(); }, false, true});
     }
