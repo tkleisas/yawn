@@ -1193,6 +1193,23 @@ void App::launchVisualClipData(int track,
             m_project.track(track).visualBlendMode));
 
     m_visualEngine.applyLayerParamValues(track, vc.paramValues);
+
+    // Shader chain — additional passes after pass 0. Each pass's shader
+    // resolves through resolveShaderPath the same way pass 0 does.
+    // Empty additionalPasses (the common case) clears any prior chain
+    // so a clip switch doesn't carry stale stages.
+    {
+        std::vector<visual::VisualEngine::ChainPassSpec> chain;
+        chain.reserve(vc.additionalPasses.size());
+        for (const auto& p : vc.additionalPasses) {
+            visual::VisualEngine::ChainPassSpec spec;
+            spec.shaderPath  = resolveShaderPath(p.shaderPath);
+            spec.paramValues = p.paramValues;
+            chain.push_back(std::move(spec));
+        }
+        m_visualEngine.setLayerAdditionalPasses(track, chain);
+    }
+
     for (int i = 0; i < 8; ++i) {
         const auto& s = vc.knobLFOs[i];
         visual::VisualLFO lfo;

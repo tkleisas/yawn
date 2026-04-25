@@ -78,6 +78,20 @@ public:
     // if the shader fails to compile — any pre-existing layer keeps its
     // last-good program so live reloads don't break the show.
     bool loadLayer(int track, const std::string& shaderPath, int audioSource);
+
+    // Replace the layer's chain of *additional* shader passes (passes
+    // 1..N — pass 0 is whatever loadLayer() compiled). Each entry's
+    // shaderPath is compiled + cached; saved paramValues are applied
+    // by name. Pass an empty vector to clear the chain (single-pass
+    // mode). Returns false if any pass fails to compile — the layer
+    // keeps its previous chain to avoid breaking a running show.
+    struct ChainPassSpec {
+        std::string shaderPath;
+        std::vector<std::pair<std::string, float>> paramValues;
+    };
+    bool setLayerAdditionalPasses(int track,
+                                   const std::vector<ChainPassSpec>& passes);
+
     void setLayerAudioSource(int track, int audioSource);
     void setLayerBlendMode(int track, BlendMode mode);
     void setLayerText(int track, const std::string& text);
@@ -317,6 +331,61 @@ private:
 
         // User-declared shader parameters (bound via glUniform1f each frame).
         std::vector<Param> params;
+
+        // ── Shader chain — additional passes after pass 0 ─────────────
+        // Pass 0 lives in the legacy fields above (program, shaderPath,
+        // mtime, loc_*, params) so single-pass clips render identically
+        // to the pre-chain code path. Each ChainPass below contributes
+        // one extra ping-pong stage that reads the previous output via
+        // sampler2D iPrev (black for pass 0) plus the same iChannel0..3
+        // sources as pass 0. The final pass writes into L.fbo so the
+        // composite stage downstream is unchanged.
+        struct ChainPass {
+            GLuint program = 0;
+            std::string shaderPath;
+            std::filesystem::file_time_type mtime{};
+            bool mtimeValid = false;
+
+            // Same uniform location cache layout as Layer — chain
+            // passes can use every standard uniform pass 0 can, plus
+            // iPrev for the previous-pass output texture.
+            GLint loc_iResolution        = -1;
+            GLint loc_iTime              = -1;
+            GLint loc_iTimeDelta         = -1;
+            GLint loc_iFrame             = -1;
+            GLint loc_iMouse             = -1;
+            GLint loc_iDate              = -1;
+            GLint loc_iSampleRate        = -1;
+            GLint loc_iBeat              = -1;
+            GLint loc_iTransportPlaying  = -1;
+            GLint loc_iTransportTime     = -1;
+            GLint loc_iAudioLevel        = -1;
+            GLint loc_iAudioLow          = -1;
+            GLint loc_iAudioMid          = -1;
+            GLint loc_iAudioHigh         = -1;
+            GLint loc_iKick              = -1;
+            GLint loc_iChannel[4]        = {-1, -1, -1, -1};
+            GLint loc_iChannelResolution = -1;
+            GLint loc_iChannelTime       = -1;
+            GLint loc_iTextWidth         = -1;
+            GLint loc_iTextTexWidth      = -1;
+            GLint loc_iPrev              = -1;
+            GLint loc_knobs[8]           = {-1, -1, -1, -1, -1, -1, -1, -1};
+
+            std::vector<Param> params;
+        };
+        std::vector<ChainPass> additionalPasses;
+
+        // iPrev location on pass 0 — defaults to a dummy black texture
+        // so pass-0-only shaders that happen to declare iPrev still
+        // work without special-casing.
+        GLint loc_iPrev = -1;
+
+        // Ping-pong FBOs used when additionalPasses.size() >= 1.
+        // Allocated lazily in renderLayerToFBO and freed by clearLayer.
+        // Sized to match the layer's main FBO (640×360).
+        GLuint pingFBO[2] = {0, 0};
+        GLuint pingTex[2] = {0, 0};
     };
     std::unordered_map<int, Layer> m_layers;
 
@@ -371,6 +440,19 @@ private:
     bool   compileShaderForLayer(Layer& L, const std::string& userSrc,
                                   const std::string& sourceLabel);
     void   cacheUniformLocations(Layer& L);
+    // Shader-chain helpers — compile / cache uniforms for an additional
+    // pass beyond pass 0. Same shader preamble + param parsing as
+    // compileShaderForLayer; live-reload preserves params by name.
+    bool   compileChainPass(Layer::ChainPass& cp,
+                              const std::string& userSrc,
+                              const std::string& sourceLabel,
+                              const std::vector<std::pair<std::string,
+                                                          float>>& savedValues);
+    void   cacheChainPassUniformLocations(Layer::ChainPass& cp);
+    // Lazily allocate the two ping-pong FBO+textures used when a layer
+    // has additionalPasses. No-op once they exist; no-op on layers
+    // that stay single-pass.
+    bool   ensurePingFBOs(Layer& L);
     void   checkLayerHotReload(Layer& L);
     void   renderLayerToFBO(Layer& L, double transportSeconds,
                              double transportBeats, bool playing);

@@ -339,6 +339,34 @@ bool VisualEngine::createOutputWindowAndContext() {
     return true;
 }
 
+bool VisualEngine::ensurePingFBOs(Layer& L) {
+    if (L.pingFBO[0] && L.pingFBO[1]) return true;
+    for (int i = 0; i < 2; ++i) {
+        if (L.pingFBO[i]) continue;
+        glGenTextures(1, &L.pingTex[i]);
+        glBindTexture(GL_TEXTURE_2D, L.pingTex[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kInternalWidth, kInternalHeight,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glGenFramebuffers(1, &L.pingFBO[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, L.pingFBO[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, L.pingTex[i], 0);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Visual",
+                       "Chain ping-pong FBO[%d] incomplete (0x%04X)", i, status);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool VisualEngine::buildFBO(Layer& L) {
     glGenTextures(1, &L.fboTex);
     glBindTexture(GL_TEXTURE_2D, L.fboTex);
@@ -366,6 +394,14 @@ void VisualEngine::destroyLayer(Layer& L) {
     if (L.fbo)      { glDeleteFramebuffers(1, &L.fbo); L.fbo = 0; }
     if (L.fboTex)   { glDeleteTextures(1, &L.fboTex);  L.fboTex = 0; }
     if (L.program)  { glDeleteProgram(L.program); L.program = 0; }
+    // Chain passes + ping-pong FBOs.
+    for (auto& cp : L.additionalPasses)
+        if (cp.program) { glDeleteProgram(cp.program); cp.program = 0; }
+    L.additionalPasses.clear();
+    for (int i = 0; i < 2; ++i) {
+        if (L.pingFBO[i]) { glDeleteFramebuffers(1, &L.pingFBO[i]); L.pingFBO[i] = 0; }
+        if (L.pingTex[i]) { glDeleteTextures(1, &L.pingTex[i]);    L.pingTex[i] = 0; }
+    }
     if (L.textTex)  { glDeleteTextures(1, &L.textTex); L.textTex = 0; }
     if (L.videoTex) { glDeleteTextures(1, &L.videoTex); L.videoTex = 0; }
     L.video.reset();
@@ -563,6 +599,10 @@ void VisualEngine::cacheUniformLocations(Layer& L) {
     };
     for (int i = 0; i < 8; ++i)
         L.loc_knobs[i] = loc(kKnobNames[i]);
+    // iPrev — dummy on pass 0 (no previous output exists), but cache the
+    // location so a shader that declares `uniform sampler2D iPrev` and
+    // is later moved to a chain position behaves consistently.
+    L.loc_iPrev = loc("iPrev");
 }
 
 // ── Shared shader programs (blit + composite) ─────────────────────────────
@@ -1065,6 +1105,131 @@ void VisualEngine::clearLayer(int track) {
     updateAudioWiring();
 }
 
+// ── Shader chain helpers ──────────────────────────────────────────────
+
+void VisualEngine::cacheChainPassUniformLocations(Layer::ChainPass& cp) {
+    auto loc = [&](const char* n) { return glGetUniformLocation(cp.program, n); };
+    cp.loc_iResolution        = loc("iResolution");
+    cp.loc_iTime              = loc("iTime");
+    cp.loc_iTimeDelta         = loc("iTimeDelta");
+    cp.loc_iFrame             = loc("iFrame");
+    cp.loc_iMouse             = loc("iMouse");
+    cp.loc_iDate              = loc("iDate");
+    cp.loc_iSampleRate        = loc("iSampleRate");
+    cp.loc_iBeat              = loc("iBeat");
+    cp.loc_iTransportPlaying  = loc("iTransportPlaying");
+    cp.loc_iTransportTime     = loc("iTransportTime");
+    cp.loc_iAudioLevel        = loc("iAudioLevel");
+    cp.loc_iAudioLow          = loc("iAudioLow");
+    cp.loc_iAudioMid          = loc("iAudioMid");
+    cp.loc_iAudioHigh         = loc("iAudioHigh");
+    cp.loc_iKick              = loc("iKick");
+    cp.loc_iChannel[0]        = loc("iChannel0");
+    cp.loc_iChannel[1]        = loc("iChannel1");
+    cp.loc_iChannel[2]        = loc("iChannel2");
+    cp.loc_iChannel[3]        = loc("iChannel3");
+    cp.loc_iChannelResolution = loc("iChannelResolution[0]");
+    cp.loc_iChannelTime       = loc("iChannelTime[0]");
+    cp.loc_iTextWidth         = loc("iTextWidth");
+    cp.loc_iTextTexWidth      = loc("iTextTexWidth");
+    cp.loc_iPrev              = loc("iPrev");
+
+    static const char* kKnobNames[8] = {
+        "knobA", "knobB", "knobC", "knobD",
+        "knobE", "knobF", "knobG", "knobH"
+    };
+    for (int i = 0; i < 8; ++i)
+        cp.loc_knobs[i] = loc(kKnobNames[i]);
+}
+
+bool VisualEngine::compileChainPass(Layer::ChainPass& cp,
+                                      const std::string& userSrc,
+                                      const std::string& sourceLabel,
+                                      const std::vector<std::pair<std::string,
+                                                                  float>>& savedValues) {
+    std::string full = kShaderToyPreamble;
+    full += userSrc;
+    GLuint program = compileShaderProgram(kFullscreenVS, full.c_str(),
+                                            sourceLabel.c_str());
+    if (!program) return false;
+    if (cp.program) glDeleteProgram(cp.program);
+    cp.program = program;
+    cacheChainPassUniformLocations(cp);
+
+    auto parsed = parseShaderParams(userSrc);
+    std::vector<Param> newParams;
+    newParams.reserve(parsed.size());
+    for (auto& pp : parsed) {
+        Param p;
+        p.name         = pp.name;
+        p.min          = pp.min;
+        p.max          = pp.max;
+        p.defaultValue = pp.defaultValue;
+        p.value        = pp.defaultValue;
+        // First preserve any value still on the previous compile of
+        // this pass (live reload), then overlay the saved value from
+        // the project file (initial load).
+        for (const auto& old : cp.params)
+            if (old.name == p.name) { p.value = std::clamp(old.value, p.min, p.max); break; }
+        for (const auto& sv : savedValues)
+            if (sv.first == p.name) { p.value = std::clamp(sv.second, p.min, p.max); break; }
+        p.location = glGetUniformLocation(cp.program, p.name.c_str());
+        newParams.push_back(std::move(p));
+    }
+    cp.params = std::move(newParams);
+    return true;
+}
+
+bool VisualEngine::setLayerAdditionalPasses(int track,
+        const std::vector<ChainPassSpec>& passes) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    Layer& L = it->second;
+    ContextScope scope(m_outputWindow, m_outputContext);
+
+    // Compile every spec into a staging vector first — if any one
+    // fails we keep the previous chain so a typo in pass N doesn't
+    // wipe a working pass 0..N-1 from a live show.
+    std::vector<Layer::ChainPass> staged;
+    staged.reserve(passes.size());
+    for (size_t i = 0; i < passes.size(); ++i) {
+        const auto& spec = passes[i];
+        std::ifstream f(spec.shaderPath);
+        if (!f) {
+            LOG_ERROR("Visual",
+                       "Chain pass %zu: cannot open shader file: %s",
+                       i + 1, spec.shaderPath.c_str());
+            return false;
+        }
+        std::stringstream buf;
+        buf << f.rdbuf();
+        Layer::ChainPass cp;
+        cp.shaderPath = spec.shaderPath;
+        std::error_code ec;
+        auto mt = std::filesystem::last_write_time(spec.shaderPath, ec);
+        if (!ec) { cp.mtime = mt; cp.mtimeValid = true; }
+        if (!compileChainPass(cp, buf.str(), spec.shaderPath,
+                                spec.paramValues)) {
+            LOG_ERROR("Visual",
+                       "Chain pass %zu (%s) failed to compile — chain unchanged",
+                       i + 1, spec.shaderPath.c_str());
+            // Free the program we just compiled (compileChainPass
+            // allocated it on success — if it returned false the
+            // program was rolled back already).
+            return false;
+        }
+        staged.push_back(std::move(cp));
+    }
+
+    // Swap in — free old programs that the new chain doesn't reuse.
+    for (auto& old : L.additionalPasses)
+        if (old.program) { glDeleteProgram(old.program); old.program = 0; }
+    L.additionalPasses = std::move(staged);
+    LOG_INFO("Visual", "Layer %d: %zu additional shader pass(es)",
+             track, L.additionalPasses.size());
+    return true;
+}
+
 // ── Post-FX chain implementation ──────────────────────────────────────
 
 void VisualEngine::cachePostFXUniformLocations(PostEffect& pe) {
@@ -1514,63 +1679,10 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     }
 #endif
 
-    glBindFramebuffer(GL_FRAMEBUFFER, L.fbo);
-    glViewport(0, 0, kInternalWidth, kInternalHeight);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glUseProgram(L.program);
-
     // tDelta was computed up top so the 3D pass could use it; just
     // finalize the per-layer wall clock here for shader uniforms.
     const float tSecs  = static_cast<float>(preWall);
     L.lastWallSeconds  = preWall;
-
-    if (L.loc_iResolution >= 0)
-        glUniform3f(L.loc_iResolution,
-                    static_cast<float>(kInternalWidth),
-                    static_cast<float>(kInternalHeight), 1.0f);
-    if (L.loc_iTime       >= 0) glUniform1f(L.loc_iTime, tSecs);
-    if (L.loc_iTimeDelta  >= 0) glUniform1f(L.loc_iTimeDelta, tDelta);
-    if (L.loc_iFrame      >= 0) glUniform1i(L.loc_iFrame, L.frameCounter);
-    if (L.loc_iMouse      >= 0) glUniform4f(L.loc_iMouse, 0.0f, 0.0f, 0.0f, 0.0f);
-
-    {
-        std::time_t now = std::time(nullptr);
-        std::tm lt = *std::localtime(&now);
-        const float secondsOfDay =
-            static_cast<float>(lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
-        if (L.loc_iDate >= 0)
-            glUniform4f(L.loc_iDate,
-                        static_cast<float>(lt.tm_year + 1900),
-                        static_cast<float>(lt.tm_mon),
-                        static_cast<float>(lt.tm_mday),
-                        secondsOfDay);
-    }
-
-    if (L.loc_iSampleRate       >= 0) glUniform1f(L.loc_iSampleRate, 44100.0f);
-    if (L.loc_iBeat             >= 0) glUniform1f(L.loc_iBeat, static_cast<float>(transportBeats));
-    if (L.loc_iTransportPlaying >= 0) glUniform1f(L.loc_iTransportPlaying, playing ? 1.0f : 0.0f);
-    if (L.loc_iTransportTime    >= 0) glUniform1f(L.loc_iTransportTime, static_cast<float>(transportSeconds));
-
-    // Audio reactivity uniforms — sampled once above so the 3D pass
-    // and the shader block see consistent values (readLayerKick etc.
-    // are stateful and can't be called twice per frame).
-    if (L.loc_iAudioLevel >= 0) glUniform1f(L.loc_iAudioLevel, audioLevel);
-    if (L.loc_iAudioLow   >= 0) glUniform1f(L.loc_iAudioLow,   audioBands.low);
-    if (L.loc_iAudioMid   >= 0) glUniform1f(L.loc_iAudioMid,   audioBands.mid);
-    if (L.loc_iAudioHigh  >= 0) glUniform1f(L.loc_iAudioHigh,  audioBands.high);
-    if (L.loc_iKick       >= 0) glUniform1f(L.loc_iKick,       audioKick);
-
-    // iChannel0 = audio (FFT + waveform). iChannel1 = text strip (R8,
-    // alpha-only, swizzled to read as .rrrr). iChannel2..3 dummy.
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_audioTex ? m_audioTex : m_dummyChannelTex[0]);
-    if (L.loc_iChannel[0] >= 0) glUniform1i(L.loc_iChannel[0], 0);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, L.textTex ? L.textTex : m_dummyChannelTex[1]);
-    if (L.loc_iChannel[1] >= 0) glUniform1i(L.loc_iChannel[1], 1);
 
     // One-shot diagnostic: log per-layer text state the first time it
     // renders with a non-empty text string. Helps diagnose "black screen"
@@ -1584,6 +1696,18 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
                  static_cast<unsigned>(L.textTex),
                  static_cast<int>(L.loc_iChannel[1]),
                  L.textPixelW);
+    }
+
+    // Compute knob (base + LFO) values once per frame — chain passes
+    // share the same A..H macros, so it'd be wasteful to evaluate the
+    // LFOs N times. The per-pass loop just uploads the cached value.
+    for (int i = 0; i < 8; ++i) {
+        float v = L.knobValues[i];
+        if (L.knobLFOs[i].enabled) {
+            float mod = L.knobLFOs[i].evaluate(transportBeats, preWall);
+            v = std::clamp(v + mod * L.knobLFOs[i].depth, 0.0f, 1.0f);
+        }
+        L.knobDisplayValues[i] = v;  // cached for the UI
     }
 
     // iChannel2 = video frame if attached, else dummy black.
@@ -1657,7 +1781,7 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             }
         }
     }
-    glActiveTexture(GL_TEXTURE2);
+    // Resolve which texture iChannel2 sees (model > video > dummy).
     GLuint iCh2Tex = m_dummyChannelTex[2];
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
     if (L.modelRenderer && L.modelRenderer->hasModel() &&
@@ -1668,57 +1792,140 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     if ((L.video || L.liveVideo) && L.videoTex) {
         iCh2Tex = L.videoTex;
     }
-    glBindTexture(GL_TEXTURE_2D, iCh2Tex);
-    if (L.loc_iChannel[2] >= 0) glUniform1i(L.loc_iChannel[2], 2);
 
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, m_dummyChannelTex[3]);
-    if (L.loc_iChannel[3] >= 0) glUniform1i(L.loc_iChannel[3], 3);
-    if (L.loc_iChannelResolution >= 0) {
-        // iChannelResolution reports the texture's own size, per the
-        // Shadertoy convention. For the text strip's rendered width,
-        // shaders should read the dedicated iTextWidth uniform below.
-        const float res[12] = {
-            static_cast<float>(kAudioTexW), static_cast<float>(kAudioTexH), 1.0f,
-            static_cast<float>(kTextTexW),  static_cast<float>(kTextTexH),  1.0f,
-            1.0f, 1.0f, 1.0f,
-            1.0f, 1.0f, 1.0f,
-        };
-        glUniform3fv(L.loc_iChannelResolution, 4, res);
-    }
-    if (L.loc_iTextWidth >= 0) {
-        // Fall back to the full tex width for unset/empty text so shaders
-        // never divide by zero.
-        float w = (L.textPixelW > 0) ? static_cast<float>(L.textPixelW)
-                                      : static_cast<float>(kTextTexW);
-        glUniform1f(L.loc_iTextWidth, w);
-    }
-    if (L.loc_iTextTexWidth >= 0) {
-        glUniform1f(L.loc_iTextTexWidth, static_cast<float>(kTextTexW));
-    }
-    if (L.loc_iChannelTime >= 0) {
-        const float t[4] = {tSecs, tSecs, tSecs, tSecs};
-        glUniform1fv(L.loc_iChannelTime, 4, t);
-    }
+    // Render one pass into `targetFBO`. Templated over the uniform-loc
+    // source so it works for pass 0 (Layer fields) and chain passes
+    // (ChainPass fields) — both have identical loc field names + the
+    // same param schema. iPrevTex is the previous pass's output (for
+    // chain passes); pass 0's iPrev binds to a dummy black texture.
+    auto renderPass = [&](GLuint program, auto& src,
+                          GLuint targetFBO, GLuint iPrevTex,
+                          const std::vector<Param>& params) {
+        glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
+        glViewport(0, 0, kInternalWidth, kInternalHeight);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(program);
 
-    // Always-available A..H knobs, with optional per-knob LFO modulation.
-    for (int i = 0; i < 8; ++i) {
-        float v = L.knobValues[i];
-        if (L.knobLFOs[i].enabled) {
-            float m = L.knobLFOs[i].evaluate(transportBeats, preWall);
-            v = std::clamp(v + m * L.knobLFOs[i].depth, 0.0f, 1.0f);
+        if (src.loc_iResolution >= 0)
+            glUniform3f(src.loc_iResolution,
+                        static_cast<float>(kInternalWidth),
+                        static_cast<float>(kInternalHeight), 1.0f);
+        if (src.loc_iTime       >= 0) glUniform1f(src.loc_iTime, tSecs);
+        if (src.loc_iTimeDelta  >= 0) glUniform1f(src.loc_iTimeDelta, tDelta);
+        if (src.loc_iFrame      >= 0) glUniform1i(src.loc_iFrame, L.frameCounter);
+        if (src.loc_iMouse      >= 0) glUniform4f(src.loc_iMouse, 0.0f, 0.0f, 0.0f, 0.0f);
+
+        {
+            std::time_t now = std::time(nullptr);
+            std::tm lt = *std::localtime(&now);
+            const float secondsOfDay =
+                static_cast<float>(lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
+            if (src.loc_iDate >= 0)
+                glUniform4f(src.loc_iDate,
+                            static_cast<float>(lt.tm_year + 1900),
+                            static_cast<float>(lt.tm_mon),
+                            static_cast<float>(lt.tm_mday),
+                            secondsOfDay);
         }
-        L.knobDisplayValues[i] = v;  // cache for the UI
-        if (L.loc_knobs[i] >= 0) glUniform1f(L.loc_knobs[i], v);
+
+        if (src.loc_iSampleRate       >= 0) glUniform1f(src.loc_iSampleRate, 44100.0f);
+        if (src.loc_iBeat             >= 0) glUniform1f(src.loc_iBeat, static_cast<float>(transportBeats));
+        if (src.loc_iTransportPlaying >= 0) glUniform1f(src.loc_iTransportPlaying, playing ? 1.0f : 0.0f);
+        if (src.loc_iTransportTime    >= 0) glUniform1f(src.loc_iTransportTime, static_cast<float>(transportSeconds));
+
+        if (src.loc_iAudioLevel >= 0) glUniform1f(src.loc_iAudioLevel, audioLevel);
+        if (src.loc_iAudioLow   >= 0) glUniform1f(src.loc_iAudioLow,   audioBands.low);
+        if (src.loc_iAudioMid   >= 0) glUniform1f(src.loc_iAudioMid,   audioBands.mid);
+        if (src.loc_iAudioHigh  >= 0) glUniform1f(src.loc_iAudioHigh,  audioBands.high);
+        if (src.loc_iKick       >= 0) glUniform1f(src.loc_iKick,       audioKick);
+
+        // iChannel0..3 — the underlying GL texture bindings on TU0..3
+        // are stable across passes (we set them at the same time we
+        // upload uniforms here so program state stays self-contained).
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_audioTex ? m_audioTex : m_dummyChannelTex[0]);
+        if (src.loc_iChannel[0] >= 0) glUniform1i(src.loc_iChannel[0], 0);
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, L.textTex ? L.textTex : m_dummyChannelTex[1]);
+        if (src.loc_iChannel[1] >= 0) glUniform1i(src.loc_iChannel[1], 1);
+
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, iCh2Tex);
+        if (src.loc_iChannel[2] >= 0) glUniform1i(src.loc_iChannel[2], 2);
+
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, m_dummyChannelTex[3]);
+        if (src.loc_iChannel[3] >= 0) glUniform1i(src.loc_iChannel[3], 3);
+
+        // iPrev — sampler unit 4 so it doesn't clobber iChannel3.
+        // For pass 0 we point it at the dummy black texture; chain
+        // passes get the previous output.
+        if (src.loc_iPrev >= 0) {
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D,
+                          iPrevTex ? iPrevTex : m_dummyChannelTex[3]);
+            glUniform1i(src.loc_iPrev, 4);
+        }
+
+        if (src.loc_iChannelResolution >= 0) {
+            const float res[12] = {
+                static_cast<float>(kAudioTexW), static_cast<float>(kAudioTexH), 1.0f,
+                static_cast<float>(kTextTexW),  static_cast<float>(kTextTexH),  1.0f,
+                1.0f, 1.0f, 1.0f,
+                1.0f, 1.0f, 1.0f,
+            };
+            glUniform3fv(src.loc_iChannelResolution, 4, res);
+        }
+        if (src.loc_iTextWidth >= 0) {
+            float w = (L.textPixelW > 0) ? static_cast<float>(L.textPixelW)
+                                          : static_cast<float>(kTextTexW);
+            glUniform1f(src.loc_iTextWidth, w);
+        }
+        if (src.loc_iTextTexWidth >= 0)
+            glUniform1f(src.loc_iTextTexWidth, static_cast<float>(kTextTexW));
+        if (src.loc_iChannelTime >= 0) {
+            const float t[4] = {tSecs, tSecs, tSecs, tSecs};
+            glUniform1fv(src.loc_iChannelTime, 4, t);
+        }
+
+        // A..H knob macros (shared across passes — values were
+        // computed once above into knobDisplayValues).
+        for (int i = 0; i < 8; ++i)
+            if (src.loc_knobs[i] >= 0)
+                glUniform1f(src.loc_knobs[i], L.knobDisplayValues[i]);
+
+        // Per-pass user-declared @range params.
+        for (const auto& p : params)
+            if (p.location >= 0) glUniform1f(p.location, p.value);
+
+        glBindVertexArray(m_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    };
+
+    // Render the chain. Single-pass: write straight into L.fbo, no
+    // ping-pong allocation. Multi-pass: pass 0 → pingFBO[0], chain
+    // passes ping-pong, last pass writes into L.fbo so the composite
+    // stage downstream is unchanged.
+    if (L.additionalPasses.empty()) {
+        renderPass(L.program, L, L.fbo, 0, L.params);
+    } else if (!ensurePingFBOs(L)) {
+        // Allocation failed — degrade to single-pass to keep showing
+        // something rather than blanking the layer.
+        renderPass(L.program, L, L.fbo, 0, L.params);
+    } else {
+        renderPass(L.program, L, L.pingFBO[0], 0, L.params);
+        for (size_t i = 0; i < L.additionalPasses.size(); ++i) {
+            const int prevSlot = static_cast<int>(i) % 2;
+            const int currSlot = (static_cast<int>(i) + 1) % 2;
+            const bool isLast  = (i + 1 == L.additionalPasses.size());
+            const GLuint target = isLast ? L.fbo : L.pingFBO[currSlot];
+            auto& cp = L.additionalPasses[i];
+            renderPass(cp.program, cp, target, L.pingTex[prevSlot], cp.params);
+        }
     }
 
-    // User-declared params: one glUniform1f per param.
-    for (const auto& p : L.params) {
-        if (p.location >= 0) glUniform1f(p.location, p.value);
-    }
-
-    glBindVertexArray(m_vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
     ++L.frameCounter;
 }
 
