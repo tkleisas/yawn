@@ -71,6 +71,12 @@ uniform sampler2D iChannel3;
 uniform vec3      iChannelResolution[4];
 uniform float     iChannelTime[4];
 
+// Previous-pass output. On pass 0 this binds to a dummy black texture
+// (no upstream pass exists); on each chain pass it binds to the prior
+// pass's framebuffer colour attachment. Effect shaders sample it via
+// `texture(iPrev, uv)` to compose on top of the running image.
+uniform sampler2D iPrev;
+
 // YAWN-specific extensions — not in Shadertoy.
 // iTime advances with wall-clock; iTransportTime follows the transport
 // position (stops when playback is paused). iBeat is transport beats.

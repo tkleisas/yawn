@@ -660,6 +660,63 @@ void App::buildWidgetTree() {
             updateDetailForSelectedTrack();
         });
 
+    // Shader chain (per-clip) callbacks. Mutate the VisualClip in-place
+    // and re-launch the layer so the live engine state matches the new
+    // chain. Targets the track's active scene, falling back to the
+    // selected scene when no clip is launched.
+    auto chainTargetSlot = [this]() -> ClipSlot* {
+        const int sc = (m_project.track(m_selectedTrack).defaultScene >= 0)
+            ? m_project.track(m_selectedTrack).defaultScene
+            : m_selectedScene;
+        return m_project.getSlot(m_selectedTrack, sc);
+    };
+    auto reloadVisualLayer = [this](ClipSlot* slot) {
+        if (!slot || !slot->visualClip) return;
+        launchVisualClipData(m_selectedTrack, *slot->visualClip,
+                              slot->visualClip->firstShaderPath());
+    };
+
+    m_visualParamsPanel->setOnChainPassChanged(
+        [this, chainTargetSlot, reloadVisualLayer](
+                int passIdx, const std::string& name, float v) {
+            // Effect chain lives on the *track* now — every clip on
+            // this track shares the same chain (matches audio FX UX).
+            if (m_selectedTrack < 0 ||
+                m_selectedTrack >= m_project.numTracks()) return;
+            auto& chain = m_project.track(m_selectedTrack).visualEffectChain;
+            if (passIdx < 0 || passIdx >= (int)chain.size()) return;
+            bool found = false;
+            for (auto& kv : chain[passIdx].paramValues) {
+                if (kv.first == name) { kv.second = v; found = true; break; }
+            }
+            if (!found) chain[passIdx].paramValues.emplace_back(name, v);
+            // No selective per-pass param apply on the engine yet —
+            // re-launching is the simplest way to pick up the change.
+            // Acceptable: chain knob turns are rare relative to source
+            // (A..H) knob turns, which take the cheap path.
+            auto* slot = chainTargetSlot();
+            if (slot) reloadVisualLayer(slot);
+            markDirty();
+        });
+
+    m_visualParamsPanel->setOnChainPassRemove(
+        [this, chainTargetSlot, reloadVisualLayer](int passIdx) {
+            if (m_selectedTrack < 0 ||
+                m_selectedTrack >= m_project.numTracks()) return;
+            auto& chain = m_project.track(m_selectedTrack).visualEffectChain;
+            if (passIdx < 0 || passIdx >= (int)chain.size()) return;
+            chain.erase(chain.begin() + passIdx);
+            auto* slot = chainTargetSlot();
+            if (slot) reloadVisualLayer(slot);
+            markDirty();
+            updateDetailForSelectedTrack();
+        });
+
+    m_visualParamsPanel->setOnChainAdd(
+        [this](float mx, float my) {
+            showShaderLibraryMenu(mx, my);
+        });
+
     // Synchronized horizontal scrolling between session clips and mixer strips
     m_sessionPanel->setOnScrollChanged([this](float sx) {
         m_mixerPanel->setScrollX(sx);
@@ -1194,18 +1251,19 @@ void App::launchVisualClipData(int track,
 
     m_visualEngine.applyLayerParamValues(track, vc.firstPassParamValues());
 
-    // Shader chain — additional passes (1..N) after pass 0. Pass 0
-    // is whatever loadLayer compiled above; the chain here covers the
-    // rest. Empty chain (single-pass clip) clears any prior extras
-    // so a clip switch doesn't carry stale stages.
+    // Effect chain — additional passes after the source. The chain
+    // lives on the *track* (audio-FX-style) so it persists across
+    // clip switches; we just re-push it here whenever the layer is
+    // re-launched. Empty chain clears any prior extras.
     {
         std::vector<visual::VisualEngine::ChainPassSpec> extras;
-        if (vc.shaderChain.size() > 1) {
-            extras.reserve(vc.shaderChain.size() - 1);
-            for (size_t i = 1; i < vc.shaderChain.size(); ++i) {
+        if (track >= 0 && track < m_project.numTracks()) {
+            const auto& chain = m_project.track(track).visualEffectChain;
+            extras.reserve(chain.size());
+            for (const auto& p : chain) {
                 visual::VisualEngine::ChainPassSpec spec;
-                spec.shaderPath  = resolveShaderPath(vc.shaderChain[i].shaderPath);
-                spec.paramValues = vc.shaderChain[i].paramValues;
+                spec.shaderPath  = resolveShaderPath(p.shaderPath);
+                spec.paramValues = p.paramValues;
                 extras.push_back(std::move(spec));
             }
         }
@@ -2694,6 +2752,81 @@ void App::onVideoImportDone(PendingVideoImport& pi) {
                         1.5f, ui::ToastManager::Severity::Info);
 }
 
+void App::showShaderLibraryMenu(float mx, float my) {
+    // Refresh on every open so newly imported shaders appear without
+    // restarting the app. Project root drives <project>/shaders/.
+    if (!m_projectPath.empty())
+        m_shaderLibrary.setProjectShadersDir(m_projectPath / "shaders");
+    else
+        m_shaderLibrary.setProjectShadersDir({});
+    m_shaderLibrary.refresh();
+
+    const auto& entries = m_shaderLibrary.entries();
+    std::vector<ui::ContextMenu::Item> items;
+
+    // The "+ Add Pass" menu only adds *effects* — passes that sample
+    // iPrev and process the previous output. "Sources" (standalone
+    // generators that ignore iPrev) would blank the chain if appended,
+    // so we filter them out here. Project shaders are kept (the user
+    // wrote them; they presumably know the convention they used).
+    auto isEffectish = [](const std::string& cat) {
+        return cat == "Effects" || cat == "Project";
+    };
+    bool anyEffect = false;
+    for (const auto& e : entries) if (isEffectish(e.category)) { anyEffect = true; break; }
+
+    if (entries.empty() || !anyEffect) {
+        items.push_back({"(no chainable effects found)", nullptr, false, false});
+    } else {
+        // Group by category — Project then Effects, in that order.
+        // Insert separator + heading rows so the menu reads like a
+        // categorised picker.
+        std::string lastCat;
+        for (const auto& e : entries) {
+            if (!isEffectish(e.category)) continue;
+            if (e.category != lastCat) {
+                if (!lastCat.empty())
+                    items.push_back({"", nullptr, true, false}); // separator
+                items.push_back({"── " + e.category + " ──", nullptr, false, false});
+                lastCat = e.category;
+            }
+            std::string path = e.absolutePath;
+            items.push_back({e.label, [this, path]() {
+                if (m_selectedTrack < 0 ||
+                    m_selectedTrack >= m_project.numTracks()) return;
+                auto& trk = m_project.track(m_selectedTrack);
+                visual::ShaderPass pass;
+                // Store project-relative path when possible so projects
+                // remain portable; fall back to absolute otherwise.
+                pass.shaderPath = path;
+                if (!m_projectPath.empty()) {
+                    std::error_code ec;
+                    auto rel = std::filesystem::relative(path, m_projectPath, ec);
+                    if (!ec && !rel.empty() && rel.string().find("..") == std::string::npos)
+                        pass.shaderPath = rel.generic_string();
+                }
+                trk.visualEffectChain.push_back(std::move(pass));
+                // Re-launch the active clip so the engine picks up
+                // the new chain entry. If no clip is launched on this
+                // track yet, the chain just sits ready and applies
+                // the next time one launches.
+                int sc = (trk.defaultScene >= 0) ? trk.defaultScene
+                                                   : m_selectedScene;
+                auto* slot = m_project.getSlot(m_selectedTrack, sc);
+                if (slot && slot->visualClip) {
+                    launchVisualClipData(m_selectedTrack, *slot->visualClip,
+                                          slot->visualClip->firstShaderPath());
+                }
+                markDirty();
+                updateDetailForSelectedTrack();
+            }, false, true});
+        }
+    }
+
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                 ui::fw::Point{mx, my});
+}
+
 void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
     if (knobIdx < 0 || knobIdx >= 8) return;
     if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
@@ -3123,6 +3256,32 @@ void App::updateDetailForSelectedTrack() {
                                   m_visualEngine.getPostFXParams(i));
         }
         m_visualParamsPanel->rebuildPostFX(fxChain);
+
+        // Build the effect-chain snapshot for the panel — one entry
+        // per effect on the selected *track* (chain-on-track, not on
+        // clip). Each entry shows the shader's @range uniforms
+        // overlaid with the saved per-pass values.
+        std::vector<std::pair<std::string,
+            std::vector<visual::VisualEngine::LayerParamInfo>>> shaderChainSnap;
+        {
+            const auto& trkChain =
+                m_project.track(m_selectedTrack).visualEffectChain;
+            for (const auto& pass : trkChain) {
+                if (pass.shaderPath.empty()) continue;
+                std::filesystem::path pp(pass.shaderPath);
+                auto pParams = visual::VisualEngine::parseShaderFileParams(
+                    resolveShaderPath(pass.shaderPath));
+                for (auto& info : pParams) {
+                    for (const auto& kv : pass.paramValues) {
+                        if (kv.first == info.name) {
+                            info.value = kv.second; break;
+                        }
+                    }
+                }
+                shaderChainSnap.emplace_back(pp.stem().string(), std::move(pParams));
+            }
+        }
+        m_visualParamsPanel->rebuildShaderChain(shaderChainSnap);
 
         // Wire the selected visual-clip slot's follow-action block
         // into the browser-panel editor (the browser panel is shown

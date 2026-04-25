@@ -3,6 +3,7 @@
 #include "ui/Window.h"
 #include "ui/Renderer.h"
 #include "visual/VisualEngine.h"
+#include "visual/ShaderLibrary.h"
 #include "ui/Font.h"
 #include "ui/ToastManager.h"
 #include "ui/Widget.h"
@@ -96,6 +97,7 @@ private:
     void showSceneContextMenu(int sceneIndex, float mx, float my);
     void showArrangementClipContextMenu(int trackIndex, int clipIdx, float mx, float my);
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
+    void showShaderLibraryMenu(float mx, float my);
 
     // Shared launch logic for visual clips — routes either a
     // session-grid clip (via its source slot) or an arrangement clip
@@ -160,6 +162,7 @@ private:
 
     ui::Window m_mainWindow;
     visual::VisualEngine m_visualEngine;
+    visual::ShaderLibrary m_shaderLibrary;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
     ui::ToastManager m_toastManager;

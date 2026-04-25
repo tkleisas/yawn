@@ -29,10 +29,20 @@ void ShaderLibrary::scanDir(const fs::path& dir, const std::string& category) {
 void ShaderLibrary::refresh() {
     m_entries.clear();
 
-    // Bundled effects + post-FX. Two separate categories so the menu
-    // can group them visually (and so a user can tell them apart).
-    scanDir("assets/shaders/examples", "Effects");
-    scanDir("assets/shaders/post",     "Post");
+    // Two semantically distinct buckets — confusingly bundled in
+    // sibling folders historically. Keep them separate in the menu so
+    // users compose chains correctly (Source first, then Effects):
+    //   • assets/shaders/examples/  → "Sources"  — standalone generators
+    //                                  that synthesize from iTime/audio/
+    //                                  iChannel*. They IGNORE iPrev, so
+    //                                  using one as a chain pass > 0 will
+    //                                  blank whatever was rendered before.
+    //   • assets/shaders/post/       → "Effects" — written to sample iPrev
+    //                                  and process the previous output.
+    //                                  These are the right pick for any
+    //                                  pass after the first.
+    scanDir("assets/shaders/examples", "Sources");
+    scanDir("assets/shaders/post",     "Effects");
 
     if (!m_projectDir.empty()) {
         scanDir(m_projectDir, "Project");
@@ -54,11 +64,13 @@ void ShaderLibrary::refresh() {
             m_entries.end());
     }
 
-    // Stable order: Project first (most specific), then Effects, then Post.
+    // Stable order: Project first (most specific), then Effects (the
+    // common pick for chain pass > 0), then Sources (typically the
+    // first pass only).
     auto rank = [](const std::string& c) {
         if (c == "Project") return 0;
         if (c == "Effects") return 1;
-        if (c == "Post")    return 2;
+        if (c == "Sources") return 2;
         return 3;
     };
     std::sort(m_entries.begin(), m_entries.end(),

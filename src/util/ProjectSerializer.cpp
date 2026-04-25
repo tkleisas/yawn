@@ -647,20 +647,20 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
     j["lengthBeats"] = vc.lengthBeats;
     j["audioSource"] = vc.audioSource;
 
-    // Shader chain — every pass writes shaderPath + (sparse) params.
-    // Empty array == no shader (clip is video / model / live only).
-    json chain = json::array();
-    for (const auto& p : vc.shaderChain) {
-        json pj;
-        pj["shaderPath"] = p.shaderPath;
-        if (!p.paramValues.empty()) {
+    // Source pass — the per-clip generator. Empty path means the clip
+    // has no source shader (relies on video / model / live alone).
+    // Effects no longer live here; the track's visualEffectChain owns
+    // them so they apply across whichever clip plays on the track.
+    if (!vc.source.shaderPath.empty() || !vc.source.paramValues.empty()) {
+        json sj;
+        sj["shaderPath"] = vc.source.shaderPath;
+        if (!vc.source.paramValues.empty()) {
             json params = json::object();
-            for (auto& kv : p.paramValues) params[kv.first] = kv.second;
-            pj["params"] = params;
+            for (auto& kv : vc.source.paramValues) params[kv.first] = kv.second;
+            sj["params"] = params;
         }
-        chain.push_back(std::move(pj));
+        j["source"] = std::move(sj);
     }
-    j["shaderChain"] = std::move(chain);
 
     // LFO state — sparse: only write slots that are enabled.
     json lfos = json::object();
@@ -698,39 +698,31 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
     vc->lengthBeats = val.value("lengthBeats", 4.0);
     vc->audioSource = val.value("audioSource", -1);
 
-    // Shader chain. New format is a single "shaderChain" array; we
-    // also accept the prior single-pass format ("shaderPath" + "params"
-    // and the brief "additionalPasses" array used during phase 1) so
-    // mid-development project files don't get stranded.
-    if (val.contains("shaderChain") && val["shaderChain"].is_array()) {
-        for (const auto& pj : val["shaderChain"]) {
-            visual::ShaderPass p;
-            p.shaderPath = pj.value("shaderPath", "");
-            if (pj.contains("params") && pj["params"].is_object())
-                for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
-                    p.paramValues.emplace_back(it.key(), it.value().get<float>());
-            vc->shaderChain.push_back(std::move(p));
-        }
+    // Source pass. New format is a single "source" object holding
+    // shaderPath + sparse params. We still accept the prior shapes
+    // (legacy "shaderChain" array, "shaderPath"+"params", and
+    // "additionalPasses") and just take the first pass as the source —
+    // any per-clip effect chain entries from older saves are dropped
+    // since effects now live on the track and we can't reliably
+    // associate clip-level entries with a specific track here.
+    if (val.contains("source") && val["source"].is_object()) {
+        const auto& sj = val["source"];
+        vc->source.shaderPath = sj.value("shaderPath", "");
+        if (sj.contains("params") && sj["params"].is_object())
+            for (auto it = sj["params"].begin(); it != sj["params"].end(); ++it)
+                vc->source.paramValues.emplace_back(it.key(), it.value().get<float>());
+    } else if (val.contains("shaderChain") && val["shaderChain"].is_array()
+               && !val["shaderChain"].empty()) {
+        const auto& pj = val["shaderChain"].front();
+        vc->source.shaderPath = pj.value("shaderPath", "");
+        if (pj.contains("params") && pj["params"].is_object())
+            for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
+                vc->source.paramValues.emplace_back(it.key(), it.value().get<float>());
     } else {
-        std::string legacyPath = val.value("shaderPath", std::string{});
-        if (!legacyPath.empty()) {
-            visual::ShaderPass p;
-            p.shaderPath = std::move(legacyPath);
-            if (val.contains("params") && val["params"].is_object())
-                for (auto it = val["params"].begin(); it != val["params"].end(); ++it)
-                    p.paramValues.emplace_back(it.key(), it.value().get<float>());
-            vc->shaderChain.push_back(std::move(p));
-        }
-        if (val.contains("additionalPasses") && val["additionalPasses"].is_array()) {
-            for (const auto& pj : val["additionalPasses"]) {
-                visual::ShaderPass p;
-                p.shaderPath = pj.value("shaderPath", "");
-                if (pj.contains("params") && pj["params"].is_object())
-                    for (auto it = pj["params"].begin(); it != pj["params"].end(); ++it)
-                        p.paramValues.emplace_back(it.key(), it.value().get<float>());
-                vc->shaderChain.push_back(std::move(p));
-            }
-        }
+        vc->source.shaderPath = val.value("shaderPath", std::string{});
+        if (val.contains("params") && val["params"].is_object())
+            for (auto it = val["params"].begin(); it != val["params"].end(); ++it)
+                vc->source.paramValues.emplace_back(it.key(), it.value().get<float>());
     }
 
     vc->text            = val.value("text",            std::string());
@@ -888,6 +880,23 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                 case Track::VisualBlendMode::Normal:   bm = "Normal";   break;
             }
             tj["visualBlendMode"] = bm;
+        }
+
+        // Visual effect chain — per-track, ordered. Empty array
+        // omitted to keep saves slim for non-Visual tracks.
+        if (!tr.visualEffectChain.empty()) {
+            json chain = json::array();
+            for (const auto& p : tr.visualEffectChain) {
+                json pj;
+                pj["shaderPath"] = p.shaderPath;
+                if (!p.paramValues.empty()) {
+                    json params = json::object();
+                    for (auto& kv : p.paramValues) params[kv.first] = kv.second;
+                    pj["params"] = params;
+                }
+                chain.push_back(std::move(pj));
+            }
+            tj["visualEffectChain"] = std::move(chain);
         }
 
         // Automation mode and lanes
@@ -1069,6 +1078,21 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                                     : (bm == "Multiply") ? Track::VisualBlendMode::Multiply
                                     : (bm == "Screen")   ? Track::VisualBlendMode::Screen
                                                            : Track::VisualBlendMode::Normal;
+            }
+
+            // Visual effect chain — per track, ordered.
+            if (tj.contains("visualEffectChain") &&
+                tj["visualEffectChain"].is_array()) {
+                for (const auto& pj : tj["visualEffectChain"]) {
+                    visual::ShaderPass p;
+                    p.shaderPath = pj.value("shaderPath", "");
+                    if (pj.contains("params") && pj["params"].is_object())
+                        for (auto it = pj["params"].begin();
+                             it != pj["params"].end(); ++it)
+                            p.paramValues.emplace_back(it.key(),
+                                                        it.value().get<float>());
+                    tr.visualEffectChain.push_back(std::move(p));
+                }
             }
 
             // Automation mode and lanes

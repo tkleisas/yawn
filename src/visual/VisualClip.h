@@ -24,11 +24,9 @@ struct SavedKnobLFO {
     bool    sync    = true;
 };
 
-// ShaderPass — one stage in a clip's shader chain. Pass 0 reads the
-// clip's iChannel0..3 inputs (audio / text / video / dummy) and a
-// black `iPrev`. Each subsequent pass receives the previous pass's
-// output via `iPrev` while still seeing the original iChannel inputs
-// unchanged. paramValues are scoped to the pass — only this pass's
+// ShaderPass — a single shader stage with its own param overrides.
+// Used for both the clip's source and each entry in the track's
+// effect chain. paramValues are scoped to this pass — only its
 // @range uniforms are looked up here.
 struct ShaderPass {
     std::string shaderPath;
@@ -36,10 +34,13 @@ struct ShaderPass {
 };
 
 struct VisualClip {
-    // Shader chain — every pass is equal. Empty chain means the layer
-    // has no compiled shader (typically a clip that's only a video /
-    // model placeholder before the user picks an effect).
-    std::vector<ShaderPass> shaderChain;
+    // Source pass — the clip's per-clip generator shader. Sampled
+    // from iTime / iChannel*; ignores iPrev. Sits at pass 0 of the
+    // render chain; the post-source effects come from the *track*'s
+    // visualEffectChain (so they apply to whichever clip plays).
+    // Empty source.shaderPath = no source shader (the layer relies
+    // on video / model / live input alone).
+    ShaderPass source;
 
     std::string name;               // display name (defaults to filename stem)
     int         colorIndex = 0;     // UI accent colour
@@ -50,29 +51,22 @@ struct VisualClip {
     //   0..N-1 = track index
     int audioSource = -1;
 
-    // Convenience accessors.
-    int  passCount() const { return static_cast<int>(shaderChain.size()); }
-    bool hasPasses() const { return !shaderChain.empty(); }
-    const std::string& firstShaderPath() const {
-        static const std::string empty;
-        return shaderChain.empty() ? empty : shaderChain.front().shaderPath;
-    }
-    // Ensure pass 0 exists (creating an empty one if not) so callers
-    // that want to assign into it can do so unconditionally.
-    ShaderPass& ensurePass0() {
-        if (shaderChain.empty()) shaderChain.emplace_back();
-        return shaderChain.front();
-    }
-    // Mutable ref to pass-0 paramValues (the engine reads these by
-    // name when launching the layer). Auto-creates pass 0 to keep
-    // sites that just want to push a value tidy.
+    // Convenience accessors. Names kept matching the historical
+    // shaderChain[0]-based API so existing call sites keep working
+    // after the chain-on-track refactor; under the hood they all
+    // touch the single `source` field.
+    bool hasSource() const { return !source.shaderPath.empty(); }
+    const std::string& firstShaderPath() const { return source.shaderPath; }
+    // Returns a ref to the source pass — kept under the legacy name
+    // so callers that previously did `ensurePass0().shaderPath = ...`
+    // keep compiling without churn.
+    ShaderPass& ensurePass0() { return source; }
     std::vector<std::pair<std::string, float>>& firstPassParamValues() {
-        return ensurePass0().paramValues;
+        return source.paramValues;
     }
     const std::vector<std::pair<std::string, float>>&
             firstPassParamValues() const {
-        static const std::vector<std::pair<std::string, float>> empty;
-        return shaderChain.empty() ? empty : shaderChain.front().paramValues;
+        return source.paramValues;
     }
 
     // Per-A..H-knob LFO state (8 slots, index = knob index 0..7).
@@ -136,7 +130,7 @@ struct VisualClip {
 
     std::unique_ptr<VisualClip> clone() const {
         auto c = std::make_unique<VisualClip>();
-        c->shaderChain   = shaderChain;
+        c->source        = source;
         c->name          = name;
         c->colorIndex    = colorIndex;
         c->lengthBeats   = lengthBeats;

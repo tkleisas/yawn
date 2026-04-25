@@ -51,6 +51,11 @@ public:
                                                       const std::string& name,
                                                       float value)>;
     using PostFXRemoveCallback = std::function<void(int fxIndex)>;
+    using ChainPassChangeCallback = std::function<void(int passIndex,
+                                                        const std::string& name,
+                                                        float value)>;
+    using ChainPassRemoveCallback = std::function<void(int passIndex)>;
+    using ChainAddCallback        = std::function<void(float screenX, float screenY)>;
 
     static constexpr float kPanelHeight = 160.0f;
     static constexpr float kHandleH     = 8.0f;
@@ -95,6 +100,9 @@ public:
     void setOnKnobRightClick(KnobRightClickCallback cb) { m_onKnobRightClick = std::move(cb); }
     void setOnPostFXChanged(PostFXChangeCallback cb) { m_onPostFXChanged = std::move(cb); }
     void setOnPostFXRemove(PostFXRemoveCallback cb)  { m_onPostFXRemove  = std::move(cb); }
+    void setOnChainPassChanged(ChainPassChangeCallback cb) { m_onChainPassChanged = std::move(cb); }
+    void setOnChainPassRemove(ChainPassRemoveCallback cb)  { m_onChainPassRemove  = std::move(cb); }
+    void setOnChainAdd(ChainAddCallback cb)               { m_onChainAdd        = std::move(cb); }
 
     // Link to the v1 DetailPanelWidget so our height mirrors it and
     // the top drag handle resizes both panels in lockstep.
@@ -167,6 +175,97 @@ public:
         std::string name;
         std::vector<std::unique_ptr<FwKnob>> knobs;
     };
+
+    // Per-pass card in the Shader Chain section. Mirror of PostFXEntry
+    // but addressing the visual clip's chain (not the engine's master
+    // post-FX chain).
+    struct ChainPassEntry {
+        std::string name;
+        std::vector<std::unique_ptr<FwKnob>> knobs;
+    };
+
+    // Rebuild the shader-chain section. `chain` is one entry per pass
+    // (pass index 0..N-1), each holding the shader display name + the
+    // pass's @range parameters with their current live values. Mirrors
+    // rebuildPostFX's diff-and-reuse strategy so dragging a knob doesn't
+    // get clobbered by every redraw.
+    void rebuildShaderChain(
+        const std::vector<std::pair<std::string,
+            std::vector<visual::VisualEngine::LayerParamInfo>>>& chain) {
+        bool matches = (m_chainSig.size() == chain.size()) &&
+                        (m_chain.size()    == chain.size());
+        if (matches) {
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const auto& sig  = m_chainSig[i];
+                const auto& incoming = chain[i];
+                if (sig.name != incoming.first ||
+                    sig.params.size() != incoming.second.size()) {
+                    matches = false;
+                    break;
+                }
+                for (size_t j = 0; j < incoming.second.size(); ++j) {
+                    const auto& sp = sig.params[j];
+                    const auto& p  = incoming.second[j];
+                    if (sp.name != p.name || sp.min != p.min ||
+                        sp.max  != p.max  || sp.defVal != p.defaultValue) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (!matches) break;
+            }
+        }
+
+        if (matches) {
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const auto& incoming = chain[i].second;
+                auto& entry = m_chain[i];
+                for (size_t j = 0; j < incoming.size(); ++j) {
+                    entry.knobs[j]->setValue(incoming[j].value,
+                                              ValueChangeSource::Automation);
+                }
+            }
+            return;
+        }
+
+        m_chain.clear();
+        m_chainSig.clear();
+        m_chainSig.reserve(chain.size());
+        // Keep the remove-button rect vector paired with m_chain at
+        // every mutation. onLayout() recomputes the actual positions
+        // each time, but render() can run between rebuild and the
+        // next layout (the v1 wrapper only re-layouts on bounds
+        // change). Without this, an OOB read fires when render walks
+        // m_chain and indexes m_chainRemoveRects in lockstep.
+        m_chainRemoveRects.assign(chain.size(), Rect{0, 0, 0, 0});
+        for (size_t i = 0; i < chain.size(); ++i) {
+            ChainPassEntry entry;
+            entry.name = chain[i].first;
+            PostFXSig sig;
+            sig.name = chain[i].first;
+            for (const auto& p : chain[i].second) {
+                auto k = std::make_unique<FwKnob>();
+                k->setLabel(p.name);
+                k->setRange(p.min, p.max);
+                k->setDefaultValue(p.defaultValue);
+                k->setValue(p.value);
+                int passIdx = static_cast<int>(i);
+                std::string nm = p.name;
+                k->setOnChange([this, passIdx, nm](float v) {
+                    if (m_onChainPassChanged) m_onChainPassChanged(passIdx, nm, v);
+                });
+                k->setValueFormatter([](float v) {
+                    char b[16];
+                    std::snprintf(b, sizeof(b), "%.2f", v);
+                    return std::string(b);
+                });
+                entry.knobs.push_back(std::move(k));
+                sig.params.push_back({p.name, p.min, p.max, p.defaultValue});
+            }
+            m_chain.push_back(std::move(entry));
+            m_chainSig.push_back(std::move(sig));
+        }
+    }
     void rebuildPostFX(
         const std::vector<std::pair<std::string,
             std::vector<visual::VisualEngine::LayerParamInfo>>>& chain) {
@@ -209,6 +308,10 @@ public:
         m_postFX.clear();
         m_postFXSig.clear();
         m_postFXSig.reserve(chain.size());
+        // Same invariant as m_chainRemoveRects: keep the remove-button
+        // rect vector paired with m_postFX so render can index it
+        // safely even if it runs before the next layout.
+        m_removeRects.assign(chain.size(), Rect{0, 0, 0, 0});
         for (size_t i = 0; i < chain.size(); ++i) {
             PostFXEntry entry;
             entry.name = chain[i].first;
@@ -269,7 +372,48 @@ protected:
             x += colW + kKnobGapX;
         }
 
-        m_postFXSectionY = y + (m_customKnobs.empty() ? 0.0f : kKnobH) + 14.0f;
+        // ── Shader Chain section ────────────────────────────────────
+        // Placed above Post-FX so it's the first chain you see when
+        // building up a visual track. The "+ Add Pass" button always
+        // appears at the trailing edge so users with empty chains have
+        // a discoverable starting point.
+        m_chainSectionY = y + (m_customKnobs.empty() ? 0.0f : kKnobH) + 14.0f;
+        m_chainRemoveRects.assign(m_chain.size(), Rect{0, 0, 0, 0});
+
+        float cy = m_chainSectionY + 18.0f;
+        float cx = x0;
+        for (size_t i = 0; i < m_chain.size(); ++i) {
+            auto& entry = m_chain[i];
+            float cardW = kLabelW + kRemoveW + kKnobGapX
+                         + static_cast<float>(entry.knobs.size())
+                         * (kKnobW + kKnobGapX);
+            if (cardW < kLabelW + kRemoveW + 20.0f)
+                cardW = kLabelW + kRemoveW + 20.0f;
+            if (cx + cardW > bounds.x + bounds.w - kPad && cx > x0) {
+                cx = x0;
+                cy += kKnobH + kKnobGapY;
+            }
+            m_chainRemoveRects[i] = Rect{cx, cy, kRemoveW, kKnobH * 0.35f};
+            float kx = cx + kLabelW + kRemoveW + kKnobGapX;
+            for (auto& k : entry.knobs) {
+                k->measure(Constraints::tight(kKnobW, kKnobH), ctx);
+                k->layout(Rect{kx, cy, kKnobW, kKnobH}, ctx);
+                kx += kKnobW + kKnobGapX;
+            }
+            cx += cardW + 18.0f;
+        }
+        // "+ Add Pass" button
+        constexpr float kAddBtnW = 72.0f, kAddBtnH = 22.0f;
+        if (cx + kAddBtnW > bounds.x + bounds.w - kPad && cx > x0) {
+            cx = x0;
+            cy += kKnobH + kKnobGapY;
+        }
+        m_chainAddRect = Rect{cx, cy + (kKnobH - kAddBtnH) * 0.5f,
+                              kAddBtnW, kAddBtnH};
+
+        // ── Post-FX section ─────────────────────────────────────────
+        const float chainBottom = cy + (m_chain.empty() ? kAddBtnH : kKnobH);
+        m_postFXSectionY = chainBottom + 14.0f;
         m_removeRects.assign(m_postFX.size(), Rect{0, 0, 0, 0});
 
         float py = m_postFXSectionY + 18.0f;
@@ -329,6 +473,28 @@ protected:
         for (auto& k : m_customKnobs) {
             if (!hitWidgetV2(*k, e.x, e.y)) continue;
             forwardTo(*k);
+            return true;
+        }
+        // Shader chain: remove button + per-pass knobs.
+        for (size_t i = 0; i < m_chain.size(); ++i) {
+            const Rect& xr = m_chainRemoveRects[i];
+            if (e.x >= xr.x + kLabelW && e.x < xr.x + kLabelW + xr.w &&
+                e.y >= xr.y && e.y < xr.y + xr.h) {
+                if (!rightClick && m_onChainPassRemove)
+                    m_onChainPassRemove(static_cast<int>(i));
+                return true;
+            }
+            for (auto& k : m_chain[i].knobs) {
+                if (!hitWidgetV2(*k, e.x, e.y)) continue;
+                forwardTo(*k);
+                return true;
+            }
+        }
+        // "+ Add Pass" button.
+        if (!rightClick &&
+            e.x >= m_chainAddRect.x && e.x < m_chainAddRect.x + m_chainAddRect.w &&
+            e.y >= m_chainAddRect.y && e.y < m_chainAddRect.y + m_chainAddRect.h) {
+            if (m_onChainAdd) m_onChainAdd(e.x, e.y);
             return true;
         }
         for (size_t i = 0; i < m_postFX.size(); ++i) {
@@ -413,6 +579,41 @@ public:
         for (int i = 0; i < 8; ++i) m_knobAH[i]->render(ctx);
         for (auto& k : m_customKnobs) k->render(ctx);
 
+        // ── Shader Chain header + cards + "+ Add Pass" ──────────────
+        r.drawRect(m_bounds.x + kPad, m_chainSectionY,
+                    m_bounds.w - 2.0f * kPad, 1.0f,
+                    Color{60, 60, 68, 255});
+        tm.drawText(r, "Shader Chain",
+                    m_bounds.x + kPad, m_chainSectionY + 14.0f,
+                    titleSize, ::yawn::ui::Theme::textSecondary);
+        for (size_t i = 0; i < m_chain.size(); ++i) {
+            auto& entry = m_chain[i];
+            std::string label = std::to_string(i + 1) + ". " + entry.name;
+            const Rect& xr = m_chainRemoveRects[i];
+            tm.drawText(r, label,
+                        xr.x, xr.y + 11.0f,
+                        titleSize, ::yawn::ui::Theme::textPrimary);
+            r.drawRect(xr.x + kLabelW, xr.y, xr.w, xr.h,
+                        Color{160, 50, 50, 220});
+            tm.drawText(r, "×",
+                        xr.x + kLabelW + xr.w * 0.5f - 4.0f,
+                        xr.y + xr.h * 0.5f + 5.0f,
+                        titleSize * 1.1f, ::yawn::ui::Theme::textPrimary);
+            for (auto& k : entry.knobs) k->render(ctx);
+        }
+        // "+ Add Pass" pill
+        r.drawRoundedRect(m_chainAddRect.x, m_chainAddRect.y,
+                           m_chainAddRect.w, m_chainAddRect.h,
+                           m_chainAddRect.h * 0.5f,
+                           Color{60, 130, 80, 220});
+        const float addLh = tm.lineHeight(titleSize);
+        const float addTw = tm.textWidth("+ Add Pass", titleSize);
+        tm.drawText(r, "+ Add Pass",
+                    m_chainAddRect.x + (m_chainAddRect.w - addTw) * 0.5f,
+                    m_chainAddRect.y + (m_chainAddRect.h - addLh) * 0.5f
+                        - addLh * 0.15f,
+                    titleSize, Color{240, 240, 245, 255});
+
         if (!m_postFX.empty()) {
             r.drawRect(m_bounds.x + kPad, m_postFXSectionY,
                         m_bounds.w - 2.0f * kPad, 1.0f,
@@ -474,9 +675,36 @@ private:
             lastY = y;
         }
         float customBottom = lastY + (m_customKnobs.empty() ? 0.0f : kKnobH);
-        float fxBottom = customBottom + 14.0f;
+
+        // Shader Chain row(s) — same flow geometry as Post-FX, plus the
+        // trailing "+ Add Pass" button.
+        float chainBottom = customBottom;
+        {
+            float cy = customBottom + 18.0f;
+            float cx = kPad;
+            for (auto& entry : m_chain) {
+                float cardW = kLabelW + kRemoveW + kKnobGapX +
+                               static_cast<float>(entry.knobs.size()) *
+                               (kKnobW + kKnobGapX);
+                if (cardW < kLabelW + kRemoveW + 20.0f)
+                    cardW = kLabelW + kRemoveW + 20.0f;
+                if (cx + cardW > panelW - kPad && cx > kPad) {
+                    cx = kPad;
+                    cy += rowH;
+                }
+                cx += cardW + 18.0f;
+            }
+            constexpr float kAddBtnW = 72.0f;
+            if (cx + kAddBtnW > panelW - kPad && cx > kPad) {
+                cx = kPad;
+                cy += rowH;
+            }
+            chainBottom = cy + kKnobH;
+        }
+
+        float fxBottom = chainBottom + 14.0f;
         if (!m_postFX.empty()) {
-            float py = customBottom + 18.0f;
+            float py = chainBottom + 18.0f;
             float px = kPad;
             for (auto& entry : m_postFX) {
                 float cardW = kLabelW + kRemoveW + kKnobGapX +
@@ -512,6 +740,16 @@ private:
     float                    m_postFXSectionY = 0.0f;
     PostFXChangeCallback     m_onPostFXChanged;
     PostFXRemoveCallback     m_onPostFXRemove;
+
+    // Shader Chain (per-clip).
+    std::vector<ChainPassEntry> m_chain;
+    std::vector<PostFXSig>      m_chainSig;
+    std::vector<Rect>           m_chainRemoveRects;
+    Rect                        m_chainAddRect{};
+    float                       m_chainSectionY = 0.0f;
+    ChainPassChangeCallback     m_onChainPassChanged;
+    ChainPassRemoveCallback     m_onChainPassRemove;
+    ChainAddCallback            m_onChainAdd;
 
     ::yawn::ui::fw::DetailPanelWidget* m_detail = nullptr;
     bool  m_handleDrag   = false;

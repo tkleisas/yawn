@@ -49,6 +49,13 @@ struct Track {
     std::vector<automation::AutomationLane> automationLanes;
     automation::AutoMode autoMode = automation::AutoMode::Off;
 
+    // Visual-track effect chain — ordered list of post-source shader
+    // passes (each samples iPrev and writes the next stage). Lives on
+    // the track, like an audio FX chain: applies to whichever clip is
+    // currently playing on this track. Empty = source renders alone.
+    // Only meaningful for type == Visual; ignored otherwise.
+    std::vector<visual::ShaderPass> visualEffectChain;
+
     // Arrangement clips (sorted by startBeat)
     std::vector<ArrangementClip> arrangementClips;
     bool arrangementActive = false;  // true = arrangement mode, false = session mode
