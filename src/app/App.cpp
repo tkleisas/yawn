@@ -3948,6 +3948,30 @@ bool App::init() {
     LOG_INFO("App", "  Drag & drop audio files to load clips");
     LOG_INFO("App", "  [Esc] Quit");
 
+    // Surface FFmpeg-build gaps loudly — silently missing video support
+    // makes Visual tracks look broken (no Set Video, empty Live Input
+    // submenu) and the user has no way to know without reading source.
+    // Log on stdout (so it lands in yawn.log) AND show a sticky toast.
+#if !defined(YAWN_HAS_VIDEO)
+    LOG_INFO("App", "[!] Video support DISABLED — this build has no FFmpeg.");
+    LOG_INFO("App", "    Visual tracks can run shaders only; video files");
+    LOG_INFO("App", "    and live capture (webcams) won't work.");
+    LOG_INFO("App", "    Fix: download ffmpeg-master-latest-win64-gpl-shared");
+    LOG_INFO("App", "    from BtbN/FFmpeg-Builds, then reconfigure CMake");
+    LOG_INFO("App", "    with -DFFMPEG_ROOT=<extracted folder>.");
+    m_toastManager.show("Video support disabled — set FFMPEG_ROOT and rebuild "
+                        "to enable video files / webcams",
+                        8.0f, ui::ToastManager::Severity::Warn);
+#elif !defined(YAWN_HAS_AVDEVICE)
+    LOG_INFO("App", "[!] Live capture DISABLED — libavdevice not linked.");
+    LOG_INFO("App", "    Video files work, but webcams / dshow streams won't.");
+    LOG_INFO("App", "    Fix: rebuild against an FFmpeg distro that ships");
+    LOG_INFO("App", "    avdevice (BtbN's gpl-shared bundle does).");
+    m_toastManager.show("Live capture disabled — libavdevice missing from "
+                        "this FFmpeg build",
+                        6.0f, ui::ToastManager::Severity::Warn);
+#endif
+
     updateWindowTitle();
     return true;
 }
