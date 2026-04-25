@@ -20,11 +20,11 @@ TEST(ArrangementClip, VisualTypeHoldsVisualClip) {
     c.startBeat = 2.0;
     c.lengthBeats = 4.0;
     c.visualClip = std::make_unique<visual::VisualClip>();
-    c.visualClip->shaderPath = "shaders/demo.frag";
+    c.visualClip->source.shaderPath = "shaders/demo.frag";
     c.visualClip->name       = "demo";
 
     ASSERT_NE(c.visualClip, nullptr);
-    EXPECT_EQ(c.visualClip->shaderPath, "shaders/demo.frag");
+    EXPECT_EQ(c.visualClip->source.shaderPath, "shaders/demo.frag");
     EXPECT_EQ(c.type, ArrangementClip::Type::Visual);
 }
 
@@ -32,16 +32,16 @@ TEST(ArrangementClip, CopyDeepClonesVisualClip) {
     ArrangementClip a;
     a.type = ArrangementClip::Type::Visual;
     a.visualClip = std::make_unique<visual::VisualClip>();
-    a.visualClip->shaderPath = "shaders/a.frag";
+    a.visualClip->source.shaderPath = "shaders/a.frag";
 
     ArrangementClip b = a;  // uses the copy constructor
     ASSERT_NE(b.visualClip, nullptr);
     // Deep clone — the two should be distinct instances.
     EXPECT_NE(b.visualClip.get(), a.visualClip.get());
-    EXPECT_EQ(b.visualClip->shaderPath, "shaders/a.frag");
+    EXPECT_EQ(b.visualClip->source.shaderPath, "shaders/a.frag");
     // Mutating one must not touch the other.
-    b.visualClip->shaderPath = "shaders/b.frag";
-    EXPECT_EQ(a.visualClip->shaderPath, "shaders/a.frag");
+    b.visualClip->source.shaderPath = "shaders/b.frag";
+    EXPECT_EQ(a.visualClip->source.shaderPath, "shaders/a.frag");
 }
 
 TEST(ArrangementClip, OverlapsTrue) {

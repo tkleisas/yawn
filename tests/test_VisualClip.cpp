@@ -9,10 +9,11 @@ using namespace yawn::visual;
 
 TEST(VisualClipTest, DefaultsAreSane) {
     VisualClip c;
-    EXPECT_TRUE(c.shaderPath.empty());
+    EXPECT_TRUE(c.source.shaderPath.empty());
+    EXPECT_FALSE(c.hasSource());
     EXPECT_EQ(c.colorIndex, 0);
     EXPECT_EQ(c.audioSource, -1);
-    EXPECT_TRUE(c.paramValues.empty());
+    EXPECT_TRUE(c.source.paramValues.empty());
     EXPECT_TRUE(c.text.empty());
     EXPECT_TRUE(c.videoPath.empty());
     EXPECT_TRUE(c.thumbnailPath.empty());
@@ -33,12 +34,12 @@ TEST(VisualClipTest, DefaultsAreSane) {
 
 TEST(VisualClipTest, ClonePreservesAllFields) {
     VisualClip c;
-    c.shaderPath       = "/a/b.frag";
-    c.name             = "demo";
-    c.colorIndex       = 7;
-    c.lengthBeats      = 8.0;
-    c.audioSource      = 3;
-    c.paramValues      = {{"speed", 0.75f}, {"knobA", 0.2f}};
+    c.source.shaderPath  = "/a/b.frag";
+    c.name               = "demo";
+    c.colorIndex         = 7;
+    c.lengthBeats        = 8.0;
+    c.audioSource        = 3;
+    c.source.paramValues = {{"speed", 0.75f}, {"knobA", 0.2f}};
     c.text             = "LIVE";
     c.videoPath        = "/media/x.mp4";
     c.thumbnailPath    = "/media/x_thumb.jpg";
@@ -61,15 +62,17 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     auto clone = c.clone();
     ASSERT_NE(clone, nullptr);
 
-    EXPECT_EQ(clone->shaderPath,       c.shaderPath);
-    EXPECT_EQ(clone->name,             c.name);
-    EXPECT_EQ(clone->colorIndex,       c.colorIndex);
+    EXPECT_EQ(clone->source.shaderPath, c.source.shaderPath);
+    EXPECT_EQ(clone->name,               c.name);
+    EXPECT_EQ(clone->colorIndex,         c.colorIndex);
     EXPECT_DOUBLE_EQ(clone->lengthBeats, c.lengthBeats);
-    EXPECT_EQ(clone->audioSource,      c.audioSource);
-    ASSERT_EQ(clone->paramValues.size(), c.paramValues.size());
-    for (size_t i = 0; i < c.paramValues.size(); ++i) {
-        EXPECT_EQ(clone->paramValues[i].first,  c.paramValues[i].first);
-        EXPECT_FLOAT_EQ(clone->paramValues[i].second, c.paramValues[i].second);
+    EXPECT_EQ(clone->audioSource,        c.audioSource);
+    ASSERT_EQ(clone->source.paramValues.size(), c.source.paramValues.size());
+    for (size_t i = 0; i < c.source.paramValues.size(); ++i) {
+        EXPECT_EQ(clone->source.paramValues[i].first,
+                   c.source.paramValues[i].first);
+        EXPECT_FLOAT_EQ(clone->source.paramValues[i].second,
+                         c.source.paramValues[i].second);
     }
     EXPECT_EQ(clone->text,             c.text);
     EXPECT_EQ(clone->videoPath,        c.videoPath);

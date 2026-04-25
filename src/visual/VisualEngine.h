@@ -92,6 +92,15 @@ public:
     bool setLayerAdditionalPasses(int track,
                                    const std::vector<ChainPassSpec>& passes);
 
+    // Cheap per-pass param setter — updates the cached value the next
+    // render reads, no recompile. Use this on every knob delta during
+    // a chain-knob drag; falling back to setLayerAdditionalPasses() on
+    // a knob turn forces a full relink/program-rebuild and recompiles
+    // the source pass too, which murders the frame budget. No-op if
+    // the track / pass / param name doesn't resolve.
+    void setLayerChainPassParam(int track, int passIdx,
+                                  const std::string& name, float value);
+
     void setLayerAudioSource(int track, int audioSource);
     void setLayerBlendMode(int track, BlendMode mode);
     void setLayerText(int track, const std::string& text);
@@ -267,6 +276,11 @@ private:
         GLint loc_iChannelTime       = -1;
         GLint loc_iTextWidth         = -1;
         GLint loc_iTextTexWidth      = -1;
+        // iFeedback — previous frame's chain output. Allocated lazily
+        // (see feedbackTex below) when any pass actually declares it,
+        // so layers without echo/feedback shaders don't pay the
+        // per-frame copy cost.
+        GLint loc_iFeedback          = -1;
 
         // 8 always-available generic knobs (knobA..knobH). Default 0.5 so
         // shaders that don't set them explicitly sit at the centre of the
@@ -370,6 +384,7 @@ private:
             GLint loc_iTextWidth         = -1;
             GLint loc_iTextTexWidth      = -1;
             GLint loc_iPrev              = -1;
+            GLint loc_iFeedback          = -1;
             GLint loc_knobs[8]           = {-1, -1, -1, -1, -1, -1, -1, -1};
 
             std::vector<Param> params;
@@ -386,6 +401,14 @@ private:
         // Sized to match the layer's main FBO (640×360).
         GLuint pingFBO[2] = {0, 0};
         GLuint pingTex[2] = {0, 0};
+
+        // Persistent feedback texture — holds the previous frame's
+        // final chain output. Lazily allocated only when at least one
+        // pass declares `uniform sampler2D iFeedback`, so non-feedback
+        // layers don't pay the per-frame VRAM copy. Re-uploaded each
+        // frame via glCopyTexSubImage2D from L.fbo at the end of
+        // renderLayerToFBO.
+        GLuint feedbackTex = 0;
     };
     std::unordered_map<int, Layer> m_layers;
 
@@ -437,6 +460,9 @@ private:
     // Layer helpers.
     Layer& ensureLayer(int track);
     bool   buildFBO(Layer& L);
+    // Allocate the per-frame feedback texture if needed. Returns true
+    // on success (or if already allocated). Idempotent.
+    bool   ensureFeedbackTex(Layer& L);
     bool   compileShaderForLayer(Layer& L, const std::string& userSrc,
                                   const std::string& sourceLabel);
     void   cacheUniformLocations(Layer& L);

@@ -77,6 +77,14 @@ uniform float     iChannelTime[4];
 // `texture(iPrev, uv)` to compose on top of the running image.
 uniform sampler2D iPrev;
 
+// Previous *frame*'s final chain output. Lets feedback / echo / trail
+// shaders sample what they emitted last frame and superimpose it on
+// the current iPrev. The engine only allocates + populates this
+// texture when at least one pass actually declares it (lazy), so
+// layers that don't use iFeedback pay nothing. Black on the very
+// first frame after the layer is created.
+uniform sampler2D iFeedback;
+
 // YAWN-specific extensions — not in Shadertoy.
 // iTime advances with wall-clock; iTransportTime follows the transport
 // position (stops when playback is paused). iBeat is transport beats.
@@ -373,6 +381,24 @@ bool VisualEngine::ensurePingFBOs(Layer& L) {
     return true;
 }
 
+bool VisualEngine::ensureFeedbackTex(Layer& L) {
+    if (L.feedbackTex) return true;
+    glGenTextures(1, &L.feedbackTex);
+    if (!L.feedbackTex) return false;
+    glBindTexture(GL_TEXTURE_2D, L.feedbackTex);
+    // Initialise to opaque black so the first frame after this layer
+    // is created doesn't sample garbage uninitialised VRAM.
+    std::vector<uint8_t> zero(size_t(kInternalWidth) * kInternalHeight * 4, 0);
+    for (size_t i = 3; i < zero.size(); i += 4) zero[i] = 255;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kInternalWidth, kInternalHeight,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, zero.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return true;
+}
+
 bool VisualEngine::buildFBO(Layer& L) {
     glGenTextures(1, &L.fboTex);
     glBindTexture(GL_TEXTURE_2D, L.fboTex);
@@ -408,6 +434,7 @@ void VisualEngine::destroyLayer(Layer& L) {
         if (L.pingFBO[i]) { glDeleteFramebuffers(1, &L.pingFBO[i]); L.pingFBO[i] = 0; }
         if (L.pingTex[i]) { glDeleteTextures(1, &L.pingTex[i]);    L.pingTex[i] = 0; }
     }
+    if (L.feedbackTex) { glDeleteTextures(1, &L.feedbackTex); L.feedbackTex = 0; }
     if (L.textTex)  { glDeleteTextures(1, &L.textTex); L.textTex = 0; }
     if (L.videoTex) { glDeleteTextures(1, &L.videoTex); L.videoTex = 0; }
     L.video.reset();
@@ -608,7 +635,11 @@ void VisualEngine::cacheUniformLocations(Layer& L) {
     // iPrev — dummy on pass 0 (no previous output exists), but cache the
     // location so a shader that declares `uniform sampler2D iPrev` and
     // is later moved to a chain position behaves consistently.
-    L.loc_iPrev = loc("iPrev");
+    L.loc_iPrev     = loc("iPrev");
+    // iFeedback — previous frame's chain output (persistent across
+    // frames). Same caching pattern as iPrev: we look it up
+    // unconditionally; the renderer skips work when loc < 0.
+    L.loc_iFeedback = loc("iFeedback");
 }
 
 // ── Shared shader programs (blit + composite) ─────────────────────────────
@@ -1139,6 +1170,7 @@ void VisualEngine::cacheChainPassUniformLocations(Layer::ChainPass& cp) {
     cp.loc_iTextWidth         = loc("iTextWidth");
     cp.loc_iTextTexWidth      = loc("iTextTexWidth");
     cp.loc_iPrev              = loc("iPrev");
+    cp.loc_iFeedback          = loc("iFeedback");
 
     static const char* kKnobNames[8] = {
         "knobA", "knobB", "knobC", "knobD",
@@ -1184,6 +1216,23 @@ bool VisualEngine::compileChainPass(Layer::ChainPass& cp,
     }
     cp.params = std::move(newParams);
     return true;
+}
+
+void VisualEngine::setLayerChainPassParam(int track, int passIdx,
+                                            const std::string& name,
+                                            float value) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    if (passIdx < 0 || passIdx >= static_cast<int>(L.additionalPasses.size()))
+        return;
+    auto& cp = L.additionalPasses[passIdx];
+    for (auto& p : cp.params) {
+        if (p.name == name) {
+            p.value = std::clamp(value, p.min, p.max);
+            return;
+        }
+    }
 }
 
 bool VisualEngine::setLayerAdditionalPasses(int track,
@@ -1875,6 +1924,17 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             glUniform1i(src.loc_iPrev, 4);
         }
 
+        // iFeedback — sampler unit 5. Persistent texture holding the
+        // previous *frame*'s final chain output (lazily allocated by
+        // the layer-level needsFeedback check just above this lambda).
+        // Falls back to dummy black when the layer never opted in.
+        if (src.loc_iFeedback >= 0) {
+            glActiveTexture(GL_TEXTURE5);
+            glBindTexture(GL_TEXTURE_2D,
+                          L.feedbackTex ? L.feedbackTex : m_dummyChannelTex[3]);
+            glUniform1i(src.loc_iFeedback, 5);
+        }
+
         if (src.loc_iChannelResolution >= 0) {
             const float res[12] = {
                 static_cast<float>(kAudioTexW), static_cast<float>(kAudioTexH), 1.0f,
@@ -1910,6 +1970,18 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         glDrawArrays(GL_TRIANGLES, 0, 3);
     };
 
+    // Lazy feedback-texture allocation. Walk every pass once and
+    // check whether anybody actually declared `iFeedback` — only then
+    // do we allocate the persistent texture and pay the per-frame
+    // copy cost at the bottom of this function.
+    bool needsFeedback = (L.loc_iFeedback >= 0);
+    if (!needsFeedback) {
+        for (const auto& cp : L.additionalPasses) {
+            if (cp.loc_iFeedback >= 0) { needsFeedback = true; break; }
+        }
+    }
+    if (needsFeedback) ensureFeedbackTex(L);
+
     // Render the chain. Single-pass: write straight into L.fbo, no
     // ping-pong allocation. Multi-pass: pass 0 → pingFBO[0], chain
     // passes ping-pong, last pass writes into L.fbo so the composite
@@ -1930,6 +2002,21 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             auto& cp = L.additionalPasses[i];
             renderPass(cp.program, cp, target, L.pingTex[prevSlot], cp.params);
         }
+    }
+
+    // Capture this frame's final chain output into the persistent
+    // feedback texture so the *next* frame's iFeedback samples it.
+    // glCopyTexSubImage2D works in GL 3.3 (we'd otherwise need
+    // glCopyImageSubData from 4.3 or a blit-FBO dance). Source = the
+    // layer's main FBO (now holding the final pass output); dest =
+    // the feedback texture. Skip entirely when no pass uses it.
+    if (needsFeedback && L.feedbackTex) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, L.fbo);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glBindTexture(GL_TEXTURE_2D, L.feedbackTex);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0,
+                             kInternalWidth, kInternalHeight);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     }
 
     ++L.frameCounter;

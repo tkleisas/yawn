@@ -677,25 +677,28 @@ void App::buildWidgetTree() {
     };
 
     m_visualParamsPanel->setOnChainPassChanged(
-        [this, chainTargetSlot, reloadVisualLayer](
-                int passIdx, const std::string& name, float v) {
+        [this](int passIdx, const std::string& name, float v) {
             // Effect chain lives on the *track* now — every clip on
             // this track shares the same chain (matches audio FX UX).
             if (m_selectedTrack < 0 ||
                 m_selectedTrack >= m_project.numTracks()) return;
             auto& chain = m_project.track(m_selectedTrack).visualEffectChain;
             if (passIdx < 0 || passIdx >= (int)chain.size()) return;
+            // Persist into the project model so save / clip-relaunch
+            // see the new value.
             bool found = false;
             for (auto& kv : chain[passIdx].paramValues) {
                 if (kv.first == name) { kv.second = v; found = true; break; }
             }
             if (!found) chain[passIdx].paramValues.emplace_back(name, v);
-            // No selective per-pass param apply on the engine yet —
-            // re-launching is the simplest way to pick up the change.
-            // Acceptable: chain knob turns are rare relative to source
-            // (A..H) knob turns, which take the cheap path.
-            auto* slot = chainTargetSlot();
-            if (slot) reloadVisualLayer(slot);
+            // Push the change into the live engine via the cheap path
+            // — just updates the cached uniform value the next render
+            // reads. Crucially does NOT recompile any shaders, so a
+            // continuous drag on a chain knob doesn't murder the
+            // frame budget the way a full relaunch would (one
+            // recompile per drag delta == ~30 program builds/sec).
+            m_visualEngine.setLayerChainPassParam(m_selectedTrack,
+                                                    passIdx, name, v);
             markDirty();
         });
 
