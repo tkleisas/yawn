@@ -124,6 +124,8 @@ public:
         // can do its own gesture handling.
         setFocusable(false);
         setRelayoutBoundary(true);
+        // Own-dispatch container — see fw2::Widget gotcha note.
+        setAutoCaptureOnUnhandledPress(false);
     }
 
     void init(Project* project, audio::AudioEngine* engine,

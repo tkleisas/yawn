@@ -49,6 +49,8 @@ public:
         initClipEnvelopeWidgets();
         setFocusable(false);
         setRelayoutBoundary(true);
+        // Own-dispatch container — see fw2::Widget gotcha note.
+        setAutoCaptureOnUnhandledPress(false);
     }
 
     // ── Follow action API ──

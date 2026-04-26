@@ -130,6 +130,10 @@ public:
         }
         setFocusable(false);
         setRelayoutBoundary(true);
+        // Own-dispatch container — see fw2::Widget gotcha note.
+        // (We also keep the cap != this guards in onMouseMove /
+        // onMouseUp as belt-and-suspenders.)
+        setAutoCaptureOnUnhandledPress(false);
     }
 
     void setOnChanged(ChangeCallback cb)          { m_onChanged     = std::move(cb); }

@@ -310,6 +310,14 @@ bool Widget::dispatchMouseDown(MouseEvent& e) {
     // low-level event before the gesture state machine kicks in.
     if (onMouseDown(e) || e.consumed) return true;
 
+    // Opt-out path for container widgets that do their own hit-test
+    // + dispatch. With m_autoCaptureOnPress=false, an unhandled
+    // press on dead space stays unhandled — no auto-capture, no
+    // gesture state machine. This is the supported way to avoid the
+    // self-dispatch trap below without sprinkling cap != this guards
+    // through every onMouseMove/onMouseUp override.
+    if (!m_autoCaptureOnPress) return false;
+
     // Start gesture state machine.
     m_gesture.pressed    = true;
     m_gesture.dragging   = false;
@@ -328,18 +336,22 @@ bool Widget::dispatchMouseDown(MouseEvent& e) {
     // returns false (e.g. clicks landing on dead space inside a
     // container) ends up as Widget::capturedWidget(). A panel that
     // overrides onMouseMove/onMouseUp to forward events to whatever
-    // capturedWidget() returns MUST guard against self-dispatch:
+    // capturedWidget() returns would self-dispatch and stack-overflow,
+    // killing the process silently before any crash handler runs.
     //
-    //   if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
-    //       cap->dispatchMouseMove(ev);
-    //   }
+    // The supported escape hatch for container widgets that do their
+    // own hit-test + dispatch is `setAutoCaptureOnUnhandledPress
+    // (false)` — the early return above skips THIS code path before
+    // the capture happens. All bundled own-dispatch panels
+    // (VisualParamsPanel, DetailPanelWidget, MixerPanel, BrowserPanel,
+    // ReturnMasterPanel, TransportPanel, PianoRollPanel, ContentGrid)
+    // set the flag in their constructors. New panels that hit-test
+    // children and dispatch in onMouseMove/onMouseUp must do the same.
     //
-    // Without the `cap != this` check, the panel re-enters its own
-    // dispatchMouseMove → onMouseMove → … forever, the stack runs
-    // out, and the process is killed before any signal handler / SEH
-    // filter / crash logger has a chance to write anything to disk
-    // (the failure presents as a *silent* exit). VisualParamsPanel
-    // hit this when clicking empty card space in 0.41.x dev.
+    // Belt-and-suspenders: panels can also guard their forwarding
+    // sites with `if (Widget* cap = capturedWidget(); cap && cap != this)`
+    // — VisualParamsPanel keeps the guard alongside the opt-out so a
+    // future regression in either layer is caught by the other.
     captureMouse();
     return true;
 }

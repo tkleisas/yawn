@@ -27,7 +27,13 @@ namespace fw2 {
 
 class ContentGrid : public Widget {
 public:
-    ContentGrid() = default;
+    // Own-dispatch container — onMouseDown forwards to its quad
+    // children via cap->dispatchMouseMove. Opt out of the
+    // framework's auto-capture-on-press to dodge the self-recursion
+    // trap (see fw2::Widget GOTCHA in dispatchMouseDown).
+    ContentGrid() {
+        setAutoCaptureOnUnhandledPress(false);
+    }
 
     void setChildren(Widget* topLeft, Widget* topRight,
                      Widget* bottomLeft, Widget* bottomRight) {

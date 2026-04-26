@@ -150,6 +150,11 @@ public:
         m_scrollbar.setOnScroll([this](float pos) {
             m_scrollX = pos;
         });
+        // Own-dispatch container — onMouseDown forwards to children
+        // via cap->dispatchMouseMove. Opt out of the framework's
+        // auto-capture-on-press fall-through to avoid the silent
+        // self-recursion trap (see fw2::Widget gotcha note).
+        setAutoCaptureOnUnhandledPress(false);
     }
 
     // ─── Public API ─────────────────────────────────────────────────────

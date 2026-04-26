@@ -238,6 +238,21 @@ public:
     bool isClickOnly() const { return m_clickOnly; }
     void setClickOnly(bool b) { m_clickOnly = b; }
 
+    // Opt-out of the dispatchMouseDown gesture-state-machine fall-
+    // through. Default true (current behaviour: any press where
+    // onMouseDown returns false triggers captureMouse() on this
+    // widget so the framework can drive its own onClick/onDrag).
+    //
+    // Set to FALSE on container widgets that override onMouseDown
+    // to do their own hit-testing + dispatch. Without this, a press
+    // landing on the panel's dead space ends up captured BY THE
+    // PANEL, and any subsequent onMouseMove that forwards to
+    // capturedWidget() recurses into the panel's own dispatchMouse
+    // — stack overflow, silent process exit, no log entry.
+    // (See the GOTCHA comment in dispatchMouseDown.)
+    bool autoCaptureOnUnhandledPress() const { return m_autoCaptureOnPress; }
+    void setAutoCaptureOnUnhandledPress(bool b) { m_autoCaptureOnPress = b; }
+
     // ─── Size policy ──────────────────────────────────────────────
     SizePolicy sizePolicy() const { return m_sizePolicy; }
     void setSizePolicy(SizePolicy sp);
@@ -340,6 +355,7 @@ protected:
     bool m_hovered   = false;
     bool m_focusable = false;
     bool m_clickOnly = false;
+    bool m_autoCaptureOnPress = true;
 
     SizePolicy m_sizePolicy;
     Insets     m_padding;
