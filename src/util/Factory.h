@@ -132,3 +132,50 @@ inline std::unique_ptr<midi::MidiEffect> createMidiEffect(const std::string& id)
 }
 
 } // namespace yawn
+
+// Name-based factory helpers — used by UI menus (display names → make_unique).
+// These are separate from the id-based factories above, which are used by
+// the project serializer (internal IDs like "subsynth" → make_unique).
+inline std::unique_ptr<yawn::instruments::Instrument> createInstrumentByName(const std::string& n) {
+    if (n == "Subtractive Synth") return std::make_unique<yawn::instruments::SubtractiveSynth>();
+    if (n == "FM Synth")          return std::make_unique<yawn::instruments::FMSynth>();
+    if (n == "Sampler")           return std::make_unique<yawn::instruments::Sampler>();
+    if (n == "Drum Rack")         return std::make_unique<yawn::instruments::DrumRack>();
+    if (n == "DrumSlop")          return std::make_unique<yawn::instruments::DrumSlop>();
+    if (n == "Karplus-Strong")    return std::make_unique<yawn::instruments::KarplusStrong>();
+    if (n == "Wavetable Synth")   return std::make_unique<yawn::instruments::WavetableSynth>();
+    if (n == "Granular Synth")    return std::make_unique<yawn::instruments::GranularSynth>();
+    if (n == "Vocoder")           return std::make_unique<yawn::instruments::Vocoder>();
+    if (n == "Multisampler")      return std::make_unique<yawn::instruments::Multisampler>();
+    if (n == "Instrument Rack")   return std::make_unique<yawn::instruments::InstrumentRack>();
+    return nullptr;
+}
+
+inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const std::string& n) {
+    if (n == "Reverb")            return std::make_unique<yawn::effects::Reverb>();
+    if (n == "Delay")             return std::make_unique<yawn::effects::Delay>();
+    if (n == "EQ")                return std::make_unique<yawn::effects::EQ>();
+    if (n == "Compressor")        return std::make_unique<yawn::effects::Compressor>();
+    if (n == "Limiter")           return std::make_unique<yawn::effects::Limiter>();
+    if (n == "Filter")            return std::make_unique<yawn::effects::Filter>();
+    if (n == "Chorus")            return std::make_unique<yawn::effects::Chorus>();
+    if (n == "Distortion")        return std::make_unique<yawn::effects::Distortion>();
+    if (n == "Tape Emulation")    return std::make_unique<yawn::effects::TapeEmulation>();
+    if (n == "Amp Simulator")     return std::make_unique<yawn::effects::AmpSimulator>();
+    if (n == "Oscilloscope")      return std::make_unique<yawn::effects::Oscilloscope>();
+    if (n == "Spectrum Analyzer" || n == "Spectrum") return std::make_unique<yawn::effects::SpectrumAnalyzer>();
+    if (n == "Tuner")             return std::make_unique<yawn::effects::Tuner>();
+    return nullptr;
+}
+
+inline std::unique_ptr<yawn::midi::MidiEffect> createMidiEffectByName(const std::string& n) {
+    if (n == "Arpeggiator")    return std::make_unique<yawn::midi::Arpeggiator>();
+    if (n == "Chord")          return std::make_unique<yawn::midi::Chord>();
+    if (n == "Scale")          return std::make_unique<yawn::midi::Scale>();
+    if (n == "Note Length")    return std::make_unique<yawn::midi::NoteLength>();
+    if (n == "Velocity")       return std::make_unique<yawn::midi::VelocityEffect>();
+    if (n == "Random" || n == "MIDI Random") return std::make_unique<yawn::midi::MidiRandom>();
+    if (n == "Pitch" || n == "MIDI Pitch")   return std::make_unique<yawn::midi::MidiPitch>();
+    if (n == "LFO")            return std::make_unique<yawn::midi::LFO>();
+    return nullptr;
+}

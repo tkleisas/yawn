@@ -101,51 +101,6 @@ static yawn::ui::fw2::MouseButton sdlBtnToFw2(int btn) {
     }
 }
 
-// Factory helpers for undo — create device by name (loses parameters but restores type)
-static std::unique_ptr<instruments::Instrument> makeInstrumentByName(const std::string& n) {
-    if (n == "Subtractive Synth") return std::make_unique<instruments::SubtractiveSynth>();
-    if (n == "FM Synth")          return std::make_unique<instruments::FMSynth>();
-    if (n == "Sampler")           return std::make_unique<instruments::Sampler>();
-    if (n == "Drum Rack")         return std::make_unique<instruments::DrumRack>();
-    if (n == "DrumSlop")          return std::make_unique<instruments::DrumSlop>();
-    if (n == "Karplus-Strong")    return std::make_unique<instruments::KarplusStrong>();
-    if (n == "Wavetable Synth")   return std::make_unique<instruments::WavetableSynth>();
-    if (n == "Granular Synth")    return std::make_unique<instruments::GranularSynth>();
-    if (n == "Vocoder")           return std::make_unique<instruments::Vocoder>();
-    if (n == "Multisampler")      return std::make_unique<instruments::Multisampler>();
-    if (n == "Instrument Rack")   return std::make_unique<instruments::InstrumentRack>();
-    return nullptr;
-}
-
-static std::unique_ptr<effects::AudioEffect> makeAudioEffectByName(const std::string& n) {
-    if (n == "Reverb")            return std::make_unique<effects::Reverb>();
-    if (n == "Delay")             return std::make_unique<effects::Delay>();
-    if (n == "EQ")                return std::make_unique<effects::EQ>();
-    if (n == "Compressor")        return std::make_unique<effects::Compressor>();
-    if (n == "Limiter")           return std::make_unique<effects::Limiter>();
-    if (n == "Filter")            return std::make_unique<effects::Filter>();
-    if (n == "Chorus")            return std::make_unique<effects::Chorus>();
-    if (n == "Distortion")        return std::make_unique<effects::Distortion>();
-    if (n == "Tape Emulation")    return std::make_unique<effects::TapeEmulation>();
-    if (n == "Amp Simulator")     return std::make_unique<effects::AmpSimulator>();
-    if (n == "Oscilloscope")      return std::make_unique<effects::Oscilloscope>();
-    if (n == "Spectrum Analyzer" || n == "Spectrum") return std::make_unique<effects::SpectrumAnalyzer>();
-    if (n == "Tuner")             return std::make_unique<effects::Tuner>();
-    return nullptr;
-}
-
-static std::unique_ptr<midi::MidiEffect> makeMidiEffectByName(const std::string& n) {
-    if (n == "Arpeggiator")    return std::make_unique<midi::Arpeggiator>();
-    if (n == "Chord")          return std::make_unique<midi::Chord>();
-    if (n == "Scale")          return std::make_unique<midi::Scale>();
-    if (n == "Note Length")    return std::make_unique<midi::NoteLength>();
-    if (n == "Velocity")       return std::make_unique<midi::VelocityEffect>();
-    if (n == "Random" || n == "MIDI Random") return std::make_unique<midi::MidiRandom>();
-    if (n == "Pitch" || n == "MIDI Pitch")   return std::make_unique<midi::MidiPitch>();
-    if (n == "LFO")            return std::make_unique<midi::LFO>();
-    return nullptr;
-}
-
 App::~App() {
     shutdown();
 }
@@ -1059,7 +1014,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 [this, trackIndex, oldType, oldTypeVal, oldInstr]{
                     m_project.track(trackIndex).type = oldType;
                     m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, oldTypeVal});
-                    m_audioEngine.setInstrument(trackIndex, makeInstrumentByName(oldInstr));
+                    m_audioEngine.setInstrument(trackIndex, createInstrumentByName(oldInstr));
                     markDirty();
                 },
                 [this, trackIndex, factory]{
@@ -4263,7 +4218,7 @@ bool App::init() {
                 LOG_INFO("MIDI", "Removed MIDI effect %d from track %d", chainIndex, t + 1);
                 m_undoManager.push({"Remove MIDI Effect",
                     [this, t, chainIndex, fxName]{
-                        auto inst = makeMidiEffectByName(fxName);
+                        auto inst = createMidiEffectByName(fxName);
                         if (inst) {
                             auto& chain = m_audioEngine.midiEffectChain(t);
                             chain.addEffect(std::move(inst));
@@ -4305,7 +4260,7 @@ bool App::init() {
 
                 m_undoManager.push({label,
                     [this, resolveChain, chainIndex, fxName]{
-                        auto inst = makeAudioEffectByName(fxName);
+                        auto inst = createAudioEffectByName(fxName);
                         if (inst) {
                             if (auto* c = resolveChain()) c->insert(chainIndex, std::move(inst));
                         }
