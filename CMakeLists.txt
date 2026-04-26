@@ -10,6 +10,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+function(yawn_set_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4
+            /wd4244 /wd4267 /wd4100
+        )
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra
+            -Wno-unused-parameter
+        )
+    endif()
+endfunction()
+
 # Workaround for older dependencies with outdated cmake_minimum_required
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version")
 
@@ -206,6 +219,51 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/ScrollView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/TabView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/SplitView.cpp
+    # Instruments (implementations split from headers)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/GranularSynth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumSlop.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/Vocoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/WavetableSynth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/SubtractiveSynth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/KarplusStrong.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/Sampler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/FMSynth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/InstrumentRack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumRack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/Multisampler.cpp
+    # Audio effects (implementations split from headers)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Reverb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Delay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/EQ.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Compressor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Chorus.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Distortion.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/TapeEmulation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/AmpSimulator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Tuner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Oscilloscope.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/SpectrumAnalyzer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Limiter.cpp
+    # MIDI effects (implementations split from headers)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/Arpeggiator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/Chord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/Scale.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/NoteLength.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/VelocityEffect.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiRandom.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiPitch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/LFO.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiMapping.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiMonitorBuffer.cpp
+    # Automation engine (implementation split from header)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/automation/AutomationEngine.cpp
+    # Audio subsystem (implementations split from headers)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TimeStretcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Transport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Metronome.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TransientDetector.cpp
 )
 # VST3 hosting sources (conditional)
 if(YAWN_VST3)
@@ -228,6 +286,8 @@ if(YAWN_HAS_MODEL3D)
     )
 endif()
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
+yawn_set_warnings(yawn_core)
+target_precompile_headers(yawn_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/pch/yawn_core_pch.h)
 target_include_directories(yawn_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${minimp3_SOURCE_DIR}
@@ -271,6 +331,9 @@ list(REMOVE_ITEM YAWN_SOURCES ${YAWN_CORE_SOURCES})
 list(FILTER YAWN_SOURCES EXCLUDE REGEX "VST3EditorHost\\.cpp$")
 
 add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
+
+yawn_set_warnings(${PROJECT_NAME})
+target_precompile_headers(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/pch/yawn_pch.h)
 
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)

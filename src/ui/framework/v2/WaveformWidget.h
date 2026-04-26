@@ -471,7 +471,7 @@ private:
             if (isBar) {
                 r.drawRect(px, y, 1.5f, h, Color{255, 160, 40, 200});
                 const int barNum = sub / totalSubdivsPerBar + 1;
-                char buf[8];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%d", barNum);
                 if (tm) tm->drawText(r, buf, px + 3, y + 1, kFsLabel,
                                       Color{255, 190, 80, 230});

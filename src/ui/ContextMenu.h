@@ -24,10 +24,10 @@ class ContextMenu {
 public:
     struct Item {
         std::string label;
-        Widget::Callback action;
+        Widget::Callback action{};
         bool separator = false;
         bool enabled   = true;
-        std::vector<Item> submenu; // non-empty = opens submenu on hover
+        std::vector<Item> submenu{};
     };
 
     static constexpr float kItemHeight = 24.0f;

@@ -27,70 +27,9 @@ public:
     const char* name() const override { return "Limiter"; }
     const char* id()   const override { return "limiter"; }
 
-    void init(double sampleRate, int maxBlockSize) override {
-        m_sampleRate = sampleRate;
-        m_maxBlockSize = maxBlockSize;
-        m_delayBuf.assign(kMaxLookaheadSamples * 2, 0.0f);  // stereo
-        updateCoeffs();
-        reset();
-    }
-
-    void reset() override {
-        m_envLin = 1.0f;  // no reduction at start
-        m_writePos = 0;
-        std::fill(m_delayBuf.begin(), m_delayBuf.end(), 0.0f);
-    }
-
-    void process(float* buffer, int numFrames, int numChannels) override {
-        if (m_bypassed) return;
-        const float ceilingLin = std::pow(10.0f, m_params[kCeiling] / 20.0f);
-        // Lookahead in samples, clamped to the ring size. Attack
-        // coefficient is derived from lookahead: one-pole smoothing with
-        // τ ≈ lookahead time so the envelope reaches the target just as
-        // the peak emerges from the delay line.
-        const int lookSamples = std::min(
-            static_cast<int>(m_params[kLookahead] * 0.001f * m_sampleRate),
-            kMaxLookaheadSamples - 1);
-
-        const int delayMask = kMaxLookaheadSamples;  // capacity per channel
-        for (int i = 0; i < numFrames; ++i) {
-            const float inL = buffer[i * numChannels];
-            const float inR = (numChannels > 1) ? buffer[i * numChannels + 1] : inL;
-
-            // Peak of the incoming (future) sample drives the envelope.
-            // Target gain = min(1, ceiling / peak). Envelope follower
-            // attacks fast toward lower gain, releases slowly toward 1.
-            const float peak = std::max(std::abs(inL), std::abs(inR));
-            const float target = (peak > ceilingLin)
-                ? ceilingLin / peak : 1.0f;
-
-            if (target < m_envLin) {
-                // Attack: move quickly toward the limiting gain.
-                m_envLin = m_attackCoeff * m_envLin + (1.0f - m_attackCoeff) * target;
-            } else {
-                m_envLin = m_releaseCoeff * m_envLin + (1.0f - m_releaseCoeff) * target;
-            }
-
-            // Apply the envelope to the DELAYED sample so the ducking
-            // aligns with the peak. With zero lookahead this is just
-            // instantaneous limiting.
-            const int readPos = (m_writePos - lookSamples + delayMask) % delayMask;
-            const float outL = m_delayBuf[readPos * 2 + 0] * m_envLin;
-            const float outR = m_delayBuf[readPos * 2 + 1] * m_envLin;
-
-            // Hard ceiling as a safety net — if the envelope hasn't
-            // caught a peak, clamp here so nothing slips above the
-            // ceiling. Shouldn't engage in normal operation.
-            buffer[i * numChannels] = std::clamp(outL, -ceilingLin, ceilingLin);
-            if (numChannels > 1)
-                buffer[i * numChannels + 1] = std::clamp(outR, -ceilingLin, ceilingLin);
-
-            // Write the incoming sample into the delay line.
-            m_delayBuf[m_writePos * 2 + 0] = inL;
-            m_delayBuf[m_writePos * 2 + 1] = inR;
-            m_writePos = (m_writePos + 1) % delayMask;
-        }
-    }
+    void init(double sampleRate, int maxBlockSize) override;
+    void reset() override;
+    void process(float* buffer, int numFrames, int numChannels) override;
 
     int parameterCount() const override { return kParamCount; }
 
@@ -114,10 +53,6 @@ public:
 
 private:
     void updateCoeffs() {
-        // Attack time is derived from lookahead: we want the envelope
-        // to reach the target within the lookahead window so ducking
-        // aligns with the peak. With zero lookahead, fall back to ~1ms
-        // so we still react fast.
         const float attackMs = std::max(1.0f, m_params[kLookahead]);
         const float releaseMs = std::max(1.0f, m_params[kRelease]);
         m_attackCoeff  = std::exp(-1.0f / (static_cast<float>(m_sampleRate) * attackMs * 0.001f));

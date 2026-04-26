@@ -41,7 +41,7 @@ struct PendingMidiLaunch {
     QuantizeMode quantizeMode = QuantizeMode::NextBar;
     bool valid = false;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
-    FollowAction followAction;
+    FollowAction followAction{};
 };
 
 // MidiClipEngine: plays MidiClips on the audio thread, generating MIDI

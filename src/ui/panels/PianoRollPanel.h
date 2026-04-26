@@ -91,8 +91,6 @@ public:
         }
 
         static const char* snapNames[] = {"1/4","1/8","1/16","1/32","4T","8T","16T"};
-        static constexpr float snapW[] = {kSnapBtnW, kSnapBtnW, kSnapBtnW, kSnapBtnW,
-                                          kTripletBtnW, kTripletBtnW, kTripletBtnW};
         for (int i = 0; i < 7; ++i) {
             m_snapBtns[i].setLabel(snapNames[i]);
             m_snapBtns[i].setAccentColor(Color{100, 180, 255});

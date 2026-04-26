@@ -18,17 +18,10 @@ public:
 
     enum Params { kRoot = 0, kScaleType, kNumParams };
 
-    void init(double sampleRate) override { m_sampleRate = sampleRate; }
-    void reset() override {}
-
-    void process(MidiBuffer& buffer, int /*numFrames*/,
-                 const TransportInfo& /*transport*/) override {
-        for (int i = 0; i < buffer.count(); ++i) {
-            auto& msg = buffer[i];
-            if (msg.isNoteOn() || msg.isNoteOff())
-                msg.note = quantize(msg.note);
-        }
-    }
+    void init(double sampleRate) override;
+    void reset() override;
+    void process(MidiBuffer& buffer, int numFrames,
+                 const TransportInfo& transport) override;
 
     const char* name() const override { return "Scale"; }
     const char* id()   const override { return "scale"; }

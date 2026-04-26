@@ -3,7 +3,10 @@ file(GLOB TEST_SOURCES *.cpp)
 
 add_executable(yawn_tests ${TEST_SOURCES})
 
-target_include_directories(yawn_tests PRIVATE
+yawn_set_warnings(yawn_tests)
+target_precompile_headers(yawn_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch/yawn_test_pch.h)
+
+target_include_directories(yawn_tests SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
 

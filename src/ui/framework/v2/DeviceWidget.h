@@ -59,10 +59,7 @@ public:
         float       minVal, maxVal, defaultVal;
         bool        isBoolean;
         ::yawn::WidgetHint widgetHint = ::yawn::WidgetHint::Knob;
-        std::vector<std::string> valueLabels;
-        // Optional: formatter that maps the raw stored value to a
-        // display string. Overrides the unit-based default when set
-        // (used for log-scaled params that store 0..1 but show Hz).
+        std::vector<std::string> valueLabels{};
         void (*formatFn)(float, char*, int) = nullptr;
     };
 

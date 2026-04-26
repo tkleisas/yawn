@@ -143,8 +143,8 @@ protected:
     bool onMouseDown(MouseEvent& e) override {
         const float mx = e.x, my = e.y;
         const bool rightClick = (e.button == MouseButton::Right);
-        const float x = m_bounds.x, y = m_bounds.y;
-        const float w = m_bounds.w, h = m_bounds.h;
+        const float y = m_bounds.y;
+        const float h = m_bounds.h;
 
         // Search input — let fw2 widget handle it via dispatch. Its
         // onMouseDown enters edit mode and returns true, short-circuiting

@@ -4478,8 +4478,6 @@ bool App::init() {
             deviceId = fx->id();
             deviceName = fx->name();
         }
-        int t = m_selectedTrack;
-
         auto presets = PresetManager::listPresetsForDevice(deviceId);
         std::vector<ui::ContextMenu::Item> items;
 
@@ -4667,7 +4665,7 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
     clip->looping = true;
     clip->gain = 0.8f;
 
-    auto* clipPtr = m_project.setClip(trackIndex, sceneIndex, std::move(clip));
+    m_project.setClip(trackIndex, sceneIndex, std::move(clip));
 
     LOG_INFO("File", "Loaded '%s' -> Track %d, Scene %d",
         name.c_str(), trackIndex + 1, sceneIndex + 1);

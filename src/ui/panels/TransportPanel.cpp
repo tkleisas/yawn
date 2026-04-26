@@ -311,7 +311,7 @@ void TransportPanel::render(UIContext& ctx) {
         const float flash = std::max(0.0f, 1.0f - static_cast<float>(beatFrac) * 4.0f);
 
         if (m_metroVisualStyle == 1) {
-            char numBuf[4];
+            char numBuf[16];
             std::snprintf(numBuf, sizeof(numBuf), "%d", currentBeat + 1);
             const float numSize = 22.0f;
             const float numW = tm.textWidth(numBuf, numSize);

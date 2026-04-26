@@ -52,7 +52,7 @@ public:
 
         auto* tm = ctx.textMetrics;
         const float lblFs = 8.0f * (48.0f / 26.0f);   // ≈ 14.77 px
-        char algoText[16];
+        char algoText[24];
         std::snprintf(algoText, sizeof(algoText), "Algo %d", m_algorithm + 1);
         if (tm)
             tm->drawText(r, algoText, m_bounds.x + 4, m_bounds.y + 2, lblFs,

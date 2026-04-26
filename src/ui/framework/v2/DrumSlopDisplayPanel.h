@@ -179,7 +179,7 @@ public:
                 const int midiNote = m_baseNote + i;
                 const int octave = (midiNote / 12) - 1;
                 const int noteIdx = midiNote % 12;
-                char label[8];
+                char label[16];
                 std::snprintf(label, sizeof(label), "%s%d",
                               noteNames[noteIdx], octave);
                 const float tw = tm->textWidth(label, lblFs);

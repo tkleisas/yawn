@@ -28,23 +28,9 @@ public:
     const char* name() const override { return "Filter"; }
     const char* id()   const override { return "filter"; }
 
-    void init(double sampleRate, int maxBlockSize) override {
-        m_sampleRate = sampleRate;
-        m_maxBlockSize = maxBlockSize;
-        updateFilter();
-        reset();
-    }
-
-    void reset() override { m_filterL.reset(); m_filterR.reset(); }
-
-    void process(float* buffer, int numFrames, int numChannels) override {
-        if (m_bypassed) return;
-        for (int i = 0; i < numFrames; ++i) {
-            buffer[i * numChannels] = m_filterL.process(buffer[i * numChannels]);
-            if (numChannels > 1)
-                buffer[i * numChannels + 1] = m_filterR.process(buffer[i * numChannels + 1]);
-        }
-    }
+    void init(double sampleRate, int maxBlockSize) override;
+    void reset() override;
+    void process(float* buffer, int numFrames, int numChannels) override;
 
     int parameterCount() const override { return kParamCount; }
 
@@ -69,19 +55,7 @@ public:
     }
 
 private:
-    void updateFilter() {
-        Biquad::Type bt;
-        int t = static_cast<int>(m_params[kType]);
-        switch (t) {
-            case HP:    bt = Biquad::Type::HighPass; break;
-            case BP:    bt = Biquad::Type::BandPass; break;
-            case Notch: bt = Biquad::Type::Notch;    break;
-            default:    bt = Biquad::Type::LowPass;  break;
-        }
-        const float hz = cutoffNormToHz(m_params[kCutoff]);
-        m_filterL.compute(bt, m_sampleRate, hz, 0.0, m_params[kResonance]);
-        m_filterR.compute(bt, m_sampleRate, hz, 0.0, m_params[kResonance]);
-    }
+    void updateFilter();
 
     Biquad m_filterL, m_filterR;
     float m_params[kParamCount] = {0.566f, 0.707f, 0.0f};

@@ -236,7 +236,6 @@ TEST(VelocityEffect, LinearPassthrough) {
 
     MidiBuffer buf;
     buf.addMessage(MidiMessage::noteOn(0, 60, 100, 0));
-    uint16_t origVel = buf[0].velocity;
     vel.process(buf, 256, makeTransport());
 
     // Min=1, Max=127, Linear: output ≈ original
@@ -352,8 +351,9 @@ TEST(NoteLength, ForcesLength) {
 
     // NoteOff should be at ~0.5 beat = 11025 samples from start
     for (int i = 0; i < buf.count(); ++i) {
-        if (buf[i].isNoteOff())
+        if (buf[i].isNoteOff()) {
             EXPECT_NEAR(buf[i].frameOffset, 11025, 5);
+        }
     }
 }
 

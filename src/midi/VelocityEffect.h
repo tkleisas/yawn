@@ -13,32 +13,10 @@ public:
     enum Curve { Linear = 0, Exponential, Logarithmic, SCurve };
     enum Params { kMinOut = 0, kMaxOut, kCurve, kRandomAmount, kNumParams };
 
-    void init(double sampleRate) override { m_sampleRate = sampleRate; m_rng = 42; }
-    void reset() override { m_rng = 42; }
-
-    void process(MidiBuffer& buffer, int /*numFrames*/,
-                 const TransportInfo& /*transport*/) override {
-        for (int i = 0; i < buffer.count(); ++i) {
-            auto& msg = buffer[i];
-            if (!msg.isNoteOn()) continue;
-
-            float v = (float)msg.velocity / 65535.0f;
-            v = applyCurve(v);
-
-            float outMin = m_minOut / 127.0f;
-            float outMax = m_maxOut / 127.0f;
-            v = outMin + v * (outMax - outMin);
-
-            if (m_randomAmount > 0.0f) {
-                float rnd = ((float)(nextRandom() % 1000) / 500.0f - 1.0f);
-                v += rnd * (m_randomAmount / 127.0f);
-            }
-
-            v = std::clamp(v, 0.0f, 1.0f);
-            msg.velocity = (uint16_t)(v * 65535.0f);
-            if (msg.velocity == 0) msg.velocity = 1;
-        }
-    }
+    void init(double sampleRate) override;
+    void reset() override;
+    void process(MidiBuffer& buffer, int numFrames,
+                 const TransportInfo& transport) override;
 
     const char* name() const override { return "Velocity"; }
     const char* id()   const override { return "velocity"; }

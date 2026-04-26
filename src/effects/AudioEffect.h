@@ -1,34 +1,12 @@
 #pragma once
 
-// AudioEffect — abstract base class for all audio effects.
-// All values stored as float, processed in interleaved stereo buffers.
-// Effects must be real-time safe: no allocations in process(), all memory preallocated in init().
-
-#include "WidgetHint.h"
+#include "core/ParameterInfo.h"
 #include <cstdint>
 
 namespace yawn {
 namespace effects {
 
-struct ParameterInfo {
-    const char* name;
-    float minValue;
-    float maxValue;
-    float defaultValue;
-    const char* unit;       // "dB", "ms", "Hz", "%", ""
-    bool isBoolean;         // If true, 0.0 = off, 1.0 = on
-    bool isPerVoice = false;
-    WidgetHint widgetHint = WidgetHint::Knob;
-    const char* const* valueLabels = nullptr;
-    int valueLabelCount = 0;
-
-    // Optional custom display formatter. When set, overrides the unit-
-    // based default in the knob UI. Used for log-mapped params that store
-    // 0..1 for uniform modulation but are displayed in natural units
-    // (e.g. filter cutoff 0..1 shown as "5.0k Hz").
-    using FormatFn = void (*)(float value, char* buf, int bufSize);
-    FormatFn formatFn = nullptr;
-};
+using ParameterInfo = ::yawn::ParameterInfo;
 
 class AudioEffect {
 public:

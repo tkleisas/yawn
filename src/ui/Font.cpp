@@ -75,8 +75,10 @@ bool Font::load(const std::string& path, float pixelHeight) {
     fseek(f, 0, SEEK_SET);
 
     std::vector<unsigned char> fontData(fileSize);
-    fread(fontData.data(), 1, fileSize, f);
-    fclose(f);
+    if (fread(fontData.data(), 1, fileSize, f) != static_cast<size_t>(fileSize)) {
+        fclose(f);
+        return false;
+    }
 
     m_pixelHeight = pixelHeight;
     m_atlasWidth = 1024;

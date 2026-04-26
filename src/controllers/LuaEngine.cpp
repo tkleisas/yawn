@@ -289,23 +289,23 @@ static int l_get_device_param_display(lua_State* L) {
     const char* unit = "";
     const char* const* labels = nullptr;
     int labelCount = 0;
-    float minVal = 0.0f, maxVal = 1.0f;
+    float minVal = 0.0f;
 
     if (d.inst) {
         val = d.inst->getParameter(pi);
         auto& info = d.inst->parameterInfo(pi);
         unit = info.unit; labels = info.valueLabels; labelCount = info.valueLabelCount;
-        minVal = info.minValue; maxVal = info.maxValue;
+        minVal = info.minValue;
     } else if (d.fx) {
         val = d.fx->getParameter(pi);
         auto& info = d.fx->parameterInfo(pi);
         unit = info.unit; labels = info.valueLabels; labelCount = info.valueLabelCount;
-        minVal = info.minValue; maxVal = info.maxValue;
+        minVal = info.minValue;
     } else if (d.mfx) {
         val = d.mfx->getParameter(pi);
         auto& info = d.mfx->parameterInfo(pi);
         unit = info.unit; labels = info.valueLabels; labelCount = info.valueLabelCount;
-        minVal = info.minValue; maxVal = info.maxValue;
+        minVal = info.minValue;
     }
 
     // If value labels are available, use the corresponding label

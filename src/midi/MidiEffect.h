@@ -1,14 +1,15 @@
 #pragma once
 
 #include "midi/MidiTypes.h"
-#include "WidgetHint.h"
+#include "core/ParameterInfo.h"
 #include <atomic>
 #include <cstdint>
 
 namespace yawn {
 namespace midi {
 
-// Transport state snapshot passed to MIDI effects each buffer
+using MidiEffectParameterInfo = ::yawn::ParameterInfo;
+
 struct TransportInfo {
     double bpm              = 120.0;
     double sampleRate       = 44100.0;
@@ -19,20 +20,6 @@ struct TransportInfo {
     int    beatsPerBar      = 4;
     int    beatDenominator  = 4;
 };
-
-struct MidiEffectParameterInfo {
-    const char* name    = "";
-    float minValue      = 0.0f;
-    float maxValue      = 1.0f;
-    float defaultValue  = 0.0f;
-    const char* unit    = "";
-    bool isBoolean      = false;
-    bool isPerVoice     = false;
-    WidgetHint widgetHint = WidgetHint::Knob;
-    const char* const* valueLabels = nullptr;
-    int valueLabelCount = 0;
-};
-
 // Abstract base class for all MIDI effects.
 // Processes a MidiBuffer in-place on the audio thread.
 class MidiEffect {

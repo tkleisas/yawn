@@ -1,7 +1,7 @@
 #pragma once
 
 #include "midi/MidiTypes.h"
-#include "WidgetHint.h"
+#include "core/ParameterInfo.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -9,26 +9,7 @@
 namespace yawn {
 namespace instruments {
 
-struct InstrumentParameterInfo {
-    const char* name    = "";
-    float minValue      = 0.0f;
-    float maxValue      = 1.0f;
-    float defaultValue  = 0.0f;
-    const char* unit    = "";
-    bool isBoolean      = false;
-    bool isPerVoice     = false;  // true = per-voice/pad (applies to selected voice)
-    WidgetHint widgetHint = WidgetHint::Knob;
-    const char* const* valueLabels = nullptr;
-    int valueLabelCount = 0;
-
-    // Optional custom display formatter. When set, overrides the unit-
-    // based default in the knob UI. Used for exponentially-scaled params
-    // that are stored 0..1 for uniform modulation but displayed in their
-    // natural units (e.g. filter cutoff stored 0..1, shown as "5.0k Hz").
-    // Writes a null-terminated string into the provided buffer.
-    using FormatFn = void (*)(float value, char* buf, int bufSize);
-    FormatFn formatFn = nullptr;
-};
+using InstrumentParameterInfo = ::yawn::ParameterInfo;
 
 inline float noteToFreq(int note) {
     return 440.0f * std::pow(2.0f, (note - 69) / 12.0f);

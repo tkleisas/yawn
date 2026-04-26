@@ -117,8 +117,8 @@ protected:
 
     bool onMouseDown(MouseEvent& e) override {
         const float mx = e.x, my = e.y;
-        const float x = m_bounds.x, y = m_bounds.y;
-        const float w = m_bounds.w, h = m_bounds.h;
+        const float y = m_bounds.y;
+        const float h = m_bounds.h;
 
         // Search input — dispatch to fw2 widget; enters edit mode on
         // down + short-circuits gesture SM (no capture, no paired up).

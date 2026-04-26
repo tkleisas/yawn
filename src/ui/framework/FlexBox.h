@@ -151,7 +151,6 @@ public:
 
         for (size_t i = 0; i < m_children.size(); ++i) {
             if (!m_children[i]->isVisible()) continue;
-            auto sp = m_children[i]->sizePolicy();
             float childMain  = mainSizes[i];
             float childCross = (m_direction == Direction::Row) ? m_childSizes[i].h : m_childSizes[i].w;
 

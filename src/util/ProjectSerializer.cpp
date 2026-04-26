@@ -2,6 +2,7 @@
 
 #include "ProjectSerializer.h"
 #include "util/Base64.h"
+#include "util/Logger.h"
 #include "visual/VisualEngineAPI.h"
 
 #ifdef YAWN_HAS_VST3
@@ -64,7 +65,10 @@ void deserializeEffectChain(effects::EffectChain& chain, const json& arr,
             fx = createAudioEffect(id);
         }
 
-        if (!fx) continue;
+        if (!fx) {
+            LOG_WARN("Project", "Unknown effect ID '%s' in chain - skipping", id.c_str());
+            continue;
+        }
         fx->init(sampleRate, maxBlockSize);
         fx->setBypassed(j.value("bypassed", false));
         fx->setMix(j.value("mix", 1.0f));
@@ -118,7 +122,10 @@ void deserializeMidiEffectChain(midi::MidiEffectChain& chain, const json& arr,
     for (const auto& j : arr) {
         std::string id = j.value("id", "");
         auto fx = createMidiEffect(id);
-        if (!fx) continue;
+        if (!fx) {
+            LOG_WARN("Project", "Unknown MIDI effect ID '%s' in chain - skipping", id.c_str());
+            continue;
+        }
         fx->init(sampleRate);
         fx->setBypassed(j.value("bypassed", false));
         if (j.contains("instanceId"))
@@ -266,7 +273,11 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
         std::string modulePath = j.value("vst3modulePath", "");
         std::string classID = j.value("vst3classID", vst3ClassIDFromId(id));
         inst = createVST3Instrument(modulePath, classID);
-        if (!inst) return nullptr;
+        if (!inst) {
+            LOG_WARN("Project", "Failed to load VST3 instrument '%s' (%s) - skipping",
+                     modulePath.c_str(), classID.c_str());
+            return nullptr;
+        }
         inst->init(sampleRate, maxBlockSize);
         inst->setBypassed(j.value("bypassed", false));
         auto* vinst = static_cast<vst3::VST3Instrument*>(inst.get());
@@ -285,7 +296,10 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
 #endif
 
     inst = createInstrument(id);
-    if (!inst) return nullptr;
+    if (!inst) {
+        LOG_WARN("Project", "Unknown instrument ID '%s' - skipping", id.c_str());
+        return nullptr;
+    }
 
     inst->init(sampleRate, maxBlockSize);
     inst->setBypassed(j.value("bypassed", false));
@@ -297,8 +311,11 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
         auto& sampler = static_cast<instruments::Sampler&>(*inst);
         fs::path samplePath = projectDir / j["sampleFile"].get<std::string>();
         auto buf = FileIO::loadAudioFile(samplePath.string());
-        if (buf)
+        if (buf) {
             sampler.loadSample(buf->data(), buf->numFrames(), buf->numChannels());
+        } else {
+            LOG_WARN("Project", "Sample file not found: %s", samplePath.string().c_str());
+        }
     }
 
     // DrumRack: load per-pad samples
@@ -310,8 +327,11 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             if (relPath.empty()) continue;
             fs::path samplePath = projectDir / relPath;
             auto buf = FileIO::loadAudioFile(samplePath.string());
-            if (buf)
+            if (buf) {
                 rack.loadPad(note, buf->data(), buf->numFrames(), buf->numChannels());
+            } else {
+                LOG_WARN("Project", "DrumRack pad %d sample missing: %s", note, samplePath.string().c_str());
+            }
             if (padJ.contains("volume"))
                 rack.setPadVolume(note, padJ["volume"].get<float>());
             if (padJ.contains("pan"))
@@ -337,6 +357,8 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
                         interleaved[f * nc + ch] = src[f];
                 }
                 ds.loadLoop(interleaved.data(), nf, nc);
+            } else {
+                LOG_WARN("Project", "DrumSlop loop sample missing: %s", samplePath.string().c_str());
             }
         }
         if (j.contains("dslopPads")) {
@@ -373,10 +395,12 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             uint8_t kh = cj.value("keyHigh", (uint8_t)127);
             uint8_t vl = cj.value("velLow",  (uint8_t)1);
             uint8_t vh = cj.value("velHigh", (uint8_t)127);
-            if (chainInst)
+            if (chainInst) {
                 rack.addChain(std::move(chainInst), kl, kh, vl, vh);
-            else
+            } else {
+                LOG_WARN("Project", "InstrumentRack chain instrument failed to load - skipping chain");
                 continue;
+            }
             // Set chain-level params after adding
             int ci = rack.chainCount() - 1;
             if (ci >= 0) {
@@ -509,7 +533,11 @@ std::unique_ptr<audio::Clip> deserializeAudioClip(const json& j,
     if (j.contains("sampleFile")){
         fs::path samplePath = projectDir / j["sampleFile"].get<std::string>();
         auto buf = FileIO::loadAudioFile(samplePath.string());
-        if (buf) clip->buffer = std::move(buf);
+        if (buf) {
+            clip->buffer = std::move(buf);
+        } else {
+            LOG_WARN("Project", "Clip sample missing: %s", samplePath.string().c_str());
+        }
     }
 
     return clip;
@@ -784,7 +812,11 @@ ArrangementClip deserializeArrangementClip(const json& j,
     if (clip.type == ArrangementClip::Type::Audio && j.contains("sampleFile")) {
         fs::path samplePath = projectDir / "samples" / j["sampleFile"].get<std::string>();
         auto buf = FileIO::loadAudioFile(samplePath.string());
-        if (buf) clip.audioBuffer = std::move(buf);
+        if (buf) {
+            clip.audioBuffer = std::move(buf);
+        } else {
+            LOG_WARN("Project", "Arrangement audio sample missing: %s", samplePath.string().c_str());
+        }
     } else if (clip.type == ArrangementClip::Type::Midi && j.contains("midiClip")) {
         clip.midiClip = deserializeMidiClip(j["midiClip"]);
     } else if (clip.type == ArrangementClip::Type::Visual && j.contains("visual")) {
@@ -1030,7 +1062,11 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
 
     // Write project.json
     std::ofstream out(folderPath / "project.json");
-    if (!out.is_open()) return false;
+    if (!out.is_open()) {
+        LOG_ERROR("Project", "Failed to open %s for writing",
+                  (folderPath / "project.json").string().c_str());
+        return false;
+    }
     out << root.dump(2);
     out.close();
 
@@ -1043,15 +1079,27 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                                        midi::MidiLearnManager* learnMgr,
                                        visual::VisualEngine* visualEngine) {
     fs::path jsonPath = folderPath / "project.json";
-    if (!fs::exists(jsonPath)) return false;
+    if (!fs::exists(jsonPath)) {
+        LOG_ERROR("Project", "Project file not found: %s", jsonPath.string().c_str());
+        return false;
+    }
 
     std::ifstream in(jsonPath);
-    if (!in.is_open()) return false;
+    if (!in.is_open()) {
+        LOG_ERROR("Project", "Failed to open %s for reading", jsonPath.string().c_str());
+        return false;
+    }
 
     json root;
     try {
         root = json::parse(in);
+    } catch (const std::exception& e) {
+        LOG_ERROR("Project", "JSON parse error in %s: %s", jsonPath.string().c_str(), e.what());
+        in.close();
+        return false;
     } catch (...) {
+        LOG_ERROR("Project", "Unknown JSON parse error in %s", jsonPath.string().c_str());
+        in.close();
         return false;
     }
     in.close();

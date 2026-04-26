@@ -34,15 +34,10 @@ public:
         float  velocity  = 1.0f;
     };
 
-    void init(double sampleRate, int maxBlockSize) override {
-        m_sampleRate = sampleRate;
-        m_maxBlockSize = maxBlockSize;
-    }
-
-    void reset() override {
-        for (auto& p : m_pads)
-            p.playing = false;
-    }
+    void init(double sampleRate, int maxBlockSize) override;
+    void reset() override;
+    void process(float* buffer, int numFrames, int numChannels,
+                 const midi::MidiBuffer& midi) override;
 
     // Load a sample into a pad. Note = MIDI note number (0-127).
     void loadPad(int note, const float* data, int numFrames, int numChannels) {
@@ -89,49 +84,6 @@ public:
     }
     int padSampleChannels(int note) const {
         return (note >= 0 && note < kNumPads) ? m_pads[note].sampleChannels : 1;
-    }
-
-    void process(float* buffer, int numFrames, int numChannels,
-                 const midi::MidiBuffer& midi) override {
-        // Handle MIDI triggers
-        for (int i = 0; i < midi.count(); ++i) {
-            const auto& msg = midi[i];
-            if (msg.isNoteOn()) {
-                auto& p = m_pads[msg.note & 0x7F];
-                if (p.sampleFrames > 0) {
-                    p.playing = true;
-                    p.playPos = 0.0;
-                    p.velocity = velocityToGain(msg.velocity);
-                    p.playSpeed = std::pow(2.0, p.pitchAdjust / 12.0);
-                }
-            }
-            // NoteOff: optionally stop pad (choke). For drums, we let them ring.
-        }
-
-        // Render all playing pads
-        for (int n = 0; n < kNumPads; ++n) {
-            auto& p = m_pads[n];
-            if (!p.playing) continue;
-
-            float angle = (p.pan + 1.0f) * 0.25f * (float)M_PI;
-            float gL = p.volume * p.velocity * m_volume * std::cos(angle);
-            float gR = p.volume * p.velocity * m_volume * std::sin(angle);
-
-            for (int i = 0; i < numFrames; ++i) {
-                int pos = (int)p.playPos;
-                if (pos >= p.sampleFrames) { p.playing = false; break; }
-
-                float sL = p.sampleData[pos * p.sampleChannels];
-                float sR = (p.sampleChannels > 1)
-                    ? p.sampleData[pos * p.sampleChannels + 1] : sL;
-
-                buffer[i * numChannels + 0] += sL * gL;
-                if (numChannels > 1)
-                    buffer[i * numChannels + 1] += sR * gR;
-
-                p.playPos += p.playSpeed;
-            }
-        }
     }
 
     const char* name() const override { return "Drum Rack"; }

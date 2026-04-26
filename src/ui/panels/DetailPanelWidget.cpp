@@ -23,7 +23,6 @@ bool DetailPanelWidget::handleRightClick(float mx, float my) {
         if (mx < db.x || mx >= db.x + db.w) continue;
         if (my < db.y || my >= db.y + db.h) continue;
 
-        auto& ref = m_deviceRefs[i];
         if (!m_deviceWidgets[i]->isExpanded()) return true;
 
         return handleKnobRightClick(i, mx, my);

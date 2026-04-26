@@ -236,7 +236,7 @@ public:
 
             const int octave = (note / 12) - 1;
             const int noteIdx = note % 12;
-            char label[8];
+            char label[16];
             std::snprintf(label, sizeof(label), "%s%d",
                           noteNames[noteIdx], octave);
             if (tm) {

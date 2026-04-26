@@ -24,16 +24,7 @@ public:
     // --- Called from audio thread ---
 
     void play() { m_playing.store(true, std::memory_order_release); }
-    void stop() {
-        m_playing.store(false, std::memory_order_release);
-        m_recording.store(false, std::memory_order_release);
-        m_countInRemaining.store(0, std::memory_order_release);
-        // Counter increments on every stop() call — even when already
-        // stopped — so main-thread observers can detect the "Stop
-        // button was pressed" event rather than just "transport went
-        // from playing to not-playing" (which is only a subset).
-        m_stopCounter.fetch_add(1, std::memory_order_release);
-    }
+    void stop();
 
     bool isPlaying() const { return m_playing.load(std::memory_order_acquire); }
     // Monotonic counter — reading across threads is lock-free via
@@ -51,46 +42,23 @@ public:
     void setCountInBars(int bars) { m_countInBars.store(bars, std::memory_order_release); }
     int countInBars() const { return m_countInBars.load(std::memory_order_acquire); }
 
-    void beginCountIn() {
-        int bars = countInBars();
-        if (bars > 0) {
-            int64_t countInSamples = static_cast<int64_t>(samplesPerBar() * bars);
-            m_countInRemaining.store(countInSamples, std::memory_order_release);
-        } else {
-            m_countInRemaining.store(0, std::memory_order_release);
-        }
-    }
+    void beginCountIn();
 
     bool isCountingIn() const {
         return m_countInRemaining.load(std::memory_order_acquire) > 0;
     }
 
     // Elapsed samples since count-in began (for metronome during count-in)
-    int64_t countInElapsedSamples() const {
-        int bars = countInBars();
-        if (bars <= 0) return 0;
-        int64_t total = static_cast<int64_t>(samplesPerBar() * bars);
-        int64_t remaining = m_countInRemaining.load(std::memory_order_acquire);
-        return total - remaining;
-    }
+    int64_t countInElapsedSamples() const;
 
-    double countInProgress() const {
-        int bars = countInBars();
-        if (bars <= 0) return 1.0;
-        int64_t total = static_cast<int64_t>(samplesPerBar() * bars);
-        int64_t remaining = m_countInRemaining.load(std::memory_order_acquire);
-        if (total <= 0) return 1.0;
-        return 1.0 - static_cast<double>(remaining) / total;
-    }
+    double countInProgress() const;
 
     void setBPM(double bpm) { m_bpm.store(bpm, std::memory_order_release); }
     double bpm() const { return m_bpm.load(std::memory_order_acquire); }
 
     // Time signature: numerator / denominator (e.g. 3/4, 6/8, 7/8)
-    void setTimeSignature(int numerator, int denominator) {
-        m_numerator.store(std::max(1, numerator), std::memory_order_release);
-        m_denominator.store(std::max(1, denominator), std::memory_order_release);
-    }
+    void setTimeSignature(int numerator, int denominator);
+
     int numerator()   const { return m_numerator.load(std::memory_order_acquire); }
     int denominator() const { return m_denominator.load(std::memory_order_acquire); }
 
@@ -98,10 +66,8 @@ public:
     void setLoopEnabled(bool e) { m_loopEnabled.store(e, std::memory_order_release); }
     bool isLoopEnabled() const { return m_loopEnabled.load(std::memory_order_acquire); }
 
-    void setLoopRange(double startBeats, double endBeats) {
-        m_loopStartBeats.store(startBeats, std::memory_order_release);
-        m_loopEndBeats.store(endBeats, std::memory_order_release);
-    }
+    void setLoopRange(double startBeats, double endBeats);
+
     double loopStartBeats() const { return m_loopStartBeats.load(std::memory_order_acquire); }
     double loopEndBeats() const { return m_loopEndBeats.load(std::memory_order_acquire); }
 
@@ -109,34 +75,7 @@ public:
     bool didLoopWrap() const { return m_didLoopWrap; }
 
     // Advance transport position by numFrames. Called each audio callback.
-    void advance(int numFrames) {
-        m_didLoopWrap = false;
-        // Handle count-in first
-        int64_t countIn = m_countInRemaining.load(std::memory_order_acquire);
-        if (countIn > 0) {
-            int64_t newCountIn = countIn - numFrames;
-            if (newCountIn <= 0) {
-                m_countInRemaining.store(0, std::memory_order_release);
-            } else {
-                m_countInRemaining.store(newCountIn, std::memory_order_release);
-            }
-            return; // Don't advance position during count-in
-        }
-        if (m_playing.load(std::memory_order_acquire)) {
-            m_positionInSamples.fetch_add(numFrames, std::memory_order_relaxed);
-
-            // Loop wrap
-            if (m_loopEnabled.load(std::memory_order_acquire)) {
-                double loopEnd = m_loopEndBeats.load(std::memory_order_acquire);
-                if (loopEnd > 0.0 && positionInBeats() >= loopEnd) {
-                    double loopStart = m_loopStartBeats.load(std::memory_order_acquire);
-                    int64_t startSamples = static_cast<int64_t>(loopStart * samplesPerBeat());
-                    m_positionInSamples.store(startSamples, std::memory_order_release);
-                    m_didLoopWrap = true;
-                }
-            }
-        }
-    }
+    void advance(int numFrames);
 
     void setPositionInSamples(int64_t pos) {
         m_positionInSamples.store(pos, std::memory_order_release);
@@ -147,42 +86,18 @@ public:
     }
 
     // Convert sample position to beats (quarter notes)
-    double positionInBeats() const {
-        double pos = static_cast<double>(positionInSamples());
-        double currentBpm = bpm();
-        double sr = m_sampleRate;
-        if (sr <= 0.0 || currentBpm <= 0.0) return 0.0;
-        return (pos / sr) * (currentBpm / 60.0);
-    }
+    double positionInBeats() const;
 
     // Samples per beat (quarter note) at current BPM
-    double samplesPerBeat() const {
-        double currentBpm = bpm();
-        if (currentBpm <= 0.0) return 0.0;
-        return m_sampleRate * 60.0 / currentBpm;
-    }
+    double samplesPerBeat() const;
 
     // Samples per bar based on time signature numerator
-    double samplesPerBar() const {
-        return samplesPerBeat() * numerator();
-    }
+    double samplesPerBar() const;
 
     // Number of beats (quarter notes) per bar from time signature
     int beatsPerBar() const { return numerator(); }
 
-    void reset() {
-        m_playing.store(false, std::memory_order_release);
-        m_recording.store(false, std::memory_order_release);
-        m_positionInSamples.store(0, std::memory_order_release);
-        m_bpm.store(kDefaultBPM, std::memory_order_release);
-        m_numerator.store(kDefaultNumerator, std::memory_order_release);
-        m_denominator.store(kDefaultDenominator, std::memory_order_release);
-        m_countInRemaining.store(0, std::memory_order_release);
-        m_loopEnabled.store(false, std::memory_order_release);
-        m_loopStartBeats.store(0.0, std::memory_order_release);
-        m_loopEndBeats.store(0.0, std::memory_order_release);
-        m_didLoopWrap = false;
-    }
+    void reset();
 
 private:
     double m_sampleRate = kDefaultSampleRate;
