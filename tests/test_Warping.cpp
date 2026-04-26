@@ -198,6 +198,8 @@ TEST(TransientDetector, MinInterOnsetEnforced) {
     }
 }
 
+// ==================== TransientDetector EstimateBPM Tests ====================
+
 TEST(TransientDetector, EstimateBPMTooFewTransients) {
     std::vector<int64_t> transients = {0, 22050};
     double bpm = TransientDetector::estimateBPM(transients, 44100.0);
@@ -382,6 +384,117 @@ TEST(TimeStretcher, FFTRoundTrip) {
         EXPECT_NEAR(real[i], origReal[i], 1e-4f) << "at index " << i;
         EXPECT_NEAR(imag[i], 0.0f, 1e-4f) << "at index " << i;
     }
+}
+
+TEST(TimeStretcher, WSOLASpeedRatioProportionality) {
+    TimeStretcher ts;
+    ts.init(44100.0, 4096, TimeStretcher::Algorithm::WSOLA);
+
+    std::vector<float> input(22050);
+    for (int i = 0; i < 22050; ++i)
+        input[i] = std::sin(2.0 * M_PI * 440.0 * i / 44100.0);
+
+    // Speed 0.5: should consume ~half the input per output sample
+    ts.setSpeedRatio(0.5);
+    ts.resetInputPosition();
+    std::vector<float> outHalf(44100, 0.0f);
+    int consumedHalf = 0;
+    int writtenHalf = ts.process(input.data(), 22050, outHalf.data(), 44100, consumedHalf);
+    ts.reset();
+
+    // Speed 1.0: should consume roughly output frames
+    ts.setSpeedRatio(1.0);
+    ts.resetInputPosition();
+    std::vector<float> outOne(44100, 0.0f);
+    int consumedOne = 0;
+    int writtenOne = ts.process(input.data(), 22050, outOne.data(), 44100, consumedOne);
+    ts.reset();
+
+    // Speed 2.0: should consume more input per output sample
+    ts.setSpeedRatio(2.0);
+    ts.resetInputPosition();
+    std::vector<float> outDouble(44100, 0.0f);
+    int consumedDouble = 0;
+    int writtenDouble = ts.process(input.data(), 22050, outDouble.data(), 44100, consumedDouble);
+
+    // At 0.5x speed, we produce more output per input
+    double ratioHalf = static_cast<double>(writtenHalf) / consumedHalf;
+    // At 2.0x speed, we produce less output per input
+    double ratioDouble = static_cast<double>(writtenDouble) / consumedDouble;
+
+    EXPECT_GT(ratioHalf, ratioDouble);
+    EXPECT_GT(writtenHalf, 0);
+    EXPECT_GT(writtenOne, 0);
+    EXPECT_GT(writtenDouble, 0);
+}
+
+TEST(TimeStretcher, PhaseVocoderOutputNotAllSilence) {
+    TimeStretcher ts;
+    ts.init(44100.0, 4096, TimeStretcher::Algorithm::PhaseVocoder);
+    ts.setSpeedRatio(1.0);
+
+    std::vector<float> input(22050);
+    for (int i = 0; i < 22050; ++i)
+        input[i] = std::sin(2.0 * M_PI * 440.0 * i / 44100.0);
+
+    std::vector<float> output(44100, 0.0f);
+    int consumed = 0;
+    int written = ts.process(input.data(), 22050, output.data(), 44100, consumed);
+
+    EXPECT_GT(written, 0);
+
+    float maxAbs = 0.0f;
+    for (int i = 0; i < written; ++i)
+        maxAbs = std::max(maxAbs, std::abs(output[i]));
+    EXPECT_GT(maxAbs, 0.001f);
+}
+
+TEST(TimeStretcher, WSOLAAndPhaseVocoderCanInit) {
+    TimeStretcher tsW;
+    tsW.init(44100.0, 4096, TimeStretcher::Algorithm::WSOLA);
+    EXPECT_EQ(tsW.algorithm(), TimeStretcher::Algorithm::WSOLA);
+
+    TimeStretcher tsP;
+    tsP.init(44100.0, 4096, TimeStretcher::Algorithm::PhaseVocoder);
+    EXPECT_EQ(tsP.algorithm(), TimeStretcher::Algorithm::PhaseVocoder);
+}
+
+TEST(TimeStretcher, ProcessWithShortInput) {
+    TimeStretcher ts;
+    ts.init(44100.0, 4096, TimeStretcher::Algorithm::WSOLA);
+    ts.setSpeedRatio(1.0);
+
+    // Input shorter than window size
+    std::vector<float> input(256, 0.5f);
+    std::vector<float> output(4096, 0.0f);
+    int consumed = 0;
+    int written = ts.process(input.data(), 256, output.data(), 4096, consumed);
+
+    // May produce output or fall back — just verify no crash
+    EXPECT_GE(written, 0);
+}
+
+TEST(TimeStretcher, StretchThenResetThenStretchAgain) {
+    TimeStretcher ts;
+    ts.init(44100.0, 512, TimeStretcher::Algorithm::WSOLA);
+
+    std::vector<float> input(11025, 0.5f);
+    std::vector<float> output(44100, 0.0f);
+
+    // First pass
+    ts.setSpeedRatio(1.0);
+    int consumed1 = 0;
+    int written1 = ts.process(input.data(), 11025, output.data(), 44100, consumed1);
+    EXPECT_GT(written1, 0);
+
+    // Reset and do second pass — should behave the same
+    ts.reset();
+    ts.setSpeedRatio(1.0);
+    ts.resetInputPosition();
+    int consumed2 = 0;
+    int written2 = ts.process(input.data(), 11025, output.data(), 44100, consumed2);
+    EXPECT_GT(written2, 0);
+    EXPECT_EQ(written1, written2);
 }
 
 // ==================== Warp-Aware Playback Tests ====================
