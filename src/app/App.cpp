@@ -371,6 +371,9 @@ void App::setupMenuBar() {
         m_menuBar.addMenu("MIDI", {
             M::item("MIDI Devices",  nullptr),
             M::item("MIDI Sync",     nullptr),
+            M::item("Keyboard Velocity...", [this]() {
+                showKeyboardVelocityMenu();
+            }),
             M::separator(),
             disabled("Link Settings"),
         });
@@ -6686,6 +6689,29 @@ void App::insertSceneAtSelection() {
 // "Audio 1/2 | MIDI 1/2 | Visual 1". MIDI slots get a stock
 // SubtractiveSynth so they're audible out of the box. Engine sync is
 // the caller's responsibility (syncTracksToEngine / startup flow).
+void App::showKeyboardVelocityMenu() {
+    const uint16_t currentVel = m_virtualKeyboard.velocity();
+    const uint8_t currentVel7 = midi::Convert::vel16to7(currentVel);
+
+    struct Preset { const char* label; uint8_t vel7; };
+    static constexpr Preset presets[] = {
+        {"Soft (25%)",   32},
+        {"Medium (50%)",  64},
+        {"Normal (75%)",  96},
+        {"Hard (100%)",  127},
+    };
+
+    std::vector<ui::ContextMenu::Item> items;
+    for (const auto& p : presets) {
+        items.push_back({p.label, [this, vel7 = p.vel7]() {
+            m_virtualKeyboard.setVelocity(vel7);
+        }});
+    }
+
+    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+        ui::fw2::Point{m_mainWindow.getWidth() * 0.5f, ui::Theme::kTransportBarHeight + 30});
+}
+
 void App::resetEngineState() {
     for (int t = 0; t < kMaxTracks; ++t) {
         m_audioEngine.setInstrument(t, nullptr);

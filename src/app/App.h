@@ -98,6 +98,7 @@ private:
     void showArrangementClipContextMenu(int trackIndex, int clipIdx, float mx, float my);
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
     void showShaderLibraryMenu(float mx, float my);
+    void showKeyboardVelocityMenu();
     // Right-click menu for "Map to Macro N" on a parameter knob.
     // Builds a context menu showing each of the 8 macros as a target;
     // if the same target is already mapped, also offers "Unmap" and
