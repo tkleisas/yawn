@@ -101,6 +101,35 @@ static yawn::ui::fw2::MouseButton sdlBtnToFw2(int btn) {
     }
 }
 
+// Helper: load audio file, resample to engine rate, convert to interleaved
+static bool loadInterleaved(audio::AudioEngine& engine, const std::string& path,
+                            std::vector<float>& outInterleaved, int& outFrames, int& outChannels) {
+    util::AudioFileInfo info;
+    auto buffer = util::loadAudioFile(path, &info);
+    if (!buffer) return false;
+
+    if (info.sampleRate != static_cast<int>(engine.sampleRate())) {
+        buffer = util::resampleBuffer(*buffer, info.sampleRate, engine.sampleRate());
+        if (!buffer) return false;
+    }
+
+    outFrames = buffer->numFrames();
+    outChannels = buffer->numChannels();
+    outInterleaved.resize(static_cast<size_t>(outFrames) * outChannels);
+    for (int ch = 0; ch < outChannels; ++ch) {
+        const float* src = buffer->channelData(ch);
+        for (int i = 0; i < outFrames; ++i)
+            outInterleaved[static_cast<size_t>(i) * outChannels + ch] = src[i];
+    }
+    return true;
+}
+
+// Helper: extract filename without extension from a path
+static std::string fileNameFromPath(const std::string& path) {
+    std::string name = fileNameFromPath(path);
+    return name;
+}
+
 App::~App() {
     shutdown();
 }
@@ -4608,11 +4637,7 @@ bool App::loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex
         if (!buffer) return false;
     }
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
-    auto dot = name.find_last_of('.');
-    if (dot != std::string::npos) name = name.substr(0, dot);
+    std::string name = fileNameFromPath(path);
 
     auto clip = std::make_unique<audio::Clip>();
     clip->name = name;
@@ -4639,11 +4664,7 @@ bool App::loadClipToArrangement(const std::string& path, int trackIndex, double 
         if (!buffer) return false;
     }
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
-    auto dot = name.find_last_of('.');
-    if (dot != std::string::npos) name = name.substr(0, dot);
+    std::string name = fileNameFromPath(path);
 
     // Calculate length in beats from audio duration
     double sampleRate = m_audioEngine.sampleRate();
@@ -4682,30 +4703,14 @@ bool App::loadSampleToSampler(const std::string& path, int trackIndex) {
     auto* sampler = dynamic_cast<instruments::Sampler*>(inst);
     if (!sampler) return false;
 
-    util::AudioFileInfo info;
-    auto buffer = util::loadAudioFile(path, &info);
-    if (!buffer) return false;
-
-    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
-        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
-        if (!buffer) return false;
-    }
-
-    // Convert non-interleaved AudioBuffer to interleaved for Sampler::loadSample
-    int frames = buffer->numFrames();
-    int channels = buffer->numChannels();
-    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
-    for (int ch = 0; ch < channels; ++ch) {
-        const float* src = buffer->channelData(ch);
-        for (int i = 0; i < frames; ++i)
-            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
-    }
+    std::vector<float> interleaved;
+    int frames, channels;
+    if (!loadInterleaved(m_audioEngine, path, interleaved, frames, channels))
+        return false;
 
     sampler->loadSample(interleaved.data(), frames, channels);
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
+    std::string name = fileNameFromPath(path);
     LOG_INFO("File", "Loaded sample '%s' into Sampler on Track %d",
         name.c_str(), trackIndex + 1);
 
@@ -4734,29 +4739,14 @@ bool App::loadLoopToDrumSlop(const std::string& path, int trackIndex) {
     auto* ds = dynamic_cast<instruments::DrumSlop*>(inst);
     if (!ds) return false;
 
-    util::AudioFileInfo info;
-    auto buffer = util::loadAudioFile(path, &info);
-    if (!buffer) return false;
-
-    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
-        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
-        if (!buffer) return false;
-    }
-
-    int frames = buffer->numFrames();
-    int channels = buffer->numChannels();
-    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
-    for (int ch = 0; ch < channels; ++ch) {
-        const float* src = buffer->channelData(ch);
-        for (int i = 0; i < frames; ++i)
-            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
-    }
+    std::vector<float> interleaved;
+    int frames, channels;
+    if (!loadInterleaved(m_audioEngine, path, interleaved, frames, channels))
+        return false;
 
     ds->loadLoop(interleaved.data(), frames, channels);
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
+    std::string name = fileNameFromPath(path);
     LOG_INFO("File", "Loaded loop '%s' into DrumSlop on Track %d",
         name.c_str(), trackIndex + 1);
 
@@ -4785,29 +4775,14 @@ bool App::loadSampleToDrumRack(const std::string& path, int trackIndex) {
     auto* rack = dynamic_cast<instruments::DrumRack*>(inst);
     if (!rack) return false;
 
-    util::AudioFileInfo info;
-    auto buffer = util::loadAudioFile(path, &info);
-    if (!buffer) return false;
-
-    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
-        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
-        if (!buffer) return false;
-    }
-
-    int frames = buffer->numFrames();
-    int channels = buffer->numChannels();
-    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
-    for (int ch = 0; ch < channels; ++ch) {
-        const float* src = buffer->channelData(ch);
-        for (int i = 0; i < frames; ++i)
-            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
-    }
+    std::vector<float> interleaved;
+    int frames, channels;
+    if (!loadInterleaved(m_audioEngine, path, interleaved, frames, channels))
+        return false;
 
     rack->loadPad(rack->selectedPad(), interleaved.data(), frames, channels);
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
+    std::string name = fileNameFromPath(path);
     int padIdx = rack->selectedPad();
     LOG_INFO("File", "Loaded sample '%s' into Drum Rack pad %d on Track %d",
         name.c_str(), padIdx, trackIndex + 1);
@@ -4837,29 +4812,14 @@ bool App::loadSampleToGranular(const std::string& path, int trackIndex) {
     auto* granular = dynamic_cast<instruments::GranularSynth*>(inst);
     if (!granular) return false;
 
-    util::AudioFileInfo info;
-    auto buffer = util::loadAudioFile(path, &info);
-    if (!buffer) return false;
-
-    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
-        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
-        if (!buffer) return false;
-    }
-
-    int frames = buffer->numFrames();
-    int channels = buffer->numChannels();
-    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
-    for (int ch = 0; ch < channels; ++ch) {
-        const float* src = buffer->channelData(ch);
-        for (int i = 0; i < frames; ++i)
-            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
-    }
+    std::vector<float> interleaved;
+    int frames, channels;
+    if (!loadInterleaved(m_audioEngine, path, interleaved, frames, channels))
+        return false;
 
     granular->loadSample(interleaved.data(), frames, channels);
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
+    std::string name = fileNameFromPath(path);
     LOG_INFO("File", "Loaded sample '%s' into Granular Synth on Track %d",
         name.c_str(), trackIndex + 1);
 
@@ -4888,29 +4848,14 @@ bool App::loadModulatorToVocoder(const std::string& path, int trackIndex) {
     auto* vocoder = dynamic_cast<instruments::Vocoder*>(inst);
     if (!vocoder) return false;
 
-    util::AudioFileInfo info;
-    auto buffer = util::loadAudioFile(path, &info);
-    if (!buffer) return false;
-
-    if (info.sampleRate != static_cast<int>(m_audioEngine.sampleRate())) {
-        buffer = util::resampleBuffer(*buffer, info.sampleRate, m_audioEngine.sampleRate());
-        if (!buffer) return false;
-    }
-
-    int frames = buffer->numFrames();
-    int channels = buffer->numChannels();
-    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
-    for (int ch = 0; ch < channels; ++ch) {
-        const float* src = buffer->channelData(ch);
-        for (int i = 0; i < frames; ++i)
-            interleaved[static_cast<size_t>(i) * channels + ch] = src[i];
-    }
+    std::vector<float> interleaved;
+    int frames, channels;
+    if (!loadInterleaved(m_audioEngine, path, interleaved, frames, channels))
+        return false;
 
     vocoder->loadModulatorSample(interleaved.data(), frames, channels);
 
-    std::string name = path;
-    auto pos = name.find_last_of("/\\");
-    if (pos != std::string::npos) name = name.substr(pos + 1);
+    std::string name = fileNameFromPath(path);
     LOG_INFO("File", "Loaded modulator '%s' into Vocoder on Track %d",
         name.c_str(), trackIndex + 1);
 
