@@ -204,7 +204,8 @@ private:
     void openMidiLearnMenu(float mx, float my,
                            const automation::AutomationTarget& target,
                            float paramMin, float paramMax,
-                           std::function<void()> resetAction);
+                           std::function<void()> resetAction,
+                           const ::yawn::MacroTarget& macroTarget = {});
 
 #ifdef YAWN_TEST_BUILD
     void setupStripCallbacks(int) {}

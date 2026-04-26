@@ -196,6 +196,17 @@ public:
 
     std::vector<LayerParamInfo> getLayerParams(int track) const;
     void setLayerParam(int track, const std::string& name, float value);
+    // Look up a single source-pass param's natural [min, max] without
+    // copying the full param vector. Returns false (and leaves the
+    // out-args untouched) when the layer / param doesn't resolve.
+    // Used by the macro mapping evaluator to unnormalise its 0..1
+    // sub-range output into the param's actual range.
+    bool getLayerParamRange(int track, const std::string& name,
+                              float* outMin, float* outMax) const;
+    // Same idea for a chain-pass param at the given pass index.
+    bool getLayerChainPassParamRange(int track, int passIdx,
+                                       const std::string& name,
+                                       float* outMin, float* outMax) const;
     // Apply saved name→value pairs (by name; missing names keep their default).
     void applyLayerParamValues(int track,
                                 const std::vector<std::pair<std::string, float>>& values);

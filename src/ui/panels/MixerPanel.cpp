@@ -254,6 +254,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             if (mx >= pb.x && mx < pb.x + pb.w &&
                 my >= pb.y && my < pb.y + pb.h) {
                 if (rightClick) {
+                    ::yawn::MacroTarget mt;
+                    mt.kind = ::yawn::MacroTarget::Kind::TrackPan;
                     openMidiLearnMenu(mx, my,
                         automation::AutomationTarget::mixer(t, automation::MixerParam::Pan),
                         -1.0f, 1.0f,
@@ -269,7 +271,7 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                                         m_engine->sendCommand(audio::SetTrackPanMsg{t, 0.0f}); },
                                     ""});
                             }
-                        });
+                        }, mt);
                     return true;
                 }
                 MouseEvent ev = e;
@@ -287,6 +289,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
             if (mx >= fb.x && mx < fb.x + fb.w &&
                 my >= fb.y && my < fb.y + fb.h) {
                 if (rightClick) {
+                    ::yawn::MacroTarget mt;
+                    mt.kind = ::yawn::MacroTarget::Kind::TrackVolume;
                     openMidiLearnMenu(mx, my,
                         automation::AutomationTarget::mixer(t, automation::MixerParam::Volume),
                         0.0f, 2.0f,
@@ -302,7 +306,7 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
                                         m_engine->sendCommand(audio::SetTrackVolumeMsg{t, 1.0f}); },
                                     ""});
                             }
-                        });
+                        }, mt);
                     return true;
                 }
                 MouseEvent ev = e;
@@ -326,7 +330,8 @@ bool MixerPanel::onMouseDown(MouseEvent& e) {
 void MixerPanel::openMidiLearnMenu(float mx, float my,
                                     const automation::AutomationTarget& target,
                                     float paramMin, float paramMax,
-                                    std::function<void()> resetAction) {
+                                    std::function<void()> resetAction,
+                                    const ::yawn::MacroTarget& macroTarget) {
     using Item = ::yawn::ui::ContextMenu::Item;
     std::vector<Item> items;
 
@@ -359,6 +364,75 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
             if (m_learnManager) m_learnManager->removeByTarget(target);
         };
         items.push_back(std::move(removeItem));
+    }
+
+    // Macro mapping section — only injected when the caller supplied a
+    // valid MacroTarget. Volume/Pan sites pass TrackVolume/TrackPan
+    // here. We resolve the live mapping (if any) to mark the current
+    // macro with ✓ and to gate the "Unmap" entry.
+    if (macroTarget.kind != ::yawn::MacroTarget::Kind::None &&
+        m_project && target.trackIndex >= 0 &&
+        target.trackIndex < m_project->numTracks()) {
+        const int t = target.trackIndex;
+        auto& macros = m_project->track(t).macros;
+        auto matches = [&](const ::yawn::MacroMapping& m) {
+            return m.target.kind      == macroTarget.kind  &&
+                   m.target.index     == macroTarget.index &&
+                   m.target.paramName == macroTarget.paramName;
+        };
+        int currentMacro = -1;
+        for (const auto& mm : macros.mappings)
+            if (matches(mm)) { currentMacro = mm.macroIdx; break; }
+
+        Item sep;
+        sep.separator = true;
+        items.push_back(std::move(sep));
+
+        Item header;
+        header.label   = "Map to:";
+        header.enabled = false;
+        items.push_back(std::move(header));
+
+        for (int i = 0; i < ::yawn::MacroDevice::kNumMacros; ++i) {
+            std::string label =
+                (i == currentMacro ? "\xe2\x9c\x93 Macro " : "   Macro ")
+                + std::to_string(i + 1);
+            if (!macros.labels[i].empty())
+                label += ": " + macros.labels[i];
+            Item it;
+            it.label = std::move(label);
+            it.action = [this, t, i, macroTarget]() {
+                if (!m_project) return;
+                auto& chain = m_project->track(t).macros.mappings;
+                chain.erase(std::remove_if(chain.begin(), chain.end(),
+                    [&](const ::yawn::MacroMapping& m) {
+                        return m.target.kind      == macroTarget.kind  &&
+                               m.target.index     == macroTarget.index &&
+                               m.target.paramName == macroTarget.paramName;
+                    }), chain.end());
+                ::yawn::MacroMapping nm;
+                nm.macroIdx = i;
+                nm.target   = macroTarget;
+                chain.push_back(std::move(nm));
+            };
+            items.push_back(std::move(it));
+        }
+
+        if (currentMacro >= 0) {
+            Item unmap;
+            unmap.label = "Unmap from macro";
+            unmap.action = [this, t, macroTarget]() {
+                if (!m_project) return;
+                auto& chain = m_project->track(t).macros.mappings;
+                chain.erase(std::remove_if(chain.begin(), chain.end(),
+                    [&](const ::yawn::MacroMapping& m) {
+                        return m.target.kind      == macroTarget.kind  &&
+                               m.target.index     == macroTarget.index &&
+                               m.target.paramName == macroTarget.paramName;
+                    }), chain.end());
+            };
+            items.push_back(std::move(unmap));
+        }
     }
 
     Item sep;

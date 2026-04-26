@@ -1235,6 +1235,39 @@ void VisualEngine::setLayerChainPassParam(int track, int passIdx,
     }
 }
 
+bool VisualEngine::getLayerParamRange(int track, const std::string& name,
+                                        float* outMin, float* outMax) const {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    for (const auto& p : it->second.params) {
+        if (p.name == name) {
+            if (outMin) *outMin = p.min;
+            if (outMax) *outMax = p.max;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VisualEngine::getLayerChainPassParamRange(int track, int passIdx,
+                                                 const std::string& name,
+                                                 float* outMin,
+                                                 float* outMax) const {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    const auto& L = it->second;
+    if (passIdx < 0 || passIdx >= static_cast<int>(L.additionalPasses.size()))
+        return false;
+    for (const auto& p : L.additionalPasses[passIdx].params) {
+        if (p.name == name) {
+            if (outMin) *outMin = p.min;
+            if (outMax) *outMax = p.max;
+            return true;
+        }
+    }
+    return false;
+}
+
 void VisualEngine::setLayerChainPassBypass(int track, int passIdx,
                                              bool bypassed) {
     auto it = m_layers.find(track);

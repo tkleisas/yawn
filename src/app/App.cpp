@@ -1569,50 +1569,124 @@ void App::stopAllVisualLayers() {
     }
 }
 
+// Linear scan for a parameter by name on any device that exposes
+// the parameterCount() + parameterInfo(idx).name pair (instruments,
+// audio effects, midi effects all qualify). Returns -1 when the
+// name doesn't resolve. Per-frame call site, but the param counts
+// are tiny so a hash isn't worth the upkeep.
+namespace {
+template <typename Device>
+int findParamByName(const Device& dev, const std::string& name) {
+    const int n = dev.parameterCount();
+    for (int i = 0; i < n; ++i) {
+        const char* pn = dev.parameterInfo(i).name;
+        if (pn && name == pn) return i;
+    }
+    return -1;
+}
+} // namespace
+
 void App::applyMacroMappings() {
-    // Phase 4.1 — visual-track mappings only. Walks every track's
-    // MacroDevice once per frame; each mapping reads the live
-    // (LFO-modulated) macro value the engine displays for that knob,
-    // lerps it through [rangeMin, rangeMax], and pushes the result
-    // into the appropriate engine API. Inverted ranges (rangeMin >
-    // rangeMax) drop straight out of the lerp arithmetic.
+    // Walk every track's MacroDevice once per frame; each mapping
+    // reads the live (LFO-modulated) macro value, lerps it through
+    // [rangeMin, rangeMax] (a 0..1 sub-range), then unnormalises into
+    // the target parameter's *natural* range and pushes it. Inverted
+    // sub-ranges (rangeMin > rangeMax) drop straight out of the lerp
+    // arithmetic — no special case.
     //
     // Reading the engine's *display* value (rather than the raw
-    // value from track.macros.values) keeps the mapped target in
-    // lock-step with what the same macro is doing to the shader's
-    // knob[macroIdx] uniform — so an LFO modulating the macro
-    // breathes both the shader output and the mapped chain knob
-    // identically.
+    // track.macros.values entry) keeps mapped targets in lock-step
+    // with what the same macro does to the shader's knob[idx]
+    // uniform — so an LFO breathing the macro pulses every mapped
+    // target in unison.
     const int nTracks = m_project.numTracks();
     for (int t = 0; t < nTracks; ++t) {
         auto& track = m_project.track(t);
         if (track.macros.mappings.empty()) continue;
-        // Audio + MIDI mapping kinds aren't wired yet (4.2). Skip
-        // non-visual tracks early so the inner loop only runs work
-        // we know how to dispatch.
-        if (track.type != Track::Type::Visual) continue;
 
         for (const auto& m : track.macros.mappings) {
             if (m.macroIdx < 0 ||
                 m.macroIdx >= MacroDevice::kNumMacros) continue;
-            const float macroV =
-                m_visualEngine.getLayerKnobDisplayValue(t, m.macroIdx);
-            const float v = m.rangeMin + (m.rangeMax - m.rangeMin) * macroV;
+
+            // Visual macros pull modulated value from the engine
+            // (which has the LFO state). For non-visual tracks we
+            // fall back to the raw macro value — audio/MIDI tracks
+            // don't yet have layer-style LFO eval (Phase 4.6).
+            const float macroV = (track.type == Track::Type::Visual)
+                ? m_visualEngine.getLayerKnobDisplayValue(t, m.macroIdx)
+                : track.macros.values[m.macroIdx];
+            const float normV = m.rangeMin
+                + (m.rangeMax - m.rangeMin) * macroV;
+
             switch (m.target.kind) {
-                case MacroTarget::Kind::VisualSourceParam:
+                case MacroTarget::Kind::VisualSourceParam: {
+                    if (track.type != Track::Type::Visual) break;
+                    float pmin = 0.0f, pmax = 1.0f;
+                    if (!m_visualEngine.getLayerParamRange(
+                            t, m.target.paramName, &pmin, &pmax))
+                        break;
+                    const float v = pmin + normV * (pmax - pmin);
                     m_visualEngine.setLayerParam(t, m.target.paramName, v);
                     break;
-                case MacroTarget::Kind::VisualChainParam:
+                }
+                case MacroTarget::Kind::VisualChainParam: {
+                    if (track.type != Track::Type::Visual) break;
+                    float pmin = 0.0f, pmax = 1.0f;
+                    if (!m_visualEngine.getLayerChainPassParamRange(
+                            t, m.target.index, m.target.paramName,
+                            &pmin, &pmax))
+                        break;
+                    const float v = pmin + normV * (pmax - pmin);
                     m_visualEngine.setLayerChainPassParam(
                         t, m.target.index, m.target.paramName, v);
                     break;
+                }
+                case MacroTarget::Kind::AudioInstrumentParam: {
+                    auto* inst = m_audioEngine.instrument(t);
+                    if (!inst) break;
+                    int pi = findParamByName(*inst, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = inst->parameterInfo(pi);
+                    const float v =
+                        info.minValue + normV * (info.maxValue - info.minValue);
+                    inst->setParameter(pi, v);
+                    break;
+                }
+                case MacroTarget::Kind::AudioEffectParam: {
+                    auto& chain = m_audioEngine.mixer().trackEffects(t);
+                    auto* fx = chain.effectAt(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    const float v =
+                        info.minValue + normV * (info.maxValue - info.minValue);
+                    fx->setParameter(pi, v);
+                    break;
+                }
+                case MacroTarget::Kind::MidiEffectParam: {
+                    auto& chain = m_audioEngine.midiEffectChain(t);
+                    auto* fx = chain.effect(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    const float v =
+                        info.minValue + normV * (info.maxValue - info.minValue);
+                    fx->setParameter(pi, v);
+                    break;
+                }
+                case MacroTarget::Kind::TrackVolume: {
+                    // Linear gain 0..2 (matches the mixer fader).
+                    m_audioEngine.mixer().setTrackVolume(t, normV * 2.0f);
+                    break;
+                }
+                case MacroTarget::Kind::TrackPan: {
+                    // -1 left … +1 right.
+                    m_audioEngine.mixer().setTrackPan(t, normV * 2.0f - 1.0f);
+                    break;
+                }
                 case MacroTarget::Kind::None:
-                case MacroTarget::Kind::AudioInstrumentParam:
-                case MacroTarget::Kind::AudioEffectParam:
-                case MacroTarget::Kind::MidiEffectParam:
-                case MacroTarget::Kind::TrackVolume:
-                case MacroTarget::Kind::TrackPan:
-                    // Phase 4.2 territory — fall through.
                     break;
             }
         }
