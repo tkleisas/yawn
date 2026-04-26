@@ -101,7 +101,7 @@ private:
                             int& inputConsumed);
 
     // ==================== Common ====================
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     double m_speedRatio = 1.0;
     Algorithm m_algorithm = Algorithm::WSOLA;
 };

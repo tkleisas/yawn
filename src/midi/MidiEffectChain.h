@@ -55,7 +55,7 @@ public:
     }
 
 private:
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
 };
 
 } // namespace midi

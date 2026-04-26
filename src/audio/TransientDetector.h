@@ -14,7 +14,7 @@ namespace audio {
 class TransientDetector {
 public:
     struct Config {
-        double sampleRate = 44100.0;
+        double sampleRate = kDefaultSampleRate;
         float sensitivity = 0.5f;       // 0.0 = less sensitive, 1.0 = very sensitive
         double minInterOnsetSec = 0.05;  // minimum 50ms between detected transients
         int windowSize = 512;            // analysis window size in samples

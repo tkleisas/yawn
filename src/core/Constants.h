@@ -28,4 +28,9 @@ static constexpr int kMaxMidiPorts             = 16;
 static constexpr int kDefaultNumTracks = 5;
 static constexpr int kDefaultNumScenes = 4;
 
+// Default audio sample rate — referenced by all audio/midi/instrument
+// classes as their initial m_sampleRate value. Transport.h also defines
+// kDefaultSampleRate in its own namespace for backward compatibility.
+static constexpr double kDefaultSampleRate = 44100.0;
+
 } // namespace yawn

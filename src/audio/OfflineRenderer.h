@@ -12,7 +12,7 @@ class AudioEngine;
 struct RenderConfig {
     double startBeat = 0.0;
     double endBeat = 0.0;
-    int targetSampleRate = 44100;
+    int targetSampleRate = static_cast<int>(kDefaultSampleRate);
     int channels = 2;
 };
 

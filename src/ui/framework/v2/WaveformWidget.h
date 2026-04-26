@@ -337,7 +337,7 @@ public:
     bool    m_snapToGrid       = false;
     int     m_draggingMarker     = -1;
     int     m_draggingLoopMarker = 0;
-    int     m_sampleRate   = 44100;
+    int     m_sampleRate   = static_cast<int>(kDefaultSampleRate);
     double  m_transportBPM = 120.0;
     std::chrono::steady_clock::time_point m_lastClickTime{};
 

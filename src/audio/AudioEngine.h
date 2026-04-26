@@ -29,11 +29,11 @@ struct AudioDevice {
     std::string name;
     int maxInputChannels = 0;
     int maxOutputChannels = 0;
-    double defaultSampleRate = 44100.0;
+    double defaultSampleRate = kDefaultSampleRate;
 };
 
 struct AudioEngineConfig {
-    double sampleRate = 44100.0;
+    double sampleRate = kDefaultSampleRate;
     int framesPerBuffer = 256;
     int outputChannels = 2;
     int inputChannels = 2;

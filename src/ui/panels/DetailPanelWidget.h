@@ -237,7 +237,7 @@ public:
 
     // Show audio clip view: waveform + properties + effect chain
     void setAudioClip(const audio::Clip* clip, effects::EffectChain* fxChain,
-                      int sampleRate = 44100) {
+                      int sampleRate = static_cast<int>(kDefaultSampleRate)) {
         if (clip == m_clipPtr && fxChain == m_lastFxChain &&
             (fxChain ? fxChain->count() : 0) == m_lastFxCount)
             return;
@@ -1548,7 +1548,7 @@ private:
     // Audio clip view state
     ViewMode m_viewMode = ViewMode::Devices;
     const audio::Clip* m_clipPtr = nullptr;
-    int m_clipSampleRate = 44100;
+    int m_clipSampleRate = static_cast<int>(kDefaultSampleRate);
     ::yawn::ui::fw2::WaveformWidget m_waveformWidget;
     ::yawn::ui::fw2::FwDropDown m_warpModeDropdown;
     ::yawn::ui::fw2::FwButton m_detectBtn;

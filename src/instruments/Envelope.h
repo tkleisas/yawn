@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include "core/Constants.h"
 
 namespace yawn {
 namespace instruments {
@@ -71,7 +72,7 @@ private:
         m_rCoeff = std::exp(-5.0f / std::max(1.0f, m_rTime * m_sr));
     }
 
-    float m_sr     = 44100.0f;
+    float m_sr     = static_cast<float>(kDefaultSampleRate);
     Stage m_stage  = Idle;
     float m_level  = 0.0f;
     float m_aTime  = 0.01f;

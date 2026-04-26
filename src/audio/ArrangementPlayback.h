@@ -151,7 +151,7 @@ private:
     }
 
     Transport* m_transport = nullptr;
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     std::array<ArrTrackState, kMaxTracks> m_tracks{};
 
     // Thread-safe clip submission (UI→audio)

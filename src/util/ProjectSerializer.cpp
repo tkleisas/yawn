@@ -176,7 +176,7 @@ json serializeInstrument(const instruments::Instrument& inst,
             fs::path samplePath = samplesDir / filename;
             FileIO::saveAudioFile(samplePath.string(),
                                   sampler.sampleData(), sampler.sampleFrames(),
-                                  sampler.sampleChannels(), 44100);
+                                  sampler.sampleChannels(), static_cast<int>(kDefaultSampleRate));
             j["sampleFile"] = "samples/" + filename;
         }
     }
@@ -193,7 +193,7 @@ json serializeInstrument(const instruments::Instrument& inst,
             fs::path samplePath = samplesDir / filename;
             FileIO::saveAudioFile(samplePath.string(),
                                   p.sampleData.data(), p.sampleFrames,
-                                  p.sampleChannels, 44100);
+                                  p.sampleChannels, static_cast<int>(kDefaultSampleRate));
             json padJ;
             padJ["note"] = note;
             padJ["sampleFile"] = "samples/" + filename;
@@ -213,7 +213,7 @@ json serializeInstrument(const instruments::Instrument& inst,
             fs::path samplePath = samplesDir / filename;
             FileIO::saveAudioFile(samplePath.string(),
                                   ds.loopData(), ds.loopFrames(),
-                                  ds.loopChannels(), 44100);
+                                  ds.loopChannels(), static_cast<int>(kDefaultSampleRate));
             j["loopFile"] = "samples/" + filename;
         }
         json padsArr = json::array();
@@ -512,7 +512,7 @@ json serializeAudioClip(const audio::Clip& clip, const fs::path& samplesDir,
     if (clip.buffer&& clip.buffer->numFrames() > 0) {
         std::string filename = "clip_" + std::to_string(sampleCounter++) + ".wav";
         fs::path samplePath = samplesDir / filename;
-        FileIO::saveAudioBuffer(samplePath.string(), *clip.buffer, 44100);
+        FileIO::saveAudioBuffer(samplePath.string(), *clip.buffer, static_cast<int>(kDefaultSampleRate));
         j["sampleFile"] = "samples/" + filename;
     }
 
@@ -781,7 +781,7 @@ json serializeArrangementClip(const ArrangementClip& clip,
         // Save the audio buffer reference
         std::string filename = "arr_sample_" + std::to_string(sampleCounter++) + ".wav";
         fs::path samplePath = samplesDir / filename;
-        FileIO::saveAudioBuffer(samplePath.string(), *clip.audioBuffer, 44100);
+        FileIO::saveAudioBuffer(samplePath.string(), *clip.audioBuffer, static_cast<int>(kDefaultSampleRate));
         j["sampleFile"] = filename;
     } else if (clip.type == ArrangementClip::Type::Midi && clip.midiClip) {
         j["midiClip"] = serializeMidiClip(*clip.midiClip);

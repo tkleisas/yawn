@@ -50,7 +50,7 @@ public:
     virtual bool supportsSidechain() const { return false; }
 
 protected:
-    double m_sampleRate   = 44100.0;
+    double m_sampleRate   = kDefaultSampleRate;
     int    m_maxBlockSize = 256;
     bool   m_bypassed     = false;
     const float* m_sidechainBuffer = nullptr;

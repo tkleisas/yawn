@@ -143,7 +143,7 @@ private:
     double computeLocalSpeedRatio(const Clip& clip, double samplePos, double projectBPM) const;
 
     Transport* m_transport = nullptr;
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     QuantizeMode m_quantizeMode = QuantizeMode::NextBar;
 
     std::array<ClipPlayState, kMaxTracks> m_tracks{};

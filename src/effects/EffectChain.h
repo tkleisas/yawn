@@ -70,7 +70,7 @@ private:
         }
     }
 
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     int    m_maxBlockSize = 4096;
 };
 

@@ -21,7 +21,7 @@ namespace util {
 struct AppSettings {
     int outputDevice = -1;
     int inputDevice = -1;
-    double sampleRate = 44100.0;
+    double sampleRate = kDefaultSampleRate;
     int bufferSize = 256;
     int defaultLaunchQuantize = 2; // 0=None, 1=Beat, 2=Bar
     int defaultRecordQuantize = 2;
@@ -63,7 +63,7 @@ struct AppSettings {
             auto j = nlohmann::json::parse(in);
             s.outputDevice = j.value("outputDevice", -1);
             s.inputDevice = j.value("inputDevice", -1);
-            s.sampleRate = j.value("sampleRate", 44100.0);
+            s.sampleRate = j.value("sampleRate", kDefaultSampleRate);
             s.bufferSize = j.value("bufferSize", 256);
             s.defaultLaunchQuantize = j.value("defaultLaunchQuantize", 2);
             s.defaultRecordQuantize = j.value("defaultRecordQuantize", 2);

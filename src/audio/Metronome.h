@@ -51,7 +51,7 @@ private:
     void generateClicks();
     void mixClickRange(float* output, int numChannels, int fromFrame, int toFrame);
 
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     bool m_enabled = false;
     float m_volume = 0.7f;
     int m_beatsPerBar = 4;

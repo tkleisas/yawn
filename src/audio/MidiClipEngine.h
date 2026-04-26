@@ -104,7 +104,7 @@ private:
                      double offsetBeat, double samplesPerBeat, int numFrames);
 
     Transport* m_transport = nullptr;
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     int64_t m_lastQuantizeCheck = -1;
 
     std::array<MidiClipPlayState, kMaxTracks> m_tracks{};

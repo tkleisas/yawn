@@ -74,7 +74,7 @@ private:
         return (float)(m_rng & 0xFFFF) / 32768.0f - 1.0f;
     }
 
-    double   m_sr       = 44100.0;
+    double   m_sr       = kDefaultSampleRate;
     double   m_phase    = 0.0;
     double   m_inc      = 0.0;
     Waveform m_wave     = Sine;

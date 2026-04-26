@@ -12,7 +12,7 @@ using MidiEffectParameterInfo = ::yawn::ParameterInfo;
 
 struct TransportInfo {
     double bpm              = 120.0;
-    double sampleRate       = 44100.0;
+    double sampleRate       = kDefaultSampleRate;
     double positionInBeats  = 0.0;
     int64_t positionInSamples = 0;
     double samplesPerBeat   = 22050.0;
@@ -83,7 +83,7 @@ public:
 
 protected:
     bool   m_bypassed   = false;
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     float  m_lastAppliedOffset = 0.0f;
 
 private:

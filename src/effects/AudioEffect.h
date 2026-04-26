@@ -46,7 +46,7 @@ public:
     virtual void clearNewData() {}
 
 protected:
-    double m_sampleRate = 44100.0;
+    double m_sampleRate = kDefaultSampleRate;
     int    m_maxBlockSize = 4096;
     bool   m_bypassed = false;
     float  m_mix = 1.0f;
