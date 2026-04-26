@@ -4404,6 +4404,40 @@ bool App::init() {
         m_audioEngine.sendCommand(audio::AutoParamTouchMsg{track, tt, ci, pi, v, touching});
     });
 
+    // Right-click on an instrument / audio FX / MIDI FX knob →
+    // build the MacroTarget for it and open the macro-mapping
+    // context menu rooted at the click. The chain index is only
+    // meaningful for the audio/MIDI effect kinds; instrument
+    // mappings ignore it (target.index defaulted to 0).
+    m_detailPanel->setOnParamRightClick(
+        [this](int trackIdx, ui::fw::DetailPanelWidget::DeviceType type,
+               int chainIndex, const std::string& paramName,
+               int /*paramIdx*/, float mx, float my) {
+            if (trackIdx < 0) return;
+            // Selecting a different track via the macro menu would
+            // show the wrong track's macros — sync the selection so
+            // showMacroMappingMenu (which reads m_selectedTrack)
+            // operates on the device the user actually clicked.
+            m_selectedTrack = trackIdx;
+            MacroTarget t;
+            t.paramName = paramName;
+            switch (type) {
+                case ui::fw::DetailPanelWidget::DeviceType::Instrument:
+                    t.kind  = MacroTarget::Kind::AudioInstrumentParam;
+                    t.index = 0;
+                    break;
+                case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
+                    t.kind  = MacroTarget::Kind::AudioEffectParam;
+                    t.index = chainIndex;
+                    break;
+                case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
+                    t.kind  = MacroTarget::Kind::MidiEffectParam;
+                    t.index = chainIndex;
+                    break;
+            }
+            showMacroMappingMenu(t, mx, my);
+        });
+
     // Wire preset click: open context menu with preset list + Save
     m_detailPanel->setOnPresetClick([this](ui::fw::DetailPanelWidget::DeviceType type,
                                            int chainIndex, float mx, float my) {

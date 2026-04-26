@@ -154,6 +154,20 @@ public:
     using ParamTouchCallback = std::function<void(int, uint8_t, int, int, float, bool)>;
     void setOnParamTouch(ParamTouchCallback cb) { m_onParamTouch = std::move(cb); }
 
+    // Callback fired when the user right-clicks a device's parameter
+    // knob — App opens its "Map to Macro N" context menu rooted at
+    // the click position. Args: trackIndex, deviceType, chainIndex,
+    // paramName, paramIndex, screenX, screenY. The param's name is
+    // resolved by DetailPanel before the call so App doesn't need to
+    // dereference instrument / effect device pointers.
+    using ParamRightClickCallback =
+        std::function<void(int trackIndex, DeviceType type, int chainIndex,
+                            const std::string& paramName, int paramIndex,
+                            float screenX, float screenY)>;
+    void setOnParamRightClick(ParamRightClickCallback cb) {
+        m_onParamRightClick = std::move(cb);
+    }
+
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
 
     void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
@@ -946,6 +960,30 @@ private:
             r.setParam(idx, v);
         });
 
+        // Right-click on a device knob → "Map to Macro N" menu (App
+        // builds + shows it). The param's display name is resolved
+        // here against the live device pointer so App can stay
+        // device-type agnostic in showMacroMappingMenu.
+        dw->setOnParamRightClick(
+            [this, ref](int paramIdx, float mx, float my) {
+                if (!m_onParamRightClick) return;
+                if (m_autoTrackIndex < 0) return;
+                std::string paramName;
+                if (ref.midiEffect && paramIdx < ref.midiEffect->parameterCount())
+                    paramName = ref.midiEffect->parameterInfo(paramIdx).name
+                                  ? ref.midiEffect->parameterInfo(paramIdx).name : "";
+                else if (ref.instrument && paramIdx < ref.instrument->parameterCount())
+                    paramName = ref.instrument->parameterInfo(paramIdx).name
+                                  ? ref.instrument->parameterInfo(paramIdx).name : "";
+                else if (ref.audioEffect && paramIdx < ref.audioEffect->parameterCount())
+                    paramName = ref.audioEffect->parameterInfo(paramIdx).name
+                                  ? ref.audioEffect->parameterInfo(paramIdx).name : "";
+                if (paramName.empty()) return;
+                m_onParamRightClick(m_autoTrackIndex, ref.type,
+                                     ref.chainIndex, paramName,
+                                     paramIdx, mx, my);
+            });
+
         // Automation recording: forward knob touch begin/end
         {
             uint8_t tt = 0;
@@ -1490,7 +1528,8 @@ private:
 
     std::function<void(DeviceType, int)> m_onRemoveDevice;
     std::function<void(DeviceType, int, int)> m_onMoveDevice;
-    ParamTouchCallback m_onParamTouch;
+    ParamTouchCallback     m_onParamTouch;
+    ParamRightClickCallback m_onParamRightClick;
     PresetClickCallback m_onPresetClick;
 
     // Drag-to-reorder state
