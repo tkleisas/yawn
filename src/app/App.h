@@ -166,6 +166,7 @@ private:
     void startExportRender(const std::string& filePath);
     void syncTracksToEngine();
     void setupDefaultTracks();
+    void resetEngineState();
     void insertSceneAtSelection();
     void updateWindowTitle();
     void markDirty() { m_projectDirty = true; updateWindowTitle(); }

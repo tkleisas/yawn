@@ -6686,6 +6686,23 @@ void App::insertSceneAtSelection() {
 // "Audio 1/2 | MIDI 1/2 | Visual 1". MIDI slots get a stock
 // SubtractiveSynth so they're audible out of the box. Engine sync is
 // the caller's responsibility (syncTracksToEngine / startup flow).
+void App::resetEngineState() {
+    for (int t = 0; t < kMaxTracks; ++t) {
+        m_audioEngine.setInstrument(t, nullptr);
+        m_audioEngine.midiEffectChain(t).clear();
+        m_audioEngine.mixer().trackEffects(t).clear();
+        m_audioEngine.mixer().setTrackVolume(t, 1.0f);
+        m_audioEngine.mixer().setTrackPan(t, 0.0f);
+        m_audioEngine.mixer().setTrackMute(t, false);
+        m_audioEngine.mixer().setTrackSolo(t, false);
+    }
+    for (int r = 0; r < kMaxReturnBuses; ++r)
+        m_audioEngine.mixer().returnEffects(r).clear();
+    m_audioEngine.mixer().masterEffects().clear();
+    m_audioEngine.mixer().setMasterVolume(1.0f);
+    m_audioEngine.sendCommand(audio::TransportSetBPMMsg{120.0});
+}
+
 void App::setupDefaultTracks() {
     struct Default { const char* name; Track::Type type; };
     static constexpr Default defaults[] = {
@@ -6714,26 +6731,7 @@ void App::newProject() {
         m_project = Project();
         m_project.init();
 
-        // Reset audio engine state (instruments, effects, mixer).
-        // setupDefaultTracks below will reinstall default MIDI synths.
-        for (int i = 0; i < 16; ++i) {
-            m_audioEngine.setInstrument(i, nullptr);
-            m_audioEngine.midiEffectChain(i).clear();
-            m_audioEngine.mixer().trackEffects(i).clear();
-        }
-        for (int r = 0; r < 4; ++r)
-            m_audioEngine.mixer().returnEffects(r).clear();
-        m_audioEngine.mixer().masterEffects().clear();
-
-        // Reset mixer volumes/pans
-        for (int i = 0; i < 16; ++i) {
-            m_audioEngine.mixer().setTrackVolume(i, 1.0f);
-            m_audioEngine.mixer().setTrackPan(i, 0.0f);
-            m_audioEngine.mixer().setTrackMute(i, false);
-            m_audioEngine.mixer().setTrackSolo(i, false);
-        }
-        m_audioEngine.mixer().setMasterVolume(1.0f);
-        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{120.0});
+        resetEngineState();
 
         setupDefaultTracks();
         syncTracksToEngine();
@@ -6830,15 +6828,7 @@ void App::doOpenProject(const std::filesystem::path& path) {
 
     m_audioEngine.sendCommand(audio::TransportStopMsg{});
 
-    // Clear current engine state before loading
-    for (int i = 0; i < 16; ++i) {
-        m_audioEngine.setInstrument(i, nullptr);
-        m_audioEngine.midiEffectChain(i).clear();
-        m_audioEngine.mixer().trackEffects(i).clear();
-    }
-    for (int r = 0; r < 4; ++r)
-        m_audioEngine.mixer().returnEffects(r).clear();
-    m_audioEngine.mixer().masterEffects().clear();
+    resetEngineState();
 
     Project loadedProject;
     if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
