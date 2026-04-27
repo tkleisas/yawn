@@ -78,6 +78,7 @@ public:
 
 private:
     void processEvents();
+    void handleKeyEvent(const SDL_Event& event);
     void update();
     void render();
     void computeLayout();

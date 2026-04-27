@@ -4884,6 +4884,562 @@ bool App::loadModulatorToVocoder(const std::string& path, int trackIndex) {
     return true;
 }
 
+void App::handleKeyEvent(const SDL_Event& event) {
+    if (event.key.repeat) return;
+    bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+    bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
+
+    // fw2 LayerStack first — open overlays (dropdowns,
+    // dialogs, context menus) get first crack at keys.
+    {
+        ui::fw2::KeyEvent ke{};
+        ke.key       = sdlKeyToFw2(event.key.key);
+        ke.modifiers = sdlModsToFw2(SDL_GetModState());
+        ke.isRepeat  = event.key.repeat;
+        if (ke.key != ui::fw2::Key::None &&
+            m_fw2LayerStack.dispatchKey(ke)) return;
+    }
+
+    // v1 confirm dialog retired — fw2::Dialog on the
+    // Modal layer handles Escape/Enter through LayerStack.
+
+    // v1 TextInputDialog retired — fw2 FwTextInputDialog
+    // runs on LayerStack::Modal, so keys reach it via the
+    // LayerStack dispatchKey path above.
+    // v1 About dialog retired — fw2::Dialog handles
+    // Escape/Enter through LayerStack.
+
+    // v1 Preferences dialog retired — fw2 FwPreferencesDialog
+    // runs on LayerStack::Modal and consumes keys via the
+    // LayerStack::dispatchKey path above.
+
+    // v1 Export dialog retired — FwExportDialog runs on
+    // LayerStack::Modal and consumes keys via the
+    // LayerStack dispatchKey path above.
+
+    // v2 dropdowns in the BrowserPanel consume keyboard
+    // events through LayerStack::dispatchKey (handled
+    // above), so the panel-side hasOpenDropdown() early
+    // route is no longer needed.
+
+    // Transport editing (BPM / time signature) takes priority
+    if (m_transportPanel->isEditing()) {
+        int kc = 0;
+        if (event.key.key == SDLK_RETURN) kc = 13;
+        else if (event.key.key == SDLK_ESCAPE) kc = 27;
+        else if (event.key.key == SDLK_BACKSPACE) kc = 8;
+        else if (event.key.key == SDLK_TAB) kc = 9;
+        if (kc) {
+            m_transportPanel->handleKeyDown(kc);
+            if (!m_transportPanel->isEditing())
+                SDL_StopTextInput(m_mainWindow.getHandle());
+        }
+        return;
+    }
+
+    // Keyboard shortcuts for menus (Ctrl combos always take priority)
+    if (ctrl) {
+        switch (event.key.key) {
+            case SDLK_Q: m_running = false; break;
+            case SDLK_N: newProject(); break;
+            case SDLK_O: openProject(); break;
+            case SDLK_S:
+                if (shift) saveProjectAs();
+                else       saveProject();
+                break;
+            case SDLK_Z: // Undo
+                if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); }
+                break;
+            case SDLK_Y: // Redo
+                if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); }
+                break;
+            case SDLK_C: { // Copy clip
+                // Arrangement view: copy the selected arrangement clip
+                if (m_project.viewMode() == ViewMode::Arrangement) {
+                    int ct = m_arrangementPanel->selectedClipTrack();
+                    int ci = m_arrangementPanel->selectedClipIndex();
+                    if (ct >= 0 && ci >= 0) {
+                        auto& cs = m_project.track(ct).arrangementClips;
+                        if (ci < static_cast<int>(cs.size())) {
+                            m_arrangementClipboard = cs[ci];
+                            m_arrangementClipboardValid = true;
+                        }
+                    }
+                    break;
+                }
+                auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                if (slot && slot->audioClip) {
+                    m_clipboard.clear();
+                    m_clipboard.type = ClipboardData::Type::Audio;
+                    m_clipboard.audioClip = slot->audioClip->clone();
+                } else if (slot && slot->midiClip) {
+                    m_clipboard.clear();
+                    m_clipboard.type = ClipboardData::Type::Midi;
+                    m_clipboard.midiClip = slot->midiClip->clone();
+                }
+                break;
+            }
+            case SDLK_X: { // Cut clip
+                // Arrangement view: cut = copy + delete
+                if (m_project.viewMode() == ViewMode::Arrangement) {
+                    int ct = m_arrangementPanel->selectedClipTrack();
+                    int ci = m_arrangementPanel->selectedClipIndex();
+                    if (ct >= 0 && ci >= 0) {
+                        auto& cs = m_project.track(ct).arrangementClips;
+                        if (ci < static_cast<int>(cs.size())) {
+                            m_arrangementClipboard = cs[ci];
+                            m_arrangementClipboardValid = true;
+                            m_arrangementPanel->handleAppKey(
+                                SDLK_DELETE, /*ctrl=*/false);
+                        }
+                    }
+                    break;
+                }
+                int ct = m_selectedTrack, cs = m_selectedScene;
+                auto* slot = m_project.getSlot(ct, cs);
+                if (slot && slot->audioClip) {
+                    auto backup = slot->audioClip->clone();
+                    m_clipboard.clear();
+                    m_clipboard.type = ClipboardData::Type::Audio;
+                    m_clipboard.audioClip = slot->audioClip->clone();
+                    m_audioEngine.sendCommand(audio::StopClipMsg{ct});
+                    slot->audioClip.reset();
+                    markDirty();
+                    m_undoManager.push({"Cut Audio Clip",
+                        [this, ct, cs, b = std::shared_ptr<audio::Clip>(std::move(backup))]{
+                            auto* s = m_project.getSlot(ct, cs);
+                            if (s) { s->audioClip = b->clone(); markDirty(); }
+                        },
+                        [this, ct, cs]{
+                            auto* s = m_project.getSlot(ct, cs);
+                            if (s) { m_audioEngine.sendCommand(audio::StopClipMsg{ct});
+                                      s->audioClip.reset(); markDirty(); }
+                        }, ""});
+                } else if (slot && slot->midiClip) {
+                    auto backup = slot->midiClip->clone();
+                    m_clipboard.clear();
+                    m_clipboard.type = ClipboardData::Type::Midi;
+                    m_clipboard.midiClip = slot->midiClip->clone();
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
+                    slot->midiClip.reset();
+                    markDirty();
+                    m_undoManager.push({"Cut MIDI Clip",
+                        [this, ct, cs, b = std::shared_ptr<midi::MidiClip>(std::move(backup))]{
+                            auto* s = m_project.getSlot(ct, cs);
+                            if (s) { s->midiClip = b->clone(); markDirty(); }
+                        },
+                        [this, ct, cs]{
+                            auto* s = m_project.getSlot(ct, cs);
+                            if (s) { m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
+                                      s->midiClip.reset(); markDirty(); }
+                        }, ""});
+                }
+                break;
+            }
+            case SDLK_V: { // Paste clip
+                // Arrangement view: paste at current transport position
+                // on the source track, from the arrangement clipboard.
+                if (m_project.viewMode() == ViewMode::Arrangement) {
+                    if (!m_arrangementClipboardValid) break;
+                    // Pick destination track: selected track if it
+                    // matches the clipboard's clip type, otherwise
+                    // fall back to whatever track the clip came from
+                    // when it was copied (we don't preserve that
+                    // explicitly, so default to m_selectedTrack and
+                    // let the user move it if needed).
+                    int pt = m_arrangementPanel->selectedTrack();
+                    if (pt < 0 || pt >= m_project.numTracks()) break;
+                    // Type compatibility: audio→Audio track,
+                    // midi→Midi, visual→Visual. If mismatched,
+                    // reject silently — pasting a MIDI clip on an
+                    // audio track wouldn't play.
+                    auto trkType = m_project.track(pt).type;
+                    auto clipType = m_arrangementClipboard.type;
+                    bool typeOk =
+                        (trkType == Track::Type::Audio  && clipType == ArrangementClip::Type::Audio)  ||
+                        (trkType == Track::Type::Midi   && clipType == ArrangementClip::Type::Midi)   ||
+                        (trkType == Track::Type::Visual && clipType == ArrangementClip::Type::Visual);
+                    if (!typeOk) break;
+                    ArrangementClip ac = m_arrangementClipboard;  // deep copy (visualClip cloned)
+                    ac.startBeat = m_audioEngine.transport().positionInBeats();
+                    m_project.track(pt).arrangementClips.push_back(std::move(ac));
+                    m_project.track(pt).sortArrangementClips();
+                    m_project.updateArrangementLength();
+                    syncArrangementClipsToEngine(pt);
+                    if (!m_project.track(pt).arrangementActive) {
+                        m_project.track(pt).arrangementActive = true;
+                        m_audioEngine.sendCommand(
+                            audio::SetTrackArrActiveMsg{pt, true});
+                    }
+                    markDirty();
+                    break;
+                }
+                int pt = m_selectedTrack, ps = m_selectedScene;
+                if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
+                    auto* slot = m_project.getSlot(pt, ps);
+                    if (slot) {
+                        // Capture old slot contents for undo
+                        std::shared_ptr<audio::Clip> oldAudio;
+                        std::shared_ptr<midi::MidiClip> oldMidi;
+                        if (slot->audioClip) oldAudio.reset(slot->audioClip->clone().release());
+                        if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
+                        m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                        m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                        slot->clear();
+                        slot->audioClip = m_clipboard.audioClip->clone();
+                        markDirty();
+                        auto pastedClone = m_clipboard.audioClip->clone();
+                        m_undoManager.push({"Paste Audio Clip",
+                            [this, pt, ps, oldAudio, oldMidi]{
+                                auto* s = m_project.getSlot(pt, ps);
+                                if (!s) return;
+                                m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                s->clear();
+                                if (oldAudio) s->audioClip = oldAudio->clone();
+                                if (oldMidi) s->midiClip = oldMidi->clone();
+                                markDirty();
+                            },
+                            [this, pt, ps, pc = std::shared_ptr<audio::Clip>(std::move(pastedClone))]{
+                                auto* s = m_project.getSlot(pt, ps);
+                                if (!s) return;
+                                m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                s->clear();
+                                s->audioClip = pc->clone();
+                                markDirty();
+                            }, ""});
+                    }
+                } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
+                    auto* slot = m_project.getSlot(pt, ps);
+                    if (slot) {
+                        std::shared_ptr<audio::Clip> oldAudio;
+                        std::shared_ptr<midi::MidiClip> oldMidi;
+                        if (slot->audioClip) oldAudio.reset(slot->audioClip->clone().release());
+                        if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
+                        m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                        m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                        slot->clear();
+                        slot->midiClip = m_clipboard.midiClip->clone();
+                        markDirty();
+                        auto pastedClone = m_clipboard.midiClip->clone();
+                        m_undoManager.push({"Paste MIDI Clip",
+                            [this, pt, ps, oldAudio, oldMidi]{
+                                auto* s = m_project.getSlot(pt, ps);
+                                if (!s) return;
+                                m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                s->clear();
+                                if (oldAudio) s->audioClip = oldAudio->clone();
+                                if (oldMidi) s->midiClip = oldMidi->clone();
+                                markDirty();
+                            },
+                            [this, pt, ps, pc = std::shared_ptr<midi::MidiClip>(std::move(pastedClone))]{
+                                auto* s = m_project.getSlot(pt, ps);
+                                if (!s) return;
+                                m_audioEngine.sendCommand(audio::StopClipMsg{pt});
+                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
+                                s->clear();
+                                s->midiClip = pc->clone();
+                                markDirty();
+                            }, ""});
+                    }
+                }
+                break;
+            }
+            case SDLK_D: { // Duplicate clip to next empty slot below
+                int dt = m_selectedTrack, ds = m_selectedScene;
+                auto* srcSlot = m_project.getSlot(dt, ds);
+                if (srcSlot && !srcSlot->empty()) {
+                    for (int s = ds + 1; s < m_project.numScenes(); ++s) {
+                        auto* dst = m_project.getSlot(dt, s);
+                        if (dst && dst->empty()) {
+                            if (srcSlot->audioClip)
+                                dst->audioClip = srcSlot->audioClip->clone();
+                            else if (srcSlot->midiClip)
+                                dst->midiClip = srcSlot->midiClip->clone();
+                            int destScene = s;
+                            m_selectedScene = s;
+                            m_sessionPanel->setSelectedScene(m_selectedScene);
+                            markDirty();
+                            m_undoManager.push({"Duplicate Clip",
+                                [this, dt, destScene]{
+                                    auto* s2 = m_project.getSlot(dt, destScene);
+                                    if (s2) { s2->clear(); markDirty(); }
+                                },
+                                [this, dt, ds, destScene]{
+                                    auto* src2 = m_project.getSlot(dt, ds);
+                                    auto* dst2 = m_project.getSlot(dt, destScene);
+                                    if (src2 && dst2) {
+                                        if (src2->audioClip) dst2->audioClip = src2->audioClip->clone();
+                                        else if (src2->midiClip) dst2->midiClip = src2->midiClip->clone();
+                                        markDirty();
+                                    }
+                                }, ""});
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+            default: break;
+        }
+        return;
+    }
+
+    // InputState keyboard forwarding (for focused widgets)
+    if (m_inputState.focused()) {
+        if (m_inputState.onKeyDown(static_cast<int>(event.key.key), ctrl, shift))
+            return;
+    }
+
+    // Track rename keyboard handling
+    if (m_sessionPanel->isRenamingTrack()) {
+        bool wasRenaming = true;
+        m_sessionPanel->handleRenameKeyDown(static_cast<int>(event.key.key));
+        if (!m_sessionPanel->isRenamingTrack())
+            SDL_StopTextInput(m_mainWindow.getHandle());
+        if (wasRenaming) return;
+    }
+    if (m_arrangementPanel->isRenamingTrack()) {
+        bool wasRenaming = true;
+        m_arrangementPanel->handleRenameKeyDown(static_cast<int>(event.key.key));
+        if (!m_arrangementPanel->isRenamingTrack())
+            SDL_StopTextInput(m_mainWindow.getHandle());
+        if (wasRenaming) return;
+    }
+
+    // Detail panel knob text-edit mode
+    if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
+        if (m_detailPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
+            if (!m_detailPanel->hasEditingKnob())
+                SDL_StopTextInput(m_mainWindow.getHandle());
+            return;
+        }
+    }
+    // Browser panel knob text-edit mode
+    if (m_browserPanel->hasEditingKnob()) {
+        if (m_browserPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
+            if (!m_browserPanel->hasEditingKnob())
+                SDL_StopTextInput(m_mainWindow.getHandle());
+            return;
+        }
+    }
+
+    // Piano roll keyboard shortcuts
+    if (m_pianoRoll->isOpen()) {
+        bool prCtrl = (event.key.mod & SDL_KMOD_CTRL) != 0;
+        if (m_pianoRoll->handleKeyDown(static_cast<int>(event.key.key), prCtrl)) {
+            if (!m_pianoRoll->isOpen()) {
+                // Piano roll was closed (Escape)
+            }
+            return;
+        }
+    }
+
+    // Virtual keyboard (intercepts musical keys before shortcuts)
+    // Skip when renaming a track — keys are for text input, not notes
+    if (!m_sessionPanel->isRenamingTrack() && !m_arrangementPanel->isRenamingTrack()) {
+        if (m_virtualKeyboard.onKeyDown(event.key.key))
+            return;
+    }
+
+    // Detail panel arrow key navigation
+    if (m_showDetailPanel && m_detailPanel->isFocused()) {
+        if (event.key.key == SDLK_LEFT) { m_detailPanel->scrollLeft(); return; }
+        if (event.key.key == SDLK_RIGHT) { m_detailPanel->scrollRight(); return; }
+    }
+
+    switch (event.key.key) {
+        case SDLK_ESCAPE:
+            // ESC exits fullscreen on the visual output if
+            // that's what's currently going on; otherwise it
+            // keeps its menu/quit behaviour.
+            if (m_visualEngine.isFullscreen()) {
+                m_visualEngine.setFullscreen(false);
+            } else if (m_menuBar.isOpen()) {
+                m_menuBar.close();
+            } else {
+                m_running = false;
+            }
+            break;
+
+        case SDLK_F11:
+            if (!m_visualEngine.isOutputVisible())
+                m_visualEngine.setOutputVisible(true);
+            m_visualEngine.setFullscreen(!m_visualEngine.isFullscreen());
+            break;
+
+        case SDLK_SPACE:
+            if (m_displayPlaying) {
+                m_audioEngine.sendCommand(audio::TransportStopMsg{});
+            } else {
+                // Re-launch default clips before starting transport
+                for (int t = 0; t < m_project.numTracks(); ++t) {
+                    int ds = m_project.track(t).defaultScene;
+                    if (ds < 0 || ds >= m_project.numScenes()) continue;
+                    auto* slot = m_project.getSlot(t, ds);
+                    if (!slot) continue;
+                    if (slot->audioClip)
+                        m_audioEngine.sendCommand(audio::LaunchClipMsg{t, ds, slot->audioClip.get(),
+                            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                    else if (slot->midiClip)
+                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{t, ds, slot->midiClip.get(),
+                            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                }
+                m_audioEngine.sendCommand(audio::TransportPlayMsg{});
+            }
+            break;
+
+        case SDLK_KP_PLUS:
+        case SDLK_EQUALS: {
+            double newBpm = m_audioEngine.transport().bpm() + 1.0;
+            m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::min(newBpm, 999.0)});
+            break;
+        }
+        case SDLK_KP_MINUS:
+        case SDLK_MINUS: {
+            double newBpm = m_audioEngine.transport().bpm() - 1.0;
+            m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::max(newBpm, 20.0)});
+            break;
+        }
+        case SDLK_HOME:
+            m_audioEngine.sendCommand(audio::TransportSetPositionMsg{0});
+            break;
+
+        case SDLK_TAB:
+            if (!shift) {
+                auto next = (m_project.viewMode() == ViewMode::Session)
+                    ? ViewMode::Arrangement
+                    : ViewMode::Session;
+                switchToView(next);
+            }
+            break;
+
+        case SDLK_INSERT:
+            // Insert a new scene below the selection (session view).
+            // Mirrors the Scene → Insert Scene menu item.
+            insertSceneAtSelection();
+            break;
+
+        case SDLK_M:
+            if (!shift) m_showMixer = !m_showMixer;
+            break;
+
+        case SDLK_D:
+            if (ctrl && !shift && m_project.viewMode() == ViewMode::Arrangement) {
+                m_arrangementPanel->handleAppKey(SDLK_D, /*ctrl=*/true);
+            } else if (!shift && !ctrl) {
+                m_showDetailPanel = !m_showDetailPanel;
+                if (m_showDetailPanel) {
+                    m_detailPanel->setOpen(true);
+                    switch (m_detailTarget) {
+                        case DetailTarget::Track:     updateDetailForSelectedTrack(); break;
+                        case DetailTarget::ReturnBus: updateDetailForReturnBus(m_detailReturnBus); break;
+                        case DetailTarget::Master:    updateDetailForMaster(); break;
+                    }
+                }
+            }
+            break;
+
+        case SDLK_DELETE:
+        case SDLK_BACKSPACE: {
+            if (m_project.viewMode() == ViewMode::Arrangement) {
+                m_arrangementPanel->handleAppKey(
+                    static_cast<int>(event.key.key), /*ctrl=*/ctrl);
+            } else {
+                auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
+                if (slot && !slot->empty()) {
+                    m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
+                    slot->clear();
+                    markDirty();
+                }
+            }
+            break;
+        }
+
+        // Arrow key clip navigation (session view only)
+        // Shift+Arrow moves the controller grid region
+        case SDLK_UP:
+            if (m_project.viewMode() == ViewMode::Session) {
+                if (shift) {
+                    m_sessionPanel->moveGridRegion(0, -1);
+                } else {
+                    m_selectedScene = std::max(0, m_selectedScene - 1);
+                    m_sessionPanel->setSelectedScene(m_selectedScene);
+                    m_sessionPanel->ensureSelectionVisible();
+                    updateDetailForSelectedTrack();
+                }
+            }
+            break;
+        case SDLK_DOWN:
+            if (m_project.viewMode() == ViewMode::Session) {
+                if (shift) {
+                    m_sessionPanel->moveGridRegion(0, 1);
+                } else {
+                    m_selectedScene = std::min(m_project.numScenes() - 1, m_selectedScene + 1);
+                    m_sessionPanel->setSelectedScene(m_selectedScene);
+                    m_sessionPanel->ensureSelectionVisible();
+                    updateDetailForSelectedTrack();
+                }
+            }
+            break;
+        case SDLK_LEFT:
+            if (m_project.viewMode() == ViewMode::Session) {
+                if (shift) {
+                    m_sessionPanel->moveGridRegion(-1, 0);
+                } else {
+                    m_selectedTrack = std::max(0, m_selectedTrack - 1);
+                    m_sessionPanel->setSelectedTrack(m_selectedTrack);
+                    m_sessionPanel->ensureSelectionVisible();
+                    updateDetailForSelectedTrack();
+                }
+            }
+            break;
+        case SDLK_RIGHT:
+            if (m_project.viewMode() == ViewMode::Session) {
+                if (shift) {
+                    m_sessionPanel->moveGridRegion(1, 0);
+                } else {
+                    m_selectedTrack = std::min(m_project.numTracks() - 1, m_selectedTrack + 1);
+                    m_sessionPanel->setSelectedTrack(m_selectedTrack);
+                    m_sessionPanel->ensureSelectionVisible();
+                    updateDetailForSelectedTrack();
+                }
+            }
+            break;
+
+        // Enter launches/stops selected clip
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+            if (m_project.viewMode() == ViewMode::Session)
+                m_sessionPanel->launchOrStopSlot(m_selectedTrack, m_selectedScene);
+            break;
+
+        // G toggles controller grid region overlay
+        case SDLK_G:
+            if (m_project.viewMode() == ViewMode::Session)
+                m_sessionPanel->toggleGridRegion();
+            break;
+
+        // Arrangement-mode key forwarding (L=loop, F=follow)
+        case SDLK_L:
+        case SDLK_F:
+        case SDLK_LEFTBRACKET:
+        case SDLK_RIGHTBRACKET:
+            if (m_project.viewMode() == ViewMode::Arrangement) {
+                m_arrangementPanel->handleAppKey(
+                    static_cast<int>(event.key.key), /*ctrl=*/ctrl);
+            }
+            break;
+
+        default:
+            break;
+    }
+    return;
+}
+
 void App::processEvents() {
     computeLayout();  // ensure widget bounds are current for hit-testing
 
@@ -4911,561 +5467,9 @@ void App::processEvents() {
                          static_cast<unsigned>(event.adevice.which));
                 break;
 
-            case SDL_EVENT_KEY_DOWN: {
-                if (event.key.repeat) break;
-                bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
-                bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
-
-                // fw2 LayerStack first — open overlays (dropdowns,
-                // dialogs, context menus) get first crack at keys.
-                {
-                    ui::fw2::KeyEvent ke{};
-                    ke.key       = sdlKeyToFw2(event.key.key);
-                    ke.modifiers = sdlModsToFw2(SDL_GetModState());
-                    ke.isRepeat  = event.key.repeat;
-                    if (ke.key != ui::fw2::Key::None &&
-                        m_fw2LayerStack.dispatchKey(ke)) break;
-                }
-
-                // v1 confirm dialog retired — fw2::Dialog on the
-                // Modal layer handles Escape/Enter through LayerStack.
-
-                // v1 TextInputDialog retired — fw2 FwTextInputDialog
-                // runs on LayerStack::Modal, so keys reach it via the
-                // LayerStack dispatchKey path above.
-                // v1 About dialog retired — fw2::Dialog handles
-                // Escape/Enter through LayerStack.
-
-                // v1 Preferences dialog retired — fw2 FwPreferencesDialog
-                // runs on LayerStack::Modal and consumes keys via the
-                // LayerStack::dispatchKey path above.
-
-                // v1 Export dialog retired — FwExportDialog runs on
-                // LayerStack::Modal and consumes keys via the
-                // LayerStack dispatchKey path above.
-
-                // v2 dropdowns in the BrowserPanel consume keyboard
-                // events through LayerStack::dispatchKey (handled
-                // above), so the panel-side hasOpenDropdown() early
-                // route is no longer needed.
-
-                // Transport editing (BPM / time signature) takes priority
-                if (m_transportPanel->isEditing()) {
-                    int kc = 0;
-                    if (event.key.key == SDLK_RETURN) kc = 13;
-                    else if (event.key.key == SDLK_ESCAPE) kc = 27;
-                    else if (event.key.key == SDLK_BACKSPACE) kc = 8;
-                    else if (event.key.key == SDLK_TAB) kc = 9;
-                    if (kc) {
-                        m_transportPanel->handleKeyDown(kc);
-                        if (!m_transportPanel->isEditing())
-                            SDL_StopTextInput(m_mainWindow.getHandle());
-                    }
-                    break;
-                }
-
-                // Keyboard shortcuts for menus (Ctrl combos always take priority)
-                if (ctrl) {
-                    switch (event.key.key) {
-                        case SDLK_Q: m_running = false; break;
-                        case SDLK_N: newProject(); break;
-                        case SDLK_O: openProject(); break;
-                        case SDLK_S:
-                            if (shift) saveProjectAs();
-                            else       saveProject();
-                            break;
-                        case SDLK_Z: // Undo
-                            if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); }
-                            break;
-                        case SDLK_Y: // Redo
-                            if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); }
-                            break;
-                        case SDLK_C: { // Copy clip
-                            // Arrangement view: copy the selected arrangement clip
-                            if (m_project.viewMode() == ViewMode::Arrangement) {
-                                int ct = m_arrangementPanel->selectedClipTrack();
-                                int ci = m_arrangementPanel->selectedClipIndex();
-                                if (ct >= 0 && ci >= 0) {
-                                    auto& cs = m_project.track(ct).arrangementClips;
-                                    if (ci < static_cast<int>(cs.size())) {
-                                        m_arrangementClipboard = cs[ci];
-                                        m_arrangementClipboardValid = true;
-                                    }
-                                }
-                                break;
-                            }
-                            auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
-                            if (slot && slot->audioClip) {
-                                m_clipboard.clear();
-                                m_clipboard.type = ClipboardData::Type::Audio;
-                                m_clipboard.audioClip = slot->audioClip->clone();
-                            } else if (slot && slot->midiClip) {
-                                m_clipboard.clear();
-                                m_clipboard.type = ClipboardData::Type::Midi;
-                                m_clipboard.midiClip = slot->midiClip->clone();
-                            }
-                            break;
-                        }
-                        case SDLK_X: { // Cut clip
-                            // Arrangement view: cut = copy + delete
-                            if (m_project.viewMode() == ViewMode::Arrangement) {
-                                int ct = m_arrangementPanel->selectedClipTrack();
-                                int ci = m_arrangementPanel->selectedClipIndex();
-                                if (ct >= 0 && ci >= 0) {
-                                    auto& cs = m_project.track(ct).arrangementClips;
-                                    if (ci < static_cast<int>(cs.size())) {
-                                        m_arrangementClipboard = cs[ci];
-                                        m_arrangementClipboardValid = true;
-                                        m_arrangementPanel->handleAppKey(
-                                            SDLK_DELETE, /*ctrl=*/false);
-                                    }
-                                }
-                                break;
-                            }
-                            int ct = m_selectedTrack, cs = m_selectedScene;
-                            auto* slot = m_project.getSlot(ct, cs);
-                            if (slot && slot->audioClip) {
-                                auto backup = slot->audioClip->clone();
-                                m_clipboard.clear();
-                                m_clipboard.type = ClipboardData::Type::Audio;
-                                m_clipboard.audioClip = slot->audioClip->clone();
-                                m_audioEngine.sendCommand(audio::StopClipMsg{ct});
-                                slot->audioClip.reset();
-                                markDirty();
-                                m_undoManager.push({"Cut Audio Clip",
-                                    [this, ct, cs, b = std::shared_ptr<audio::Clip>(std::move(backup))]{
-                                        auto* s = m_project.getSlot(ct, cs);
-                                        if (s) { s->audioClip = b->clone(); markDirty(); }
-                                    },
-                                    [this, ct, cs]{
-                                        auto* s = m_project.getSlot(ct, cs);
-                                        if (s) { m_audioEngine.sendCommand(audio::StopClipMsg{ct});
-                                                  s->audioClip.reset(); markDirty(); }
-                                    }, ""});
-                            } else if (slot && slot->midiClip) {
-                                auto backup = slot->midiClip->clone();
-                                m_clipboard.clear();
-                                m_clipboard.type = ClipboardData::Type::Midi;
-                                m_clipboard.midiClip = slot->midiClip->clone();
-                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
-                                slot->midiClip.reset();
-                                markDirty();
-                                m_undoManager.push({"Cut MIDI Clip",
-                                    [this, ct, cs, b = std::shared_ptr<midi::MidiClip>(std::move(backup))]{
-                                        auto* s = m_project.getSlot(ct, cs);
-                                        if (s) { s->midiClip = b->clone(); markDirty(); }
-                                    },
-                                    [this, ct, cs]{
-                                        auto* s = m_project.getSlot(ct, cs);
-                                        if (s) { m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
-                                                  s->midiClip.reset(); markDirty(); }
-                                    }, ""});
-                            }
-                            break;
-                        }
-                        case SDLK_V: { // Paste clip
-                            // Arrangement view: paste at current transport position
-                            // on the source track, from the arrangement clipboard.
-                            if (m_project.viewMode() == ViewMode::Arrangement) {
-                                if (!m_arrangementClipboardValid) break;
-                                // Pick destination track: selected track if it
-                                // matches the clipboard's clip type, otherwise
-                                // fall back to whatever track the clip came from
-                                // when it was copied (we don't preserve that
-                                // explicitly, so default to m_selectedTrack and
-                                // let the user move it if needed).
-                                int pt = m_arrangementPanel->selectedTrack();
-                                if (pt < 0 || pt >= m_project.numTracks()) break;
-                                // Type compatibility: audio→Audio track,
-                                // midi→Midi, visual→Visual. If mismatched,
-                                // reject silently — pasting a MIDI clip on an
-                                // audio track wouldn't play.
-                                auto trkType = m_project.track(pt).type;
-                                auto clipType = m_arrangementClipboard.type;
-                                bool typeOk =
-                                    (trkType == Track::Type::Audio  && clipType == ArrangementClip::Type::Audio)  ||
-                                    (trkType == Track::Type::Midi   && clipType == ArrangementClip::Type::Midi)   ||
-                                    (trkType == Track::Type::Visual && clipType == ArrangementClip::Type::Visual);
-                                if (!typeOk) break;
-                                ArrangementClip ac = m_arrangementClipboard;  // deep copy (visualClip cloned)
-                                ac.startBeat = m_audioEngine.transport().positionInBeats();
-                                m_project.track(pt).arrangementClips.push_back(std::move(ac));
-                                m_project.track(pt).sortArrangementClips();
-                                m_project.updateArrangementLength();
-                                syncArrangementClipsToEngine(pt);
-                                if (!m_project.track(pt).arrangementActive) {
-                                    m_project.track(pt).arrangementActive = true;
-                                    m_audioEngine.sendCommand(
-                                        audio::SetTrackArrActiveMsg{pt, true});
-                                }
-                                markDirty();
-                                break;
-                            }
-                            int pt = m_selectedTrack, ps = m_selectedScene;
-                            if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
-                                auto* slot = m_project.getSlot(pt, ps);
-                                if (slot) {
-                                    // Capture old slot contents for undo
-                                    std::shared_ptr<audio::Clip> oldAudio;
-                                    std::shared_ptr<midi::MidiClip> oldMidi;
-                                    if (slot->audioClip) oldAudio.reset(slot->audioClip->clone().release());
-                                    if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
-                                    m_audioEngine.sendCommand(audio::StopClipMsg{pt});
-                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                    slot->clear();
-                                    slot->audioClip = m_clipboard.audioClip->clone();
-                                    markDirty();
-                                    auto pastedClone = m_clipboard.audioClip->clone();
-                                    m_undoManager.push({"Paste Audio Clip",
-                                        [this, pt, ps, oldAudio, oldMidi]{
-                                            auto* s = m_project.getSlot(pt, ps);
-                                            if (!s) return;
-                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
-                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                            s->clear();
-                                            if (oldAudio) s->audioClip = oldAudio->clone();
-                                            if (oldMidi) s->midiClip = oldMidi->clone();
-                                            markDirty();
-                                        },
-                                        [this, pt, ps, pc = std::shared_ptr<audio::Clip>(std::move(pastedClone))]{
-                                            auto* s = m_project.getSlot(pt, ps);
-                                            if (!s) return;
-                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
-                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                            s->clear();
-                                            s->audioClip = pc->clone();
-                                            markDirty();
-                                        }, ""});
-                                }
-                            } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
-                                auto* slot = m_project.getSlot(pt, ps);
-                                if (slot) {
-                                    std::shared_ptr<audio::Clip> oldAudio;
-                                    std::shared_ptr<midi::MidiClip> oldMidi;
-                                    if (slot->audioClip) oldAudio.reset(slot->audioClip->clone().release());
-                                    if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
-                                    m_audioEngine.sendCommand(audio::StopClipMsg{pt});
-                                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                    slot->clear();
-                                    slot->midiClip = m_clipboard.midiClip->clone();
-                                    markDirty();
-                                    auto pastedClone = m_clipboard.midiClip->clone();
-                                    m_undoManager.push({"Paste MIDI Clip",
-                                        [this, pt, ps, oldAudio, oldMidi]{
-                                            auto* s = m_project.getSlot(pt, ps);
-                                            if (!s) return;
-                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
-                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                            s->clear();
-                                            if (oldAudio) s->audioClip = oldAudio->clone();
-                                            if (oldMidi) s->midiClip = oldMidi->clone();
-                                            markDirty();
-                                        },
-                                        [this, pt, ps, pc = std::shared_ptr<midi::MidiClip>(std::move(pastedClone))]{
-                                            auto* s = m_project.getSlot(pt, ps);
-                                            if (!s) return;
-                                            m_audioEngine.sendCommand(audio::StopClipMsg{pt});
-                                            m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                            s->clear();
-                                            s->midiClip = pc->clone();
-                                            markDirty();
-                                        }, ""});
-                                }
-                            }
-                            break;
-                        }
-                        case SDLK_D: { // Duplicate clip to next empty slot below
-                            int dt = m_selectedTrack, ds = m_selectedScene;
-                            auto* srcSlot = m_project.getSlot(dt, ds);
-                            if (srcSlot && !srcSlot->empty()) {
-                                for (int s = ds + 1; s < m_project.numScenes(); ++s) {
-                                    auto* dst = m_project.getSlot(dt, s);
-                                    if (dst && dst->empty()) {
-                                        if (srcSlot->audioClip)
-                                            dst->audioClip = srcSlot->audioClip->clone();
-                                        else if (srcSlot->midiClip)
-                                            dst->midiClip = srcSlot->midiClip->clone();
-                                        int destScene = s;
-                                        m_selectedScene = s;
-                                        m_sessionPanel->setSelectedScene(m_selectedScene);
-                                        markDirty();
-                                        m_undoManager.push({"Duplicate Clip",
-                                            [this, dt, destScene]{
-                                                auto* s2 = m_project.getSlot(dt, destScene);
-                                                if (s2) { s2->clear(); markDirty(); }
-                                            },
-                                            [this, dt, ds, destScene]{
-                                                auto* src2 = m_project.getSlot(dt, ds);
-                                                auto* dst2 = m_project.getSlot(dt, destScene);
-                                                if (src2 && dst2) {
-                                                    if (src2->audioClip) dst2->audioClip = src2->audioClip->clone();
-                                                    else if (src2->midiClip) dst2->midiClip = src2->midiClip->clone();
-                                                    markDirty();
-                                                }
-                                            }, ""});
-                                        break;
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                        default: break;
-                    }
-                    break;
-                }
-
-                // InputState keyboard forwarding (for focused widgets)
-                if (m_inputState.focused()) {
-                    if (m_inputState.onKeyDown(static_cast<int>(event.key.key), ctrl, shift))
-                        break;
-                }
-
-                // Track rename keyboard handling
-                if (m_sessionPanel->isRenamingTrack()) {
-                    bool wasRenaming = true;
-                    m_sessionPanel->handleRenameKeyDown(static_cast<int>(event.key.key));
-                    if (!m_sessionPanel->isRenamingTrack())
-                        SDL_StopTextInput(m_mainWindow.getHandle());
-                    if (wasRenaming) break;
-                }
-                if (m_arrangementPanel->isRenamingTrack()) {
-                    bool wasRenaming = true;
-                    m_arrangementPanel->handleRenameKeyDown(static_cast<int>(event.key.key));
-                    if (!m_arrangementPanel->isRenamingTrack())
-                        SDL_StopTextInput(m_mainWindow.getHandle());
-                    if (wasRenaming) break;
-                }
-
-                // Detail panel knob text-edit mode
-                if (m_showDetailPanel && m_detailPanel->hasEditingKnob()) {
-                    if (m_detailPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
-                        if (!m_detailPanel->hasEditingKnob())
-                            SDL_StopTextInput(m_mainWindow.getHandle());
-                        break;
-                    }
-                }
-                // Browser panel knob text-edit mode
-                if (m_browserPanel->hasEditingKnob()) {
-                    if (m_browserPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
-                        if (!m_browserPanel->hasEditingKnob())
-                            SDL_StopTextInput(m_mainWindow.getHandle());
-                        break;
-                    }
-                }
-
-                // Piano roll keyboard shortcuts
-                if (m_pianoRoll->isOpen()) {
-                    bool prCtrl = (event.key.mod & SDL_KMOD_CTRL) != 0;
-                    if (m_pianoRoll->handleKeyDown(static_cast<int>(event.key.key), prCtrl)) {
-                        if (!m_pianoRoll->isOpen()) {
-                            // Piano roll was closed (Escape)
-                        }
-                        break;
-                    }
-                }
-
-                // Virtual keyboard (intercepts musical keys before shortcuts)
-                // Skip when renaming a track — keys are for text input, not notes
-                if (!m_sessionPanel->isRenamingTrack() && !m_arrangementPanel->isRenamingTrack()) {
-                    if (m_virtualKeyboard.onKeyDown(event.key.key))
-                        break;
-                }
-
-                // Detail panel arrow key navigation
-                if (m_showDetailPanel && m_detailPanel->isFocused()) {
-                    if (event.key.key == SDLK_LEFT) { m_detailPanel->scrollLeft(); break; }
-                    if (event.key.key == SDLK_RIGHT) { m_detailPanel->scrollRight(); break; }
-                }
-
-                switch (event.key.key) {
-                    case SDLK_ESCAPE:
-                        // ESC exits fullscreen on the visual output if
-                        // that's what's currently going on; otherwise it
-                        // keeps its menu/quit behaviour.
-                        if (m_visualEngine.isFullscreen()) {
-                            m_visualEngine.setFullscreen(false);
-                        } else if (m_menuBar.isOpen()) {
-                            m_menuBar.close();
-                        } else {
-                            m_running = false;
-                        }
-                        break;
-
-                    case SDLK_F11:
-                        if (!m_visualEngine.isOutputVisible())
-                            m_visualEngine.setOutputVisible(true);
-                        m_visualEngine.setFullscreen(!m_visualEngine.isFullscreen());
-                        break;
-
-                    case SDLK_SPACE:
-                        if (m_displayPlaying) {
-                            m_audioEngine.sendCommand(audio::TransportStopMsg{});
-                        } else {
-                            // Re-launch default clips before starting transport
-                            for (int t = 0; t < m_project.numTracks(); ++t) {
-                                int ds = m_project.track(t).defaultScene;
-                                if (ds < 0 || ds >= m_project.numScenes()) continue;
-                                auto* slot = m_project.getSlot(t, ds);
-                                if (!slot) continue;
-                                if (slot->audioClip)
-                                    m_audioEngine.sendCommand(audio::LaunchClipMsg{t, ds, slot->audioClip.get(),
-                                        slot->launchQuantize, &slot->clipAutomation, slot->followAction});
-                                else if (slot->midiClip)
-                                    m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{t, ds, slot->midiClip.get(),
-                                        slot->launchQuantize, &slot->clipAutomation, slot->followAction});
-                            }
-                            m_audioEngine.sendCommand(audio::TransportPlayMsg{});
-                        }
-                        break;
-
-                    case SDLK_KP_PLUS:
-                    case SDLK_EQUALS: {
-                        double newBpm = m_audioEngine.transport().bpm() + 1.0;
-                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::min(newBpm, 999.0)});
-                        break;
-                    }
-                    case SDLK_KP_MINUS:
-                    case SDLK_MINUS: {
-                        double newBpm = m_audioEngine.transport().bpm() - 1.0;
-                        m_audioEngine.sendCommand(audio::TransportSetBPMMsg{std::max(newBpm, 20.0)});
-                        break;
-                    }
-                    case SDLK_HOME:
-                        m_audioEngine.sendCommand(audio::TransportSetPositionMsg{0});
-                        break;
-
-                    case SDLK_TAB:
-                        if (!shift) {
-                            auto next = (m_project.viewMode() == ViewMode::Session)
-                                ? ViewMode::Arrangement
-                                : ViewMode::Session;
-                            switchToView(next);
-                        }
-                        break;
-
-                    case SDLK_INSERT:
-                        // Insert a new scene below the selection (session view).
-                        // Mirrors the Scene → Insert Scene menu item.
-                        insertSceneAtSelection();
-                        break;
-
-                    case SDLK_M:
-                        if (!shift) m_showMixer = !m_showMixer;
-                        break;
-
-                    case SDLK_D:
-                        if (ctrl && !shift && m_project.viewMode() == ViewMode::Arrangement) {
-                            m_arrangementPanel->handleAppKey(SDLK_D, /*ctrl=*/true);
-                        } else if (!shift && !ctrl) {
-                            m_showDetailPanel = !m_showDetailPanel;
-                            if (m_showDetailPanel) {
-                                m_detailPanel->setOpen(true);
-                                switch (m_detailTarget) {
-                                    case DetailTarget::Track:     updateDetailForSelectedTrack(); break;
-                                    case DetailTarget::ReturnBus: updateDetailForReturnBus(m_detailReturnBus); break;
-                                    case DetailTarget::Master:    updateDetailForMaster(); break;
-                                }
-                            }
-                        }
-                        break;
-
-                    case SDLK_DELETE:
-                    case SDLK_BACKSPACE: {
-                        if (m_project.viewMode() == ViewMode::Arrangement) {
-                            m_arrangementPanel->handleAppKey(
-                                static_cast<int>(event.key.key), /*ctrl=*/ctrl);
-                        } else {
-                            auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
-                            if (slot && !slot->empty()) {
-                                m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
-                                m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
-                                slot->clear();
-                                markDirty();
-                            }
-                        }
-                        break;
-                    }
-
-                    // Arrow key clip navigation (session view only)
-                    // Shift+Arrow moves the controller grid region
-                    case SDLK_UP:
-                        if (m_project.viewMode() == ViewMode::Session) {
-                            if (shift) {
-                                m_sessionPanel->moveGridRegion(0, -1);
-                            } else {
-                                m_selectedScene = std::max(0, m_selectedScene - 1);
-                                m_sessionPanel->setSelectedScene(m_selectedScene);
-                                m_sessionPanel->ensureSelectionVisible();
-                                updateDetailForSelectedTrack();
-                            }
-                        }
-                        break;
-                    case SDLK_DOWN:
-                        if (m_project.viewMode() == ViewMode::Session) {
-                            if (shift) {
-                                m_sessionPanel->moveGridRegion(0, 1);
-                            } else {
-                                m_selectedScene = std::min(m_project.numScenes() - 1, m_selectedScene + 1);
-                                m_sessionPanel->setSelectedScene(m_selectedScene);
-                                m_sessionPanel->ensureSelectionVisible();
-                                updateDetailForSelectedTrack();
-                            }
-                        }
-                        break;
-                    case SDLK_LEFT:
-                        if (m_project.viewMode() == ViewMode::Session) {
-                            if (shift) {
-                                m_sessionPanel->moveGridRegion(-1, 0);
-                            } else {
-                                m_selectedTrack = std::max(0, m_selectedTrack - 1);
-                                m_sessionPanel->setSelectedTrack(m_selectedTrack);
-                                m_sessionPanel->ensureSelectionVisible();
-                                updateDetailForSelectedTrack();
-                            }
-                        }
-                        break;
-                    case SDLK_RIGHT:
-                        if (m_project.viewMode() == ViewMode::Session) {
-                            if (shift) {
-                                m_sessionPanel->moveGridRegion(1, 0);
-                            } else {
-                                m_selectedTrack = std::min(m_project.numTracks() - 1, m_selectedTrack + 1);
-                                m_sessionPanel->setSelectedTrack(m_selectedTrack);
-                                m_sessionPanel->ensureSelectionVisible();
-                                updateDetailForSelectedTrack();
-                            }
-                        }
-                        break;
-
-                    // Enter launches/stops selected clip
-                    case SDLK_RETURN:
-                    case SDLK_KP_ENTER:
-                        if (m_project.viewMode() == ViewMode::Session)
-                            m_sessionPanel->launchOrStopSlot(m_selectedTrack, m_selectedScene);
-                        break;
-
-                    // G toggles controller grid region overlay
-                    case SDLK_G:
-                        if (m_project.viewMode() == ViewMode::Session)
-                            m_sessionPanel->toggleGridRegion();
-                        break;
-
-                    // Arrangement-mode key forwarding (L=loop, F=follow)
-                    case SDLK_L:
-                    case SDLK_F:
-                    case SDLK_LEFTBRACKET:
-                    case SDLK_RIGHTBRACKET:
-                        if (m_project.viewMode() == ViewMode::Arrangement) {
-                            m_arrangementPanel->handleAppKey(
-                                static_cast<int>(event.key.key), /*ctrl=*/ctrl);
-                        }
-                        break;
-
-                    default:
-                        break;
-                }
+             case SDL_EVENT_KEY_DOWN:
+                handleKeyEvent(event);
                 break;
-            }
 
             case SDL_EVENT_KEY_UP: {
                 // Virtual keyboard note-off
