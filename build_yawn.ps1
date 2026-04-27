@@ -1,9 +1,23 @@
 # build_yawn.ps1 — Build YAWN (Debug or Release)
-# Usage: .\build_yawn.ps1 [-Config Release|Debug]
+# Usage: .\build_yawn.ps1 [-Config Release|Debug] [-Clean] [-Test]
+#
+# Optional deps (auto-detected if available):
+#   - FFmpeg + libav*  → video clip import/playback
+#   - libavdevice      → live video input (webcam)
+#   - Ableton Link     → network beat/tempo sync (fetched automatically)
+#   - VST3 SDK         → third-party plugin hosting (fetched automatically)
+#
+# CMake options (pass via -ExtraArgs):
+#   -ExtraArgs "-DYAWN_VST3=OFF"       → disable VST3 plugin hosting
+#   -ExtraArgs "-DYAWN_HAS_LINK=OFF"   → disable Ableton Link support
+#   -ExtraArgs "-DYAWN_HAS_VIDEO=OFF"  → disable video support
 
 param(
     [ValidateSet("Release","Debug")]
-    [string]$Config = "Release"
+    [string]$Config = "Release",
+    [switch]$Clean,
+    [switch]$Test,
+    [string]$ExtraArgs = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,9 +34,15 @@ if (Test-Path $VsCmake) {
 
 Write-Host "=== Building YAWN ($Config) ===" -ForegroundColor Cyan
 
-if (-not (Test-Path $BuildDir)) {
+$ConfigCache = Join-Path $BuildDir "CMakeCache.txt"
+
+if ($Clean -or -not (Test-Path $ConfigCache)) {
+    if ($Clean) {
+        Write-Host "-- Cleaning build directory..."
+        Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
+    }
     Write-Host "-- Configuring CMake..."
-    & $cmake -S $ScriptDir -B $BuildDir -DCMAKE_BUILD_TYPE=$Config
+    & $cmake -S $ScriptDir -B $BuildDir -DCMAKE_BUILD_TYPE=$Config $ExtraArgs.Split(' ')
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 }
 
@@ -32,4 +52,15 @@ if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 Write-Host ""
 Write-Host "=== Build complete ===" -ForegroundColor Green
 Write-Host "Executable: $BuildDir\bin\$Config\YAWN.exe"
-Write-Host "Tests:      $BuildDir\bin\$Config\yawn_tests.exe"
+$TestExe = Join-Path $BuildDir "bin" $Config "yawn_tests.exe"
+if (Test-Path $TestExe) {
+    Write-Host "Tests:      $TestExe"
+}
+
+if ($Test) {
+    Write-Host ""
+    Write-Host "=== Running tests ===" -ForegroundColor Cyan
+    Push-Location $BuildDir
+    ctest --output-on-failure -C $Config --parallel
+    Pop-Location
+}
