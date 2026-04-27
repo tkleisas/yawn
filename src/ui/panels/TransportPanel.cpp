@@ -167,9 +167,9 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_recBtnX  = centerX + 3 * (btnSize + btnGap); m_recBtnY  = btnY;
     m_recBtnW  = btnSize;                          m_recBtnH  = btnSize;
 
-    // ── Right side: Link toggle ──
+    // ── Right side: Link toggle (rightmost) ──
     const float linkW = 52.0f;
-    m_linkBtnX = bounds.x + bounds.w - 12.0f - linkW - 140.0f;  // left of CPU meter
+    m_linkBtnX = bounds.x + bounds.w - 12.0f - linkW;
     m_linkBtnY = btnY;
     m_linkBtnW = linkW;
     m_linkBtnH = boxH;
@@ -422,7 +422,7 @@ void TransportPanel::render(UIContext& ctx) {
 
         const float meterSize = tmet.fontSizeSmall;
         const float lineH = tm.lineHeight(meterSize);
-        const float rightEdge = m_bounds.x + m_bounds.w - 160.0f - 12.0f;
+        const float rightEdge = m_linkBtnX - 8.0f;
 
         char cpuBuf[16];
         const int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
