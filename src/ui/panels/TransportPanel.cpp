@@ -166,6 +166,13 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_playBtnW = btnSize;                          m_playBtnH = btnSize;
     m_recBtnX  = centerX + 3 * (btnSize + btnGap); m_recBtnY  = btnY;
     m_recBtnW  = btnSize;                          m_recBtnH  = btnSize;
+
+    // ── Right side: Link toggle ──
+    const float linkW = 52.0f;
+    m_linkBtnX = bounds.x + bounds.w - 12.0f - linkW - 140.0f;  // left of CPU meter
+    m_linkBtnY = btnY;
+    m_linkBtnW = linkW;
+    m_linkBtnH = boxH;
 }
 
 // ─── Render ────────────────────────────────────────────────────────
@@ -354,6 +361,55 @@ void TransportPanel::render(UIContext& ctx) {
                     posSize, ::yawn::ui::Theme::transportAccent);
     }
 
+    // Ableton Link indicator and toggle
+    {
+        m_linkEnabled = m_engine->linkManager().enabled();
+        m_linkPeers = m_engine->linkManager().numPeers();
+
+        const bool hovered = (m_hoveredBtn == 5);
+        const bool active = m_linkEnabled && m_linkPeers > 0;
+        const Color bg = active
+            ? (hovered ? Color{50, 130, 170, 255} : Color{40, 110, 150, 255})
+            : m_linkEnabled
+                ? (hovered ? Color{70, 70, 80, 255} : Color{55, 55, 65, 255})
+                : (hovered ? Color{55, 55, 65, 255} : Color{40, 40, 50, 255});
+        r.drawRoundedRect(m_linkBtnX, m_linkBtnY, m_linkBtnW, m_linkBtnH,
+                           4.0f, bg);
+
+        const float fs = tmet.fontSizeSmall;
+        const Color textCol = active ? Color{180, 220, 255, 255}
+                             : m_linkEnabled ? Color{140, 150, 160, 255}
+                             : Color{100, 105, 110, 255};
+        const char* lbl = m_linkEnabled
+            ? (m_linkPeers > 0 ? "LINK" : "LINK")
+            : "LINK";
+
+        const float tw = tm.textWidth(lbl, fs);
+        const float lh = tm.lineHeight(fs);
+
+        // Show peer count when active
+        if (m_linkEnabled && m_linkPeers > 0) {
+            char peerBuf[16];
+            std::snprintf(peerBuf, sizeof(peerBuf), "%d", m_linkPeers);
+            const float peerW = tm.textWidth(peerBuf, fs * 0.75f);
+            const float totalW = tw + peerW + 4.0f;
+            const float startX = m_linkBtnX + (m_linkBtnW - totalW) * 0.5f;
+
+            tm.drawText(r, lbl, startX,
+                        m_linkBtnY + (m_linkBtnH - lh) * 0.5f - lh * 0.15f,
+                        fs, textCol);
+            tm.drawText(r, peerBuf, startX + tw + 4.0f,
+                        m_linkBtnY + (m_linkBtnH - lh) * 0.5f - 2.0f,
+                        fs * 0.75f,
+                        Color{120, 200, 140, 255});
+        } else {
+            tm.drawText(r, lbl,
+                        m_linkBtnX + (m_linkBtnW - tw) * 0.5f,
+                        m_linkBtnY + (m_linkBtnH - lh) * 0.5f - lh * 0.15f,
+                        fs, textCol);
+        }
+    }
+
     // Performance meters (CPU / MEM).
     {
         if (++m_meterUpdateCounter >= 30) {
@@ -515,6 +571,13 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         return true;
     }
 
+    // Link toggle.
+    if (hitBtn(m_linkBtnX, m_linkBtnY, m_linkBtnW, m_linkBtnH, mx, my)) {
+        m_linkEnabled = !m_linkEnabled;
+        m_engine->linkManager().enable(m_linkEnabled);
+        return true;
+    }
+
     // Transport buttons.
     if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) {
         // Return-to-zero — leaves play state untouched so a user can
@@ -587,6 +650,7 @@ bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
     else if (hitBtn(m_recBtnX,  m_recBtnY,  m_recBtnW,  m_recBtnH,  mx, my)) m_hoveredBtn = 2;
     else if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) m_hoveredBtn = 3;
     else if (hitBtn(m_audioBtnX, m_audioBtnY, m_audioBtnW, m_audioBtnH, mx, my)) m_hoveredBtn = 4;
+    else if (hitBtn(m_linkBtnX, m_linkBtnY, m_linkBtnW, m_linkBtnH, mx, my)) m_hoveredBtn = 5;
     return (m_hoveredBtn != prev);
 }
 

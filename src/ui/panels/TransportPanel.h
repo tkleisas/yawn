@@ -279,6 +279,9 @@ private:
     // Audio-engine toggle (far-left of the transport bar).
     float m_audioBtnX = 0, m_audioBtnY = 0, m_audioBtnW = 0, m_audioBtnH = 0;
 
+    // Link sync toggle (right side, before CPU meter).
+    float m_linkBtnX = 0, m_linkBtnY = 0, m_linkBtnW = 0, m_linkBtnH = 0;
+
     // Centered transport button positions.
     float m_homeBtnX = 0, m_homeBtnY = 0, m_homeBtnW = 0, m_homeBtnH = 0;
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;
@@ -309,6 +312,10 @@ private:
     int    m_metroVisualStyle = 0; // 0=Dots, 1=Beat Number
     float  m_metroDotX = 0.0f;
     float  m_metroDotY = 0.0f;
+
+    // Ableton Link state (updated per-frame from engine)
+    bool m_linkEnabled = false;
+    int  m_linkPeers = 0;
 
     // "Last seen" engine values — see setTransportState's comment for
     // the rubber-banding rationale.
