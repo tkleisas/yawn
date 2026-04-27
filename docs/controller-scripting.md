@@ -79,6 +79,8 @@ local pads   = require("pads")    -- loads pads.lua from same directory
 | `yawn.set_metronome_enabled(bool)` | Toggle metronome via command queue |
 | `yawn.get_master_volume()` | Returns master volume (0.0-2.0) |
 | `yawn.set_master_volume(vol)` | Set master volume via command queue |
+| `yawn.get_loop()` | Returns `true` if loop is enabled |
+| `yawn.set_loop(bool)` | Enable/disable transport loop |
 
 ### Tracks & Instruments
 
@@ -88,6 +90,14 @@ local pads   = require("pads")    -- loads pads.lua from same directory
 | `yawn.set_selected_track(track)` | Set the selected track (0-based) |
 | `yawn.get_track_count()` | Returns number of tracks |
 | `yawn.get_track_name(track)` | Returns track name string (or nil) |
+| `yawn.get_track_volume(track)` | Returns track volume (0.0–2.0) from mixer |
+| `yawn.set_track_volume(track, vol)` | Set track volume via command queue |
+| `yawn.get_track_pan(track)` | Returns track pan (-1.0–1.0) from mixer |
+| `yawn.set_track_pan(track, pan)` | Set track pan via command queue |
+| `yawn.get_track_mute(track)` | Returns `true` if track is muted |
+| `yawn.set_track_mute(track, muted)` | Mute/unmute a track via command queue |
+| `yawn.get_track_solo(track)` | Returns `true` if track is soloed |
+| `yawn.set_track_solo(track, soloed)` | Solo/unsolo a track via command queue |
 | `yawn.get_track_type(track)` | Returns `"audio"` or `"midi"` |
 | `yawn.get_track_color(track)` | Returns track color index |
 | `yawn.get_instrument_name(track)` | Returns instrument display name (or nil) |

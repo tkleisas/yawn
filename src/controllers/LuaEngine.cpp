@@ -782,6 +782,19 @@ static int l_set_track_mute(lua_State* L) {
     return 0;
 }
 
+// ── Lua API: yawn.set_track_solo(track, soloed) ────────────────────────
+
+static int l_set_track_solo(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    bool soloed = lua_toboolean(L, 2);
+    mgr->sendCommand(audio::SetTrackSoloMsg{t, soloed});
+    return 0;
+}
+
+// ── Lua API: yawn.get_track_solo(track) → bool ─────────────────────────
+
 // ── Lua API: yawn.get_loop() → bool ─────────────────────────────────────
 
 static int l_get_loop(lua_State* L) {
@@ -799,6 +812,65 @@ static int l_set_loop(lua_State* L) {
     bool on = lua_toboolean(L, 1);
     mgr->audioEngine()->transport().setLoopEnabled(on);
     return 0;
+}
+
+// ── Lua API: yawn.set_track_volume(track, volume) ──────────────────────
+
+static int l_set_track_volume(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    float vol = static_cast<float>(luaL_checknumber(L, 2));
+    mgr->sendCommand(audio::SetTrackVolumeMsg{t, vol});
+    return 0;
+}
+
+// ── Lua API: yawn.set_track_pan(track, pan) ────────────────────────────
+
+static int l_set_track_pan(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    float pan = static_cast<float>(luaL_checknumber(L, 2));
+    mgr->sendCommand(audio::SetTrackPanMsg{t, pan});
+    return 0;
+}
+
+// ── Lua API: yawn.get_track_solo(track) → bool ─────────────────────────
+
+static int l_get_track_solo(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->project() || t < 0 || t >= mgr->project()->numTracks()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushboolean(L, mgr->project()->track(t).soloed ? 1 : 0);
+    return 1;
+}
+
+// ── Lua API: yawn.get_track_volume(track) → float ──────────────────────
+
+static int l_get_track_volume(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->audioEngine() || t < 0 || t >= kMaxTracks) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    lua_pushnumber(L, mgr->audioEngine()->mixer().trackChannel(t).volume);
+    return 1;
+}
+
+static int l_get_track_pan(lua_State* L) {
+    auto* mgr = getManager(L);
+    int t = static_cast<int>(luaL_checkinteger(L, 1));
+    if (!mgr || !mgr->audioEngine() || t < 0 || t >= kMaxTracks) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    lua_pushnumber(L, mgr->audioEngine()->mixer().trackChannel(t).pan);
+    return 1;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -967,8 +1039,14 @@ void LuaEngine::registerAPI() {
         {"set_session_focus",       l_set_session_focus},
         {"get_track_mute",          l_get_track_mute},
         {"set_track_mute",          l_set_track_mute},
+        {"set_track_solo",          l_set_track_solo},
+        {"get_track_solo",          l_get_track_solo},
         {"get_loop",                l_get_loop},
         {"set_loop",                l_set_loop},
+        {"set_track_volume",        l_set_track_volume},
+        {"set_track_pan",           l_set_track_pan},
+        {"get_track_volume",        l_get_track_volume},
+        {"get_track_pan",           l_get_track_pan},
         {nullptr, nullptr}
     };
 
