@@ -351,12 +351,13 @@ void TransportPanel::render(UIContext& ctx) {
         }
     }
 
-    // Right-aligned position display.
+    // Right-aligned position display (left of CPU/MEM meter).
     if (!m_posText.empty()) {
         const float posSize = tmet.fontSizeLarge;
         const float tw = tm.textWidth(m_posText, posSize);
         const float lh = tm.lineHeight(posSize);
-        const float posX = m_bounds.x + m_bounds.w - 160.0f - 12.0f + (160.0f - tw);
+        const float posRight = m_linkBtnX - 120.0f;
+        const float posX = posRight - tw;
         tm.drawText(r, m_posText, posX, y + (h - lh) * 0.5f,
                     posSize, ::yawn::ui::Theme::transportAccent);
     }
@@ -422,7 +423,7 @@ void TransportPanel::render(UIContext& ctx) {
 
         const float meterSize = tmet.fontSizeSmall;
         const float lineH = tm.lineHeight(meterSize);
-        const float rightEdge = m_linkBtnX - 44.0f;
+        const float rightEdge = m_linkBtnX - 8.0f;
 
         char cpuBuf[16];
         const int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
