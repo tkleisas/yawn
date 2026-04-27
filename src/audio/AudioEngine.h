@@ -7,6 +7,7 @@
 #include "audio/ArrangementPlayback.h"
 #include "audio/Mixer.h"
 #include "audio/Metronome.h"
+#include "link/LinkManager.h"
 #include "instruments/Instrument.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/MidiTypes.h"
@@ -96,6 +97,7 @@ public:
     Mixer& mixer() { return m_mixer; }
     const Mixer& mixer() const { return m_mixer; }
     Metronome& metronome() { return m_metronome; }
+    LinkManager& linkManager() { return m_linkManager; }
     midi::MidiEffectChain& midiEffectChain(int track) { return m_midiEffectChains[track]; }
     automation::AutomationEngine& automationEngine() { return m_automationEngine; }
     std::vector<automation::AutomationLane>& trackAutoLanes(int track) { return m_trackAutoLanes[track]; }
@@ -276,6 +278,7 @@ private:
     ArrangementPlayback m_arrPlayback;
     Mixer m_mixer;
     Metronome m_metronome;
+    LinkManager m_linkManager;
     automation::AutomationEngine m_automationEngine;
     // Per-track automation lanes for recording (written by automation engine)
     std::vector<automation::AutomationLane> m_trackAutoLanes[kMaxTracks];

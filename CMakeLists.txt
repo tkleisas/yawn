@@ -285,6 +285,14 @@ if(YAWN_HAS_MODEL3D)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/gltf/M3DSceneScript.cpp
     )
 endif()
+
+# Ableton Link source
+if(YAWN_HAS_LINK)
+    list(APPEND YAWN_CORE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/link/LinkManager.cpp
+    )
+endif()
+
 add_library(yawn_core STATIC ${YAWN_CORE_SOURCES})
 yawn_set_warnings(yawn_core)
 target_precompile_headers(yawn_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/pch/yawn_core_pch.h)
@@ -312,6 +320,21 @@ target_link_libraries(yawn_core PUBLIC
 if(YAWN_VST3)
     target_link_libraries(yawn_core PUBLIC vst3_hosting)
     target_compile_definitions(yawn_core PUBLIC YAWN_HAS_VST3=1)
+endif()
+
+# Ableton Link include paths and platform defines
+if(YAWN_HAS_LINK)
+    target_include_directories(yawn_core PUBLIC
+        ${ableton_link_SOURCE_DIR}/include
+        ${asio_headers_SOURCE_DIR}/asio/include
+    )
+    target_compile_definitions(yawn_core PUBLIC YAWN_HAS_LINK=1)
+    if(WIN32)
+        target_compile_definitions(yawn_core PUBLIC LINK_PLATFORM_WINDOWS=1)
+    else()
+        target_compile_definitions(yawn_core PUBLIC LINK_PLATFORM_LINUX=1)
+        target_link_libraries(yawn_core PUBLIC atomic pthread)
+    endif()
 endif()
 
 # 3D model loader (tinygltf). Header-only: include path + feature flag.

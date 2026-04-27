@@ -198,3 +198,32 @@ option(YAWN_VST3 "Enable VST3 plugin hosting support" ON)
 if(YAWN_VST3)
     include(${CMAKE_CURRENT_LIST_DIR}/VST3Hosting.cmake)
 endif()
+
+# ──────────────────────────────────────────────
+# Ableton Link (network beat/tempo sync — optional)
+# ──────────────────────────────────────────────
+option(YAWN_HAS_LINK "Enable Ableton Link support (network beat/tempo sync)" ON)
+
+if(YAWN_HAS_LINK)
+    # ASIO standalone (header-only networking, needed by Link)
+    FetchContent_Declare(
+        asio_headers
+        GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+        GIT_TAG asio-1-28-0
+    )
+    FetchContent_GetProperties(asio_headers)
+    if(NOT asio_headers_POPULATED)
+        FetchContent_Populate(asio_headers)
+    endif()
+
+    # Ableton Link (header-only C++ library)
+    FetchContent_Declare(
+        ableton_link
+        GIT_REPOSITORY https://github.com/Ableton/link.git
+        GIT_TAG Link-3.1.5
+    )
+    FetchContent_GetProperties(ableton_link)
+    if(NOT ableton_link_POPULATED)
+        FetchContent_Populate(ableton_link)
+    endif()
+endif()

@@ -873,6 +873,34 @@ static int l_get_track_pan(lua_State* L) {
     return 1;
 }
 
+// ── Lua API: yawn.link_enable(bool) ────────────────────────────────────
+
+static int l_link_enable(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) return 0;
+    bool on = lua_toboolean(L, 1);
+    mgr->audioEngine()->linkManager().enable(on);
+    return 0;
+}
+
+// ── Lua API: yawn.link_peers() → int ──────────────────────────────────
+
+static int l_link_peers(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) { lua_pushinteger(L, 0); return 1; }
+    lua_pushinteger(L, mgr->audioEngine()->linkManager().numPeers());
+    return 1;
+}
+
+// ── Lua API: yawn.link_enabled() → bool ───────────────────────────────
+
+static int l_link_enabled(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->audioEngine()) { lua_pushboolean(L, 0); return 1; }
+    lua_pushboolean(L, mgr->audioEngine()->linkManager().enabled() ? 1 : 0);
+    return 1;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // LuaEngine implementation
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1047,6 +1075,9 @@ void LuaEngine::registerAPI() {
         {"set_track_pan",           l_set_track_pan},
         {"get_track_volume",        l_get_track_volume},
         {"get_track_pan",           l_get_track_pan},
+        {"link_enable",             l_link_enable},
+        {"link_enabled",            l_link_enabled},
+        {"link_peers",              l_link_peers},
         {nullptr, nullptr}
     };
 

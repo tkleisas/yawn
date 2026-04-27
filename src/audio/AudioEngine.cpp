@@ -315,6 +315,21 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     for (int t = 0; t < kMaxTracks; ++t) m_liveInputMidi[t].clear();
     processCommands();
 
+    // Ableton Link: sync tempo and beat position from network peers
+    {
+        double bpm = m_transport.bpm();
+        double beat = m_transport.positionInBeats();
+        bool playing = m_transport.isPlaying() && !m_transport.isCountingIn();
+        m_linkManager.onAudioCallback(bpm, beat, playing);
+        if (m_linkManager.enabled() && m_linkManager.numPeers() > 0) {
+            m_transport.setBPM(bpm);
+            if (!playing) {
+                double spb = m_config.sampleRate * 60.0 / bpm;
+                m_transport.setPositionInSamples(static_cast<int64_t>(beat * spb));
+            }
+        }
+    }
+
     int nc = m_config.outputChannels;
     int nf = static_cast<int>(numFrames);
     int inCh = m_config.inputChannels;
