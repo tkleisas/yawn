@@ -422,7 +422,7 @@ void TransportPanel::render(UIContext& ctx) {
 
         const float meterSize = tmet.fontSizeSmall;
         const float lineH = tm.lineHeight(meterSize);
-        const float rightEdge = m_linkBtnX - 8.0f;
+        const float rightEdge = m_linkBtnX - 44.0f;
 
         char cpuBuf[16];
         const int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
