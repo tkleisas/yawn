@@ -121,16 +121,6 @@ static AudioBuffer makeClickTrack(int sampleRate, int numClicks, double interval
     return buf;
 }
 
-static AudioBuffer makeSineWave(int sampleRate, float freq, float durationSec) {
-    int numFrames = static_cast<int>(sampleRate * durationSec);
-    AudioBuffer buf(1, numFrames);
-    float* data = buf.channelData(0);
-    for (int i = 0; i < numFrames; ++i) {
-        data[i] = std::sin(2.0f * static_cast<float>(M_PI) * freq * i / sampleRate);
-    }
-    return buf;
-}
-
 TEST(TransientDetector, DetectsClicks) {
     // Create 4 clicks at 120 BPM (0.5s apart)
     auto buf = makeClickTrack(44100, 4, 0.5);
