@@ -311,24 +311,37 @@ public:
     bool hasEditingKnob() const {
         for (auto& s : m_knobs)    if (s.isEditing()) return true;
         for (auto& s : m_vizKnobs) if (s.isEditing()) return true;
+        // Custom-body devices (InstrumentRack and other groupedKnob
+        // instruments) bypass the m_knobs grid — their knobs live
+        // inside the body widget, so we have to ask it. Without
+        // this, double-clicking a knob in an InstrumentRack /
+        // Granular / etc. enters edit mode but DetailPanel never
+        // notices, so SDL_StartTextInput is never called and typed
+        // digits get dropped at the OS event layer.
+        if (m_customBody && m_customBody->hasEditingKnob()) return true;
         return false;
     }
 
     bool forwardKeyDown(int key) {
         for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardKeyDown(key);
         for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardKeyDown(key);
+        if (m_customBody && m_customBody->hasEditingKnob())
+            return m_customBody->forwardKeyDown(key);
         return false;
     }
 
     bool forwardTextInput(const char* text) {
         for (auto& s : m_knobs)    if (s.isEditing()) return s.forwardTextInput(text);
         for (auto& s : m_vizKnobs) if (s.isEditing()) return s.forwardTextInput(text);
+        if (m_customBody && m_customBody->hasEditingKnob())
+            return m_customBody->forwardTextInput(text);
         return false;
     }
 
     void cancelEditingKnobs() {
         for (auto& s : m_knobs)    if (s.isEditing()) s.knob->endEdit(/*commit*/false);
         for (auto& s : m_vizKnobs) if (s.isEditing()) s.knob->endEdit(/*commit*/false);
+        if (m_customBody) m_customBody->cancelEditingKnobs();
     }
 
     // ─── Width calculation (matches v1) ─────────────────────────────
