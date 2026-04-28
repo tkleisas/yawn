@@ -170,7 +170,12 @@ bool PianoRollPanel::onMouseDown(MouseEvent& e) {
 
     if (!inGrid(mx, my)) return false;
 
-    double beat = snapBeat(xToBeat(mx));
+    // Click-to-place: floor the cursor's beat to the start of its
+    // cell so a click anywhere inside cell N draws a note in cell N
+    // (was rounding to nearest, which sent clicks past the cell
+    // midpoint into the next cell). Drag-snap below still uses
+    // snapBeat (round-to-nearest) for the gestures that read better.
+    double beat = snapBeatFloor(xToBeat(mx));
     int pitch = yToPitch(my);
     if (pitch < 0 || pitch > 127 || beat < 0) return true;
 

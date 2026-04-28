@@ -628,6 +628,15 @@ private:
         double s = snapVal();
         return std::round(b / s) * s;
     }
+    // Floor variant — places a value at the START of the cell that
+    // contains b, regardless of where in the cell. Use for click-to-
+    // place gestures (drawing a new note); the round-to-nearest
+    // snapBeat above is for drag-snap behaviour where landing on the
+    // closest gridline reads more naturally.
+    double snapBeatFloor(double b) const {
+        double s = snapVal();
+        return std::floor(b / s) * s;
+    }
 
     float maxBeats() const {
         double len = m_clip ? m_clip->lengthBeats() : 4.0;
