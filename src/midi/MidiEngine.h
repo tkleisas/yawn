@@ -63,6 +63,13 @@ public:
 
     int openInputPortCount() const { return static_cast<int>(m_inputPorts.size()); }
     int openOutputPortCount() const { return static_cast<int>(m_outputPorts.size()); }
+    // Name of an OPEN output port (the one that sendToOutput(idx)
+    // dispatches to). Empty string if idx is out of range or the
+    // port slot is null.
+    std::string openOutputPortName(int idx) const {
+        if (idx < 0 || idx >= openOutputPortCount()) return {};
+        return m_outputPorts[idx] ? m_outputPorts[idx]->portName() : std::string{};
+    }
 
     // ---- Track routing ----
 
