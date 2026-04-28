@@ -14,6 +14,7 @@
 #include "midi/MidiClip.h"
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
+#include "instruments/Multisampler.h"
 #include "instruments/DrumRack.h"
 #include "instruments/InstrumentRack.h"
 #include "instruments/DrumSlop.h"

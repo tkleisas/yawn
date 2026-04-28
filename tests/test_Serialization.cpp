@@ -428,6 +428,137 @@ TEST_F(ProjectSerializerTest, SchemaVersioningIgnoresUnknownFields) {
     EXPECT_NEAR(engine.transport().bpm(), 130.0, 0.1);
 }
 
+TEST_F(ProjectSerializerTest, RoundTripMultisamplerZones) {
+    // Builds a Multisampler with three zones (each with a synthetic
+    // 1-frame sample so the zone's sample data is identifiable), saves
+    // the project to disk, loads it back, and verifies every zone
+    // metadata field round-trips and the per-zone .wav file actually
+    // gets written and reloaded.
+
+    Project project;
+    project.init(1, 1);
+    project.track(0).type = Track::Type::Midi;
+
+    audio::AudioEngine engine;
+    auto ms = std::make_unique<instruments::Multisampler>();
+    ms->init(44100.0, 256);
+
+    // Zone 0: mono single-sample marker (value = 0.25), root C4=60,
+    // covers C0–B3, vel 1–64
+    {
+        instruments::Multisampler::Zone z;
+        z.sampleData = {0.25f};
+        z.sampleFrames = 1;
+        z.sampleChannels = 1;
+        z.rootNote = 60;
+        z.lowKey = 0;   z.highKey = 59;
+        z.lowVel = 1;   z.highVel = 64;
+        z.tune = 0.5f;
+        z.volume = 0.8f;
+        z.pan = -0.4f;
+        ms->addZone(z);
+    }
+    // Zone 1: stereo 2-frame marker, root C5=72, key 60–95, vel 65–127
+    {
+        instruments::Multisampler::Zone z;
+        z.sampleData = {0.10f, 0.20f, 0.30f, 0.40f};   // interleaved L/R
+        z.sampleFrames = 2;
+        z.sampleChannels = 2;
+        z.rootNote = 72;
+        z.lowKey = 60;  z.highKey = 95;
+        z.lowVel = 65;  z.highVel = 127;
+        z.tune = -0.25f;
+        z.volume = 1.2f;
+        z.pan = 0.3f;
+        z.loop = true;
+        z.loopStart = 1;
+        z.loopEnd = 2;
+        ms->addZone(z);
+    }
+    // Zone 2: mono with high range, root C6=84
+    {
+        instruments::Multisampler::Zone z;
+        z.sampleData = {-0.5f};
+        z.sampleFrames = 1;
+        z.sampleChannels = 1;
+        z.rootNote = 84;
+        z.lowKey = 96;  z.highKey = 127;
+        ms->addZone(z);
+    }
+    engine.setInstrument(0, std::move(ms));
+
+    auto dir = projDir();
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(dir, project, engine));
+    ASSERT_TRUE(fs::exists(dir / "project.json"));
+    ASSERT_TRUE(fs::is_directory(dir / "samples"));
+
+    // Three zone .wav files should have been written
+    int wavCount = 0;
+    for (const auto& entry : fs::directory_iterator(dir / "samples")) {
+        if (entry.path().extension() == ".wav" &&
+            entry.path().filename().string().rfind("ms_zone_", 0) == 0)
+            ++wavCount;
+    }
+    EXPECT_EQ(wavCount, 3);
+
+    // Load into a fresh project + engine
+    Project project2;
+    audio::AudioEngine engine2;
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(dir, project2, engine2));
+
+    auto* loaded = engine2.instrument(0);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_STREQ(loaded->id(), "multisampler");
+
+    auto* loadedMs = dynamic_cast<instruments::Multisampler*>(loaded);
+    ASSERT_NE(loadedMs, nullptr);
+    ASSERT_EQ(loadedMs->zoneCount(), 3);
+
+    // Zone 0 round-trip
+    {
+        const auto* z = loadedMs->zone(0);
+        ASSERT_NE(z, nullptr);
+        EXPECT_EQ(z->rootNote, 60);
+        EXPECT_EQ(z->lowKey, 0);
+        EXPECT_EQ(z->highKey, 59);
+        EXPECT_EQ(z->lowVel, 1);
+        EXPECT_EQ(z->highVel, 64);
+        EXPECT_NEAR(z->tune, 0.5f, 1e-4f);
+        EXPECT_NEAR(z->volume, 0.8f, 1e-4f);
+        EXPECT_NEAR(z->pan, -0.4f, 1e-4f);
+        EXPECT_EQ(z->sampleChannels, 1);
+        EXPECT_EQ(z->sampleFrames, 1);
+        EXPECT_NEAR(z->sampleData[0], 0.25f, 1e-3f);
+    }
+    // Zone 1: stereo, interleaved sample data preserved + loop
+    {
+        const auto* z = loadedMs->zone(1);
+        ASSERT_NE(z, nullptr);
+        EXPECT_EQ(z->rootNote, 72);
+        EXPECT_EQ(z->sampleChannels, 2);
+        EXPECT_EQ(z->sampleFrames, 2);
+        EXPECT_TRUE(z->loop);
+        EXPECT_EQ(z->loopStart, 1);
+        EXPECT_EQ(z->loopEnd, 2);
+        // Interleaved: [f0L, f0R, f1L, f1R]
+        EXPECT_NEAR(z->sampleData[0], 0.10f, 1e-3f);
+        EXPECT_NEAR(z->sampleData[1], 0.20f, 1e-3f);
+        EXPECT_NEAR(z->sampleData[2], 0.30f, 1e-3f);
+        EXPECT_NEAR(z->sampleData[3], 0.40f, 1e-3f);
+    }
+    // Zone 2: mono, negative sample value preserved (sign matters for
+    // the interleave-conversion roundtrip)
+    {
+        const auto* z = loadedMs->zone(2);
+        ASSERT_NE(z, nullptr);
+        EXPECT_EQ(z->rootNote, 84);
+        EXPECT_EQ(z->lowKey, 96);
+        EXPECT_EQ(z->highKey, 127);
+        EXPECT_EQ(z->sampleFrames, 1);
+        EXPECT_NEAR(z->sampleData[0], -0.5f, 1e-3f);
+    }
+}
+
 TEST_F(ProjectSerializerTest, RoundTripInstrumentRackChains) {
     Project project;
     project.init(1, 1);

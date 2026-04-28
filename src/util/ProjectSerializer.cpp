@@ -181,6 +181,42 @@ json serializeInstrument(const instruments::Instrument& inst,
         }
     }
 
+    // Multisampler: save per-zone samples + zone metadata. Each zone's
+    // audio lives as its own .wav under <project>.yawn/samples/; the
+    // JSON tracks the playback metadata (root, key/vel ranges, tune,
+    // vol, pan, loop). Samples are stored interleaved (matching the
+    // Multisampler's internal Zone layout); save uses the engine's
+    // current sample rate as the file's stored rate.
+    if (std::string(inst.id()) == "multisampler") {
+        auto& ms = static_cast<const instruments::Multisampler&>(inst);
+        json zones = json::array();
+        for (int i = 0; i < ms.zoneCount(); ++i) {
+            const auto* z = ms.zone(i);
+            if (!z || z->sampleFrames <= 0) continue;
+            std::string filename = "ms_zone_" + std::to_string(i) + "_" +
+                                   std::to_string(sampleCounter++) + ".wav";
+            fs::path samplePath = samplesDir / filename;
+            FileIO::saveAudioFile(samplePath.string(),
+                                  z->sampleData.data(), z->sampleFrames,
+                                  z->sampleChannels, static_cast<int>(kDefaultSampleRate));
+            json zj;
+            zj["sampleFile"] = "samples/" + filename;
+            zj["rootNote"]   = z->rootNote;
+            zj["lowKey"]     = z->lowKey;
+            zj["highKey"]    = z->highKey;
+            zj["lowVel"]     = z->lowVel;
+            zj["highVel"]    = z->highVel;
+            zj["tune"]       = z->tune;
+            zj["volume"]     = z->volume;
+            zj["pan"]        = z->pan;
+            zj["loop"]       = z->loop;
+            zj["loopStart"]  = z->loopStart;
+            zj["loopEnd"]    = z->loopEnd;
+            zones.push_back(zj);
+        }
+        j["zones"] = zones;
+    }
+
     // DrumRack: save per-pad samples
     if (std::string(inst.id()) == "drumrack") {
         auto& rack = static_cast<const instruments::DrumRack&>(inst);
@@ -315,6 +351,49 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             sampler.loadSample(buf->data(), buf->numFrames(), buf->numChannels());
         } else {
             LOG_WARN("Project", "Sample file not found: %s", samplePath.string().c_str());
+        }
+    }
+
+    // Multisampler: load per-zone samples + zone metadata. Mirrors the
+    // save side. AudioBuffer is non-interleaved; the Multisampler's
+    // Zone struct holds interleaved sampleData, so we de-stripe the
+    // channels back into [f0c0, f0c1, ..., f1c0, f1c1, ...] order.
+    if (id == "multisampler" && j.contains("zones")) {
+        auto& ms = static_cast<instruments::Multisampler&>(*inst);
+        ms.clearZones();
+        for (const auto& zj : j["zones"]) {
+            std::string relPath = zj.value("sampleFile", "");
+            if (relPath.empty()) continue;
+            fs::path samplePath = projectDir / relPath;
+            auto buf = FileIO::loadAudioFile(samplePath.string());
+            if (!buf) {
+                LOG_WARN("Project", "Multisampler zone sample missing: %s",
+                         samplePath.string().c_str());
+                continue;
+            }
+            const int nf = buf->numFrames();
+            const int nc = buf->numChannels();
+            instruments::Multisampler::Zone z;
+            z.sampleData.resize(static_cast<size_t>(nf) * nc);
+            for (int ch = 0; ch < nc; ++ch) {
+                const float* src = buf->channelData(ch);
+                for (int f = 0; f < nf; ++f)
+                    z.sampleData[f * nc + ch] = src[f];
+            }
+            z.sampleFrames   = nf;
+            z.sampleChannels = nc;
+            z.rootNote  = zj.value("rootNote", 60);
+            z.lowKey    = zj.value("lowKey",   0);
+            z.highKey   = zj.value("highKey",  127);
+            z.lowVel    = zj.value("lowVel",   0);
+            z.highVel   = zj.value("highVel",  127);
+            z.tune      = zj.value("tune",     0.0f);
+            z.volume    = zj.value("volume",   1.0f);
+            z.pan       = zj.value("pan",      0.0f);
+            z.loop      = zj.value("loop",     false);
+            z.loopStart = zj.value("loopStart", 0);
+            z.loopEnd   = zj.value("loopEnd",   nf);
+            ms.addZone(z);
         }
     }
 
