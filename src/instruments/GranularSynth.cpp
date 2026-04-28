@@ -112,26 +112,26 @@ void GranularSynth::process(float* buffer, int numFrames, int numChannels,
         }
 
         float mixL = 0.0f, mixR = 0.0f;
-        for (auto& g : m_grains) {
-            if (!g.active) continue;
+        for (auto& grain : m_grains) {
+            if (!grain.active) continue;
 
-            float t = static_cast<float>(g.pos) / static_cast<float>(g.length);
-            float window = grainWindow(t, g.shape);
+            float t = static_cast<float>(grain.pos) / static_cast<float>(grain.length);
+            float window = grainWindow(t, grain.shape);
 
-            float samp = readSample(g.readPos, g.fromSidechain);
-            float val = samp * window * g.velocity;
+            float samp = readSample(grain.readPos, grain.fromSidechain);
+            float val = samp * window * grain.velocity;
 
-            mixL += val * g.panL;
-            mixR += val * g.panR;
+            mixL += val * grain.panL;
+            mixR += val * grain.panR;
 
-            g.readPos += g.speed;
-            int wrapLen = g.fromSidechain ? m_scFilled : m_sampleFrames;
+            grain.readPos += grain.speed;
+            int wrapLen = grain.fromSidechain ? m_scFilled : m_sampleFrames;
             if (wrapLen > 0) {
-                if (g.readPos < 0) g.readPos += wrapLen;
-                if (g.readPos >= wrapLen) g.readPos -= wrapLen;
+                if (grain.readPos < 0) grain.readPos += wrapLen;
+                if (grain.readPos >= wrapLen) grain.readPos -= wrapLen;
             }
-            g.pos++;
-            if (g.pos >= g.length) g.active = false;
+            grain.pos++;
+            if (grain.pos >= grain.length) grain.active = false;
         }
 
         float envSum = 0.0f;

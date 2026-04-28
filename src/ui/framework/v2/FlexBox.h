@@ -25,8 +25,20 @@ using ::yawn::ui::fw::Align;
 
 class FlexBox : public Widget {
 public:
-    FlexBox() = default;
-    explicit FlexBox(Direction dir) : m_direction(dir) {}
+    FlexBox() {
+        setAutoCaptureOnUnhandledPress(false);
+        // Container widget — its measured size depends on children, so
+        // child invalidations MUST bubble through. The default auto-
+        // boundary heuristic ("flexWeight=0 ⇒ boundary") is wrong for
+        // containers; force it off. Symptom this fixes: a child whose
+        // visibility flips from off to on doesn't appear / appears at
+        // (0,0) because the FlexBox's measure cache stayed valid.
+        setRelayoutBoundary(false);
+    }
+    explicit FlexBox(Direction dir) : m_direction(dir) {
+        setAutoCaptureOnUnhandledPress(false);
+        setRelayoutBoundary(false);
+    }
 
     // ─── Configuration ────────────────────────────────────────────
     Direction direction() const     { return m_direction; }
@@ -45,6 +57,17 @@ protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;
     void onLayout(Rect bounds, UIContext& ctx) override;
+
+    // ─── Mouse dispatch (own-dispatch container) ──────────────────
+    // FlexBox is a hierarchy container — clicks inside route to the
+    // child whose bounds contain the point, drag-tracking forwards to
+    // the captured descendant. Same pattern as ContentGrid; opt out of
+    // the gesture SM auto-capture (set in ctor) so dead-space clicks
+    // don't end up captured by the FlexBox itself.
+    bool onMouseDown(MouseEvent& e)     override;
+    bool onMouseMove(MouseMoveEvent& e) override;
+    bool onMouseUp(MouseEvent& e)       override;
+    bool onScroll(ScrollEvent& e)       override;
 
 private:
     Direction m_direction = Direction::Row;

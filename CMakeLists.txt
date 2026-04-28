@@ -13,12 +13,36 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 function(yawn_set_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4
-            /wd4244 /wd4267 /wd4100
+            # ── Style/conversion noise we accept ──
+            /wd4244    # conversion may lose data (float/double promotion noise)
+            /wd4267    # size_t → int conversion (size() return values)
+            /wd4100    # unreferenced formal parameter
+            /wd4456    # declaration shadows previous local (vendored minimp3 etc.)
+            /wd4996    # CRT secure-function deprecation (Microsoft-specific noise)
+            /wd4324    # structure padded due to alignment specifier (informational)
+            # ── Promote-to-error: silent-runtime-bug warnings ──
+            # /we<N> turns warning N into an error. These are the warnings
+            # whose payload is "this code is unconditionally broken" — not
+            # style nits. Letting them sit in the build output is what hid
+            # the recursive-on-all-paths fileNameFromPath stack overflow
+            # for an unknown number of versions. If you trip one of these
+            # during development, fix the code — don't add another /wd.
+            /we4716    # function must return a value
+            /we4715    # not all control paths return a value
+            /we4717    # function will cause runtime stack overflow (always-recursive)
+            /we4172    # returning address of local variable or temporary
+            /we4533    # initialization of '<var>' skipped by 'goto'
+            /we4701    # potentially uninitialized local variable used
         )
     else()
         target_compile_options(${target} PRIVATE
             -Wall -Wextra
             -Wno-unused-parameter
+            # Counterpart promote-to-error set for gcc/clang.
+            -Werror=return-type            # missing return value
+            -Werror=infinite-recursion     # always-recursive function (clang + gcc 12+)
+            -Werror=return-local-addr      # returning addr of local
+            -Werror=uninitialized          # potentially uninitialized local
         )
     endif()
 endfunction()

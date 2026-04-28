@@ -10,7 +10,17 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
+
+namespace {
+// v1 Font is baked at 48 px. The original code computed scales as
+// `pt / Theme::kFontSize (=26)` against that 48-px bake; for fw2's
+// pixel-sized TextMetrics interface we materialise the equivalent
+// pixel size at the call site so the on-screen output stays identical.
+constexpr float kFontBakePx = 48.0f;
+constexpr float kPt9Px      = 9.0f  / 26.0f * kFontBakePx;   // ~16.6
+constexpr float kPt10Px     = 10.0f / 26.0f * kFontBakePx;   // ~18.5
+} // anon
 
 bool DetailPanelWidget::handleRightClick(float mx, float my) {
     if (!m_open || my < m_bounds.y + kHandleHeight) return false;
@@ -30,19 +40,16 @@ bool DetailPanelWidget::handleRightClick(float mx, float my) {
     return false;
 }
 
-void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
-    m_bounds = bounds;
+void DetailPanelWidget::onLayout(Rect bounds, UIContext& ctx) {
     if (!m_open) return;
     float bodyY = bounds.y + kHandleHeight;
     float bodyH = m_animatedHeight - kHandleHeight;
     if (bodyH < 0) bodyH = 0;
 
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-
     if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
-        // Match paint's dynamic layout: title + waveform(fills space) + control strip + effects
-        float overviewExtra = ::yawn::ui::fw2::WaveformWidget::kOverviewH
-                            + ::yawn::ui::fw2::WaveformWidget::kOverviewGap;
+        // Match render's dynamic layout: title + waveform(fills space) + control strip + effects
+        float overviewExtra = WaveformWidget::kOverviewH
+                            + WaveformWidget::kOverviewGap;
         static constexpr float kControlStripH = 76.0f;
         static constexpr float kFxLabelH      = 18.0f;
         float fxReserve = m_deviceWidgets.empty() ? kFxLabelH
@@ -55,17 +62,19 @@ void DetailPanelWidget::layout(const Rect& bounds, const UIContext& ctx) {
         float fxSepY = stripY + 5.0f + 13.0f + 6.0f + 50.0f + 6.0f;
         float scrollY = fxSepY + kFxLabelH;
         float scrollH = std::max(0.0f, bodyY + bodyH - scrollY);
-        m_scroll.measure(::yawn::ui::fw2::Constraints::loose(bounds.w, scrollH), v2ctx);
-        m_scroll.layout(::yawn::ui::fw2::Rect{bounds.x, scrollY, bounds.w, scrollH}, v2ctx);
+        m_scroll.measure(Constraints::loose(bounds.w, scrollH), ctx);
+        m_scroll.layout(Rect{bounds.x, scrollY, bounds.w, scrollH}, ctx);
     } else {
-        m_scroll.measure(::yawn::ui::fw2::Constraints::loose(bounds.w, bodyH), v2ctx);
-        m_scroll.layout(::yawn::ui::fw2::Rect{bounds.x, bodyY, bounds.w, bodyH}, v2ctx);
+        m_scroll.measure(Constraints::loose(bounds.w, bodyH), ctx);
+        m_scroll.layout(Rect{bounds.x, bodyY, bounds.w, bodyH}, ctx);
     }
 }
 
-void DetailPanelWidget::paint(UIContext& ctx) {
+void DetailPanelWidget::render(UIContext& ctx) {
+    if (!isVisible()) return;
+    if (!ctx.renderer || !ctx.textMetrics) return;
     auto& renderer = *ctx.renderer;
-    auto& font = *ctx.font;
+    auto& tm = *ctx.textMetrics;
     float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w;
 
     renderer.pushClip(x, y, w, m_animatedHeight);
@@ -87,18 +96,16 @@ void DetailPanelWidget::paint(UIContext& ctx) {
         float bodyH = m_animatedHeight - kHandleHeight;
         renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
 
-        float hScale = 9.0f / Theme::kFontSize;  // ~14.8 px (paired with clip-name title)
-
         if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
-            paintAudioClipView(renderer, font, x, bodyY, w, bodyH, hScale, ctx);
+            paintAudioClipView(renderer, tm, x, bodyY, w, bodyH, ctx);
         } else if (m_deviceWidgets.empty()) {
-            font.drawText(renderer, "No devices on track",
-                          x + 20, bodyY + 20, hScale, Theme::textDim);
+            tm.drawText(renderer, "No devices on track",
+                        x + 20, bodyY + 20, kPt9Px, ::yawn::ui::Theme::textDim);
         } else {
             updateParamValues();
             updateVisualizerData();
 
-            m_scroll.render(::yawn::ui::fw2::UIContext::global());
+            m_scroll.render(ctx);
 
             // Draw drag-to-reorder insertion indicator
             if (m_dragReorderActive && m_dragInsertIdx >= 0 &&
@@ -118,21 +125,15 @@ void DetailPanelWidget::paint(UIContext& ctx) {
     }
 
     renderer.popClip();
-
-    // v2 dropdown popups paint via LayerStack::paintLayers in App —
-    // no per-panel paintOverlay call needed.
-
-    // v1 device context menu retired — fw2::ContextMenu paints via
-    // LayerStack in App's render loop.
 }
 
 bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
     float mx = e.x, my = e.y;
+    LOG_INFO("UI", "DetailPanel::onMouseDown click=(%g,%g) bounds=(%g,%g,%g,%g) animH=%g viewMode=%d devices=%zu",
+             mx, my, m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+             m_animatedHeight, (int)m_viewMode, m_deviceWidgets.size());
     if (my < m_bounds.y || my > m_bounds.y + height()) return false;
     if (mx < m_bounds.x || mx > m_bounds.x + m_bounds.w) return false;
-
-    // v1 device context menu retired — LayerStack handles open-menu
-    // clicks upstream in App::pollEvents.
 
     m_panelFocused = true;
 
@@ -155,41 +156,37 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     if (!m_open) return false;
 
+    // ── Descendant dispatch ──
+    //
+    // GOTCHA — fw2 has a SINGLE global capture slot. Calling
+    // `captureMouse()` on the panel after a descendant's
+    // dispatchMouseDown overwrites the descendant's auto-capture, and
+    // then `onMouseMove`'s `cap != this` guard skips the forwarding —
+    // dials don't turn, buttons don't release, etc. Same trap that
+    // bit InstrumentRack / GroupedKnobBody before, just one layer up.
+    //
+    // The wrapper (DetailPanelWrapper) takes the v1 capture so the
+    // App's mouseMove dispatch keeps reaching us. The fw2 capture
+    // slot belongs to whichever descendant the gesture started in.
+    // Don't touch it here.
+
     // Forward to waveform widget in audio clip view
     if (m_viewMode == ViewMode::AudioClip) {
-        // v2 dropdown popups are handled by LayerStack upstream; when
-        // the popup is open we don't reach this point for clicks.
         const auto& wb = m_waveformWidget.bounds();
         if (mx >= wb.x && mx < wb.x + wb.w && my >= wb.y && my < wb.y + wb.h) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, wb);
-            const bool handled = m_waveformWidget.dispatchMouseDown(ev);
-            if (handled || ::yawn::ui::fw2::Widget::capturedWidget() == &m_waveformWidget) {
-                m_v2Dragging = &m_waveformWidget;
-                captureMouse();
-                return true;
-            }
-            if (handled) return true;
+            if (m_waveformWidget.dispatchMouseDown(e)) return true;
+            if (Widget::capturedWidget() == &m_waveformWidget) return true;
         }
-        // Automation envelope editor — fw2 widget; bridge the v1 event
-        // and hook into m_v2Dragging so subsequent moves/ups flow back
-        // through the gesture SM (the envelope captures fw2 mouse when
-        // a point drag starts).
+        // Automation envelope editor — fw2 widget. Capture flows
+        // through fw2's slot; we just dispatch and return.
         {
             const auto& eb = m_autoEnvelopeWidget.bounds();
             if (mx >= eb.x && mx < eb.x + eb.w &&
                 my >= eb.y && my < eb.y + eb.h) {
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, eb);
-                bool consumed = m_autoEnvelopeWidget.dispatchMouseDown(ev);
-                if (::yawn::ui::fw2::Widget::capturedWidget() == &m_autoEnvelopeWidget) {
-                    m_v2Dragging = &m_autoEnvelopeWidget;
-                    captureMouse();
-                }
-                return consumed;
+                return m_autoEnvelopeWidget.dispatchMouseDown(e);
             }
         }
-        // Automation target dropdown — v2 toggles directly on mouseDown
-        // (same pattern as BrowserPresetsTab; v1 App loop doesn't route
-        // mouseUp to v2 widgets so the gesture state machine can't fire).
+        // Automation target dropdown — toggles directly on mouseDown.
         {
             const auto& b = m_autoTargetDropdown.bounds();
             if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
@@ -205,43 +202,33 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
                 return true;
             }
         }
-        // Detect button — v2 FwButton. Route through the gesture SM so
-        // release visual + cancel-on-pointer-out behave correctly.
+        // Detect button — route through the gesture SM so release
+        // visual + cancel-on-pointer-out behave correctly.
         {
             const auto& b = m_detectBtn.bounds();
             if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-                m_detectBtn.dispatchMouseDown(ev);
-                m_v2Dragging = &m_detectBtn;
-                captureMouse();
+                m_detectBtn.dispatchMouseDown(e);
                 return true;
             }
         }
-        // v2 knobs — drag uses the fw2 gesture SM. Forward via the
-        // v1→v2 event bridge and capture v1 mouse so subsequent moves
-        // route back here. Same pattern as BrowserPanel's FaBarCountKnob.
-        auto tryV2Knob = [&](::yawn::ui::fw2::FwKnob& k) -> bool {
+        // Knobs — drag uses the fw2 gesture SM, which auto-captures
+        // the knob on press. Don't overwrite the capture here.
+        auto tryKnob = [&](FwKnob& k) -> bool {
             const auto& kb = k.bounds();
             if (mx < kb.x || mx >= kb.x + kb.w) return false;
             if (my < kb.y || my >= kb.y + kb.h) return false;
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, kb);
-            k.dispatchMouseDown(ev);
-            m_v2Dragging = &k;
-            captureMouse();
+            k.dispatchMouseDown(e);
             return true;
         };
-        if (tryV2Knob(m_gainKnob))      return true;
-        if (tryV2Knob(m_transposeKnob)) return true;
-        if (tryV2Knob(m_detuneKnob))    return true;
-        if (tryV2Knob(m_bpmKnob))       return true;
-        // Loop toggle — v2 FwToggle, same dispatch pattern.
+        if (tryKnob(m_gainKnob))      return true;
+        if (tryKnob(m_transposeKnob)) return true;
+        if (tryKnob(m_detuneKnob))    return true;
+        if (tryKnob(m_bpmKnob))       return true;
+        // Loop toggle
         {
             const auto& b = m_loopToggleBtn.bounds();
             if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, b);
-                m_loopToggleBtn.dispatchMouseDown(ev);
-                m_v2Dragging = &m_loopToggleBtn;
-                captureMouse();
+                m_loopToggleBtn.dispatchMouseDown(e);
                 return true;
             }
         }
@@ -249,28 +236,17 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
     if (m_deviceWidgets.empty()) return false;
 
-    // Scroll buttons first — fw2 SnapScrollContainer only consumes
+    // Scroll buttons first — SnapScrollContainer only consumes
     // `<`/`>` clicks and returns false for everything else, so device
     // clicks still reach the loop below.
-    {
-        const auto& sb = m_scroll.bounds();
-        auto sev = ::yawn::ui::fw2::toFw2Mouse(e, sb);
-        if (m_scroll.dispatchMouseDown(sev)) return true;
-    }
+    if (m_scroll.dispatchMouseDown(e)) return true;
 
     for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
         auto* dw = m_deviceWidgets[i];
         const auto& db = dw->bounds();
         bool inside = mx >= db.x && mx < db.x + db.w && my >= db.y && my < db.y + db.h;
-        LOG_INFO("UI", "DetailPanel device[%zu] bounds=(%g,%g,%g,%g) click=(%g,%g) inside=%d",
-                 i, db.x, db.y, db.w, db.h, mx, my, (int)inside);
         if (inside) {
-            auto dev = ::yawn::ui::fw2::toFw2Mouse(e, db);
-            if (dw->dispatchMouseDown(dev)) {
-                if (::yawn::ui::fw2::Widget::capturedWidget())
-                    captureMouse();
-                return true;
-            }
+            if (dw->dispatchMouseDown(e)) return true;
         }
     }
     return true;
@@ -352,9 +328,9 @@ bool DetailPanelWidget::handleKnobRightClick(size_t deviceIdx, float mx, float m
     return false;
 }
 
-void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
+void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, TextMetrics& tm,
                         float x, float bodyY, float w, float bodyH,
-                        float hScale, UIContext& ctx) {
+                        UIContext& ctx) {
     if (!m_clipPtr) return;
     const auto& clip = *m_clipPtr;
     float pad = 8.0f;
@@ -363,12 +339,8 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
 
     // ── Title row: clip name (left) + info (right) ──
     float headerY = bodyY + 4.0f;
-    // v1 scale arg: `pt / Theme::kFontSize(=26)` against a 48-px bake,
-    // so 8/26 * 48 ≈ 14.8 px — a touch larger than the Mixer track
-    // header for emphasis.
-    float titleScale = 9.0f / Theme::kFontSize;
-    font.drawText(renderer, clip.name.empty() ? "Audio Clip" : clip.name.c_str(),
-                   sectionX, headerY, titleScale, Theme::textPrimary);
+    tm.drawText(renderer, clip.name.empty() ? std::string("Audio Clip") : clip.name,
+                sectionX, headerY, kPt9Px, ::yawn::ui::Theme::textPrimary);
 
     if (clip.buffer) {
         int64_t frames = clip.lengthInFrames();
@@ -376,19 +348,17 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
         char durBuf[48];
         std::snprintf(durBuf, sizeof(durBuf), "%dch  %dHz  %.2fs",
                       clip.buffer->numChannels(), m_clipSampleRate, seconds);
-        float durW = font.textWidth(durBuf, hScale);
-        font.drawText(renderer, durBuf, x + w - pad - durW, headerY,
-                      hScale, Theme::textDim);
+        float durW = tm.textWidth(durBuf, kPt9Px);
+        tm.drawText(renderer, durBuf, x + w - pad - durW, headerY,
+                    kPt9Px, ::yawn::ui::Theme::textDim);
     }
 
     // ── WaveformWidget: overview bar + scrollable/zoomable waveform ──
-    // Waveform fills available space minus control strip and effects area
     float waveY = headerY + kClipTitleRowH - 4.0f;
-    float overviewExtra = ::yawn::ui::fw2::WaveformWidget::kOverviewH
-                        + ::yawn::ui::fw2::WaveformWidget::kOverviewGap;
-    static constexpr float kControlStripH = 88.0f;   // sep(1) + pad(4) + labelH(13) + gap(6) + knobH(50) + margin
-    static constexpr float kFxLabelH      = 18.0f;   // separator + "Audio Effects" label
-    // Reserve space for effects: at least 220px when effects exist, 35% of panel
+    float overviewExtra = WaveformWidget::kOverviewH
+                        + WaveformWidget::kOverviewGap;
+    static constexpr float kControlStripH = 88.0f;
+    static constexpr float kFxLabelH      = 18.0f;
     float fxReserve = m_deviceWidgets.empty() ? kFxLabelH
         : std::max(220.0f, bodyH * 0.35f);
     float fixedBelow = kControlStripH + kClipSectionGap + overviewExtra + fxReserve;
@@ -396,28 +366,24 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     static constexpr float kMinWaveH = 60.0f;
     float waveH = std::max(kMinWaveH, availableForWave) + overviewExtra;
     {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
         m_waveformWidget.measure(
-            ::yawn::ui::fw2::Constraints::tight(sectionW, waveH), v2ctx);
+            Constraints::tight(sectionW, waveH), ctx);
         m_waveformWidget.layout(
-            ::yawn::ui::fw2::Rect{sectionX, waveY, sectionW, waveH}, v2ctx);
-        m_waveformWidget.render(v2ctx);
+            Rect{sectionX, waveY, sectionW, waveH}, ctx);
+        m_waveformWidget.render(ctx);
     }
 
     // Overlay automation envelope on waveform area (semi-transparent)
     if (m_clipAutoLanes && m_autoSelectedLaneIdx >= 0 &&
         m_autoSelectedLaneIdx < static_cast<int>(m_clipAutoLanes->size())) {
         syncEnvelopeFromLane();
-        // Position envelope over the main waveform area (below overview bar)
         float envY = waveY + overviewExtra;
         float envH = waveH - overviewExtra;
-        // m_autoEnvelopeWidget is fw2 — layout + render through the fw2 context.
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
         m_autoEnvelopeWidget.measure(
-            ::yawn::ui::fw2::Constraints::tight(sectionW, envH), v2ctx);
+            Constraints::tight(sectionW, envH), ctx);
         m_autoEnvelopeWidget.layout(
-            ::yawn::ui::fw2::Rect{sectionX, envY, sectionW, envH}, v2ctx);
-        m_autoEnvelopeWidget.render(v2ctx);
+            Rect{sectionX, envY, sectionW, envH}, ctx);
+        m_autoEnvelopeWidget.render(ctx);
     }
 
     // Sync widget values from clip each frame. Skip the sync on any
@@ -426,7 +392,7 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     // be overwritten mid-gesture. (Also skip during edit — the buffer
     // is shown independently of m_value, so mutating m_value would
     // discard the user's typed text on commit.)
-    auto syncKnob = [](::yawn::ui::fw2::FwKnob& k, float v) {
+    auto syncKnob = [](FwKnob& k, float v) {
         if (!k.isDragging() && !k.isEditing()) k.setValue(v);
     };
     syncKnob(m_gainKnob,      clip.gain);
@@ -434,17 +400,14 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     syncKnob(m_detuneKnob,    static_cast<float>(clip.detuneCents));
     if (clip.originalBPM > 0)
         syncKnob(m_bpmKnob, static_cast<float>(clip.originalBPM));
-    // Keep loop toggle's visible state in sync with the clip. setState
-    // uses the Programmatic source so this doesn't fire onChange.
+    // Keep loop toggle's visible state in sync with the clip.
     m_loopToggleBtn.setLabel(clip.looping ? "On" : "Off");
     m_loopToggleBtn.setState(clip.looping);
 
     // ── Horizontal control strip ──
     float stripY = waveY + waveH + kClipSectionGap;
-    // Separator line above controls
     renderer.drawRect(sectionX, stripY, sectionW, 1.0f, Color{50, 50, 55, 255});
     stripY += 4.0f;
-    float labelScale = 10.0f / Theme::kFontSize;
     float labelH = 13.0f;
     float widgetY = stripY + labelH + 6.0f;
     float knobH = 50.0f;
@@ -452,87 +415,74 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, Font& font,
     float gap = 14.0f;
     float sectionGap = 24.0f;
     float inputH = 20.0f;
-    // Vertically center non-knob inputs with knob area
     float inputCenterY = widgetY + (knobH - inputH) * 0.5f;
 
     float cx = sectionX;
 
-    // Knobs are fw2 widgets — render through the global fw2 UIContext
-    // (same pattern as the v2 dropdowns below).
-    auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-
     // Gain knob
-    font.drawText(renderer, "Gain", cx, stripY, labelScale, Theme::textDim);
-    m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
-    m_gainKnob.render(v2ctx);
+    tm.drawText(renderer, "Gain", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_gainKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_gainKnob.render(ctx);
     cx += knobW + sectionGap;
 
     // BPM knob
-    font.drawText(renderer, "BPM", cx, stripY, labelScale, Theme::textDim);
-    m_bpmKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
-    m_bpmKnob.render(v2ctx);
+    tm.drawText(renderer, "BPM", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_bpmKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_bpmKnob.render(ctx);
     cx += knobW + sectionGap;
 
     // Transpose knob
-    font.drawText(renderer, "Trans", cx, stripY, labelScale, Theme::textDim);
-    m_transposeKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
-    m_transposeKnob.render(v2ctx);
+    tm.drawText(renderer, "Trans", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_transposeKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_transposeKnob.render(ctx);
     cx += knobW + sectionGap;
 
     // Detune knob
-    font.drawText(renderer, "Detune", cx, stripY, labelScale, Theme::textDim);
-    m_detuneKnob.layout(Rect{cx, widgetY, knobW, knobH}, v2ctx);
-    m_detuneKnob.render(v2ctx);
+    tm.drawText(renderer, "Detune", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_detuneKnob.layout(Rect{cx, widgetY, knobW, knobH}, ctx);
+    m_detuneKnob.render(ctx);
     cx += knobW + sectionGap;
 
-    // Warp dropdown — v2 widget. Popup paints via LayerStack.
+    // Warp dropdown
     float warpW = 90.0f;
     m_warpModeDropdown.setSelectedIndex(static_cast<int>(clip.warpMode));
-    font.drawText(renderer, "Warp", cx, stripY, labelScale, Theme::textDim);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_warpModeDropdown.layout(Rect{cx, inputCenterY, warpW, inputH}, v2ctx);
-        m_warpModeDropdown.render(v2ctx);
-    }
+    tm.drawText(renderer, "Warp", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_warpModeDropdown.layout(Rect{cx, inputCenterY, warpW, inputH}, ctx);
+    m_warpModeDropdown.render(ctx);
     cx += warpW + gap;
 
-    // Detect button — v2 FwButton, render via fw2 UIContext.
+    // Detect button
     float detectW = 70.0f;
-    m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, v2ctx);
-    m_detectBtn.render(v2ctx);
+    m_detectBtn.layout(Rect{cx, inputCenterY, detectW, inputH}, ctx);
+    m_detectBtn.render(ctx);
     cx += detectW + sectionGap;
 
-    // Loop toggle — v2 FwToggle, render via fw2 UIContext.
-    font.drawText(renderer, "Loop", cx, stripY, labelScale, Theme::textDim);
-    m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, v2ctx);
-    m_loopToggleBtn.render(v2ctx);
+    // Loop toggle
+    tm.drawText(renderer, "Loop", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
+    m_loopToggleBtn.render(ctx);
     cx += 50.0f + sectionGap;
 
-    // Automation target dropdown (inline in control strip) — v2 widget.
-    // v2 reads viewport from UIContext::global() so setScreenHeight is
-    // no longer needed.
+    // Automation target dropdown
     float autoDropW = 160.0f;
-    font.drawText(renderer, "Auto", cx, stripY, labelScale, Theme::textDim);
-    {
-        auto& v2ctx = ::yawn::ui::fw2::UIContext::global();
-        m_autoTargetDropdown.layout(Rect{cx, inputCenterY, autoDropW, inputH}, v2ctx);
-        m_autoTargetDropdown.render(v2ctx);
-    }
+    tm.drawText(renderer, "Auto", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
+    m_autoTargetDropdown.layout(Rect{cx, inputCenterY, autoDropW, inputH}, ctx);
+    m_autoTargetDropdown.render(ctx);
 
     // ── Effects section ──
     float fxSepY = stripY + labelH + 2.0f + knobH + 6.0f;
     renderer.drawRect(sectionX, fxSepY, sectionW, 1.0f, Color{50, 50, 55, 255});
     float fxLabelY = fxSepY + 3.0f;
-    font.drawText(renderer, "Audio Effects", sectionX, fxLabelY, labelScale, Theme::textDim);
+    tm.drawText(renderer, "Audio Effects", sectionX, fxLabelY, kPt10Px, ::yawn::ui::Theme::textDim);
 
     if (!m_deviceWidgets.empty()) {
         updateParamValues();
         updateVisualizerData();
-        m_scroll.render(::yawn::ui::fw2::UIContext::global());
+        m_scroll.render(ctx);
     } else {
         float noFxY = fxLabelY + 14.0f;
-        font.drawText(renderer, "No effects", sectionX + 80.0f, noFxY,
-                      labelScale, Theme::textDim);
+        tm.drawText(renderer, "No effects", sectionX + 80.0f, noFxY,
+                    kPt10Px, ::yawn::ui::Theme::textDim);
     }
 }
 
@@ -540,7 +490,7 @@ void DetailPanelWidget::openDeviceMidiLearnMenu(float mx, float my,
                                                  const automation::AutomationTarget& target,
                                                  float paramMin, float paramMax,
                                                  std::function<void()> resetAction) {
-    using Item = ui::ContextMenu::Item;
+    using Item = ::yawn::ui::ContextMenu::Item;
     std::vector<Item> items;
 
     bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
@@ -583,11 +533,11 @@ void DetailPanelWidget::openDeviceMidiLearnMenu(float mx, float my,
     resetItem.action = std::move(resetAction);
     items.push_back(std::move(resetItem));
 
-    ::yawn::ui::fw2::ContextMenu::show(
-        ::yawn::ui::fw2::v1ItemsToFw2(std::move(items)),
+    ContextMenu::show(
+        v1ItemsToFw2(std::move(items)),
         Point{mx, my});
 }
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

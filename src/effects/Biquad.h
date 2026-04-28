@@ -37,7 +37,12 @@ public:
         if (type == Type::Peak || type == Type::LowShelf || type == Type::HighShelf)
             A = std::pow(10.0, gainDB / 40.0);
 
-        double b0d, b1d, b2d, a0d, a1d, a2d;
+        // Default to identity filter (passthrough). The switch below
+        // overwrites for every defined Type, but MSVC can't prove it
+        // (no `default:` arm) and trips C4701. Defensive defaults
+        // also keep DSP sane if Type ever ends up out-of-range.
+        double b0d = 1.0, b1d = 0.0, b2d = 0.0;
+        double a0d = 1.0, a1d = 0.0, a2d = 0.0;
 
         switch (type) {
         case Type::LowPass:

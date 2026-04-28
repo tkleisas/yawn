@@ -188,6 +188,114 @@ void FlexBox::onLayout(Rect bounds, UIContext& ctx) {
     }
 }
 
+// ─── Mouse dispatch ─────────────────────────────────────────────────
+//
+// Own-dispatch container — find the visible child whose laid-out bounds
+// contain the press, dispatch into it. Move/up forward to whatever
+// descendant currently holds capture (knob drag, fader drag, scrollbar
+// drag, panel resize handle…), guarded by a containment check so a
+// captured widget OUTSIDE this FlexBox subtree (e.g. another panel or
+// an overlay) doesn't get double-fed.
+
+bool FlexBox::onMouseDown(MouseEvent& e) {
+    // Iterate front-to-back so the topmost child wins (last addChild).
+    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
+        Widget* child = *it;
+        if (!child || !child->isVisible() || !child->isEnabled()) continue;
+        const Rect& cb = child->bounds();
+        if (e.x < cb.x || e.x >= cb.x + cb.w) continue;
+        if (e.y < cb.y || e.y >= cb.y + cb.h) continue;
+        MouseEvent ce = e;
+        ce.lx = e.x - cb.x;
+        ce.ly = e.y - cb.y;
+        if (child->dispatchMouseDown(ce)) return true;
+    }
+    return false;
+}
+
+namespace {
+// True if `cap` is inside `flex`'s subtree (any descendant depth).
+// Used to gate move/up forwarding so we don't double-route a capture
+// that belongs to an entirely different parent (e.g. an overlay).
+bool isCapturedDescendant(const Widget* flex, const Widget* cap) {
+    for (const Widget* p = cap; p; p = p->parent())
+        if (p == flex) return true;
+    return false;
+}
+} // anon
+
+bool FlexBox::onMouseMove(MouseMoveEvent& e) {
+    if (Widget* cap = capturedWidget()) {
+        if (isCapturedDescendant(this, cap)) {
+            const Rect& cb = cap->bounds();
+            MouseMoveEvent ce = e;
+            ce.lx = e.x - cb.x;
+            ce.ly = e.y - cb.y;
+            cap->dispatchMouseMove(ce);
+            return true;
+        }
+    }
+    // Hover propagation: forward to the child currently under the
+    // pointer so it can update its hover state.
+    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
+        Widget* child = *it;
+        if (!child || !child->isVisible()) continue;
+        const Rect& cb = child->bounds();
+        if (e.x < cb.x || e.x >= cb.x + cb.w) continue;
+        if (e.y < cb.y || e.y >= cb.y + cb.h) continue;
+        MouseMoveEvent ce = e;
+        ce.lx = e.x - cb.x;
+        ce.ly = e.y - cb.y;
+        child->dispatchMouseMove(ce);
+        return false;   // hover is non-exclusive
+    }
+    return false;
+}
+
+bool FlexBox::onMouseUp(MouseEvent& e) {
+    if (Widget* cap = capturedWidget()) {
+        if (isCapturedDescendant(this, cap)) {
+            const Rect& cb = cap->bounds();
+            MouseEvent ce = e;
+            ce.lx = e.x - cb.x;
+            ce.ly = e.y - cb.y;
+            cap->dispatchMouseUp(ce);
+            return true;
+        }
+    }
+    // No capture in our subtree — try to deliver to whichever child
+    // contains the release (typical click flow on a stateless widget
+    // that didn't capture on press, e.g. a Button that fires onClick
+    // from its gesture SM).
+    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
+        Widget* child = *it;
+        if (!child || !child->isVisible()) continue;
+        const Rect& cb = child->bounds();
+        if (e.x < cb.x || e.x >= cb.x + cb.w) continue;
+        if (e.y < cb.y || e.y >= cb.y + cb.h) continue;
+        MouseEvent ce = e;
+        ce.lx = e.x - cb.x;
+        ce.ly = e.y - cb.y;
+        if (child->dispatchMouseUp(ce)) return true;
+    }
+    return false;
+}
+
+bool FlexBox::onScroll(ScrollEvent& e) {
+    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
+        Widget* child = *it;
+        if (!child || !child->isVisible()) continue;
+        const Rect& cb = child->bounds();
+        if (e.x < cb.x || e.x >= cb.x + cb.w) continue;
+        if (e.y < cb.y || e.y >= cb.y + cb.h) continue;
+        ScrollEvent ce = e;
+        ce.lx = e.x - cb.x;
+        ce.ly = e.y - cb.y;
+        if (child->dispatchScroll(ce)) return true;
+    }
+    return false;
+}
+
 } // namespace fw2
 } // namespace ui
 } // namespace yawn

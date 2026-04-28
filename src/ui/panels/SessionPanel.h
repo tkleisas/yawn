@@ -18,7 +18,7 @@
 #include "app/Project.h"
 #include "util/UndoManager.h"
 
-namespace yawn { namespace audio { class AudioEngine; class Clip; } }
+namespace yawn { namespace audio { class AudioEngine; struct Clip; } }
 #include "core/Constants.h"
 #include <cstdio>
 #include <cmath>

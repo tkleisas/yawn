@@ -201,7 +201,7 @@ TEST(IntegrationLayout, SessionPanelFlexPolicy) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 TEST(IntegrationDetailPanel, SetDeviceChainWithSynth) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     instruments::SubtractiveSynth synth;
     synth.init(44100, 256);
 
@@ -212,9 +212,9 @@ TEST(IntegrationDetailPanel, SetDeviceChainWithSynth) {
 }
 
 TEST(IntegrationDetailPanel, ToggleOpenClose) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     EXPECT_FALSE(detail.isOpen());
-    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kCollapsedHeight);
+    EXPECT_FLOAT_EQ(detail.height(), fw2::DetailPanelWidget::kCollapsedHeight);
 
     detail.setOpen(true);
     EXPECT_TRUE(detail.isOpen());
@@ -224,63 +224,72 @@ TEST(IntegrationDetailPanel, ToggleOpenClose) {
 }
 
 TEST(IntegrationDetailPanel, AnimationConvergesToOpen) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     instruments::SubtractiveSynth synth;
     synth.init(44100, 256);
     detail.setDeviceChain(nullptr, &synth, nullptr);
     detail.setOpen(true);
 
-    UIContext ctx{};
+    fw2::UIContext ctx{};
     Constraints c = Constraints::tight(800, 600);
 
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < 100; ++i) {
+        detail.tick();
         detail.measure(c, ctx);
+    }
 
-    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kDefaultPanelHeight);
+    EXPECT_FLOAT_EQ(detail.height(), fw2::DetailPanelWidget::kDefaultPanelHeight);
 }
 
 TEST(IntegrationDetailPanel, AnimationConvergesToClosed) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     detail.setOpen(true);
 
-    UIContext ctx{};
+    fw2::UIContext ctx{};
     Constraints c = Constraints::tight(800, 600);
 
     // Converge to open
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < 100; ++i) {
+        detail.tick();
         detail.measure(c, ctx);
-    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kDefaultPanelHeight);
+    }
+    EXPECT_FLOAT_EQ(detail.height(), fw2::DetailPanelWidget::kDefaultPanelHeight);
 
     // Close and converge
     detail.setOpen(false);
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < 100; ++i) {
+        detail.tick();
         detail.measure(c, ctx);
-    EXPECT_FLOAT_EQ(detail.height(), DetailPanelWidget::kCollapsedHeight);
+    }
+    EXPECT_FLOAT_EQ(detail.height(), fw2::DetailPanelWidget::kCollapsedHeight);
 }
 
 TEST(IntegrationDetailPanel, HeightAnimatesGradually) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     detail.setOpen(true);
 
-    UIContext ctx{};
+    fw2::UIContext ctx{};
     Constraints c = Constraints::tight(800, 600);
 
+    detail.tick();
     detail.measure(c, ctx);
     float h = detail.height();
-    EXPECT_GT(h, DetailPanelWidget::kCollapsedHeight);
-    EXPECT_LT(h, DetailPanelWidget::kDefaultPanelHeight);
+    EXPECT_GT(h, fw2::DetailPanelWidget::kCollapsedHeight);
+    EXPECT_LT(h, fw2::DetailPanelWidget::kDefaultPanelHeight);
 }
 
 TEST(IntegrationDetailPanel, LayoutAssignsBounds) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     detail.setOpen(true);
 
-    UIContext ctx{};
+    fw2::UIContext ctx{};
     Constraints c = Constraints::tight(800, 600);
 
     // Converge animation
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < 100; ++i) {
+        detail.tick();
         detail.measure(c, ctx);
+    }
 
     detail.layout(Rect{0, 400, 800, detail.height()}, ctx);
     EXPECT_FLOAT_EQ(detail.bounds().x, 0.0f);
@@ -289,7 +298,7 @@ TEST(IntegrationDetailPanel, LayoutAssignsBounds) {
 }
 
 TEST(IntegrationDetailPanel, ClearResetsDevices) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     instruments::SubtractiveSynth synth;
     synth.init(44100, 256);
 
@@ -303,7 +312,7 @@ TEST(IntegrationDetailPanel, ClearResetsDevices) {
 }
 
 TEST(IntegrationDetailPanel, FocusManagement) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     EXPECT_FALSE(detail.isFocused());
 
     detail.setFocused(true);
@@ -316,46 +325,46 @@ TEST(IntegrationDetailPanel, FocusManagement) {
 // ── Audio Clip Detail View Tests ──
 
 TEST(IntegrationDetailPanel, SetAudioClipSwitchesToClipMode) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     audio::Clip clip;
     clip.name = "Test Audio";
     clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
 
     detail.setAudioClip(&clip, nullptr, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
     EXPECT_TRUE(detail.isOpen());
 }
 
 TEST(IntegrationDetailPanel, SetDeviceChainSwitchesBackToDevicesMode) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     audio::Clip clip;
     clip.name = "Test Audio";
     clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
 
     detail.setAudioClip(&clip, nullptr, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
 
     instruments::SubtractiveSynth synth;
     synth.init(44100, 256);
     detail.setDeviceChain(nullptr, &synth, nullptr);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::Devices);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::Devices);
 }
 
 TEST(IntegrationDetailPanel, ClearResetsClipMode) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     audio::Clip clip;
     clip.name = "Test Audio";
     clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
 
     detail.setAudioClip(&clip, nullptr, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
 
     detail.clear();
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::Devices);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::Devices);
 }
 
 TEST(IntegrationDetailPanel, AudioClipWithEffectChain) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     audio::Clip clip;
     clip.name = "FX Test";
     clip.buffer = std::make_shared<audio::AudioBuffer>(2, 44100);
@@ -368,33 +377,33 @@ TEST(IntegrationDetailPanel, AudioClipWithEffectChain) {
     chain.init(44100.0, 256);
 
     detail.setAudioClip(&clip, &chain, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
     EXPECT_TRUE(detail.isOpen());
 }
 
 TEST(IntegrationDetailPanel, AudioClipFingerprintSkipsRedundantRebuilds) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     audio::Clip clip;
     clip.name = "Test";
     clip.buffer = std::make_shared<audio::AudioBuffer>(1, 1000);
 
     // First call — builds
     detail.setAudioClip(&clip, nullptr, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
 
     // Second call with same pointers — should be a no-op (fingerprint match)
     detail.setAudioClip(&clip, nullptr, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
 }
 
 TEST(IntegrationDetailPanel, AudioClipNullBuffer) {
-    DetailPanelWidget detail;
+    fw2::DetailPanelWidget detail;
     audio::Clip clip;
     clip.name = "Empty Clip";
     // No buffer set
 
     detail.setAudioClip(&clip, nullptr, 44100);
-    EXPECT_EQ(detail.viewMode(), DetailPanelWidget::ViewMode::AudioClip);
+    EXPECT_EQ(detail.viewMode(), fw2::DetailPanelWidget::ViewMode::AudioClip);
     EXPECT_TRUE(detail.isOpen());
 }
 
@@ -719,88 +728,13 @@ TEST_F(IntegrationDPITest, ScaledLayoutConstants) {
 // ═════════════════════════════════════════════════════════════════════════════
 // (Dialog integration tests retired along with v1 Dialog.h — see
 //  tests/test_fw2_Dialog.cpp for the fw2 equivalents.)
-
-TEST(IntegrationCrossPanel, DetailPanelInFlexBoxLayout) {
-    FlexBox root(Direction::Column);
-    root.setAlign(Align::Stretch);
-
-    FixedPanelWidget session(800, 0);
-    session.setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
-
-    DetailPanelWidget detail;
-    detail.setOpen(true);
-
-    root.addChild(&session);
-    root.addChild(&detail);
-
-    UIContext ctx{};
-    Constraints c = Constraints::tight(800, 600);
-
-    // Converge detail animation
-    for (int i = 0; i < 100; ++i)
-        root.measure(c, ctx);
-
-    root.layout(Rect{0, 0, 800, 600}, ctx);
-
-    // Detail should take kDefaultPanelHeight, session gets the rest
-    float detailH = detail.height();
-    EXPECT_FLOAT_EQ(detailH, DetailPanelWidget::kDefaultPanelHeight);
-    EXPECT_GE(session.bounds().h, 100.0f);
-    EXPECT_NEAR(session.bounds().h + detailH, 600.0f, 1.0f);
-}
-
-TEST(IntegrationCrossPanel, DetailPanelClosedInLayout) {
-    FlexBox root(Direction::Column);
-    root.setAlign(Align::Stretch);
-
-    FixedPanelWidget session(800, 0);
-    session.setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
-
-    DetailPanelWidget detail;
-    // detail starts closed (default)
-
-    root.addChild(&session);
-    root.addChild(&detail);
-
-    UIContext ctx{};
-    Constraints c = Constraints::tight(800, 600);
-    root.measure(c, ctx);
-    root.layout(Rect{0, 0, 800, 600}, ctx);
-
-    float detailH = detail.height();
-    EXPECT_FLOAT_EQ(detailH, DetailPanelWidget::kCollapsedHeight);
-    EXPECT_GT(session.bounds().h, 500.0f); // most of the space
-}
-
-TEST(IntegrationCrossPanel, ToggleDetailAndRelayout) {
-    FlexBox root(Direction::Column);
-    root.setAlign(Align::Stretch);
-
-    FixedPanelWidget session(800, 0);
-    session.setSizePolicy(SizePolicy::flexMin(1.0f, 100.0f));
-
-    DetailPanelWidget detail;
-    root.addChild(&session);
-    root.addChild(&detail);
-
-    UIContext ctx{};
-    Constraints c = Constraints::tight(800, 600);
-
-    // Initial: detail closed
-    root.measure(c, ctx);
-    root.layout(Rect{0, 0, 800, 600}, ctx);
-    float sessionH_closed = session.bounds().h;
-
-    // Open detail and converge
-    detail.setOpen(true);
-    for (int i = 0; i < 100; ++i)
-        root.measure(c, ctx);
-    root.layout(Rect{0, 0, 800, 600}, ctx);
-    float sessionH_open = session.bounds().h;
-
-    // Session should shrink when detail opens
-    EXPECT_LT(sessionH_open, sessionH_closed);
-}
+//
+// (DetailPanelInFlexBoxLayout / DetailPanelClosedInLayout / ToggleDetailAnd
+//  Relayout retired with the fw1→fw2 DetailPanel migration: DetailPanel is
+//  now an fw2 widget and can no longer be stuffed directly inside a v1
+//  fw::FlexBox. Cross-framework layout integration is now provided by
+//  DetailPanelWrapper in PanelWrappers.h. Panel-only animation behaviour
+//  is still covered by the IntegrationDetailPanel tests above.)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 9. DeviceWidget + SnapScroll composition

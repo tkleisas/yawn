@@ -18,8 +18,7 @@
 #include "ui/framework/v2/TextInputDialog.h"
 #include "ui/panels/PreferencesDialog.h"
 #include "ui/framework/v2/ExportDialog.h"
-#include "ui/framework/FlexBox.h"
-#include "ui/framework/UIContext.h"
+#include "ui/framework/v2/FlexBox.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/FontAdapter.h"
 #include "ui/framework/v2/LayerStack.h"
@@ -187,43 +186,30 @@ private:
     // v1 m_contextMenu retired — replaced by fw2::ContextMenu (LayerStack).
     ui::InputState m_inputState;
 
-    // Widget tree for layout (replaces manual layout math in render/events)
-    std::unique_ptr<ui::fw::FlexBox> m_rootLayout;
-    ui::fw::Widget* m_menuBarW    = nullptr;  // owned by unique_ptr below
-    ui::fw::DetailPanelWidget* m_detailPanel = nullptr;
-    // PianoRollPanel — fw2; owner holds it, wrapper goes in m_rootLayout.
+    // Widget tree for layout. fw2 throughout — every panel plugs into
+    // m_rootLayout (a fw2::FlexBox) directly. v1 wrappers retired in
+    // Phase 2 of the framework migration.
+    std::unique_ptr<ui::fw2::FlexBox> m_rootLayout;
+    std::unique_ptr<ui::fw2::DetailPanelWidget> m_detailPanelOwner;
+    ui::fw2::DetailPanelWidget*                 m_detailPanel  = nullptr;
     std::unique_ptr<ui::fw2::PianoRollPanel> m_pianoRollOwner;
     ui::fw2::PianoRollPanel*                 m_pianoRoll   = nullptr;
-    ui::fw::Widget*                          m_pianoRollW  = nullptr;
-    // MixerPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::MixerPanel> m_mixerPanelOwner;
     ui::fw2::MixerPanel*                 m_mixerPanel  = nullptr;
-    // SessionPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::SessionPanel> m_sessionPanelOwner;
     ui::fw2::SessionPanel*                 m_sessionPanel  = nullptr;
-    // ArrangementPanel — fw2; plugs directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::ArrangementPanel> m_arrangementPanelOwner;
     ui::fw2::ArrangementPanel*                 m_arrangementPanel = nullptr;
-    // TransportPanel is fw2 now; m_transportPanelOwner holds it.
-    // m_transportPanelW is its v1 wrapper sitting in m_rootLayout.
     std::unique_ptr<ui::fw2::TransportPanel> m_transportPanelOwner;
     ui::fw2::TransportPanel*                 m_transportPanel  = nullptr;
-    ui::fw::Widget*                          m_transportPanelW = nullptr;
-    // ContentGrid — now fw2; m_contentGridW is the v1 wrapper for rootLayout.
     std::unique_ptr<ui::fw2::ContentGrid>    m_contentGridOwner;
     ui::fw2::ContentGrid*                    m_contentGrid  = nullptr;
-    ui::fw::Widget*                          m_contentGridW = nullptr;
-    // BrowserPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::BrowserPanel> m_browserPanelOwner;
     ui::fw2::BrowserPanel*                 m_browserPanel  = nullptr;
-    // ReturnMasterPanel — fw2, owned here; goes directly into fw2::ContentGrid.
     std::unique_ptr<ui::fw2::ReturnMasterPanel> m_returnMasterPanelOwner;
     ui::fw2::ReturnMasterPanel*                 m_returnMasterPanel  = nullptr;
-    // VisualParamsPanel is fw2; owner holds it, wrapper goes in
-    // m_rootLayout.
     std::unique_ptr<ui::fw2::VisualParamsPanel> m_visualParamsPanelOwner;
     ui::fw2::VisualParamsPanel*                 m_visualParamsPanel  = nullptr;
-    ui::fw::Widget*                             m_visualParamsPanelW = nullptr;
     // v1 m_aboutDialog retired — use fw2::Dialog.
     // v1 m_confirmDialog retired — use fw2::ConfirmDialog.
     // TextInputDialog migrated to fw2 — value-typed member now.
@@ -232,8 +218,6 @@ private:
     // no longer a Widget subclass; lifetime is the App itself.
     ui::fw2::FwPreferencesDialog  m_preferencesDialog;
     ui::fw2::FwExportDialog       m_exportDialog;
-    std::vector<std::unique_ptr<ui::fw::Widget>>  m_wrappers;
-    ui::fw::UIContext m_uiContext;
 
     // v2 UI framework (ui-v2 in-progress). Coexists with v1 for now —
     // we'll migrate panels over one by one. FontAdapter bridges v1's

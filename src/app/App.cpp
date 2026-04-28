@@ -1,7 +1,6 @@
 #include "app/App.h"
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
-#include "ui/framework/PanelWrappers.h"
 #include "ui/framework/v2/Fw2Painters.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
@@ -126,7 +125,12 @@ static bool loadInterleaved(audio::AudioEngine& engine, const std::string& path,
 
 // Helper: extract filename without extension from a path
 static std::string fileNameFromPath(const std::string& path) {
-    std::string name = fileNameFromPath(path);
+    // Find last separator (handle both / and \ for cross-platform paths).
+    auto sep = path.find_last_of("/\\");
+    std::string name = (sep == std::string::npos) ? path : path.substr(sep + 1);
+    // Strip extension.
+    auto dot = name.find_last_of('.');
+    if (dot != std::string::npos) name.erase(dot);
     return name;
 }
 
@@ -212,7 +216,20 @@ void App::setupMenuBar() {
         M::item("Toggle Mixer",     [this]() { m_showMixer = !m_showMixer; }, "M"),
         M::item("Detail Panel",     [this]() {
             m_showDetailPanel = !m_showDetailPanel;
-            if (m_showDetailPanel) m_detailPanel->setOpen(true);
+            if (m_showDetailPanel) {
+                m_detailPanel->setOpen(true);
+                // Populate the device chain for the current target —
+                // without this, toggling the panel on without first
+                // clicking a track shows an empty body. The track-
+                // click / bus-click handlers gate their detail updates
+                // on m_showDetailPanel, so when D is OFF they don't
+                // populate the chain. We re-populate here on toggle on.
+                switch (m_detailTarget) {
+                case DetailTarget::Track:     updateDetailForSelectedTrack(); break;
+                case DetailTarget::ReturnBus: updateDetailForReturnBus(m_detailReturnBus); break;
+                case DetailTarget::Master:    updateDetailForMaster(); break;
+                }
+            }
         }, "D"),
         M::item("Reload Controller Scripts", [this]() {
             m_controllerManager.reloadScripts("");
@@ -407,26 +424,21 @@ void App::setupMenuBar() {
 }
 
 void App::buildWidgetTree() {
-    using namespace ui::fw;
+    using namespace ui::fw2;
 
     m_rootLayout = std::make_unique<FlexBox>(Direction::Column);
     m_rootLayout->setAlign(Align::Stretch);
 
-    auto menuW      = std::make_unique<MenuBarWrapper>(m_menuBar);
-    auto transportP = std::make_unique<ui::fw2::TransportPanel>();
-    auto transportW = std::make_unique<TransportPanelWrapper>(*transportP);
-    auto sessionP   = std::make_unique<ui::fw2::SessionPanel>();
-    auto arrP       = std::make_unique<ui::fw2::ArrangementPanel>();
-    auto mixerP     = std::make_unique<ui::fw2::MixerPanel>();
-    auto browserP   = std::make_unique<ui::fw2::BrowserPanel>();
-    auto returnMstP = std::make_unique<ui::fw2::ReturnMasterPanel>();
-    auto gridP      = std::make_unique<ui::fw2::ContentGrid>();
-    auto gridW      = std::make_unique<ContentGridWrapper>(*gridP);
-    auto detailP    = std::make_unique<DetailPanelWidget>();
-    auto visualPP   = std::make_unique<ui::fw2::VisualParamsPanel>();
-    auto visualPW   = std::make_unique<VisualParamsPanelWrapper>(*visualPP);
-    auto pianoP     = std::make_unique<ui::fw2::PianoRollPanel>();
-    auto pianoW     = std::make_unique<PianoRollPanelWrapper>(*pianoP);
+    m_transportPanelOwner    = std::make_unique<TransportPanel>();
+    m_sessionPanelOwner      = std::make_unique<SessionPanel>();
+    m_arrangementPanelOwner  = std::make_unique<ArrangementPanel>();
+    m_mixerPanelOwner        = std::make_unique<MixerPanel>();
+    m_browserPanelOwner      = std::make_unique<BrowserPanel>();
+    m_returnMasterPanelOwner = std::make_unique<ReturnMasterPanel>();
+    m_contentGridOwner       = std::make_unique<ContentGrid>();
+    m_detailPanelOwner       = std::make_unique<DetailPanelWidget>();
+    m_visualParamsPanelOwner = std::make_unique<VisualParamsPanel>();
+    m_pianoRollOwner         = std::make_unique<PianoRollPanel>();
     // v1 AboutDialog retired — fw2::Dialog drives the Help → About
     // prompt inline from the menu handler.
     // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog handles
@@ -434,25 +446,20 @@ void App::buildWidgetTree() {
     // v2 TextInputDialog, PreferencesDialog, and ExportDialog are
     // value-typed members of App — nothing to allocate here.
 
-    // ContentGrid wrapper fills remaining space in the v1 rootLayout flex.
-    gridW->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
+    // ContentGrid fills remaining space in the rootLayout column.
+    m_contentGridOwner->setSizePolicy(SizePolicy::flexMin(1.0f, 200.0f));
 
-    // Store raw pointers for quick access
-    m_menuBarW          = menuW.get();
-    m_transportPanel    = transportP.get();
-    m_transportPanelW   = transportW.get();
-    m_sessionPanel      = sessionP.get();
-    m_arrangementPanel  = arrP.get();
-    m_mixerPanel        = mixerP.get();
-    m_browserPanel      = browserP.get();
-    m_returnMasterPanel  = returnMstP.get();
-    m_contentGrid        = gridP.get();
-    m_contentGridW       = gridW.get();
-    m_detailPanel       = detailP.get();
-    m_visualParamsPanel  = visualPP.get();
-    m_visualParamsPanelW = visualPW.get();
-    m_pianoRoll         = pianoP.get();
-    m_pianoRollW        = pianoW.get();
+    // Convenience raw pointers — main code uses these.
+    m_transportPanel    = m_transportPanelOwner.get();
+    m_sessionPanel      = m_sessionPanelOwner.get();
+    m_arrangementPanel  = m_arrangementPanelOwner.get();
+    m_mixerPanel        = m_mixerPanelOwner.get();
+    m_browserPanel      = m_browserPanelOwner.get();
+    m_returnMasterPanel = m_returnMasterPanelOwner.get();
+    m_contentGrid       = m_contentGridOwner.get();
+    m_detailPanel       = m_detailPanelOwner.get();
+    m_visualParamsPanel = m_visualParamsPanelOwner.get();
+    m_pianoRoll         = m_pianoRollOwner.get();
 
     m_preferencesDialog.setOnResult([this](ui::fw2::PreferencesResult result) {
         if (result == ui::fw2::PreferencesResult::OK) {
@@ -586,15 +593,14 @@ void App::buildWidgetTree() {
     // topLeft slot swaps between session and arrangement in setViewMode.
     m_contentGrid->setChildren(m_sessionPanel, m_browserPanel,
                                m_mixerPanel, m_returnMasterPanel);
-    m_rootLayout->addChild(m_menuBarW);
-    m_rootLayout->addChild(m_transportPanelW);
-    m_rootLayout->addChild(m_contentGridW);
+    m_rootLayout->addChild(&m_menuBar);
+    m_rootLayout->addChild(m_transportPanel);
+    m_rootLayout->addChild(m_contentGrid);
     m_rootLayout->addChild(m_detailPanel);
-    // VisualParamsPanel is fw2 — the wrapper sits in m_rootLayout.
-    m_rootLayout->addChild(m_visualParamsPanelW);
-    m_visualParamsPanelW->setVisible(false);
+    m_rootLayout->addChild(m_visualParamsPanel);
+    m_visualParamsPanel->setVisible(false);
     m_visualParamsPanel->setDetailPanel(m_detailPanel);
-    m_rootLayout->addChild(m_pianoRollW);
+    m_rootLayout->addChild(m_pianoRoll);
 
     // When a custom-named knob on the panel is turned, update both the
     // live VisualEngine layer and the clip's persistent store.
@@ -837,37 +843,6 @@ void App::buildWidgetTree() {
             }
         });
 
-    // Transfer ownership
-    m_wrappers.push_back(std::move(menuW));
-    // TransportPanel is fw2 — store it in its dedicated owner; only
-    // the v1 wrapper goes into m_wrappers.
-    m_transportPanelOwner = std::move(transportP);
-    m_wrappers.push_back(std::move(transportW));
-    // SessionPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
-    m_sessionPanelOwner = std::move(sessionP);
-    // ArrangementPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
-    m_arrangementPanelOwner = std::move(arrP);
-    // MixerPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
-    m_mixerPanelOwner = std::move(mixerP);
-    // BrowserPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
-    m_browserPanelOwner = std::move(browserP);
-    // ReturnMasterPanel is fw2 — panel in dedicated owner (ContentGrid holds fw2 ptr).
-    m_returnMasterPanelOwner = std::move(returnMstP);
-    // ContentGrid is fw2 — grid in dedicated owner, v1 wrapper in m_wrappers.
-    m_contentGridOwner = std::move(gridP);
-    m_wrappers.push_back(std::move(gridW));
-    m_wrappers.push_back(std::move(detailP));
-    // VisualParamsPanel is fw2 — panel in dedicated owner, v1 wrapper
-    // in m_wrappers.
-    m_visualParamsPanelOwner = std::move(visualPP);
-    m_wrappers.push_back(std::move(visualPW));
-    // PianoRollPanel is fw2 — panel in dedicated owner, v1 wrapper in m_wrappers.
-    m_pianoRollOwner = std::move(pianoP);
-    m_wrappers.push_back(std::move(pianoW));
-
-    m_uiContext.renderer = &m_renderer;
-    m_uiContext.font     = &m_font;
-
     // ─── Wire v2 framework ──────────────────────────────────────────
     // FontAdapter bridges v1 Font → fw2 TextMetrics. Register it + the
     // renderer in fw2::UIContext, publish that as the global context
@@ -882,36 +857,32 @@ void App::buildWidgetTree() {
 }
 
 void App::computeLayout() {
-    using namespace ui::fw;
+    using namespace ui::fw2;
 
     int w = m_mainWindow.getWidth();
     int h = m_mainWindow.getHeight();
 
-    // Update panel visibility
+    // Update panel visibility — single source of truth now (fw2 panel
+    // directly), since the v1 wrappers are gone.
     m_detailPanel->setWindowHeight(static_cast<float>(h));
     const bool selectedIsVisual =
         m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks() &&
         m_project.track(m_selectedTrack).type == Track::Type::Visual;
     // Detail panel + Visual-params panel share a slot: never both at once.
-    m_detailPanel->setVisible(m_showDetailPanel && !selectedIsVisual);
-    // Visibility goes to the wrapper (the v1 rootLayout measures it).
-    m_visualParamsPanelW->setVisible(m_showDetailPanel && selectedIsVisual);
-    // PianoRoll is fw2 — wrapper visibility drives v1 rootLayout, inner
-    // panel visibility drives fw2 render/hit-test.
-    m_pianoRollW->setVisible(m_pianoRoll->isOpen());
+    const bool showDetail = m_showDetailPanel && !selectedIsVisual;
+    const bool showVisual = m_showDetailPanel && selectedIsVisual;
+    m_detailPanel->setVisible(showDetail);
+    m_visualParamsPanel->setVisible(showVisual);
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
-    // ContentGrid manages session + mixer + browser + returns visibility
-    // MixerPanel visibility is controlled via the content grid's bottom row
-    // Visibility is owned by the v1 wrapper (what ContentGrid checks);
-    // ContentGrid is fw2 — visibility is set directly on the fw2 panels.
+    // ContentGrid manages session + mixer + browser + returns visibility.
     m_mixerPanel->setVisible(m_showMixer);
     m_returnMasterPanel->setVisible(m_showMixer);
     m_returnMasterPanel->setShowReturns(m_showReturns);
 
     Constraints c = Constraints::tight(static_cast<float>(w), static_cast<float>(h));
-    m_rootLayout->measure(c, m_uiContext);
-    m_rootLayout->layout(Rect{0, 0, static_cast<float>(w), static_cast<float>(h)}, m_uiContext);
+    m_rootLayout->measure(c, m_fw2Context);
+    m_rootLayout->layout(Rect{0, 0, static_cast<float>(w), static_cast<float>(h)}, m_fw2Context);
 }
 
 void App::showTrackContextMenu(int trackIndex, float mx, float my) {
@@ -4220,7 +4191,7 @@ bool App::init() {
     m_running = true;
 
     // Wire up detail panel remove device callback
-    m_detailPanel->setOnRemoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int chainIndex) {
+    m_detailPanel->setOnRemoveDevice([this](ui::fw2::DetailPanelWidget::DeviceType type, int chainIndex) {
         // Resolve which effect chain to operate on based on detail target
         auto getAudioFxChain = [this]() -> effects::EffectChain* {
             switch (m_detailTarget) {
@@ -4239,7 +4210,7 @@ bool App::init() {
         };
 
         switch (type) {
-            case ui::fw::DetailPanelWidget::DeviceType::MidiFx: {
+            case ui::fw2::DetailPanelWidget::DeviceType::MidiFx: {
                 // MIDI effects only apply to tracks
                 if (m_detailTarget != DetailTarget::Track) break;
                 int t = m_selectedTrack;
@@ -4267,7 +4238,7 @@ bool App::init() {
                     }, ""});
                 break;
             }
-            case ui::fw::DetailPanelWidget::DeviceType::AudioFx: {
+            case ui::fw2::DetailPanelWidget::DeviceType::AudioFx: {
                 auto* chain = getAudioFxChain();
                 if (!chain) break;
                 auto* fx = chain->effectAt(chainIndex);
@@ -4313,9 +4284,9 @@ bool App::init() {
         markDirty();
     });
 
-    m_detailPanel->setOnMoveDevice([this](ui::fw::DetailPanelWidget::DeviceType type, int fromIdx, int toIdx) {
+    m_detailPanel->setOnMoveDevice([this](ui::fw2::DetailPanelWidget::DeviceType type, int fromIdx, int toIdx) {
         switch (type) {
-            case ui::fw::DetailPanelWidget::DeviceType::MidiFx: {
+            case ui::fw2::DetailPanelWidget::DeviceType::MidiFx: {
                 if (m_detailTarget != DetailTarget::Track) break;
                 int t = m_selectedTrack;
                 if (t < 0 || t >= m_project.numTracks()) break;
@@ -4335,7 +4306,7 @@ bool App::init() {
                     }, ""});
                 break;
             }
-            case ui::fw::DetailPanelWidget::DeviceType::AudioFx: {
+            case ui::fw2::DetailPanelWidget::DeviceType::AudioFx: {
                 // Resolve the target chain
                 effects::EffectChain* chain = nullptr;
                 auto target = m_detailTarget;
@@ -4399,7 +4370,7 @@ bool App::init() {
     // meaningful for the audio/MIDI effect kinds; instrument
     // mappings ignore it (target.index defaulted to 0).
     m_detailPanel->setOnParamRightClick(
-        [this](int trackIdx, ui::fw::DetailPanelWidget::DeviceType type,
+        [this](int trackIdx, ui::fw2::DetailPanelWidget::DeviceType type,
                int chainIndex, const std::string& paramName,
                int /*paramIdx*/, float mx, float my) {
             if (trackIdx < 0) return;
@@ -4411,15 +4382,15 @@ bool App::init() {
             MacroTarget t;
             t.paramName = paramName;
             switch (type) {
-                case ui::fw::DetailPanelWidget::DeviceType::Instrument:
+                case ui::fw2::DetailPanelWidget::DeviceType::Instrument:
                     t.kind  = MacroTarget::Kind::AudioInstrumentParam;
                     t.index = 0;
                     break;
-                case ui::fw::DetailPanelWidget::DeviceType::AudioFx:
+                case ui::fw2::DetailPanelWidget::DeviceType::AudioFx:
                     t.kind  = MacroTarget::Kind::AudioEffectParam;
                     t.index = chainIndex;
                     break;
-                case ui::fw::DetailPanelWidget::DeviceType::MidiFx:
+                case ui::fw2::DetailPanelWidget::DeviceType::MidiFx:
                     t.kind  = MacroTarget::Kind::MidiEffectParam;
                     t.index = chainIndex;
                     break;
@@ -4428,7 +4399,7 @@ bool App::init() {
         });
 
     // Wire preset click: open context menu with preset list + Save
-    m_detailPanel->setOnPresetClick([this](ui::fw::DetailPanelWidget::DeviceType type,
+    m_detailPanel->setOnPresetClick([this](ui::fw2::DetailPanelWidget::DeviceType type,
                                            int chainIndex, float mx, float my) {
         // Resolve device pointer and device ID
         std::string deviceId;
@@ -4447,19 +4418,19 @@ bool App::init() {
             return nullptr;
         };
 
-        if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
+        if (type == ui::fw2::DetailPanelWidget::DeviceType::Instrument) {
             if (m_detailTarget != DetailTarget::Track) return;
             if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
             auto* inst = m_audioEngine.instrument(m_selectedTrack);
             if (!inst) return;
             deviceId = inst->id();
             deviceName = inst->name();
-        } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
+        } else if (type == ui::fw2::DetailPanelWidget::DeviceType::AudioFx) {
             auto* fx = getAudioEffect(chainIndex);
             if (!fx) return;
             deviceId = fx->id();
             deviceName = fx->name();
-        } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
+        } else if (type == ui::fw2::DetailPanelWidget::DeviceType::MidiFx) {
             if (m_detailTarget != DetailTarget::Track) return;
             if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
             auto* fx = m_audioEngine.midiEffectChain(m_selectedTrack).effect(chainIndex);
@@ -4478,10 +4449,10 @@ bool App::init() {
             m_textInputDialog.prompt("Save Preset", "My Preset",
                 [this, type, chainIndex, deviceId, deviceName, target, bus](const std::string& name) {
                     std::filesystem::path saved;
-                    if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
+                    if (type == ui::fw2::DetailPanelWidget::DeviceType::Instrument) {
                         auto* inst = m_audioEngine.instrument(m_selectedTrack);
                         if (inst) saved = saveDevicePreset(name, *inst);
-                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
+                    } else if (type == ui::fw2::DetailPanelWidget::DeviceType::AudioFx) {
                         effects::AudioEffect* fx = nullptr;
                         switch (target) {
                             case DetailTarget::Track:     fx = m_audioEngine.mixer().trackEffects(m_selectedTrack).effectAt(chainIndex); break;
@@ -4489,7 +4460,7 @@ bool App::init() {
                             case DetailTarget::Master:    fx = m_audioEngine.mixer().masterEffects().effectAt(chainIndex); break;
                         }
                         if (fx) saved = saveDevicePreset(name, *fx);
-                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
+                    } else if (type == ui::fw2::DetailPanelWidget::DeviceType::MidiFx) {
                         auto* fx = m_audioEngine.midiEffectChain(m_selectedTrack).effect(chainIndex);
                         if (fx) saved = saveDevicePreset(name, *fx);
                     }
@@ -4512,10 +4483,10 @@ bool App::init() {
             items.push_back({preset.name,
                 [this, type, chainIndex, path, pName, target, bus]() {
                     bool ok = false;
-                    if (type == ui::fw::DetailPanelWidget::DeviceType::Instrument) {
+                    if (type == ui::fw2::DetailPanelWidget::DeviceType::Instrument) {
                         auto* inst = m_audioEngine.instrument(m_selectedTrack);
                         if (inst) ok = loadDevicePreset(path, *inst);
-                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::AudioFx) {
+                    } else if (type == ui::fw2::DetailPanelWidget::DeviceType::AudioFx) {
                         effects::AudioEffect* fx = nullptr;
                         switch (target) {
                             case DetailTarget::Track:     fx = m_audioEngine.mixer().trackEffects(m_selectedTrack).effectAt(chainIndex); break;
@@ -4523,7 +4494,7 @@ bool App::init() {
                             case DetailTarget::Master:    fx = m_audioEngine.mixer().masterEffects().effectAt(chainIndex); break;
                         }
                         if (fx) ok = loadDevicePreset(path, *fx);
-                    } else if (type == ui::fw::DetailPanelWidget::DeviceType::MidiFx) {
+                    } else if (type == ui::fw2::DetailPanelWidget::DeviceType::MidiFx) {
                         auto* fx = m_audioEngine.midiEffectChain(m_selectedTrack).effect(chainIndex);
                         if (fx) ok = loadDevicePreset(path, *fx);
                     }
@@ -5219,7 +5190,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
     }
     // Visual params panel knob text-edit mode (Enter/Esc/Backspace
     // for any knob inside that panel — A..H, source, chain, post-fx).
-    if (m_visualParamsPanelW->visible() &&
+    if (m_visualParamsPanel->isVisible() &&
         m_visualParamsPanel->hasEditingKnob()) {
         if (m_visualParamsPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
             if (!m_visualParamsPanel->hasEditingKnob())
@@ -5258,7 +5229,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
             m_sessionPanel->isRenamingTrack() ||
             m_arrangementPanel->isRenamingTrack() ||
             (m_showDetailPanel && m_detailPanel->hasEditingKnob()) ||
-            (m_visualParamsPanelW->visible() &&
+            (m_visualParamsPanel->isVisible() &&
              m_visualParamsPanel->hasEditingKnob()) ||
             m_browserPanel->hasEditingKnob() ||
             m_transportPanel->isEditing() ||
@@ -5533,7 +5504,7 @@ void App::processEvents() {
                 // knobs all funnel through the same editingKnob()
                 // search). Without this the user could enter edit
                 // mode but typed digits would be ignored.
-                if (m_visualParamsPanelW->visible() &&
+                if (m_visualParamsPanel->isVisible() &&
                     m_visualParamsPanel->hasEditingKnob()) {
                     m_visualParamsPanel->forwardTextInput(event.text.text);
                     break;
@@ -5581,25 +5552,20 @@ void App::processEvents() {
                 // InputState hover + drag (computes dx/dy internally)
                 m_inputState.onMouseMove(mx, my);
 
-                // Forward drag via widget tree mouse capture
-                if (ui::fw::Widget::capturedWidget()) {
-                    ui::fw::MouseMoveEvent me;
-                    me.x = mx; me.y = my;
-                    auto sdlMod = SDL_GetModState();
-                    me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
-                    me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
-                    me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
-                    m_rootLayout->dispatchMouseMove(me);
-                }
-
-                // ContentGrid hover detection for divider cursor.
-                // Route through the v1 wrapper which converts to fw2 and
-                // updates the grid's internal hover state. The grid's
-                // wantsH/V methods are then queried below for cursor shape.
+                // Forward to widget tree. fw2::FlexBox's onMouseMove
+                // handles two cases:
+                //   • a descendant currently holds capture (knob drag,
+                //     fader drag, etc.) → forward to it directly,
+                //   • otherwise → propagate hover to the child under
+                //     the pointer so panels can update their hover
+                //     state (e.g. ContentGrid's divider hover, used
+                //     just below to pick a cursor shape).
                 {
-                    ui::fw::MouseMoveEvent me;
+                    ui::fw2::MouseMoveEvent me{};
                     me.x = mx; me.y = my;
-                    m_contentGridW->onMouseMove(me);
+                    me.dx = event.motion.xrel; me.dy = event.motion.yrel;
+                    me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    m_rootLayout->dispatchMouseMove(me);
                 }
 
                 // Update cursor shape based on content grid divider hover or panel resize
@@ -5656,172 +5622,46 @@ void App::processEvents() {
                 // v1 context menu: retired — fw2::ContextMenu (handled
                 // by the LayerStack dispatch above) owns this slot now.
 
-                // Menu bar — v2 FwMenuBar sits on LayerStack for its
-                // dropdown popup and in the v1 widget tree via
-                // MenuBarWrapper for its title strip. Title clicks are
-                // routed by the wrapper's onMouseDown; popup clicks are
-                // consumed by the LayerStack dispatch at the top of this
-                // event case. No explicit handling here.
-                if (m_menuBar.pointerInBar(mx, my)) {
-                    // Let the v1 rootLayout dispatch reach MenuBarWrapper.
-                    // It returns true if it handled the title click.
-                    ui::fw::MouseEvent mbEvent;
-                    mbEvent.x = mx; mbEvent.y = my;
-                    mbEvent.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right
-                                                                : ui::fw::MouseButton::Left;
-                    if (m_rootLayout->dispatchMouseDown(mbEvent)) break;
-                }
-
                 // InputState widgets
                 if (m_inputState.onMouseDown(mx, my, btn))
                     break;
 
-                // Detail panel — dispatch via widget tree
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
-                bool hadEditingKnob = m_showDetailPanel && m_detailPanel->hasEditingKnob();
-                bool hadVisualPanelKnob = m_visualParamsPanelW->visible() &&
-                                            m_visualParamsPanel->hasEditingKnob();
-                if (m_showDetailPanel) {
-                    // Visual-params panel is shown in place of detail panel
-                    // when the selected track is a Visual track. Dispatch
-                    // through the v1 wrapper so the event converts to fw2.
-                    if (m_visualParamsPanelW->visible()) {
-                        ui::fw::MouseEvent me;
-                        me.x = mx; me.y = my;
-                        me.button = rightClick ? ui::fw::MouseButton::Right
-                                                : ui::fw::MouseButton::Left;
-                        if (m_visualParamsPanelW->onMouseDown(me)) {
-                            // Toggle SDL text input around the knob's
-                            // edit gesture, same as the detail/browser
-                            // panels do — without this, double-clicking
-                            // a knob in here enters edit mode but no
-                            // SDL_EVENT_TEXT_INPUT events ever fire.
-                            const bool nowEditing =
-                                m_visualParamsPanel->hasEditingKnob();
-                            if (nowEditing && !hadVisualPanelKnob)
-                                SDL_StartTextInput(m_mainWindow.getHandle());
-                            else if (!nowEditing && hadVisualPanelKnob)
-                                SDL_StopTextInput(m_mainWindow.getHandle());
-                            break;
-                        }
-                    }
-                    if (m_detailPanel->visible()) {
-                        if (rightClick) {
-                            if (m_detailPanel->handleRightClick(mx, my)) {
-                                m_detailPanel->setFocused(true);
-                                break;
-                            }
-                        } else {
-                            ui::fw::MouseEvent me;
-                            me.x = mx; me.y = my;
-                            me.button = ui::fw::MouseButton::Left;
-                            if (m_detailPanel->onMouseDown(me)) {
-                                // Start/stop SDL text input for knob edit mode
-                                if (m_detailPanel->hasEditingKnob() && !hadEditingKnob)
-                                    SDL_StartTextInput(m_mainWindow.getHandle());
-                                else if (!m_detailPanel->hasEditingKnob() && hadEditingKnob)
-                                    SDL_StopTextInput(m_mainWindow.getHandle());
-                                break;
-                            }
-                        }
-                    }
-                }
 
-                // Clicking outside detail panel — cancel any editing knob
-                if (hadEditingKnob) {
-                    m_detailPanel->cancelEditingKnobs();
-                    SDL_StopTextInput(m_mainWindow.getHandle());
-                }
-                m_detailPanel->setFocused(false);
-
-                // Browser panel — dispatch directly to fw2::BrowserPanel.
-                // Hit-test first: fw2::Widget::dispatchMouseDown starts
-                // the gesture state machine on *any* mouseDown, which
-                // would return true + capture mouse even for clicks
-                // miles outside the panel. That would eat clicks meant
-                // for the ContentGrid divider just past its left edge
-                // (hit zone extends 6px into the panel's neighbours).
-                {
-                    bool hadBrowserKnob = m_browserPanel->hasEditingKnob();
-                    auto bbPanel = m_browserPanel->bounds();
-                    bool inBrowser = mx >= bbPanel.x && mx < bbPanel.x + bbPanel.w
-                                  && my >= bbPanel.y && my < bbPanel.y + bbPanel.h;
-                    if (!rightClick && inBrowser) {
-                        ui::fw2::MouseEvent me{};
-                        me.x = mx; me.y = my;
-                        me.button = ui::fw2::MouseButton::Left;
-                        me.clickCount = event.button.clicks;
-                        if (m_browserPanel->dispatchMouseDown(me)) {
-                            if (m_browserPanel->hasEditingKnob() && !hadBrowserKnob)
-                                SDL_StartTextInput(m_mainWindow.getHandle());
-                            else if (!m_browserPanel->hasEditingKnob() && hadBrowserKnob)
-                                SDL_StopTextInput(m_mainWindow.getHandle());
-                            break;
-                        }
-                    }
-                    if (hadBrowserKnob) {
-                        m_browserPanel->cancelEditingKnobs();
-                        SDL_StopTextInput(m_mainWindow.getHandle());
-                    }
-                }
-
-                // Piano roll click handling. Route through the v1
-                // wrapper (not directly to the fw2 panel) so the wrapper
-                // takes v1 capture when a child widget captures fw2
-                // mouse. Otherwise v1 mouseMoves wouldn't flow back to
-                // the wrapper and in-panel drags (toolbar toggles,
-                // scrollbar, loop handles, etc.) would stall after
-                // down.
-                if (m_pianoRoll->isOpen()) {
-                    if (rightClick) {
-                        if (m_pianoRoll->handleRightClick(mx, my)) break;
-                    } else {
-                        ui::fw::MouseEvent me;
-                        me.x = mx; me.y = my;
-                        me.button = ui::fw::MouseButton::Left;
-                        me.clickCount = event.button.clicks;
-                        // Carry Ctrl / Shift / Alt through to the panel
-                        // so in-grid gestures (Ctrl+drag = piano-key
-                        // zoom, Shift-click-select, …) can see them.
-                        auto sdlMod = SDL_GetModState();
-                        me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
-                        me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
-                        me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
-                        if (m_pianoRollW->dispatchMouseDown(me)) {
-                            markDirty();
-                            break;
-                        }
-                    }
-                }
-
-                // Right-click on track headers → open context menu (session view only)
-                if (rightClick && m_project.viewMode() == ViewMode::Session) {
-                    auto sb = m_sessionPanel->bounds();
-                    float headerY = sb.y;
-                    float headerEnd = headerY + ui::Theme::kTrackHeaderHeight;
-                    float gridX = ui::Theme::kSceneLabelWidth;
-                    if (my >= headerY && my < headerEnd && mx >= gridX) {
-                        float contentMX = mx + m_sessionPanel->scrollX();
-                        int trackIdx = static_cast<int>((contentMX - gridX) / ui::Theme::kTrackWidth);
-                        if (trackIdx >= 0 && trackIdx < m_project.numTracks()) {
-                            m_selectedTrack = trackIdx;
-                            m_virtualKeyboard.setTargetTrack(trackIdx);
-                            m_sessionPanel->setSelectedTrack(trackIdx);
-                            m_mixerPanel->setSelectedTrack(trackIdx);
-                            showTrackContextMenu(trackIdx, mx, my);
-                            break;
-                        }
-                    }
-                }
-
-                // Existing view handlers: mixer → session
-                // Handle double-click for BPM/time sig editing (now on transport panel)
-                if (event.button.clicks >= 2 && btn == SDL_BUTTON_LEFT) {
-                    if (m_transportPanel->handleDoubleClick(mx, my)) {
-                        SDL_StartTextInput(m_mainWindow.getHandle());
+                // DetailPanel right-click — special: pops a knob-aware
+                // MIDI-Learn / reset menu, separate from the normal
+                // mouseDown path. Take this BEFORE the rootLayout
+                // dispatch so the panel's own onMouseDown doesn't
+                // intercept.
+                if (rightClick && m_showDetailPanel && m_detailPanel->isVisible()) {
+                    if (m_detailPanel->handleRightClick(mx, my)) {
+                        m_detailPanel->setFocused(true);
                         break;
                     }
-                    // Double-click on a MIDI clip slot → open piano roll
+                }
+
+                // PianoRoll right-click — its own handler builds a
+                // ruler/note context menu inline.
+                if (rightClick && m_pianoRoll->isOpen()) {
+                    if (m_pianoRoll->handleRightClick(mx, my)) break;
+                }
+
+                // Snapshot per-panel editing state so we can toggle
+                // SDL text input around the dispatch (needed because
+                // FwKnob's beginEdit fires from gesture onDoubleClick
+                // which lives inside the panel's dispatch).
+                const bool hadDetailKnob   = m_showDetailPanel && m_detailPanel->hasEditingKnob();
+                const bool hadVisualKnob   = m_visualParamsPanel->isVisible() &&
+                                              m_visualParamsPanel->hasEditingKnob();
+                const bool hadBrowserKnob  = m_browserPanel->hasEditingKnob();
+                const bool wasTransportEd  = m_transportPanel->isEditing();
+
+                // Double-click on a MIDI clip slot → open piano roll
+                // (this lives outside the SessionPanel because it
+                // crosses panel boundaries). Transport panel handles
+                // its own BPM/timesig double-click via the rootLayout
+                // dispatch below.
+                if (event.button.clicks >= 2 && btn == SDL_BUTTON_LEFT) {
                     int dblTrack = -1, dblScene = -1;
                     if (m_sessionPanel->getSlotAt(mx, my, dblTrack, dblScene)) {
                         auto* slot = m_project.getSlot(dblTrack, dblScene);
@@ -5832,7 +5672,6 @@ void App::processEvents() {
                             m_selectedTrack = dblTrack;
                             break;
                         }
-                        // Double-click empty slot on MIDI track → create new clip
                         if (m_project.track(dblTrack).type == Track::Type::Midi &&
                             (!slot || slot->empty())) {
                             auto newClip = std::make_unique<midi::MidiClip>(
@@ -5864,76 +5703,112 @@ void App::processEvents() {
                         }
                     }
                 }
-                // Transport panel click — dispatched through the v1
-                // wrapper which converts the event + forwards to the
-                // fw2 TransportPanel (and captures if needed).
-                bool wasEditing = m_transportPanel->isEditing();
-                bool transportHandled = false;
-                {
-                    ui::fw::MouseEvent me;
-                    me.x = mx; me.y = my;
-                    me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
-                    transportHandled = m_transportPanelW->onMouseDown(me);
+
+                // Right-click on session-view track headers — opens
+                // context menu (session panel doesn't surface track-
+                // header right-clicks itself).
+                if (rightClick && m_project.viewMode() == ViewMode::Session) {
+                    auto sb = m_sessionPanel->bounds();
+                    float headerY = sb.y;
+                    float headerEnd = headerY + ui::Theme::kTrackHeaderHeight;
+                    float gridX = ui::Theme::kSceneLabelWidth;
+                    if (my >= headerY && my < headerEnd && mx >= gridX) {
+                        float contentMX = mx + m_sessionPanel->scrollX();
+                        int trackIdx = static_cast<int>((contentMX - gridX) / ui::Theme::kTrackWidth);
+                        if (trackIdx >= 0 && trackIdx < m_project.numTracks()) {
+                            m_selectedTrack = trackIdx;
+                            m_virtualKeyboard.setTargetTrack(trackIdx);
+                            m_sessionPanel->setSelectedTrack(trackIdx);
+                            m_mixerPanel->setSelectedTrack(trackIdx);
+                            showTrackContextMenu(trackIdx, mx, my);
+                            break;
+                        }
+                    }
                 }
-                // If the transport panel handled the click (e.g. clicked a v2
-                // button that captured v1 mouse for drag/up dispatch), don't
-                // also dispatch to contentGrid — otherwise contentGrid's
-                // children would overwrite the capture and the transport's
-                // mouseUp would never reach the captured v2 widget, breaking
-                // TAP / MET / numeric-input drags.
-                if (transportHandled) break;
-                // Dispatch click through content grid (handles dividers + children)
+
+                // Main dispatch: rootLayout walks its fw2 children
+                // (menu bar, transport, content grid, detail/visual,
+                // piano roll), routing the click to whichever child
+                // contains the point. Each panel handles its own
+                // gesture state machine + capture.
+                m_sessionPanel->clearLastClickTrack();
+                m_sessionPanel->clearRightClick();
                 {
-                    m_sessionPanel->clearLastClickTrack();
-                    m_sessionPanel->clearRightClick();
-                    ui::fw::MouseEvent me;
+                    ui::fw2::MouseEvent me{};
                     me.x = mx; me.y = my;
-                    me.button = rightClick ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
+                    me.lx = mx; me.ly = my;
+                    me.button = sdlBtnToFw2(btn);
+                    me.modifiers = sdlModsToFw2(SDL_GetModState());
                     me.clickCount = event.button.clicks;
-                    auto sdlMod = SDL_GetModState();
-                    me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
-                    me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
-                    me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
-                    // Route through the v1 ContentGridWrapper which converts
-                    // the v1 event (including clickCount) to a fw2 event and
-                    // dispatches to fw2::ContentGrid and its fw2 children.
-                    m_contentGridW->dispatchMouseDown(me);
-                    // Start SDL text input if a track rename started
-                    if (m_sessionPanel->isRenamingTrack() || m_arrangementPanel->isRenamingTrack()) {
-                        SDL_StartTextInput(m_mainWindow.getHandle());
-                    }
-                    int selTrack = m_sessionPanel->lastClickTrack();
-                    if (selTrack >= 0) {
-                        m_selectedTrack = selTrack;
-                        m_detailTarget = DetailTarget::Track;
-                        m_virtualKeyboard.setTargetTrack(selTrack);
-                        m_mixerPanel->setSelectedTrack(selTrack);
-                    }
-                    int selScene = m_sessionPanel->lastClickScene();
-                    if (selScene >= 0) {
-                        m_selectedScene = selScene;
-                    }
-                    if (selTrack >= 0 || selScene >= 0) {
-                        updateDetailForSelectedTrack();
-                    }
-                    // Right-click on clip slot → show clip context menu
-                    int rcTrack = m_sessionPanel->lastRightClickTrack();
-                    int rcScene = m_sessionPanel->lastRightClickScene();
-                    if (rcTrack >= 0 && rcScene >= 0) {
-                        m_selectedTrack = rcTrack;
-                        m_selectedScene = rcScene;
-                        showClipContextMenu(rcTrack, rcScene, mx, my);
-                    }
-                    // Right-click on scene label → show scene context menu
-                    int rcSceneLabel = m_sessionPanel->rightClickSceneLabel();
-                    if (rcSceneLabel >= 0) {
-                        m_selectedScene = rcSceneLabel;
-                        showSceneContextMenu(rcSceneLabel, mx, my);
-                    }
+                    m_rootLayout->dispatchMouseDown(me);
                 }
-                if (wasEditing && !m_transportPanel->isEditing()) {
+
+                // Post-dispatch: react to state changes the panels
+                // signalled (rename gestures, click selections, knob
+                // edit transitions, etc.).
+                if (m_sessionPanel->isRenamingTrack() ||
+                    m_arrangementPanel->isRenamingTrack() ||
+                    m_transportPanel->isEditing())
+                {
+                    SDL_StartTextInput(m_mainWindow.getHandle());
+                }
+                int selTrack = m_sessionPanel->lastClickTrack();
+                if (selTrack >= 0) {
+                    m_selectedTrack = selTrack;
+                    m_detailTarget = DetailTarget::Track;
+                    m_virtualKeyboard.setTargetTrack(selTrack);
+                    m_mixerPanel->setSelectedTrack(selTrack);
+                }
+                int selScene = m_sessionPanel->lastClickScene();
+                if (selScene >= 0) m_selectedScene = selScene;
+                if (selTrack >= 0 || selScene >= 0) {
+                    updateDetailForSelectedTrack();
+                }
+                int rcTrack = m_sessionPanel->lastRightClickTrack();
+                int rcScene = m_sessionPanel->lastRightClickScene();
+                if (rcTrack >= 0 && rcScene >= 0) {
+                    m_selectedTrack = rcTrack;
+                    m_selectedScene = rcScene;
+                    showClipContextMenu(rcTrack, rcScene, mx, my);
+                }
+                int rcSceneLabel = m_sessionPanel->rightClickSceneLabel();
+                if (rcSceneLabel >= 0) {
+                    m_selectedScene = rcSceneLabel;
+                    showSceneContextMenu(rcSceneLabel, mx, my);
+                }
+
+                // Knob edit-mode SDL text-input toggling. Each panel
+                // hosts knobs that open inline edit on double-click;
+                // we mirror that into SDL_StartTextInput so digit
+                // keys reach the knob's takeTextInput.
+                auto syncTextInput = [&](bool was, bool now) {
+                    if (!was && now) SDL_StartTextInput(m_mainWindow.getHandle());
+                    else if (was && !now) SDL_StopTextInput(m_mainWindow.getHandle());
+                };
+                syncTextInput(hadDetailKnob,  m_showDetailPanel && m_detailPanel->hasEditingKnob());
+                syncTextInput(hadVisualKnob,  m_visualParamsPanel->isVisible() && m_visualParamsPanel->hasEditingKnob());
+                syncTextInput(hadBrowserKnob, m_browserPanel->hasEditingKnob());
+
+                // Detail-panel focus rules: clicking outside the panel
+                // cancels its editing knob and clears focus.
+                if (hadDetailKnob && !m_detailPanel->hasEditingKnob()) {
+                    m_detailPanel->cancelEditingKnobs();
+                }
+                if (hadBrowserKnob && !m_browserPanel->hasEditingKnob()) {
+                    m_browserPanel->cancelEditingKnobs();
+                }
+                // Set / clear detail-panel focus ring based on whether
+                // the click landed inside the panel.
+                if (m_detailPanel->isVisible()) {
+                    auto& db = m_detailPanel->bounds();
+                    bool inDetail = mx >= db.x && mx < db.x + db.w &&
+                                    my >= db.y && my < db.y + db.h;
+                    m_detailPanel->setFocused(inDetail);
+                }
+                if (wasTransportEd && !m_transportPanel->isEditing()) {
                     SDL_StopTextInput(m_mainWindow.getHandle());
                 }
+                if (m_pianoRoll->isOpen() && !rightClick) markDirty();
                 break;
             }
 
@@ -5952,53 +5827,46 @@ void App::processEvents() {
                 }
 
                 m_inputState.onMouseUp(mx, my, btn);
-                // Release mouse capture (mixer fader drag, clip drag, etc.)
-                if (ui::fw::Widget::capturedWidget()) {
-                    // fw2 widgets hosted inside v1 panels can transition
-                    // into "editing" on a double-click-up (e.g. FwKnob
-                    // → beginEdit). We need to toggle SDL text input to
-                    // match so digits reach the knob's takeTextInput.
+                // Always dispatch mouseUp through the widget tree.
+                //
+                // Two flows need it:
+                //   1. A descendant captured on mouseDown (knob drag,
+                //      fader drag, etc.) — fw2's gesture SM ends the
+                //      drag inside dispatchMouseUp + releases capture.
+                //   2. A widget that runs its OWN drag state machine
+                //      WITHOUT taking fw2 capture — e.g. ContentGrid's
+                //      divider drag, which sets m_dragH on mouseDown
+                //      and clears it on mouseUp. Without an unconditional
+                //      dispatch, the divider keeps tracking the cursor
+                //      forever after the user releases.
+                {
+                    // FwKnob's beginEdit fires from gesture onDoubleClick
+                    // which lives inside dispatchMouseUp — snapshot the
+                    // before/after state so we can mirror it into SDL
+                    // text input (digits arriving from the keyboard
+                    // need to reach the knob's takeTextInput).
                     const bool browserEditingBefore =
                         m_browserPanel->hasEditingKnob();
                     const bool detailEditingBefore =
                         m_showDetailPanel && m_detailPanel->hasEditingKnob();
                     const bool visualEditingBefore =
-                        m_visualParamsPanelW->visible() &&
+                        m_visualParamsPanel->isVisible() &&
                         m_visualParamsPanel->hasEditingKnob();
 
-                    ui::fw::MouseEvent me;
+                    ui::fw2::MouseEvent me{};
                     me.x = mx; me.y = my;
-                    me.button = (btn == SDL_BUTTON_RIGHT) ? ui::fw::MouseButton::Right : ui::fw::MouseButton::Left;
-                    auto sdlMod = SDL_GetModState();
-                    me.mods.ctrl  = (sdlMod & SDL_KMOD_CTRL)  != 0;
-                    me.mods.shift = (sdlMod & SDL_KMOD_SHIFT) != 0;
-                    me.mods.alt   = (sdlMod & SDL_KMOD_ALT)   != 0;
+                    me.lx = mx; me.ly = my;
+                    me.button = sdlBtnToFw2(btn);
+                    me.modifiers = sdlModsToFw2(SDL_GetModState());
                     m_rootLayout->dispatchMouseUp(me);
 
-                    const bool browserEditingAfter =
-                        m_browserPanel->hasEditingKnob();
-                    const bool detailEditingAfter =
-                        m_showDetailPanel && m_detailPanel->hasEditingKnob();
-                    // VisualParamsPanel — double-click on a knob inside
-                    // here flips into edit mode here, on mouseUp's
-                    // gesture state machine. Without this transition
-                    // toggle, SDL_StartTextInput is never called and
-                    // typed digits get dropped on the floor.
-                    const bool visualEditingAfter =
-                        m_visualParamsPanelW->visible() &&
-                        m_visualParamsPanel->hasEditingKnob();
-                    if (!browserEditingBefore && browserEditingAfter)
-                        SDL_StartTextInput(m_mainWindow.getHandle());
-                    else if (browserEditingBefore && !browserEditingAfter)
-                        SDL_StopTextInput(m_mainWindow.getHandle());
-                    if (!detailEditingBefore && detailEditingAfter)
-                        SDL_StartTextInput(m_mainWindow.getHandle());
-                    else if (detailEditingBefore && !detailEditingAfter)
-                        SDL_StopTextInput(m_mainWindow.getHandle());
-                    if (!visualEditingBefore && visualEditingAfter)
-                        SDL_StartTextInput(m_mainWindow.getHandle());
-                    else if (visualEditingBefore && !visualEditingAfter)
-                        SDL_StopTextInput(m_mainWindow.getHandle());
+                    auto sync = [&](bool before, bool after) {
+                        if (!before && after) SDL_StartTextInput(m_mainWindow.getHandle());
+                        else if (before && !after) SDL_StopTextInput(m_mainWindow.getHandle());
+                    };
+                    sync(browserEditingBefore, m_browserPanel->hasEditingKnob());
+                    sync(detailEditingBefore,  m_showDetailPanel && m_detailPanel->hasEditingKnob());
+                    sync(visualEditingBefore,  m_visualParamsPanel->isVisible() && m_visualParamsPanel->hasEditingKnob());
                 }
                 // Handle completed clip drag-and-drop
                 if (m_sessionPanel->clipDragCompleted()) {
@@ -6239,6 +6107,12 @@ void App::update() {
     m_lastFrameTicks = now;
     m_sessionPanel->updateAnimTimer(dt);
 
+    // Detail panel open/close height animation. Lives outside fw2's
+    // measure cache so a re-layout in the same frame doesn't read a
+    // stale height; tick() advances the animated height and bumps the
+    // panel's local version so the next measure() pass picks it up.
+    m_detailPanel->tick();
+
     // Transport stop: whenever the stop-counter advances (even while
     // transport is already stopped), clear every visual layer so
     // session-launched shaders / models / videos go dark in lockstep
@@ -6319,7 +6193,7 @@ void App::update() {
     // Push live modulated knob values into the visual-params panel so the
     // A..H arcs breathe with their LFOs. Only active while the panel is
     // visible — audio/midi tracks get cleared overrides.
-    if (m_visualParamsPanelW->visible() &&
+    if (m_visualParamsPanel->isVisible() &&
         m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks() &&
         m_project.track(m_selectedTrack).type == Track::Type::Visual) {
         float disp[8];
@@ -6404,7 +6278,7 @@ void App::update() {
                 }
                 // Forward playhead to detail panel waveform
                 if (msg.trackIndex == m_selectedTrack &&
-                    m_detailPanel->viewMode() == ui::fw::DetailPanelWidget::ViewMode::AudioClip &&
+                    m_detailPanel->viewMode() == ui::fw2::DetailPanelWidget::ViewMode::AudioClip &&
                     !msg.isMidi) {
                     m_detailPanel->setClipPlayPosition(msg.playPosition);
                     m_detailPanel->setClipPlaying(msg.playing);
@@ -6673,7 +6547,7 @@ void App::render() {
 
     // Compute widget tree layout and render all panels
     computeLayout();
-    m_rootLayout->render(m_uiContext);
+    m_rootLayout->render(m_fw2Context);
 
     // Menu bar — v2 FwMenuBar renders via MenuBarWrapper in the
     // rootLayout tree above. Its dropdown popup lives on LayerStack

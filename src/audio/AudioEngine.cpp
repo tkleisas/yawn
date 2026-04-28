@@ -121,8 +121,13 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
         Pa_GetDeviceInfo(outputParams.device)->defaultLowOutputLatency;
     outputParams.hostApiSpecificStreamInfo = nullptr;
 
-    // Try to open input device for full-duplex recording
-    PaStreamParameters inputParams;
+    // Try to open input device for full-duplex recording.
+    // Value-init the struct: MSVC's flow analysis can't tell that
+    // `inputParams.device` is only read after the conditional path
+    // that fully initializes the struct (gated on m_hasInputDevice =
+    // inputParamsPtr != nullptr), so leaving it uninitialized trips
+    // C4701. Zero-fill keeps the contract self-evident.
+    PaStreamParameters inputParams{};
     PaStreamParameters* inputParamsPtr = nullptr;
     PaDeviceIndex inputDev = (config.inputDevice >= 0)
         ? static_cast<PaDeviceIndex>(config.inputDevice)

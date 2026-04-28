@@ -1,14 +1,15 @@
 #pragma once
 // DetailPanelWidget — Composite-widget detail panel.
 //
-// Uses DeviceWidget + SnapScrollContainer instead of raw drawRect/drawText
-// rendering.  The main panel header (collapse arrow + "Detail" text) is
-// still rendered manually because it's trivial.
+// Migrated from v1 fw to fw2. Now inherits from fw2::Widget directly,
+// so child widgets (FwKnob, DeviceWidget, SnapScrollContainer, etc.)
+// are dispatched to natively without v1↔fw2 translation glue.
 //
-// Right-click is still forwarded directly from App.cpp because the widget
-// tree doesn't dispatch right-click events yet.
+// Right-click is still forwarded directly from App.cpp via
+// handleRightClick because the widget tree dispatch path doesn't
+// surface right-clicks here yet.
 
-#include "ui/framework/Widget.h"
+#include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/FilterDisplayWidget.h"
 #include "ui/framework/v2/SubSynthDisplayPanel.h"
 #include "ui/framework/v2/FMAlgorithmWidget.h"
@@ -30,7 +31,6 @@
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
-#include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Theme.h"
 #include "audio/Clip.h"
 #include "audio/FollowAction.h"
@@ -66,7 +66,7 @@
 
 namespace yawn {
 namespace ui {
-namespace fw {
+namespace fw2 {
 
 class DetailPanelWidget : public Widget {
 public:
@@ -99,6 +99,14 @@ public:
     static constexpr float kClipLabelW       = 60.0f;
     static constexpr float kClipValueW       = 80.0f;
     static constexpr float kAutoSectionH     = 90.0f;   // automation target picker + envelope
+
+    DetailPanelWidget() {
+        // Container widget that does its own hit-test + dispatch in
+        // onMouseDown — opt OUT of the gesture state machine so an
+        // unhandled press on dead space doesn't end up captured by
+        // the panel and silently stack-overflow on the next mouseMove.
+        setAutoCaptureOnUnhandledPress(false);
+    }
 
     // --- Public API ---
 
@@ -174,16 +182,16 @@ public:
 
     ViewMode viewMode() const { return m_viewMode; }
 
-    // Helper — locate the v2 knob currently in edit mode, if any.
+    // Helper — locate the knob currently in edit mode, if any.
     // Returned pointer is valid only for the duration of the call.
-    ::yawn::ui::fw2::FwKnob* editingV2Knob() {
+    FwKnob* editingKnob() {
         if (m_gainKnob.isEditing())      return &m_gainKnob;
         if (m_transposeKnob.isEditing()) return &m_transposeKnob;
         if (m_detuneKnob.isEditing())    return &m_detuneKnob;
         if (m_bpmKnob.isEditing())       return &m_bpmKnob;
         return nullptr;
     }
-    const ::yawn::ui::fw2::FwKnob* editingV2Knob() const {
+    const FwKnob* editingKnob() const {
         if (m_gainKnob.isEditing())      return &m_gainKnob;
         if (m_transposeKnob.isEditing()) return &m_transposeKnob;
         if (m_detuneKnob.isEditing())    return &m_detuneKnob;
@@ -193,22 +201,22 @@ public:
 
     // Check if any clip-property knob or device knob is in text-edit mode
     bool hasEditingKnob() const {
-        if (editingV2Knob() != nullptr) return true;
+        if (editingKnob() != nullptr) return true;
         for (auto* dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return true;
         return false;
     }
 
-    // Forward key events to the editing knob. v2 knob consumes only
+    // Forward key events to the editing knob. Knob consumes only
     // Enter / Escape / Backspace from the key stream; digits arrive
     // through forwardTextInput (SDL TEXT_INPUT).
     bool forwardKeyDown(int key) {
-        if (auto* k = editingV2Knob()) {
-            ::yawn::ui::fw2::KeyEvent ke;
+        if (auto* k = editingKnob()) {
+            KeyEvent ke;
             switch (key) {
-                case 27 /*SDLK_ESCAPE*/:    ke.key = ::yawn::ui::fw2::Key::Escape;    break;
-                case 13 /*SDLK_RETURN*/:    ke.key = ::yawn::ui::fw2::Key::Enter;     break;
-                case 8  /*SDLK_BACKSPACE*/: ke.key = ::yawn::ui::fw2::Key::Backspace; break;
+                case 27 /*SDLK_ESCAPE*/:    ke.key = Key::Escape;    break;
+                case 13 /*SDLK_RETURN*/:    ke.key = Key::Enter;     break;
+                case 8  /*SDLK_BACKSPACE*/: ke.key = Key::Backspace; break;
                 default:                    return false;
             }
             return k->dispatchKeyDown(ke);
@@ -220,7 +228,7 @@ public:
 
     // Forward text input to the editing knob
     bool forwardTextInput(const char* text) {
-        if (auto* k = editingV2Knob()) {
+        if (auto* k = editingKnob()) {
             k->takeTextInput(text ? text : "");
             return true;
         }
@@ -231,7 +239,7 @@ public:
 
     // Cancel any knob in text-edit mode (e.g., when clicking outside)
     void cancelEditingKnobs() {
-        if (auto* k = editingV2Knob()) k->endEdit(/*commit*/false);
+        if (auto* k = editingKnob()) k->endEdit(/*commit*/false);
         for (auto* dw : m_deviceWidgets) dw->cancelEditingKnobs();
     }
 
@@ -248,7 +256,7 @@ public:
         m_waveformWidget.setClip(clip);
         m_waveformWidget.setSampleRate(sampleRate);
 
-        // Setup warp mode dropdown — migrated to fw2::FwDropDown.
+        // Setup warp mode dropdown.
         m_warpModeDropdown.setItems(std::vector<std::string>{
             "Off", "Auto", "Beats", "Tones", "Texture", "Repitch"});
         m_warpModeDropdown.setSelectedIndex(static_cast<int>(clip->warpMode));
@@ -271,9 +279,6 @@ public:
         });
 
         // Gain knob: 0 to ~+6dB, stored as linear gain in clip.
-        // v1→v2 mapping: setDefault→setDefaultValue, setFormatCallback→
-        // setValueFormatter, setSensitivity(s)→setPixelsPerFullRange(120/s).
-        // (v1's sensitivity-1.0 default = 120 px for full range.)
         m_gainKnob.setRange(0.0f, 2.0f);
         m_gainKnob.setDefaultValue(1.0f);
         m_gainKnob.setValue(clip->gain);
@@ -294,7 +299,7 @@ public:
         m_transposeKnob.setDefaultValue(0.0f);
         m_transposeKnob.setValue(static_cast<float>(clip->transposeSemitones));
         m_transposeKnob.setStep(1.0f);
-        m_transposeKnob.setPixelsPerFullRange(240.0f);   // v1 sens 0.5
+        m_transposeKnob.setPixelsPerFullRange(240.0f);
         m_transposeKnob.setLabel("");
         m_transposeKnob.setShowLabel(false);
         m_transposeKnob.setValueFormatter([](float v) -> std::string {
@@ -311,7 +316,7 @@ public:
         m_detuneKnob.setDefaultValue(0.0f);
         m_detuneKnob.setValue(static_cast<float>(clip->detuneCents));
         m_detuneKnob.setStep(1.0f);
-        m_detuneKnob.setPixelsPerFullRange(400.0f);      // v1 sens 0.3
+        m_detuneKnob.setPixelsPerFullRange(400.0f);
         m_detuneKnob.setLabel("");
         m_detuneKnob.setShowLabel(false);
         m_detuneKnob.setValueFormatter([](float v) -> std::string {
@@ -327,7 +332,7 @@ public:
         m_bpmKnob.setRange(20.0f, 999.0f);
         m_bpmKnob.setDefaultValue(120.0f);
         m_bpmKnob.setValue(clip->originalBPM > 0 ? static_cast<float>(clip->originalBPM) : 120.0f);
-        m_bpmKnob.setPixelsPerFullRange(240.0f);         // v1 sens 0.5
+        m_bpmKnob.setPixelsPerFullRange(240.0f);
         m_bpmKnob.setLabel("");
         m_bpmKnob.setShowLabel(false);
         m_bpmKnob.setValueFormatter([](float v) -> std::string {
@@ -339,8 +344,7 @@ public:
             if (m_clipPtr) const_cast<audio::Clip*>(m_clipPtr)->originalBPM = static_cast<double>(v);
         });
 
-        // Loop toggle button — v2 FwToggle. Keep dynamic "On"/"Off" label
-        // (accent fill also reflects state).
+        // Loop toggle button.
         m_loopToggleBtn.setLabel(clip->looping ? "On" : "Off");
         m_loopToggleBtn.setState(clip->looping);
         m_loopToggleBtn.setOnChange([this](bool on) {
@@ -388,9 +392,9 @@ public:
                 ref.chainIndex = i;
                 ref.audioEffect = fx;
 
-                auto* dw = new ::yawn::ui::fw2::DeviceWidget();
+                auto* dw = new DeviceWidget();
                 dw->setDeviceName(fx->name());
-                dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::AudioEffect);
+                dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
@@ -474,8 +478,8 @@ public:
         });
     }
 
-    ::yawn::ui::fw2::WaveformWidget&       waveformWidget()       { return m_waveformWidget; }
-    const ::yawn::ui::fw2::WaveformWidget& waveformWidget() const { return m_waveformWidget; }
+    WaveformWidget&       waveformWidget()       { return m_waveformWidget; }
+    const WaveformWidget& waveformWidget() const { return m_waveformWidget; }
 
     // Rebuild the device chain from current track state.
     void setDeviceChain(midi::MidiEffectChain* midiChain,
@@ -514,9 +518,9 @@ public:
                 ref.chainIndex = i;
                 ref.midiEffect = fx;
 
-                auto* dw = new ::yawn::ui::fw2::DeviceWidget();
+                auto* dw = new DeviceWidget();
                 dw->setDeviceName(fx->name());
-                dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::MidiEffect);
+                dw->setDeviceType(DeviceHeaderWidget::DeviceType::MidiEffect);
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
@@ -539,9 +543,9 @@ public:
             ref.chainIndex = 0;
             ref.instrument = inst;
 
-            auto* dw = new ::yawn::ui::fw2::DeviceWidget();
+            auto* dw = new DeviceWidget();
             dw->setDeviceName(inst->name());
-            dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::Instrument);
+            dw->setDeviceType(DeviceHeaderWidget::DeviceType::Instrument);
             dw->setRemovable(false);
             dw->setExpanded(findPrevExpanded(static_cast<void*>(inst)));
             dw->setBypassed(inst->bypassed());
@@ -566,9 +570,9 @@ public:
                 ref.chainIndex = i;
                 ref.audioEffect = fx;
 
-                auto* dw = new ::yawn::ui::fw2::DeviceWidget();
+                auto* dw = new DeviceWidget();
                 dw->setDeviceName(fx->name());
-                dw->setDeviceType(::yawn::ui::fw2::DeviceHeaderWidget::DeviceType::AudioEffect);
+                dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
                 dw->setRemovable(true);
                 dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
                 dw->setBypassed(fx->bypassed());
@@ -637,13 +641,13 @@ public:
             const auto& wb = m_waveformWidget.bounds();
             if (m_lastMouseX >= wb.x && m_lastMouseX < wb.x + wb.w &&
                 m_lastMouseY >= wb.y && m_lastMouseY < wb.y + wb.h) {
-                ::yawn::ui::fw2::ScrollEvent se;
+                ScrollEvent se;
                 se.x = m_lastMouseX; se.y = m_lastMouseY;
                 se.lx = m_lastMouseX - wb.x;
                 se.ly = m_lastMouseY - wb.y;
                 se.dx = dx; se.dy = dy;
                 if (ctrl)
-                    se.modifiers |= ::yawn::ui::fw2::ModifierKey::Ctrl;
+                    se.modifiers |= ModifierKey::Ctrl;
                 m_waveformWidget.dispatchScroll(se);
                 return;
             }
@@ -663,30 +667,45 @@ public:
 #endif
 
     // v1 MIDI Learn context menu retired — fw2::ContextMenu handles
-    // hover via LayerStack. API kept as an empty stub so the v1 App
-    // event loop compile path doesn't need to be edited yet; a
-    // follow-up will remove the call from App.cpp entirely.
+    // hover via LayerStack. API kept as an empty stub so call sites
+    // can be removed in a follow-up commit.
     void handleDeviceContextMenuMouseMove(float, float) {}
 
     // ─── Measure / Layout ───────────────────────────────────────────────
 
-    Size measure(const Constraints& c, const UIContext&) override {
-        updateAnimation();
+    Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({c.maxW, m_animatedHeight});
     }
 
+    // Per-frame animation step. Advance the open/close height
+    // animation toward m_targetHeight and invalidate the measure
+    // cache so the next layout pass picks up the new height.
+    //
+    // Must be called once per frame (App::update does this). Tests
+    // drive convergence by calling tick() in a tight loop.
+    //
+    // Animation cannot live inside onMeasure because fw2 caches the
+    // measured size against (constraints, epoch, localVersion); a
+    // tight loop of measure() with the same constraints would only
+    // run onMeasure once and the animation would never advance.
+    void tick() {
+        const float prev = m_animatedHeight;
+        updateAnimation();
+        if (m_animatedHeight != prev) invalidate();
+    }
+
 #ifdef YAWN_TEST_BUILD
-    void layout(const Rect& bounds, const UIContext&) override { m_bounds = bounds; }
+    void onLayout(Rect bounds, UIContext&) override { m_bounds = bounds; }
 #else
-    void layout(const Rect& bounds, const UIContext& ctx) override;
+    void onLayout(Rect bounds, UIContext& ctx) override;
 #endif
 
     // ─── Rendering ──────────────────────────────────────────────────────
 
 #ifdef YAWN_TEST_BUILD
-    void paint(UIContext&) override {}
+    void render(UIContext&) override {}
 #else
-    void paint(UIContext& ctx) override;
+    void render(UIContext& ctx) override;
 #endif
 
     // ─── Events ─────────────────────────────────────────────────────────
@@ -740,33 +759,19 @@ public:
             m_dragInsertIdx = best;
             return true;
         }
-        // v2 knob drag in progress — forward translated events.
-        // Handled BEFORE capturedWidget() because v2 widgets drive their
-        // own gesture SM and don't participate in v1 capture.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseMove(ev);
-            return true;
-        }
-        // A fw2 descendant (device knob / custom body knob) has capture
-        // — route the move there directly. v1 capture is on ourselves,
-        // which means v1 App already forwards moves here; self-recursing
-        // via Widget::capturedWidget()->onMouseMove would stack-overflow.
-        if (auto* cap = ::yawn::ui::fw2::Widget::capturedWidget()) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, cap->bounds());
-            return cap->dispatchMouseMove(ev);
+        // A descendant has fw2 capture — route the move there directly.
+        // Guard against self-dispatch (we set autoCaptureOnUnhandledPress=
+        // false in the constructor, so this should never be us; the guard
+        // is belt-and-suspenders against a future regression).
+        if (auto* cap = Widget::capturedWidget(); cap && cap != this) {
+            return cap->dispatchMouseMove(e);
         }
         // Forward to waveform widget in audio clip view
         if (m_viewMode == ViewMode::AudioClip) {
-            // v2 dropdown popups get their mouseMove via LayerStack —
-            // no panel-side branch needed for open-state routing.
-            const auto& wb = m_waveformWidget.bounds();
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, wb);
-            if (m_waveformWidget.dispatchMouseMove(ev)) return true;
+            if (m_waveformWidget.dispatchMouseMove(e)) return true;
         }
         for (auto* dw : m_deviceWidgets) {
-            auto ev = ::yawn::ui::fw2::toFw2MouseMove(e, dw->bounds());
-            if (dw->dispatchMouseMove(ev)) return true;
+            if (dw->dispatchMouseMove(e)) return true;
         }
         return false;
     }
@@ -801,37 +806,21 @@ public:
             }
             return true;
         }
-        // v2 knob drag wrapping up — flush the release + drop v1 capture.
-        if (m_v2Dragging) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, m_v2Dragging->bounds());
-            m_v2Dragging->dispatchMouseUp(ev);
-            m_v2Dragging = nullptr;
-            releaseMouse();
-            return true;
-        }
-        // A fw2 descendant had capture — release it there and drop our
-        // v1 capture (we held it so App would route us follow-up moves).
-        if (auto* cap = ::yawn::ui::fw2::Widget::capturedWidget()) {
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, cap->bounds());
-            cap->dispatchMouseUp(ev);
-            releaseMouse();
+        // A descendant has fw2 capture — release through it. Same self-
+        // dispatch guard as in onMouseMove.
+        if (auto* cap = Widget::capturedWidget(); cap && cap != this) {
+            cap->dispatchMouseUp(e);
             return true;
         }
         // Forward to waveform widget
         if (m_viewMode == ViewMode::AudioClip) {
-            // v2 dropdowns toggle on mouse-down directly — no mouseUp
-            // forwarding needed. v2 button + toggle release via the
-            // m_v2Dragging path above. v2 knobs likewise.
-            const auto& wb = m_waveformWidget.bounds();
-            auto ev = ::yawn::ui::fw2::toFw2Mouse(e, wb);
-            if (m_waveformWidget.dispatchMouseUp(ev)) return true;
+            if (m_waveformWidget.dispatchMouseUp(e)) return true;
         }
         for (auto* dw : m_deviceWidgets) {
             const auto& db = dw->bounds();
             if (e.x >= db.x && e.x < db.x + db.w &&
                 e.y >= db.y && e.y < db.y + db.h) {
-                auto ev = ::yawn::ui::fw2::toFw2Mouse(e, db);
-                if (dw->dispatchMouseUp(ev)) return true;
+                if (dw->dispatchMouseUp(e)) return true;
             }
         }
         return false;
@@ -843,8 +832,7 @@ public:
             const auto& wb = m_waveformWidget.bounds();
             if (e.x >= wb.x && e.x < wb.x + wb.w &&
                 e.y >= wb.y && e.y < wb.y + wb.h) {
-                auto ev = ::yawn::ui::fw2::toFw2Scroll(e, wb);
-                return m_waveformWidget.dispatchScroll(ev);
+                return m_waveformWidget.dispatchScroll(e);
             }
         }
         return false;
@@ -908,18 +896,18 @@ private:
     };
 
     // ── Wire header-only callbacks (preset) that setup*Display may skip ──
-    void wireHeaderCallbacks(::yawn::ui::fw2::DeviceWidget* dw, const DeviceRef& ref) {
+    void wireHeaderCallbacks(DeviceWidget* dw, const DeviceRef& ref) {
         dw->setOnPresetClick([this, type = ref.type, chainIdx = ref.chainIndex](float x, float y) {
             if (m_onPresetClick) m_onPresetClick(type, chainIdx, x, y);
         });
     }
 
     // ── Build params and wire callbacks for a DeviceWidget ──
-    void configureDeviceWidget(::yawn::ui::fw2::DeviceWidget* dw, const DeviceRef& ref) {
-        std::vector<::yawn::ui::fw2::DeviceWidget::ParamInfo> params;
+    void configureDeviceWidget(DeviceWidget* dw, const DeviceRef& ref) {
+        std::vector<DeviceWidget::ParamInfo> params;
         int count = ref.paramCount();
         for (int p = 0; p < count; ++p) {
-            ::yawn::ui::fw2::DeviceWidget::ParamInfo pi;
+            DeviceWidget::ParamInfo pi;
             pi.index = p;
             if (ref.midiEffect) {
                 auto& info = ref.midiEffect->parameterInfo(p);
@@ -1077,15 +1065,15 @@ private:
     }
 
     // ── Create instrument-specific grouped layout (returns true if handled) ──
-    bool setupInstrumentDisplay(::yawn::ui::fw2::DeviceWidget* dw, instruments::Instrument* inst,
+    bool setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst,
                                 const DeviceRef& ref) {
         if (!inst) return false;
         std::string nm = inst->name();
 
-        ::yawn::ui::fw2::GroupedKnobBody::Config config;
+        GroupedKnobBody::Config config;
 
         if (nm == "FM Synth") {
-            auto* algoW = new ::yawn::ui::fw2::FMAlgorithmWidget();
+            auto* algoW = new FMAlgorithmWidget();
             config.display = algoW;
             config.displayWidth = 130;
             config.sections = {
@@ -1102,7 +1090,7 @@ private:
                                    inst->getParameter(10), inst->getParameter(14));
             });
         } else if (nm == "Subtractive Synth") {
-            auto* panel = new ::yawn::ui::fw2::SubSynthDisplayPanel();
+            auto* panel = new SubSynthDisplayPanel();
             config.display = panel;
             config.displayWidth = 150;
             config.sections = {
@@ -1129,7 +1117,7 @@ private:
                     inst->getParameter(18), inst->getParameter(19));
             });
         } else if (nm == "Sampler") {
-            auto* samplerPanel = new ::yawn::ui::fw2::SamplerDisplayPanel();
+            auto* samplerPanel = new SamplerDisplayPanel();
             config.display = samplerPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1155,7 +1143,7 @@ private:
                 }
             });
         } else if (nm == "DrumSlop") {
-            auto* dsPanel = new ::yawn::ui::fw2::DrumSlopDisplayPanel();
+            auto* dsPanel = new DrumSlopDisplayPanel();
             config.display = dsPanel;
             config.displayWidth = 160;
             config.sections = {
@@ -1194,7 +1182,7 @@ private:
                     dsPanel->setPadPlaying(i, ds->isPadPlaying(i));
             });
         } else if (nm == "Wavetable Synth") {
-            auto* wtPanel = new ::yawn::ui::fw2::WavetableDisplayPanel();
+            auto* wtPanel = new WavetableDisplayPanel();
             config.display = wtPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1234,7 +1222,7 @@ private:
                     wtPanel->setTableName(tableNames[table]);
             });
         } else if (nm == "Granular Synth") {
-            auto* grPanel = new ::yawn::ui::fw2::GranularDisplayPanel();
+            auto* grPanel = new GranularDisplayPanel();
             config.display = grPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1261,7 +1249,7 @@ private:
                 grPanel->setGrainSize(grainMs / totalMs);
             });
         } else if (nm == "Vocoder") {
-            auto* vocPanel = new ::yawn::ui::fw2::VocoderDisplayPanel();
+            auto* vocPanel = new VocoderDisplayPanel();
             config.display = vocPanel;
             config.displayWidth = 130;
             config.sections = {
@@ -1284,7 +1272,7 @@ private:
                     static_cast<int>(voc->getParameter(instruments::Vocoder::kBands)));
             });
         } else if (nm == "Drum Rack") {
-            auto* drPanel = new ::yawn::ui::fw2::DrumRackDisplayPanel();
+            auto* drPanel = new DrumRackDisplayPanel();
             config.display = drPanel;
             config.displayWidth = 160;
             config.sections = {
@@ -1322,7 +1310,7 @@ private:
                     drPanel->setSelectedPadWaveform(nullptr, 0, 1);
             });
         } else if (nm == "Instrument Rack") {
-            auto* irPanel = new ::yawn::ui::fw2::InstrumentRackDisplayPanel();
+            auto* irPanel = new InstrumentRackDisplayPanel();
             config.display = irPanel;
             config.displayWidth = 160;
             config.sections = {
@@ -1362,7 +1350,7 @@ private:
 
                 for (int i = 0; i < ir->chainCount(); ++i) {
                     const auto& ch = ir->chain(i);
-                    ::yawn::ui::fw2::InstrumentRackDisplayPanel::ChainInfo ci;
+                    InstrumentRackDisplayPanel::ChainInfo ci;
                     ci.name    = ch.instrument ? ch.instrument->name() : "Empty";
                     ci.keyLow  = ch.keyLow;
                     ci.keyHigh = ch.keyHigh;
@@ -1379,7 +1367,7 @@ private:
 
         // Build param descriptors
         int count = inst->parameterCount();
-        std::vector<::yawn::ui::fw2::GroupedKnobBody::ParamDesc> params(count);
+        std::vector<GroupedKnobBody::ParamDesc> params(count);
         for (int p = 0; p < count; ++p) {
             auto& info = inst->parameterInfo(p);
             params[p] = {p, info.name, info.unit ? info.unit : "",
@@ -1387,7 +1375,7 @@ private:
                          info.isBoolean, info.formatFn};
         }
 
-        auto* body = new ::yawn::ui::fw2::GroupedKnobBody();
+        auto* body = new GroupedKnobBody();
         body->configure(config, params);
         body->setOnParamChange([ref](int idx, float v) {
             DeviceRef r = ref; r.setParam(idx, v);
@@ -1407,13 +1395,13 @@ private:
     }
 
     // ── Build custom display for audio effects (currently Filter) ──
-    bool setupAudioEffectDisplay(::yawn::ui::fw2::DeviceWidget* dw, effects::AudioEffect* fx,
+    bool setupAudioEffectDisplay(DeviceWidget* dw, effects::AudioEffect* fx,
                                  const DeviceRef& ref) {
         if (!fx) return false;
         std::string id = fx->id();
 
         if (id == "filter") {
-            auto* disp = new ::yawn::ui::fw2::FilterDisplayWidget();
+            auto* disp = new FilterDisplayWidget();
             dw->setCustomPanel(disp, 52.0f, 200.0f);
             configureDeviceWidget(dw, ref);
 
@@ -1436,13 +1424,13 @@ private:
     }
 
     // ── Build custom display for MIDI effects (currently LFO) ──
-    bool setupMidiEffectDisplay(::yawn::ui::fw2::DeviceWidget* dw, midi::MidiEffect* fx,
+    bool setupMidiEffectDisplay(DeviceWidget* dw, midi::MidiEffect* fx,
                                 const DeviceRef& ref) {
         if (!fx) return false;
         std::string nm = fx->id();
 
         if (nm == "lfo") {
-            auto* lfoDisp = new ::yawn::ui::fw2::LFODisplayWidget();
+            auto* lfoDisp = new LFODisplayWidget();
             dw->setCustomPanel(lfoDisp, 52.0f, 200.0f);
             configureDeviceWidget(dw, ref);
 
@@ -1496,8 +1484,8 @@ private:
     }
 
     // ── State ──
-    ::yawn::ui::fw2::SnapScrollContainer m_scroll;
-    std::vector<::yawn::ui::fw2::DeviceWidget*> m_deviceWidgets;  // owned
+    SnapScrollContainer m_scroll;
+    std::vector<DeviceWidget*> m_deviceWidgets;  // owned
     std::vector<DeviceRef>     m_deviceRefs;     // parallel to m_deviceWidgets
     std::vector<ExpandState>   m_expandStates;
     std::vector<std::function<void()>> m_displayUpdaters;  // instrument display updaters
@@ -1549,31 +1537,25 @@ private:
     ViewMode m_viewMode = ViewMode::Devices;
     const audio::Clip* m_clipPtr = nullptr;
     int m_clipSampleRate = static_cast<int>(kDefaultSampleRate);
-    ::yawn::ui::fw2::WaveformWidget m_waveformWidget;
-    ::yawn::ui::fw2::FwDropDown m_warpModeDropdown;
-    ::yawn::ui::fw2::FwButton m_detectBtn;
-    ::yawn::ui::fw2::FwKnob m_gainKnob;
-    ::yawn::ui::fw2::FwKnob m_transposeKnob;
-    ::yawn::ui::fw2::FwKnob m_detuneKnob;
-    ::yawn::ui::fw2::FwToggle m_loopToggleBtn;
-    ::yawn::ui::fw2::FwKnob m_bpmKnob;
-    // Tracks which v2 widget currently owns a drag — set in
-    // onMouseDown, used by onMouseMove/Up to forward translated
-    // events back to the fw2 gesture SM. Null when no v2 drag is
-    // in progress.
-    ::yawn::ui::fw2::Widget* m_v2Dragging = nullptr;
+    WaveformWidget m_waveformWidget;
+    FwDropDown m_warpModeDropdown;
+    FwButton m_detectBtn;
+    FwKnob m_gainKnob;
+    FwKnob m_transposeKnob;
+    FwKnob m_detuneKnob;
+    FwToggle m_loopToggleBtn;
+    FwKnob m_bpmKnob;
     float m_lastMouseX = 0, m_lastMouseY = 0;
 
     // Automation lane editor
-    ::yawn::ui::fw2::FwDropDown m_autoTargetDropdown;
-    ::yawn::ui::fw2::AutomationEnvelopeWidget m_autoEnvelopeWidget;
+    FwDropDown m_autoTargetDropdown;
+    AutomationEnvelopeWidget m_autoEnvelopeWidget;
     int m_autoSelectedLaneIdx = -1;
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
     int m_autoTrackIndex = -1;
 
     // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;
-    // v1 m_deviceContextMenu retired — fw2::ContextMenu on LayerStack.
 
     void buildAutoTargetList() {
         std::vector<std::string> items;
@@ -1663,14 +1645,14 @@ private:
 
     // ── Audio clip view rendering ──
 #ifdef YAWN_TEST_BUILD
-    void paintAudioClipView(Renderer2D&, Font&, float, float, float, float, float, UIContext&) {}
+    void paintAudioClipView(Renderer2D&, TextMetrics&, float, float, float, float, UIContext&) {}
 #else
-    void paintAudioClipView(Renderer2D& renderer, Font& font,
+    void paintAudioClipView(Renderer2D& renderer, TextMetrics& tm,
                             float x, float bodyY, float w, float bodyH,
-                            float hScale, UIContext& ctx);
+                            UIContext& ctx);
 #endif
 };
 
-} // namespace fw
+} // namespace fw2
 } // namespace ui
 } // namespace yawn

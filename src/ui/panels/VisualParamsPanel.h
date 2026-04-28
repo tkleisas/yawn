@@ -153,9 +153,9 @@ public:
     }
     void setOnChainAdd(ChainAddCallback cb)               { m_onChainAdd        = std::move(cb); }
 
-    // Link to the v1 DetailPanelWidget so our height mirrors it and
+    // Link to the DetailPanelWidget so our height mirrors it and
     // the top drag handle resizes both panels in lockstep.
-    void setDetailPanel(::yawn::ui::fw::DetailPanelWidget* p) { m_detail = p; }
+    void setDetailPanel(::yawn::ui::fw2::DetailPanelWidget* p) { m_detail = p; }
 
     void setKnobValues(const float* vals8) {
         for (int i = 0; i < 8; ++i) m_knobAH[i]->setValue(vals8[i]);
@@ -1094,7 +1094,7 @@ private:
     // Post-FX card outlines (paired with m_postFX, like the chain side).
     std::vector<Rect>           m_postFXCardRects;
 
-    ::yawn::ui::fw::DetailPanelWidget* m_detail = nullptr;
+    ::yawn::ui::fw2::DetailPanelWidget* m_detail = nullptr;
     bool  m_handleDrag   = false;
     float m_handleStartY = 0.0f;
     float m_handleStartH = 0.0f;

@@ -1,8 +1,10 @@
 #include "Widget.h"
 #include "Painter.h"
 #include "Tooltip.h"
+#include "util/Logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <typeinfo>
 
 namespace yawn {
@@ -192,7 +194,50 @@ void Widget::setPadding(Insets p) {
 
 // ─── Mouse capture ───────────────────────────────────────────────────
 
-void Widget::captureMouse()      { g_captured = this; }
+namespace {
+// Walk parent pointers from `descendant` looking for `ancestor`.
+// True if `ancestor` is anywhere on `descendant`'s parent chain.
+bool isAncestor(const Widget* ancestor, const Widget* descendant) {
+    if (!ancestor || !descendant) return false;
+    for (const Widget* p = descendant->parent(); p; p = p->parent())
+        if (p == ancestor) return true;
+    return false;
+}
+} // anon
+
+void Widget::captureMouse() {
+    // ── Ancestor-stomps-descendant guard ──
+    //
+    // Diagnose the recurring "dial doesn't turn" trap: a self-dispatch
+    // container (DetailPanel, DeviceWidget, InstrumentRack…) calls
+    // captureMouse() AFTER forwarding the mouseDown to a descendant
+    // that has already auto-captured via its gesture state machine.
+    // fw2 has a single global capture slot, so the ancestor's capture
+    // overwrites the descendant's — the descendant's gesture SM still
+    // thinks it's mid-drag (m_gesture.pressed == true), but subsequent
+    // mouseMoves route to the ancestor instead of the descendant.
+    // Symptom: knob/fader/scrollbar visually frozen during drag.
+    //
+    // The supported pattern for own-dispatch containers is:
+    //   * setAutoCaptureOnUnhandledPress(false) in the constructor, AND
+    //   * do NOT call captureMouse() after dispatching to a descendant
+    //     — let the descendant's auto-capture stand
+    //
+    // Containers may still legitimately captureMouse() for THEIR OWN
+    // drag (panel resize handle, drag-reorder grip) — those start with
+    // no descendant capture in flight, so this guard stays quiet.
+    if (g_captured && g_captured != this && isAncestor(this, g_captured)) {
+        LOG_WARN("UI",
+            "captureMouse stomp: %s overwrote descendant capture %s — "
+            "see fw2::Widget capture gotcha. Container should opt out via "
+            "setAutoCaptureOnUnhandledPress(false) and not call captureMouse "
+            "after dispatching to a descendant.",
+            typeid(*this).name(), typeid(*g_captured).name());
+        assert(!"ancestor captureMouse stomped descendant capture — "
+                "see fw2::Widget::captureMouse comment for the fix");
+    }
+    g_captured = this;
+}
 void Widget::releaseMouse()      { if (g_captured == this) g_captured = nullptr; }
 bool Widget::hasMouseCapture() const { return g_captured == this; }
 Widget* Widget::capturedWidget()     { return g_captured; }
