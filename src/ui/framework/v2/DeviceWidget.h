@@ -22,7 +22,6 @@
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/StepSelector.h"
 #include "ui/framework/v2/Toggle.h"
-#include "ui/framework/v2/V1EventBridge.h"
 #include "ui/Theme.h"
 #include "util/Logger.h"
 #include "WidgetHint.h"

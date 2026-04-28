@@ -10,7 +10,7 @@
 // caching.
 
 #include "ui/Theme.h"              // Color
-#include "ui/framework/Types.h"    // Rect (for viewport)
+#include "Types.h"                  // Rect (for viewport)
 
 #include <string>
 

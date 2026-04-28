@@ -1,9 +1,10 @@
 #include <gtest/gtest.h>
-#include "ui/framework/Types.h"
-#include "ui/framework/EventSystem.h"
-#include <cstring>
+#include "ui/framework/v2/Types.h"
 
 using namespace yawn::ui::fw;
+// Note: types live in `fw` namespace even after the file moved into v2/.
+// Renaming the namespace is a separate cleanup pass — would touch every
+// fw2 file that has `using ::yawn::ui::fw::Rect;` (etc.) at the top.
 
 // ─── Point tests ────────────────────────────────────────────────────────────
 
@@ -300,78 +301,6 @@ TEST(ConstraintsTest, Unbounded) {
     EXPECT_TRUE(c.isUnbounded());
 }
 
-// ─── Event system tests ─────────────────────────────────────────────────────
-
-TEST(EventTest, Consume) {
-    Event e;
-    EXPECT_FALSE(e.consumed);
-    e.consume();
-    EXPECT_TRUE(e.consumed);
-}
-
-TEST(MouseEventTest, ButtonIdentification) {
-    MouseEvent e;
-    e.button = MouseButton::Left;
-    EXPECT_TRUE(e.isLeftButton());
-    EXPECT_FALSE(e.isRightButton());
-    EXPECT_FALSE(e.isMiddleButton());
-}
-
-TEST(MouseEventTest, DoubleClick) {
-    MouseEvent e;
-    e.clickCount = 1;
-    EXPECT_FALSE(e.isDoubleClick());
-    e.clickCount = 2;
-    EXPECT_TRUE(e.isDoubleClick());
-}
-
-TEST(KeyEventTest, SpecialKeys) {
-    KeyEvent e;
-
-    e.keyCode = 0x1B;
-    EXPECT_TRUE(e.isEscape());
-
-    e.keyCode = 0x0D;
-    EXPECT_TRUE(e.isEnter());
-
-    e.keyCode = 0x09;
-    EXPECT_TRUE(e.isTab());
-
-    e.keyCode = 0x7F;
-    EXPECT_TRUE(e.isDelete());
-
-    e.keyCode = 0x08;
-    EXPECT_TRUE(e.isBackspace());
-}
-
-TEST(ModifiersTest, None) {
-    Modifiers m;
-    EXPECT_TRUE(m.none());
-    m.shift = true;
-    EXPECT_FALSE(m.none());
-}
-
-TEST(ScrollEventTest, Fields) {
-    ScrollEvent e;
-    e.x = 100; e.y = 200;
-    e.dx = 0; e.dy = 3;
-    e.mods.ctrl = true;
-
-    EXPECT_FLOAT_EQ(e.x, 100.0f);
-    EXPECT_FLOAT_EQ(e.dy, 3.0f);
-    EXPECT_TRUE(e.mods.ctrl);
-}
-
-TEST(TextInputEventTest, Storage) {
-    TextInputEvent e;
-    std::strncpy(e.text, "abc", sizeof(e.text));
-    EXPECT_STREQ(e.text, "abc");
-}
-
-TEST(DropFileEventTest, Fields) {
-    DropFileEvent e;
-    const char* path = "test.wav";
-    e.path = path;
-    e.x = 50; e.y = 100;
-    EXPECT_STREQ(e.path, "test.wav");
-}
+// (v1 EventSystem.h tests retired with the v1 framework — fw2 has its
+//  own event types tested in test_fw2_*.cpp. The geometric types above
+//  are framework-agnostic and stay.)

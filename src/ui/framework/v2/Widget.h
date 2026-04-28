@@ -18,7 +18,7 @@
 // See docs/ui-v2-architecture.md, ui-v2-measure-layout.md,
 // ui-v2-events.md for the full design.
 
-#include "ui/framework/Types.h"      // reuse v1 geometric types
+#include "Types.h"                    // shared geometric types (in fw namespace)
 #include "UIContext.h"
 
 #include <algorithm>

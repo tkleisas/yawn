@@ -11,7 +11,7 @@
 // (not yawn_core) since it includes v1 Renderer2D + Font headers which
 // pull glad/GL.
 
-#include "ui/framework/Types.h"   // Rect
+#include "ui/framework/v2/Types.h"   // Rect
 
 namespace yawn {
 namespace ui {
