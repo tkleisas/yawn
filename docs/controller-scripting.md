@@ -2,6 +2,17 @@
 
 YAWN includes an embedded Lua 5.4 scripting engine for MIDI controller integration. Controllers are supported through scripts that define how hardware buttons, encoders, pads, and displays interact with the DAW.
 
+## Supported controllers
+
+| Controller | Surface | Where |
+|---|---|---|
+| **Ableton Push 1** | 8×8 pads, 8 encoders, 4-line LCD, transport | [§ Ableton Push 1](#ableton-push-1) |
+| **Ableton Move** | 4×8 pads, 2 encoders (touch-sensitive), scene & nav buttons | [docs/ableton-move.md](ableton-move.md) |
+| **Korg nanoKONTROL2** | 8 faders, 8 knobs, 24 channel buttons, transport | [§ Korg nanoKONTROL2](#korg-nanokontrol2) |
+| **Yamaha Reface DX** | 37-key FM synth, touch strip, pitch bend, sustain | [§ Yamaha Reface DX](#yamaha-reface-dx) |
+
+Adding a new controller is a Lua script + manifest — see [§ Writing a New Controller Script](#writing-a-new-controller-script). Scripts hot-reload via **View → Reload Controller Scripts**.
+
 ## Architecture
 
 ```
@@ -170,6 +181,7 @@ All device parameter functions take `(device_type, chain_index, param_index)`:
 | Function | Description |
 |----------|-------------|
 | `yawn.log(message)` | Log message to YAWN's console (appears as `[Lua]`) |
+| `yawn.toast(text, duration_sec)` | Show a top-center status banner in the YAWN window. Duration is in seconds (default ~1.5). Designed as a screen substitute for controllers without their own display (Move, nanoKONTROL2, Reface DX). Thread-safe — fire from any callback |
 
 ---
 
@@ -286,6 +298,93 @@ Major Pentatonic, Minor Pentatonic, Blues
 Hijaz, Bayati, Rast, Nahawand, Kurd, Saba, Ajam, Nikriz, Sikah, Husseini, Phrygian Dominant, Double Harmonic, Hungarian Minor, Hicaz Kar, Ussak
 
 > **Note**: Several maqamat (Bayati, Rast, Sikah) traditionally use quarter-tones that cannot be perfectly represented in 12-TET. These are the closest semitone approximations. The scale data structure supports `tones_per_octave` for future TET24 (quarter-tone) implementation.
+
+---
+
+## Korg nanoKONTROL2
+
+The nanoKONTROL2 is a hands-on bank of 8 faders, 8 knobs, 24 channel
+buttons, and a transport row. No display, no encoders — just tactile
+mixer control. YAWN drives the channel-button LEDs for visual feedback
+on mute/solo/arm state.
+
+> **Setup**: The script assumes the unit is in **CC mode** (the
+> power-on default factory setting). If buttons behave unexpectedly,
+> reset to factory via the Korg Kontrol Editor or set all controls to
+> **CC Momentary** mode.
+
+### CC Map
+
+| CC | Control | Function |
+|----|---------|----------|
+| 0–7 | Faders 1–8 | Track volume (0–127 → 0.0–2.0) |
+| 16–23 | Knobs 1–8 | Track pan (0–127 → −1.0..+1.0) |
+| 8–15 | Solo 1–8 | Toggle solo (LED on while soloed) |
+| 48–55 | Mute 1–8 | Toggle mute (LED on while muted) |
+| 56–63 | Rec 1–8 | Toggle record-arm (LED on while armed) |
+| 41 | Play | Toggle play/stop |
+| 42 | Stop | Stop transport |
+| 45 | Rec | Toggle transport record |
+| 46 | Cycle | Toggle loop (LED synced) |
+| 43 / 58 | Rew / Track ◀ | Select previous track |
+| 44 / 59 | Fwd / Track ▶ | Select next track |
+| 60 | Marker Set | Re-sync all LEDs from engine state |
+| 61 | Marker ◀ | Bank left (shift visible 8-channel window by −8) |
+| 62 | Marker ▶ | Bank right (shift visible 8-channel window by +8) |
+
+### Banking
+
+The 8 channel strips map to a sliding window over YAWN's 64 tracks.
+**Marker ◀ / ▶** shift the window by 8 channels at a time. The
+selected track follows the bank shift, and a toast confirms the new
+range (e.g. *Bank: T9-T16*).
+
+### LED feedback
+
+- Mute / solo / arm LEDs reflect engine state. Pressing a button
+  toggles the state and updates the LED.
+- The **Cycle** button LED tracks the transport loop state.
+- The **Marker Set** button forces a full LED resync — useful if
+  state has drifted (e.g. you muted from the YAWN UI while the
+  controller was disconnected).
+- Fader / knob LEDs are managed by the controller's firmware.
+
+---
+
+## Yamaha Reface DX
+
+The Reface DX is a 37-key FM synth with a touch strip, pitch bend
+wheel, and sustain. The script handles the **CC surface only** —
+notes, pitch bend, and sustain are routed through YAWN's standard
+MIDI engine via per-track MIDI input, with no script involvement.
+
+### CC Map
+
+| CC | Control | Function |
+|----|---------|----------|
+| 1 | Modulation / Touch Strip | Selected track's instrument param 0 (rate-limited toast on change) |
+| 11 | Expression | Selected track volume |
+| 7 | Volume | Master volume |
+| 64 | Sustain | Handled natively by the MIDI engine |
+
+### Touch Strip Behavior
+
+The Reface touch strip rests at center (~64) when released. The script
+maps it to instrument param 0 of the currently selected track:
+
+- **Left edge** (CC 1 ≈ 0) → param min
+- **Right edge** (CC 1 ≈ 127) → param max
+- **Center** (released) → param midpoint
+
+Use this to drive a synth's primary expression parameter (filter
+cutoff, FM amount, etc.) live from the touch strip during play. The
+script shows the parameter's current display value as a toast each
+time it changes (rate-limited to one toast per unique value).
+
+> **Per-track instruments**: Switch the selected track in YAWN to
+> retarget the touch strip to a different instrument's param 0. Combine
+> with the nanoKONTROL2's track navigation buttons for hands-free
+> retargeting.
 
 ---
 

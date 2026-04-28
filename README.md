@@ -7,9 +7,9 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · Controller Scripting (Push 1 + Ableton Move) · <strong>Visual / VJ Engine · Video Clips</strong><br/><br/>
+  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · <strong>Ableton Link</strong> · Controller Scripting (Push 1 + Move + nanoKONTROL2 + Reface DX) · <strong>Visual / VJ Engine · Video Clips · 3D Models</strong><br/><br/>
   <em>Made with AI-Sloptronic™ technology</em><br/>
-  <sub>Where "it compiles" is the new "it works" and every bug is a ✨feature request✨</sub>
+  <sub>Where "it compiles" is the new "it works", every bug is a ✨feature request✨, and every feature request is a ✨pre-existing bug✨</sub>
 </p>
 
 ---
@@ -25,6 +25,16 @@
 > of a techno-horror film. The VST3 editors run in a separate process because JUCE plugins install
 > Win32 hooks that freeze our event loop — a bug we diagnosed after 3 hours of "why is the window frozen"
 > followed by the AI saying "Ah, I see the issue!" for the 47th time.
+>
+> **⚠️ Ableton Link Disclaimer:** YAWN is now ABLE-TO-N (sync). Press Play in Live and YAWN follows.
+> Press Play in YAWN and Live follows. Two AI-written DAWs and one AI-written DAW are now phase-locked
+> over your LAN. We're not saying this is how Skynet starts but we're not NOT saying it.
+>
+> **⚠️ UI Framework Disclaimer:** We had two UI frameworks for a while. They lived next to each other
+> in `framework/` and `framework/v2/`, communicated through a 766-line bridge layer, and stomped on
+> each other's mouse capture so often we had to add a runtime guard that yells at you when it happens.
+> They are now one framework, in three commits, totalling −2,960 lines. The build is faster. The dispatch
+> chain is shorter. The dials turn. *Probably.*
 
 ## Features
 
@@ -33,6 +43,7 @@
 - **Clip Playback** — Audio files (WAV, FLAC, OGG, AIFF, MP3), looping, gain, fade-in/out
 - **Quantized Launching** — Launch clips on beat or bar boundaries with configurable quantize resolution (Next Bar, Next Beat, Immediate, 1/2, 1/4, 1/8, 1/16)
 - **Transport** — Play/stop/record, BPM control, beat-synced position tracking, loop range with draggable markers
+- **Ableton Link** — Network beat/tempo sync over LAN, automatic peer discovery, drift-free phase alignment. Plays nicely with Live, Logic, Bitwig, Reason, iOS apps — anything that speaks Link. Local UI tempo edits (typing into the BPM box, encoder turns) are gated through a `localTempoChanged` flag so the next audio buffer doesn't clobber your input by reading back the stale session tempo (race condition we found, fixed, and wrote a regression test for — once)
 - **Metronome** — Synthesized click track with accent on downbeats, configurable volume & time signature, count-in (0/1/2/4 bars), mode selection (Always/Record Only/Play Only/Off)
 - **Follow Actions** — 8 action types (Next, Previous, First, Last, Random, Any, Play Again, Stop), dual-action with probability (A/B chance), bar-count trigger duration
 - **Time Stretching** — WSOLA (rhythmic/percussive) and Phase Vocoder (tonal/texture) algorithms, per-track speed ratio (0.25×–4×), 6 warp modes (Off/Auto/Beats/Tones/Texture/Repitch)
@@ -138,54 +149,66 @@
 - **Undo/Redo** — Full undo/redo system with action merging (Ctrl+Z / Ctrl+Y)
 
 ### UI Framework
-- **Composable Widget Tree** — FlexBox layout engine with measure/layout two-pass system, stretch/flex/fixed size policies
+
+*Originally written as a v1 widget library. Then a v2 widget library was written next to it because the AI got bored. Then we lived with both for a while because nobody wanted to deal with it. Then we deleted the v1 library in three commits totalling −2960 lines and pretended we'd planned it that way the whole time.*
+
+- **Single fw2 framework** — One `Widget` base class, one event type per kind, one global `capturedWidget()` slot, one `dispatchMouseDown` walking the tree. Used to be two of each running side-by-side via 766 lines of bridge wrappers. The bridge wrappers are gone. The capture-stomp class of bug is structurally impossible (only one capture slot to stomp now).
+- **Cached two-pass layout** — Measure / layout pipeline with a global epoch + per-widget local-version cache. Re-layout of a stable tree is near-free; widgets opt out of the auto-relayout-boundary heuristic when their measured size depends on their children (which is most containers, as it turns out)
+- **Hardening guards** — `Widget::captureMouse` warns + asserts when an own-dispatch container takes capture while a descendant of its own subtree already holds it (the recurring "dial doesn't turn" trap). MSVC `/we4717` (always-recursive function) is now a compile error after a stack-overflow took 3 hours to diagnose because we'd been ignoring the warning. `/we4715`, `/we4716`, `/we4172`, `/we4533`, `/we4701` likewise; gcc/clang counterparts via `-Werror=infinite-recursion` etc.
+- **FlexBox** — Row/column layout container with stretch/flex/fixed size policies, gap, justify, align. Walks children for mouse dispatch (no children-walking-on-rails framework code; container widgets explicitly route)
+- **ContentGrid** — 4-quadrant container with draggable horizontal + vertical dividers, used for the session/mixer/browser/return-master split
 - **Session Panel** — Ableton-style clip grid with scrollable tracks and scenes
 - **Arrangement Panel** — Horizontal timeline with track headers, clip blocks, automation lanes, ruler, playhead, loop markers
 - **Mixer Panel** — Channel strips with interactive faders, pan knobs, mute/solo buttons, peak metering
 - **Device Chain Panel** — Composite widget architecture: DeviceWidget (header + grid + knobs + visualizer), SnapScrollContainer, neon arc knobs with 24-segment rendering
 - **Grouped Instrument Layouts** — Instruments display knobs in logical sections (Global, Op 1–4, Filter, Amp, etc.) with inline graphical displays instead of flat grids
 - **Instrument Display Widgets** — FM algorithm routing diagram, ADSR envelope curves, oscillator waveform previews, filter response curves, composite synth panels
+- **Visual Params Panel** — Per-track visual-knob and shader-chain editor that docks at the bottom of the screen for visual tracks (replacing the audio detail panel)
 - **Waveform Widget** — Interactive waveform display with zoom/scroll, overview bar, playhead tracking, transient markers, warp marker editing (create/drag/delete), loop region overlay
 - **Piano Roll Editor** — MIDI note editing with draw/select/erase tools, zoom/scroll, velocity, snap-to-grid, follow-playhead mode, clip operations (duplicate, double, halve, reverse, clear, set 1.1.1 here)
+- **Layer Stack** — Floating-overlay layer system for modal dialogs, dropdowns, context menus, tooltips, and toasts. Overlays sit above the main widget tree and intercept events with proper outside-click-dismiss semantics
 - **Export Dialog** — Format/bit depth/sample rate selectors, scope selection, progress bar with cancellation
-- **Preferences Dialog** — Audio devices, MIDI ports, default quantize, metronome settings
-- **Primitive Widgets** — FwButton, FwToggle, FwKnob (with double-click text entry, step snapping, format callbacks), FwFader, Label, FwTextInput, FwNumberInput, FwDropDown with hover animations
-- **Dialog System** — fw::Dialog base class with title bar, OK/Cancel, drag-to-move, Escape/Enter handling; AboutDialog, ConfirmDialog, ExportDialog, PreferencesDialog
-- **Menu Bar** — File, Edit, View, Track, MIDI, Help menus with keyboard accelerators
-- **Context Menus** — Right-click track headers, scene labels, clips, transport buttons, knobs for MIDI Learn
-- **DPI Scaling** — Auto-detect display scale (SDL3), user override, scaled() helper for all layout constants
-- **Panel Animations** — Smooth exponential-lerp height transitions on panel collapse/expand
-- **Toast Notifications** — Top-center status banner with replace-latest semantics, severity accent (info/warn/error), 1.5 s hold + 200 ms fade. Thread-safe; fired from controller scripts (`yawn.toast(...)`), project save/load, video import, and other async events. Designed partly as a screen substitute for controllers without their own display (e.g. Ableton Move)
-- **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking
+- **Preferences Dialog** — Audio devices, MIDI ports, default quantize, metronome settings, font scale, Ableton Link enable
+- **Primitive Widgets** — FwButton, FwToggle, FwKnob (with double-click text entry, step snapping, format callbacks, unit-aware edit buffer), FwFader, FwPan, FwMeter, Label, FwTextInput, FwNumberInput, FwDropDown, FwScrollbar, all with hover animations and gesture state machines
+- **Dialog System** — fw2 `Dialog` / `ConfirmDialog` / `FwTextInputDialog` / `FwExportDialog` / `FwPreferencesDialog` on the modal layer with title bar, OK/Cancel, drag-to-move, Escape/Enter handling
+- **Context Menus** — fw2::ContextMenu with submenus, keyboard navigation, separators, headers, checkable + radio rows. Right-click track headers, scene labels, clips, transport buttons, knobs (for MIDI Learn), visual clips, etc.
+- **Menu Bar** — File, Edit, View, Track, Scene, MIDI, Help menus with keyboard accelerators (auto-detected from menu items — type `D` and the panel toggles)
+- **DPI Scaling** — Auto-detect display scale (SDL3), user override, scaled() helper for all layout constants. Theme epoch bump invalidates every widget's measure cache atomically when font-size or DPI changes
+- **Panel Animations** — Smooth exponential-lerp height transitions on panel collapse/expand. Animation lives in a per-frame `tick()` method (not in `onMeasure`, because a measure cache makes "call measure 60 times to converge" silently broken — found out the hard way)
+- **Toast Notifications** — Top-center status banner with replace-latest semantics, severity accent (info/warn/error), 1.5 s hold + 200 ms fade. Thread-safe; fired from controller scripts (`yawn.toast(...)`), project save/load, video import, and other async events. Designed partly as a screen substitute for controllers without their own display (e.g. Ableton Move, nanoKONTROL2, Reface DX)
+- **Tooltip Manager** — Hover-tracked tooltips with delay + viewport-edge clamping
+- **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking. Yields number keys to text-input edits so typing a knob value doesn't accidentally play notes
 - **Track Selection** — Click to select tracks, highlight in session & mixer views
-- **Track Type Icons** — Waveform icon for audio tracks, DIN circle icon for MIDI tracks
-- **Targeted Drag & Drop** — Drop audio files onto specific clip slots
-- **Custom 2D Renderer** — Batched OpenGL 3.3 rendering with font atlas (stb_truetype)
-- **Crash Handler** — Signal handlers (SIGSEGV, SIGABRT, SIGFPE, SIGILL) with stack traces (Windows: SymFromAddr, Unix: backtrace), crash log to `yawn.log`
-- **Multi-window Ready** — Built on SDL3 for future detachable panels
+- **Track Type Icons** — Waveform icon for audio tracks, DIN circle icon for MIDI tracks, monitor icon for visual tracks
+- **Targeted Drag & Drop** — Drop audio files onto specific clip slots; drop video files onto visual tracks; drop samples onto Sampler/DrumRack/Granular
+- **Custom 2D Renderer** — Batched OpenGL 3.3 rendering with font atlas (stb_truetype), texture atlas, scissor-stack clipping
+- **Crash Handler** — Signal handlers (SIGSEGV, SIGABRT, SIGFPE, SIGILL) with stack traces (Windows: SymFromAddr + dbghelp, Unix: backtrace + addr2line), crash log appended to `yawn.log`
+- **Multi-window Ready** — Built on SDL3 for the visual output window (and future detachable panels)
 
 ### Controller Scripting
 
-*The AI embedded a scripting engine inside a DAW it wrote, so you can control the DAW it wrote with scripts it wrote. We're three layers deep and the Push display actually works.*
+*The AI embedded a scripting engine inside a DAW it wrote, so you can control the DAW it wrote with scripts it wrote. Now four pieces of hardware speak it. We're four layers deep and we're not coming back.*
 
-- **Lua 5.4 Engine** — Embedded Lua scripting for MIDI controller integration, vendored amalgamation with yawn.* API
+- **Lua 5.4 Engine** — Embedded Lua scripting for MIDI controller integration, vendored amalgamation with `yawn.*` API
 - **Auto-Detection** — Manifest-based controller matching: scripts declare port name patterns, YAWN auto-connects on startup
-- **Multi-Port Support** — Controllers with multiple MIDI ports (e.g. Push 1's Live + User ports) are handled seamlessly via a shared ring buffer
-- **yawn.* Lua API** — Full read/write access to device parameters, track/instrument info, MIDI output, SysEx, transport state, and logging
+- **Multi-Port Support** — Controllers with multiple MIDI ports (Push 1's Live + User ports, Move's four-port surface) are merged into a single byte-oriented SPSC ring buffer
+- **`yawn.*` Lua API** — Full read/write access to device parameters, track/instrument info, MIDI output, SysEx, transport state, master volume, loop, and toasts. Now ~50 functions. The PM keeps adding more
 - **Device Parameter Control** — Read param count/name/value/min/max/display, set values via lock-free audio command queue
-- **Hot Reload** — Menu → Reload Controller Scripts to disconnect, rescan, and reconnect without restarting
-- **Port Exclusivity** — Controller-claimed MIDI ports are automatically excluded from the general MIDI engine (Windows exclusive access)
+- **Toast Channel** — `yawn.toast(text, duration)` from any callback shows a top-center banner in the YAWN window. Designed as a screen substitute for hardware without its own display (Move, nanoKONTROL2, Reface DX)
+- **Hot Reload** — Menu → Reload Controller Scripts to disconnect, rescan, and reconnect without restarting. Edit the script in any editor, save, click reload, your changes are live. The 47-step debug cycle is now a 1-step debug cycle
+- **Port Exclusivity** — Controller-claimed MIDI ports are automatically excluded from the general MIDI engine (Windows' exclusive-access policy made us learn this the hard way)
 
 #### Ableton Push 1
 
-- **Pad Modes** — Note mode (chromatic & scale), Drum mode (4×4 auto-switch for DrumRack), Session mode (stub)
-- **30+ Scales** — Western modes, pentatonic, blues, and Maqam/Eastern scales (Hijaz, Bayati, Rast, Nahawand, Saba, and more)
+- **Pad Modes** — Note mode (chromatic & scale), Drum mode (4×4 auto-switch for DrumRack/DrumSlop), Session mode (8×8 clip grid with armed/playing/recording LED colors)
+- **30+ Scales** — Western modes, pentatonic, blues, and Maqam/Eastern scales (Hijaz, Bayati, Rast, Nahawand, Saba, and more); shared scale catalog with Move
 - **Scale Editor** — Select root note, scale type, row interval, and octave directly from Push encoders
-- **8 Encoders** — Relative-encoded CC 71–78 mapped to device parameters with paging, coarse/fine (Shift), and stepped param support
+- **8 Encoders** — Relative-encoded CC 71–78 mapped to device parameters with paging, coarse/fine (Shift), and stepped/discrete param support
 - **Transport Controls** — Play, Metronome, Tap Tempo, BPM encoder, Master Volume — all with button LED feedback
-- **SysEx Display** — 4-line text display: param names/values, track name, instrument, scale/mode info
-- **LED Ripple Animation** — Expanding ring animation on pad press with held-pad persistence
-- **Auto-Detection** — Drum instruments auto-switch to 4×4 pad layout; melodic instruments restore note mode
+- **SysEx Display** — 4-line text display: param names/values, track name, instrument, scale/mode info. Stopped working for 3 hours once because of one missing column-offset byte. The PM dug up his own 10-year-old Push code to prove the AI wrong
+- **Pad LED Ripple** — Expanding ring animation on pad press with held-pad persistence
+- **Auto-mode Switch** — Drum instruments (DrumRack/DrumSlop) auto-switch to 4×4 pad layout; melodic instruments restore note mode
+- **Touch Strip** — Pitch bend by default, mod wheel (CC 1) when Shift is held — sent to the selected track
 
 #### Ableton Move
 
@@ -199,9 +222,32 @@
 - **Scene launch** — First 8 numbered buttons launch scenes 0–7
 - **1 Hz LED heartbeat** — Move's firmware clears pad state on its own without Ableton Live's pairing; YAWN re-asserts the grid once a second so the layout stays visible during a long session
 
-> See [docs/ableton-move.md](docs/ableton-move.md) for the full button map, encoder behavior, LED palette, toast scheme, and Lua internals.
+#### Korg nanoKONTROL2
+
+*The flat plastic mixer that's outlived three OS versions, two USB standards, and a generation of musicians. Of course we support it.*
+
+- **8 faders → track volume** with sliding-window banking across YAWN's 64 tracks (Marker ◀ / ▶ to shift the visible window by 8)
+- **8 knobs → track pan**
+- **24 channel buttons → mute / solo / record-arm**, with LED feedback synced to engine state
+- **Transport row** — Play, Stop, Rec, Cycle (loop on/off, LED-synced), Rew/Fwd as track prev/next
+- **Marker Set button** doubles as a "force LED resync" — handy when you've muted from the YAWN UI while the controller was unplugged and the LEDs have drifted out of sync
+- **Toast feedback** on track selection and bank shifts (since the unit has no display)
+- **Setup**: assumes the unit is in CC mode (factory default — no Korg Kontrol Editor needed)
+
+#### Yamaha Reface DX
+
+*A 37-key FM synth from a company that also made keytars in 1985. We respect the bloodline.*
+
+- **Touch strip → instrument param 0** of the selected track, scaled across the param's natural range — drive a synth's primary expression parameter live with one finger
+- **Expression pedal CC (CC 11) → selected track volume**
+- **Volume CC (CC 7) → master volume**
+- **Sustain (CC 64), pitch bend, notes** — handled by YAWN's standard MIDI engine, no script needed
+- **Toast on each touch-strip change** showing the current parameter's display value (rate-limited to one toast per unique value, so it doesn't spam during a sweep)
+- **Instrument-aware**: switching the selected track in YAWN retargets the touch strip to that track's instrument param 0. Pair with the nanoKONTROL2's track navigation buttons for hands-free re-targeting
+
+> See [docs/ableton-move.md](docs/ableton-move.md) for the Move's full button map, encoder behavior, LED palette, and toast scheme.
 >
-> See [docs/controller-scripting.md](docs/controller-scripting.md) for the full Lua API reference, Push 1 button map, and guide to writing controller scripts.
+> See [docs/controller-scripting.md](docs/controller-scripting.md) for the full Lua API reference, every controller's button/CC map, and the guide to writing your own script.
 
 ### Visual / VJ Engine
 
@@ -235,16 +281,19 @@
 > See [docs/visual.md](docs/visual.md) for the full shader-authoring guide, uniform reference, video / live / 3D / Lua / automation details, and file layout.
 
 ### Quality
-- **Test-Driven Development** — 907 unit & integration tests across 40+ test suites via Google Test (because the AI doesn't trust itself either)
+- **Test-Driven Development** — 1228 unit & integration tests across 140+ test suites via Google Test. Was 1306 before we deleted ~80 v1-framework tests that were superseded by their fw2 counterparts. The AI counts down too sometimes
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
+- **Compile-time guards** — A handful of "this code is unconditionally broken" warnings (always-recursive function, missing return, uninitialised local, etc.) are promoted to errors so they can't lurk in the build output the way `fileNameFromPath` did before it stack-overflowed during a file drop
+- **Runtime guards** — Capture-stomp guard in `fw2::Widget::captureMouse` warns + asserts when an ancestor overwrites a descendant's capture; the recurring "dial doesn't turn" trap can't regress silently
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
 
 ### Planned
 
-- 🎛️ More controller scripts (Novation Launchpad, Akai APC, etc.)
-- 🖥️ Move OLED display — pending reverse-engineering of Ableton's proprietary USB pairing protocol
-- 🪪 Lua bindings for Undo/Mute/Copy/Loop so the remaining Move buttons can be wired
+- 🎛️ More controller scripts (Novation Launchpad, Akai APC, M-Audio whatever's-on-eBay-this-week)
+- 🖥️ Move OLED display — pending reverse-engineering of Ableton's proprietary USB pairing protocol (or until someone lifts the protocol and we feel ethically OK about it)
+- 🪪 Lua bindings for Undo/Mute/Copy and the remaining Move buttons that currently just no-op
+- 🪟 MIDI clock send/receive (Link covers most cases but some hardware still wants the old protocol)
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
@@ -286,9 +335,9 @@ All dependencies are fetched automatically via CMake FetchContent — no manual 
 
 ## Building
 
-> **Fun fact:** This project has been rebuilt approximately 1,247 times. 
-> The AI broke the build 312 of those times. The PM broke it 0 times because the PM doesn't touch C++.
-> The remaining 935 rebuilds were "just to be sure."
+> **Fun fact:** This project has been rebuilt approximately 2,114 times.
+> The AI broke the build 478 of those times. The PM broke it 0 times because the PM doesn't touch C++.
+> The remaining 1,636 rebuilds were "just to be sure" — including 38 rebuilds during the v1→fw2 migration where the AI confidently insisted "this should be a clean delete" right before introducing 23 link errors.
 
 ### Prerequisites
 
@@ -414,51 +463,57 @@ cd build && ctest --output-on-failure -C Release
 *Designed by an AI that has read every audio programming tutorial on the internet but has never actually heard a sound.*
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                   UI Layer (SDL3 + OpenGL)                   │
-│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐ │
-│  │  Session    │ │ Arrangement │ │  Detail   │ │  Piano    │ │
-│  │   Panel     │ │   Panel     │ │  Panel    │ │  Roll     │ │
-│  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘ │
-│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐ │
-│  │   Mixer     │ │  Waveform   │ │ Renderer │ │ Font/DPI  │ │
-│  │   Panel     │ │  Widget     │ │    2D    │ │  & Theme  │ │
-│  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘ │
-│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌───────────┐ │
-│  │  FlexBox    │ │  Dialogs &  │ │ Context  │ │  MIDI     │ │
-│  │  & Widgets  │ │  Menus      │ │  Menus   │ │  Learn    │ │
-│  └─────────────┘ └─────────────┘ └──────────┘ └───────────┘ │
-├──────────────────────────────────────────────────────────────┤
-│                   Application Core                           │
-│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌────────────────┐ │
-│  │ Project  │ │ Transport │ │  Undo    │ │  Message Queue │ │
-│  │  Model   │ │  & Loop   │ │ Manager  │ │  (lock-free)   │ │
-│  └──────────┘ └───────────┘ └──────────┘ └────────────────┘ │
-│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌────────────────┐ │
-│  │ Project  │ │   MIDI    │ │  MIDI    │ │  Crash         │ │
-│  │ Serial.  │ │  Mapping  │ │ Monitor  │ │  Handler       │ │
-│  └──────────┘ └───────────┘ └──────────┘ └────────────────┘ │
-├──────────────────────────────────────────────────────────────┤
-│                 Controller Scripting (Lua 5.4)               │
-│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌────────────────┐ │
-│  │Controller│ │   Lua     │ │Controller│ │   yawn.* API   │ │
-│  │ Manager  │ │  Engine   │ │ MidiPort │ │ (param/MIDI/…) │ │
-│  └──────────┘ └───────────┘ └──────────┘ └────────────────┘ │
-├──────────────────────────────────────────────────────────────┤
-│                   Audio Engine (real-time thread)            │
-│  ┌──────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐ │
-│  │PortAudio │ │   Clip    │ │Arrangement│ │  Metronome   │ │
-│  │ Callback │ │  Engine   │ │ Playback  │ │              │ │
-│  └──────────┘ └───────────┘ └───────────┘ └──────────────┘ │
-│  ┌──────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐ │
-│  │  Mixer   │ │  Effects  │ │Instruments│ │  Automation  │ │
-│  │ /Router  │ │  Chains   │ │ (Synths)  │ │ Engine + LFO │ │
-│  └──────────┘ └───────────┘ └───────────┘ └──────────────┘ │
-│  ┌──────────┐ ┌───────────┐ ┌───────────┐                  │
-│  │  MIDI    │ │   Time    │ │ Transient │                  │
-│  │  Engine  │ │ Stretcher │ │ Detector  │                  │
-│  └──────────┘ └───────────┘ └───────────┘                  │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│          UI Layer — fw2 only (SDL3 + OpenGL 3.3)                │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌─────────────┐  │
+│  │  Session    │ │ Arrangement │ │  Detail  │ │   Piano     │  │
+│  │   Panel     │ │   Panel     │ │  Panel   │ │    Roll     │  │
+│  └─────────────┘ └─────────────┘ └──────────┘ └─────────────┘  │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌─────────────┐  │
+│  │   Mixer     │ │   Browser   │ │ Visual   │ │  Transport  │  │
+│  │   Panel     │ │    Panel    │ │  Params  │ │    Panel    │  │
+│  └─────────────┘ └─────────────┘ └──────────┘ └─────────────┘  │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────┐ ┌─────────────┐  │
+│  │  FlexBox /  │ │ LayerStack  │ │  fw2     │ │  MIDI Learn │  │
+│  │ ContentGrid │ │ (overlays)  │ │ Widgets  │ │   manager   │  │
+│  └─────────────┘ └─────────────┘ └──────────┘ └─────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│                    Application Core                             │
+│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────────┐  │
+│  │ Project  │ │ Transport │ │  Undo    │ │  Message Queue   │  │
+│  │  Model   │ │  & Loop   │ │ Manager  │ │   (lock-free)    │  │
+│  └──────────┘ └───────────┘ └──────────┘ └──────────────────┘  │
+│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────────┐  │
+│  │ Project  │ │   MIDI    │ │  MIDI    │ │      Crash       │  │
+│  │ Serial.  │ │  Mapping  │ │ Monitor  │ │     Handler      │  │
+│  └──────────┘ └───────────┘ └──────────┘ └──────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│         Controller Scripting (Lua 5.4) ─── 4 controllers        │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────────┐  │
+│  │Controller│ │   Lua    │ │Controller│ │    yawn.* API     │  │
+│  │ Manager  │ │  Engine  │ │ MidiPort │ │ (~50 functions)   │  │
+│  └──────────┘ └──────────┘ └──────────┘ └───────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│      Visual Engine ─── GPU shaders, video, 3D, automation       │
+│  ┌──────────┐ ┌───────────┐ ┌──────────────┐ ┌──────────────┐  │
+│  │  Layer   │ │ Compositor│ │ Video / Live │ │ Lua Scene    │  │
+│  │ Manager  │ │  + PostFX │ │ FFmpeg pipe  │ │  Scripts     │  │
+│  └──────────┘ └───────────┘ └──────────────┘ └──────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│     Audio Engine — real-time thread, lock-free SPSC ringbufs    │
+│  ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌─────────────────┐ │
+│  │PortAudio │ │   Clip    │ │Arrangement │ │   Metronome     │ │
+│  │ Callback │ │  Engine   │ │ Playback   │ │                 │ │
+│  └──────────┘ └───────────┘ └────────────┘ └─────────────────┘ │
+│  ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌─────────────────┐ │
+│  │  Mixer   │ │  Effects  │ │Instruments │ │   Automation    │ │
+│  │ /Router  │ │  Chains   │ │  (Synths)  │ │  Engine + LFO   │ │
+│  └──────────┘ └───────────┘ └────────────┘ └─────────────────┘ │
+│  ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌─────────────────┐ │
+│  │  MIDI    │ │   Time    │ │ Transient  │ │  Ableton Link   │ │
+│  │  Engine  │ │ Stretcher │ │ Detector   │ │  (LAN sync)     │ │
+│  └──────────┘ └───────────┘ └────────────┘ └─────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **Thread model:** UI thread (SDL main loop) + Audio thread (PortAudio callback). Communication is entirely via lock-free SPSC ring buffers — no mutexes or allocations on the audio thread. We asked the AI to explain lock-free programming and it wrote a 200-line ring buffer. We asked it again and it wrote a different 200-line ring buffer. Both passed tests. We don't ask questions anymore.
@@ -571,38 +626,61 @@ yawn/
 │   │   ├── MidiRandom.h        # Pitch/velocity/timing randomization
 │   │   ├── MidiPitch.h         # Transpose by semitones/octaves
 │   │   └── LFO.h               # Modulation LFO (5 waveforms, tempo sync)
+│   ├── link/
+│   │   └── LinkManager.h/cpp   # Ableton Link wrapper — gated on YAWN_HAS_LINK
 │   ├── ui/
-│   │   ├── Font.h/cpp          # stb_truetype font atlas
+│   │   ├── Font.h/cpp          # stb_truetype font atlas (v1 path used by FontAdapter)
 │   │   ├── Renderer.h/cpp      # Batched 2D OpenGL renderer
-│   │   ├── MenuBar.h           # Application menu bar
-│   │   ├── ContextMenu.h       # Right-click popup menus with submenus
+│   │   ├── ContextMenu.h       # v1-shape ContextMenu::Item used by App.cpp builders;
+│   │   │                       # converted to fw2::MenuEntry via V1MenuBridge.h
 │   │   ├── VirtualKeyboard.h   # QWERTY-to-MIDI keyboard
 │   │   ├── Theme.h             # Ableton-dark color scheme + DPI scaling
+│   │   ├── ToastManager.h      # Top-center status banner (thread-safe)
 │   │   ├── Window.h/cpp        # SDL3 + OpenGL window wrapper
-│   │   ├── framework/
-│   │   │   ├── Widget.h        # Base widget class (measure/layout/paint/events)
-│   │   │   ├── FlexBox.h       # Flexbox layout container (row/column)
-│   │   │   ├── Primitives.h    # FwButton, FwToggle, FwKnob, FwFader, Label, TextInput, etc.
-│   │   │   ├── Dialog.h        # Modal dialog base class
-│   │   │   ├── AboutDialog.h   # About dialog widget
-│   │   │   ├── ConfirmDialog.h # Confirmation dialog widget
-│   │   │   ├── ExportDialog.h  # Audio export dialog (format, depth, scope, progress)
-│   │   │   ├── DeviceWidget.h  # Composite device panel (header + grid + knobs + viz)
-│   │   │   ├── DeviceHeaderWidget.h  # Color-coded device header with buttons
+│   │   ├── framework/v2/       # The framework. Used to be split v1/v2; v1 deleted.
+│   │   │   ├── Widget.h/cpp    # Base widget — cached two-pass layout, gesture SM,
+│   │   │   │                   # capture-stomp guard, single global capture slot
+│   │   │   ├── FlexBox.h/cpp   # Row/column layout — own-dispatch container
+│   │   │   ├── ContentGrid.h   # 4-quadrant draggable-divider grid
+│   │   │   ├── Types.h         # Geometric types (Point/Size/Rect/Insets/Constraints/SizePolicy)
+│   │   │   ├── UIContext.h     # Per-process render context (renderer, textMetrics,
+│   │   │   │                   # layerStack, viewport, epoch)
+│   │   │   ├── FontAdapter.h   # v1 Font → fw2 TextMetrics shim
+│   │   │   ├── LayerStack.h    # Floating overlay layers (modal/dropdown/tooltip/toast)
+│   │   │   ├── Painter.h       # Per-typeid painter registry (separates logic + paint)
+│   │   │   ├── Fw2Painters.h/cpp # Renderer impls registered at startup
+│   │   │   ├── MenuBar.h       # FwMenuBar (application title strip + dropdown popup)
+│   │   │   ├── ContextMenu.h   # fw2::ContextMenu (LayerStack-hosted)
+│   │   │   ├── Dialog.h        # fw2 modal dialog + ConfirmDialog
+│   │   │   ├── TextInputDialog.h
+│   │   │   ├── ExportDialog.h
+│   │   │   ├── Tooltip.h       # Hover-tracked tooltips with viewport clamp
+│   │   │   ├── DeviceWidget.h  # Composite device panel (header + knob grid + viz)
+│   │   │   ├── DeviceHeaderWidget.h
 │   │   │   ├── FwGrid.h        # Row-major grid layout container
-│   │   │   ├── VisualizerWidget.h    # Oscilloscope/spectrum display widget
+│   │   │   ├── SnapScrollContainer.h # Horizontal snap-scroll with nav buttons
 │   │   │   ├── WaveformWidget.h      # Scrollable/zoomable waveform display
-│   │   │   ├── InstrumentDisplayWidget.h # FM algo, ADSR, osc, filter display + GroupedKnobBody
-│   │   │   └── SnapScrollContainer.h # Horizontal snap-scroll with nav buttons
+│   │   │   ├── AutomationEnvelope.h  # Breakpoint envelope editor widget
+│   │   │   ├── Knob.h / Fader.h / Pan.h / Meter.h / Toggle.h / Button.h /
+│   │   │   ├── DropDown.h / Scrollbar.h / Checkbox.h / TextInput.h / NumberInput.h
+│   │   │   ├── GroupedKnobBody.h     # Section-grouped knob layout for synth bodies
+│   │   │   ├── *DisplayPanel.h        # Per-instrument inline visualisations
+│   │   │   │                          #  (FM algo, ADSR curves, filter response, etc.)
+│   │   │   └── V1MenuBridge.h        # v1 ContextMenu::Item → fw2::MenuEntry adapter
+│   │   │                              # (kept while App.cpp's menu builders still
+│   │   │                              #  produce v1-shape items — dead code on the
+│   │   │                              #  day every builder switches to fw2 directly)
 │   │   └── panels/
 │   │       ├── SessionPanel.h/cpp     # Session view (clip grid, scene management)
 │   │       ├── ArrangementPanel.h/cpp # Arrangement timeline (clips, automation, loop)
-│   │       ├── MixerPanel.h           # Mixer view (faders, metering)
-│   │       ├── DetailPanelWidget.h    # Device chain panel (composite widgets)
+│   │       ├── MixerPanel.h/cpp       # Mixer (faders, metering, sends)
+│   │       ├── ReturnMasterPanel.h/cpp# Return + master strips
+│   │       ├── DetailPanelWidget.h/cpp# Device chain panel (composite widgets)
 │   │       ├── TransportPanel.h/cpp   # Transport controls with MIDI Learn
-│   │       ├── PianoRollPanel.h       # MIDI piano roll editor
-│   │       ├── BrowserPanel.h         # File browser + MIDI monitor display
-│   │       └── PreferencesDialog.cpp  # Preferences (Audio, MIDI, Defaults, Metronome)
+│   │       ├── PianoRollPanel.h/cpp   # MIDI piano roll editor
+│   │       ├── BrowserPanel.h/cpp     # Files / Presets / Clip / MIDI tabs
+│   │       ├── VisualParamsPanel.h    # Per-track visual knobs + shader chain editor
+│   │       └── PreferencesDialog.h/cpp# Preferences (Audio, MIDI, Defaults, Metronome, Link)
 │   ├── util/
 │   │   ├── FileIO.h/cpp        # Audio file loading/saving (libsndfile)
 │   │   ├── MessageQueue.h      # Typed command/event variants
@@ -613,56 +691,49 @@ yawn/
 │   └── WidgetHint.h            # Widget type hints
 ├── scripts/
 │   └── controllers/
-│       ├── ableton_push1/      # Ableton Push 1 controller script
-│       │   ├── manifest.lua    # Port matching metadata
-│       │   └── init.lua        # Encoder/display/pad logic
-│       └── ableton_move/       # Ableton Move controller script
-│           ├── manifest.lua    # Port matching
-│           ├── init.lua        # Buttons, encoders, LEDs, toasts
-│           ├── pads.lua        # Pad grid + scale walker
-│           └── scales.lua      # 30+ scale catalog (shared w/ Push 1)
-├── tests/                      # 844 unit & integration tests (Google Test)
+│       ├── ableton_push1/      # Ableton Push 1 — encoders, 4-line SysEx LCD,
+│       │   ├── manifest.lua    #  64-pad note + session modes, scale editor
+│       │   ├── init.lua        #  Touch strip → pitchbend / mod wheel
+│       │   ├── pads.lua
+│       │   └── scales.lua
+│       ├── ableton_move/       # Ableton Move — 32 velocity pads, 4 layouts,
+│       │   ├── manifest.lua    #  scale visualisation, ripple LEDs, toast
+│       │   ├── init.lua        #  channel (no native screen)
+│       │   ├── pads.lua
+│       │   └── scales.lua
+│       ├── korg_nanokontrol2/  # Korg nanoKONTROL2 — 8 faders/knobs/banks,
+│       │   ├── manifest.lua    #  mute/solo/arm with LED feedback,
+│       │   └── init.lua        #  transport row, cycle = loop
+│       └── yamaha_reface_dx/   # Yamaha Reface DX — touch strip → instrument
+│           ├── manifest.lua    #  param 0, expression → track vol,
+│           └── init.lua        #  CC 7 → master, notes routed natively
+├── tests/                      # 1228 unit & integration tests (Google Test, fw2-only)
 │   ├── CMakeLists.txt
 │   ├── test_Arrangement.cpp    # Arrangement clips, playback, transport loop
 │   ├── test_AudioBuffer.cpp    # Audio buffer operations
 │   ├── test_Automation.cpp     # Automation engine, envelopes, LFO
-│   ├── test_Clip.cpp           # Clip data model
-│   ├── test_ClipEngine.cpp     # Clip playback engine
-│   ├── test_DeviceHeaderWidget.cpp # Device header UI
-│   ├── test_DeviceWidget.cpp   # Composite device widget
-│   ├── test_Effects.cpp        # All audio effects
-│   ├── test_FileIO.cpp         # File I/O, sample loading
-│   ├── test_FlexBox.cpp        # Flexbox layout
-│   ├── test_FollowAction.cpp   # Follow action logic
-│   ├── test_FrameworkComponents.cpp # UI framework
-│   ├── test_FrameworkTypes.cpp # Framework types
-│   ├── test_FwGrid.cpp         # Grid layout
-│   ├── test_Instruments.cpp    # All instruments
-│   ├── test_Integration.cpp    # Cross-component integration
-│   ├── test_LFO.cpp            # LFO waveforms, sync, linking
-│   ├── test_MessageQueue.cpp   # Inter-thread communication
-│   ├── test_Metronome.cpp      # Click track
-│   ├── test_MidiClip.cpp       # MIDI clip data
-│   ├── test_MidiClipEngine.cpp # MIDI playback engine
-│   ├── test_MidiEffects.cpp    # MIDI effects
-│   ├── test_MidiMapping.cpp    # MIDI Learn (CC + Note mapping)
-│   ├── test_MidiTypes.cpp      # MIDI types
-│   ├── test_Mixer.cpp          # Mixer routing
-│   ├── test_PanelAnimation.cpp # Panel animations
-│   ├── test_PianoRoll.cpp      # Piano roll editor
-│   ├── test_Primitives.cpp     # Widget primitives
-│   ├── test_Project.cpp        # Project structure
-│   ├── test_RingBuffer.cpp     # Lock-free buffers
-│   ├── test_Serialization.cpp  # Project save/load
-│   ├── test_SnapScrollContainer.cpp # Scroll container
-│   ├── test_Theme.cpp          # DPI scaling
-│   ├── test_TrackControls.cpp  # Track UI controls
-│   ├── test_Transport.cpp      # Transport logic
-│   ├── test_UndoManager.cpp    # Undo/redo system
-│   ├── test_VisualizerWidget.cpp # Waveform visualization
+│   ├── test_Clip.cpp / test_ClipEngine.cpp
+│   ├── test_Effects.cpp        # All 14 audio effects
+│   ├── test_FileIO.cpp / test_Serialization.cpp
+│   ├── test_FollowAction.cpp
+│   ├── test_FrameworkTypes.cpp # Geometric types only (Point/Size/Rect/etc.)
+│   ├── test_Instruments.cpp    # All 11 instruments
+│   ├── test_Integration.cpp    # Cross-component integration (DetailPanel + synth,
+│   │                           #  piano roll + transport, mixer, etc.)
+│   ├── test_LFO.cpp / test_LinkManager.cpp
+│   ├── test_MessageQueue.cpp / test_RingBuffer.cpp
+│   ├── test_Metronome.cpp / test_Transport.cpp
+│   ├── test_MidiClip.cpp / test_MidiClipEngine.cpp / test_MidiEffects.cpp
+│   ├── test_MidiMapping.cpp / test_MidiTypes.cpp
+│   ├── test_Mixer.cpp
+│   ├── test_PanelAnimation.cpp
+│   ├── test_PianoRoll.cpp
+│   ├── test_Project.cpp / test_Theme.cpp / test_TrackControls.cpp
+│   ├── test_UndoManager.cpp
 │   ├── test_Warping.cpp        # Time stretching (WSOLA, Phase Vocoder)
-│   ├── test_Widget.cpp         # Widget tree & event dispatch
-│   └── test_Widgets.cpp        # Widget tests
+│   └── test_fw2_*.cpp          # Per-widget fw2 tests — Button, Checkbox, Dialog,
+│                               #  DropDown, Fader, FlexBox, FwGrid, Knob, MenuBar,
+│                               #  Pan, Scrollbar, SnapScrollContainer, Toggle, ...
 ├── third_party/
 │   ├── lua54/                  # Lua 5.4 vendored source
 │   └── sqlite3/                # SQLite3 vendored source
@@ -694,7 +765,11 @@ yawn/
 | 17. Recording & I/O | ✅ Done | Audio/MIDI recording, MIDI Learn, audio export (WAV/FLAC/OGG), project save/load |
 | 18. Session Management | ✅ Done | Scene insert/duplicate/delete, track deletion, follow actions, undo/redo, time stretching |
 | 19. VST3 Hosting | ✅ Done | VST3 SDK, plugin scanning, process-isolated editors (Windows HWND + Linux X11 embed with IRunLoop), parameter sync, state persistence |
-| 20. Controller Scripting | ✅ Done | Lua 5.4, controller auto-detection, yawn.* API, Ableton Push 1 (encoders, display, pads, LEDs) |
+| 20. Controller Scripting | ✅ Done | Lua 5.4, controller auto-detection, `yawn.*` API, Ableton Push 1 (encoders, display, pads, LEDs) |
+| 21. More Controllers | ✅ Done | Ableton Move (32-pad scale grid, ripple LEDs, touch encoders, toast as screen-substitute), Korg nanoKONTROL2 (banked faders/knobs, LED-synced channel buttons, transport row), Yamaha Reface DX (touch-strip → instrument param, CC 7/11 → master/track vol) |
+| 22. Visual / VJ Engine | ✅ Done | Per-track GPU layers, Shadertoy-compatible shader hot-reload, video import + live input, glTF 2.0 3D models with skeletal animation, Lua scene scripts, master post-FX chain, A–H knobs + LFOs + automation, arrangement timeline integration |
+| 23. Ableton Link | ✅ Done | LAN beat/tempo sync (peers from Live, Logic, Bitwig, iOS apps, etc.) with phase alignment. Local UI tempo edits gated through `localTempoChanged` so the audio thread doesn't clobber typed BPM with the previous-frame's stale session tempo (race condition we found, fixed, and wrote a regression test for) |
+| 24. UI Framework Migration | ✅ Done | Three-phase delete-heavy refactor: v1 Widget/FlexBox/EventSystem/UIContext + a 766-line bridge wrapper layer (`PanelWrappers.h`) all retired. Single `fw2::Widget` framework, single `dispatchMouseDown` walking the tree, single global capture slot. Net ~−2960 lines. Capture-stomp guard added to `fw2::Widget::captureMouse`. C4717-and-friends promoted to compile errors |
 
 ### Phase 16: Arrangement View (Done)
 
@@ -747,13 +822,43 @@ Full VST3 plugin support for third-party effects and instruments:
 
 Lua-based MIDI controller integration with auto-detection and hot reload:
 
-- **Lua 5.4 engine** — Vendored amalgamation, embedded with yawn.* API for device parameters, MIDI I/O, SysEx, and transport
+- **Lua 5.4 engine** — Vendored amalgamation, embedded with `yawn.*` API for device parameters, MIDI I/O, SysEx, transport, master volume, loop, and toasts
 - **Controller Manager** — Scans `scripts/controllers/*/manifest.lua`, substring-matches MIDI port names, opens all matching I/O ports
-- **Multi-port architecture** — Controllers with multiple MIDI ports (Push 1 Live + User) feed a single byte-oriented SPSC ring buffer
+- **Multi-port architecture** — Controllers with multiple MIDI ports (Push 1 Live + User, Move's four-port surface) feed a single byte-oriented SPSC ring buffer
 - **Lua callbacks** — `on_connect()`, `on_disconnect()`, `on_midi(data)` (per-message), `on_tick()` (30Hz)
-- **Ableton Push 1 script** — 8 relative encoders mapped to device params, 4-line SysEx display (param names/values/track/instrument), 64-pad note forwarding with LED ripple animation
+- **Ableton Push 1 script** — 8 relative encoders mapped to device params, 4-line SysEx display (param names/values/track/instrument), 64-pad note forwarding with LED ripple animation, scale editor, session-mode 8×8 clip grid with armed/playing/recording LED colors
 - **Port exclusivity** — Claimed ports skipped by MidiEngine to avoid Windows exclusive-access conflicts
 - **Hot reload** — View → Reload Controller Scripts disconnects, rescans, and reconnects without restart
+
+### Phase 21: More Controllers (Done)
+
+Three more controllers wired through the same Lua/manifest pipeline. Each
+in 200–700 lines of Lua. The framework's payoff arrived:
+
+- **Ableton Move** — 32 velocity pads with 4 layout presets (4ths/3rds/5ths/Octaves), shared 30+ scale catalog with Push 1, ripple LEDs, two touch-sensitive encoders, scene launch buttons, 1 Hz LED heartbeat. No native screen, so the `yawn.toast(...)` channel is the visual feedback path
+- **Korg nanoKONTROL2** — 8 banked faders → track volume, 8 knobs → pan, 24 channel buttons → mute/solo/arm with LED feedback synced to engine state, transport row, Marker Set as a "force LED resync" escape hatch when the controller has been physically disconnected and reconnected mid-session
+- **Yamaha Reface DX** — CC surface mapping (touch strip → instrument param 0 of selected track, expression → track vol, volume → master). Notes / pitch bend / sustain are routed through YAWN's standard MIDI engine — no script involvement
+
+### Phase 22: Visual / VJ Engine (Done)
+
+GPU-based VJ tool inside the DAW. See the **Visual / VJ Engine** feature section above for the gory details.
+
+### Phase 23: Ableton Link (Done)
+
+Network beat/tempo sync over LAN. Plays nicely with Live, Logic, Bitwig, Reason, iOS apps — anything that speaks Link.
+
+- **Optional dependency** — Gated on `YAWN_HAS_LINK` (CMake option, default ON). Builds without the library compile a no-op stub so the rest of the code doesn't need `#ifdef`s
+- **Audio-thread integration** — `LinkManager::onAudioCallback(bpm, beat, isPlaying, localTempoChanged)` called once per buffer. When `localTempoChanged` is true (UI just typed a new BPM) the local value wins and is pushed out to peers; otherwise peers > 0 means we adopt the network tempo. The flag is the fix for a race we hit early on where every UI tempo edit got clobbered on the next audio buffer
+
+### Phase 24: UI Framework Migration (Done)
+
+Three-commit, delete-heavy refactor that retired the v1 Widget framework
+in favour of fw2. Net ~−2960 lines, behaviour preserved.
+
+- **Phase 1** — `DetailPanelWidget` (the last v1-derived panel) ported to fw2, including a `tick()`-based animation loop because the cached measure pipeline made "call measure 60 times to converge" silently broken
+- **Phase 2** — `m_rootLayout` switched from `fw::FlexBox` to `fw2::FlexBox` (with own-dispatch container semantics), every panel plugged in directly, all 10 wrapper classes in `PanelWrappers.h` (766 lines) deleted, App.cpp's per-panel explicit dispatch collapsed into a single `m_rootLayout->dispatchMouseDown(me)` walk. Two capture slots → one. App.cpp shrank ~130 lines
+- **Phase 3** — `src/ui/framework/` v1 directory deleted. `Widget.h`, `FlexBox.h`, `EventSystem.h`, `UIContext.h`, `FwGrid.h`, `V1EventBridge.h` gone. `Types.h` moved into `v2/`. Tests for v1 widgets retired (superseded by `test_fw2_*.cpp`)
+- **Hardening** — `fw2::Widget::captureMouse` now logs + asserts on ancestor-stomps-descendant capture (the recurring "dial doesn't turn" trap). MSVC `/we4717` (always-recursive function) is a compile error after `fileNameFromPath` recursed-on-all-paths and stack-overflowed during a file drop. `/we4715`, `/we4716`, `/we4172`, `/we4533`, `/we4701` similarly
 
 ## The Team
 
@@ -785,14 +890,19 @@ while (true) {
 2. **Filter resonance is the QA department** — Crank it up, sweep fast, watch things explode
 3. **The AI will always say "Fixed!"** — Statistically, it's right 60% of the time, every time
 4. **Lock-free programming is easy** — If you let someone who can't experience race conditions write it
-5. **844 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify
-6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*
+5. **1228 tests and counting** — Because when your codebase is written by autocomplete on steroids, trust but verify. Sometimes you delete tests too. Counting goes both ways
+6. **The best bug reports are just vibes** — "After a while the arpeggiator produces notes without me pressing any key" → *chef's kiss*. "When clicking on a second midi track with the synth there is empty space in the detail" → also *chef's kiss*
 7. **Track deletion requires stopping the world** — Ableton does it too, so it's a feature not a limitation
 8. **MIDI Learn is just "wiggle something, click something"** — The AI understood this perfectly on the 4th attempt
 9. **SysEx is where bytes go to hide** — The Push 1 display didn't work for hours because of one missing column offset byte. The PM dug up his own 10-year-old code to prove the AI wrong
 10. **Controllers have multiple MIDI ports** — Push 1 sends pads on the "User" port, not the main one. The AI opened the wrong port and wondered why pads were silent
+11. **Two UI frameworks side-by-side is one too many** — Two capture slots, two visibility flags, two event types, and a 766-line bridge layer to make them talk. Deleted in three commits. Should have been one. The migration plan went `Phase 1: rename namespace → Phase 2: collapse dispatch → Phase 3: delete the corpse`. We kept Phase 3 a surprise from ourselves
+12. **The compiler is trying to tell you something** — `warning C4717: 'fileNameFromPath' is recursive on all control paths, function will cause runtime stack overflow` was in the build output for an unknown number of versions before it actually crashed. It's a compile error now
+13. **Member widgets are not children** — `m_scroll` as a value member doesn't get its `invalidate()` to bubble up to the panel. We learned this when a knob's neighbour stopped rendering on the second click. Fix is a one-line `invalidate()` after mutation; the lesson is "lifecycle ownership ≠ tree membership"
+14. **Ableton Link's audio-thread API is a foot-gun** — The user types BPM, you set the transport, next audio buffer reads back the OLD session tempo and overwrites your new one. Add a `localTempoChanged` flag. Write the regression test. Walk away
+15. **fw2 has a single capture slot** — Two widgets calling `captureMouse()` is one widget overwriting the other's capture. The AI hit this trap so many times that the framework now `assert`s + logs when an ancestor stomps a descendant's capture. The PM appreciates the framework that yells at you when you're about to break it
 
-*This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, and honestly? It kinda slaps.*
+*This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, the warnings are errors, the dials turn, and honestly? It kinda slaps.*
 
 ## License
 
