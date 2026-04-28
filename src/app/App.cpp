@@ -5962,6 +5962,9 @@ void App::processEvents() {
                         m_browserPanel->hasEditingKnob();
                     const bool detailEditingBefore =
                         m_showDetailPanel && m_detailPanel->hasEditingKnob();
+                    const bool visualEditingBefore =
+                        m_visualParamsPanelW->visible() &&
+                        m_visualParamsPanel->hasEditingKnob();
 
                     ui::fw::MouseEvent me;
                     me.x = mx; me.y = my;
@@ -5976,6 +5979,14 @@ void App::processEvents() {
                         m_browserPanel->hasEditingKnob();
                     const bool detailEditingAfter =
                         m_showDetailPanel && m_detailPanel->hasEditingKnob();
+                    // VisualParamsPanel — double-click on a knob inside
+                    // here flips into edit mode here, on mouseUp's
+                    // gesture state machine. Without this transition
+                    // toggle, SDL_StartTextInput is never called and
+                    // typed digits get dropped on the floor.
+                    const bool visualEditingAfter =
+                        m_visualParamsPanelW->visible() &&
+                        m_visualParamsPanel->hasEditingKnob();
                     if (!browserEditingBefore && browserEditingAfter)
                         SDL_StartTextInput(m_mainWindow.getHandle());
                     else if (browserEditingBefore && !browserEditingAfter)
@@ -5983,6 +5994,10 @@ void App::processEvents() {
                     if (!detailEditingBefore && detailEditingAfter)
                         SDL_StartTextInput(m_mainWindow.getHandle());
                     else if (detailEditingBefore && !detailEditingAfter)
+                        SDL_StopTextInput(m_mainWindow.getHandle());
+                    if (!visualEditingBefore && visualEditingAfter)
+                        SDL_StartTextInput(m_mainWindow.getHandle());
+                    else if (visualEditingBefore && !visualEditingAfter)
                         SDL_StopTextInput(m_mainWindow.getHandle());
                 }
                 // Handle completed clip drag-and-drop
