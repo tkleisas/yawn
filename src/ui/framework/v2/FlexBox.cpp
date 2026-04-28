@@ -213,30 +213,43 @@ bool FlexBox::onMouseDown(MouseEvent& e) {
     return false;
 }
 
-namespace {
-// True if `cap` is inside `flex`'s subtree (any descendant depth).
-// Used to gate move/up forwarding so we don't double-route a capture
-// that belongs to an entirely different parent (e.g. an overlay).
-bool isCapturedDescendant(const Widget* flex, const Widget* cap) {
-    for (const Widget* p = cap; p; p = p->parent())
-        if (p == flex) return true;
-    return false;
-}
-} // anon
-
+// ── Captured-widget routing rationale ──
+//
+// When a widget has captured the mouse, ALL subsequent move + up
+// events MUST route to it, regardless of where the cursor ends up
+// or whether it's a descendant of this FlexBox via parent pointers.
+// That's the contract of mouse capture: the capturing widget owns
+// the gesture until it releases.
+//
+// Earlier this used isCapturedDescendant() to gate forwarding, which
+// broke for widgets that aren't in the parent-pointer tree:
+//   * Dynamic knobs in VisualParamsPanel (m_chain[i].knobs,
+//     m_customKnobs, m_postFX[i].knobs) — created/destroyed at
+//     runtime as shader passes come and go, never addChild'd.
+//   * Member-field widgets in panels that don't call addChild
+//     (TransportPanel was fixed by adding addChild calls; others
+//     would need the same surgery individually).
+//
+// Symptom: knobs respond to drag (mouseMove finds the panel under
+// the cursor and the panel forwards via its own cap-guard), but
+// mouseUp gets lost when the cursor leaves the panel's bounds OR
+// when it lands on a different sibling child of FlexBox. The
+// gesture SM stays in pressed=true state forever.
+//
+// Modal dialogs are dispatched via LayerStack BEFORE the main
+// widget tree, so a captured-by-dialog event never reaches us
+// here — there's no cross-layer interference to worry about.
 bool FlexBox::onMouseMove(MouseMoveEvent& e) {
     if (Widget* cap = capturedWidget()) {
-        if (isCapturedDescendant(this, cap)) {
-            const Rect& cb = cap->bounds();
-            MouseMoveEvent ce = e;
-            ce.lx = e.x - cb.x;
-            ce.ly = e.y - cb.y;
-            cap->dispatchMouseMove(ce);
-            return true;
-        }
+        const Rect& cb = cap->bounds();
+        MouseMoveEvent ce = e;
+        ce.lx = e.x - cb.x;
+        ce.ly = e.y - cb.y;
+        cap->dispatchMouseMove(ce);
+        return true;
     }
-    // Hover propagation: forward to the child currently under the
-    // pointer so it can update its hover state.
+    // No capture: hover propagation — forward to the child currently
+    // under the pointer so it can update its hover state.
     for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
         Widget* child = *it;
         if (!child || !child->isVisible()) continue;
@@ -254,19 +267,17 @@ bool FlexBox::onMouseMove(MouseMoveEvent& e) {
 
 bool FlexBox::onMouseUp(MouseEvent& e) {
     if (Widget* cap = capturedWidget()) {
-        if (isCapturedDescendant(this, cap)) {
-            const Rect& cb = cap->bounds();
-            MouseEvent ce = e;
-            ce.lx = e.x - cb.x;
-            ce.ly = e.y - cb.y;
-            cap->dispatchMouseUp(ce);
-            return true;
-        }
+        const Rect& cb = cap->bounds();
+        MouseEvent ce = e;
+        ce.lx = e.x - cb.x;
+        ce.ly = e.y - cb.y;
+        cap->dispatchMouseUp(ce);
+        return true;
     }
-    // No capture in our subtree — try to deliver to whichever child
-    // contains the release (typical click flow on a stateless widget
-    // that didn't capture on press, e.g. a Button that fires onClick
-    // from its gesture SM).
+    // No capture — try to deliver to whichever child contains the
+    // release (typical click flow on a stateless widget that didn't
+    // capture on press, e.g. a Button that fires onClick from its
+    // gesture SM after the press has already finished).
     for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
         Widget* child = *it;
         if (!child || !child->isVisible()) continue;
