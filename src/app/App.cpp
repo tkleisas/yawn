@@ -5503,6 +5503,19 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
+                LOG_INFO("KnobEdit", "TEXT_INPUT '%s' "
+                         "[dialog=%d sRen=%d aRen=%d tEdit=%d "
+                         "dKnob=%d vVis=%d vKnob=%d bKnob=%d focus=%d]",
+                         event.text.text,
+                         m_textInputDialog.isOpen() ? 1 : 0,
+                         m_sessionPanel->isRenamingTrack() ? 1 : 0,
+                         m_arrangementPanel->isRenamingTrack() ? 1 : 0,
+                         m_transportPanel->isEditing() ? 1 : 0,
+                         (m_showDetailPanel && m_detailPanel->hasEditingKnob()) ? 1 : 0,
+                         m_visualParamsPanelW->visible() ? 1 : 0,
+                         m_visualParamsPanel->hasEditingKnob() ? 1 : 0,
+                         m_browserPanel->hasEditingKnob() ? 1 : 0,
+                         m_inputState.focused() ? 1 : 0);
                 // Text input dialog (modal) — takeTextInput pushes
                 // the text into the embedded FwTextInput.
                 if (m_textInputDialog.isOpen()) {
@@ -5535,6 +5548,8 @@ void App::processEvents() {
                 // mode but typed digits would be ignored.
                 if (m_visualParamsPanelW->visible() &&
                     m_visualParamsPanel->hasEditingKnob()) {
+                    LOG_INFO("KnobEdit",
+                             "  → forwardTextInput → visual params");
                     m_visualParamsPanel->forwardTextInput(event.text.text);
                     break;
                 }
@@ -5987,6 +6002,11 @@ void App::processEvents() {
                     const bool visualEditingAfter =
                         m_visualParamsPanelW->visible() &&
                         m_visualParamsPanel->hasEditingKnob();
+                    LOG_INFO("KnobEdit",
+                             "MouseUp visParams: visible=%d before=%d after=%d",
+                             m_visualParamsPanelW->visible() ? 1 : 0,
+                             visualEditingBefore ? 1 : 0,
+                             visualEditingAfter ? 1 : 0);
                     if (!browserEditingBefore && browserEditingAfter)
                         SDL_StartTextInput(m_mainWindow.getHandle());
                     else if (browserEditingBefore && !browserEditingAfter)
@@ -5995,10 +6015,15 @@ void App::processEvents() {
                         SDL_StartTextInput(m_mainWindow.getHandle());
                     else if (detailEditingBefore && !detailEditingAfter)
                         SDL_StopTextInput(m_mainWindow.getHandle());
-                    if (!visualEditingBefore && visualEditingAfter)
+                    if (!visualEditingBefore && visualEditingAfter) {
+                        LOG_INFO("KnobEdit",
+                                 "  → SDL_StartTextInput (visual params)");
                         SDL_StartTextInput(m_mainWindow.getHandle());
-                    else if (visualEditingBefore && !visualEditingAfter)
+                    } else if (visualEditingBefore && !visualEditingAfter) {
+                        LOG_INFO("KnobEdit",
+                                 "  → SDL_StopTextInput  (visual params)");
                         SDL_StopTextInput(m_mainWindow.getHandle());
+                    }
                 }
                 // Handle completed clip drag-and-drop
                 if (m_sessionPanel->clipDragCompleted()) {

@@ -282,7 +282,34 @@ void FwKnob::beginEdit() {
     // zeros — users typing to replace don't want to wade through
     // "0.500000". Use formatter for consistency with the paint path
     // so what they see is what they'd clear.
-    m_editBuffer = formattedValue();
+    //
+    // Strip the non-numeric tail of the formatter output (units like
+    // " Hz", " ms", "x", etc.) so the edit buffer holds JUST the
+    // number — typed digits append to a clean numeric prefix instead
+    // of trying to insert into "5.0k Hz". Backspace from the end
+    // would otherwise have to delete the unit letters first before
+    // even reaching the digits.
+    const std::string formatted = formattedValue();
+    m_editBuffer.clear();
+    bool sawDot = false;
+    for (size_t i = 0; i < formatted.size(); ++i) {
+        char c = formatted[i];
+        if (c >= '0' && c <= '9') {
+            m_editBuffer.push_back(c);
+        } else if (c == '-' && m_editBuffer.empty()) {
+            m_editBuffer.push_back(c);
+        } else if (c == '.' && !sawDot) {
+            m_editBuffer.push_back(c);
+            sawDot = true;
+        } else if ((c == ' ' || c == '+') && m_editBuffer.empty()) {
+            // Skip leading whitespace / plus.
+        } else {
+            // First non-numeric (excluding allowed leading chars)
+            // ends the numeric prefix — everything after is the
+            // unit suffix and must not appear in the edit buffer.
+            break;
+        }
+    }
 }
 
 void FwKnob::endEdit(bool commit) {
