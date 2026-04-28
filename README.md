@@ -101,10 +101,37 @@
 - **Wavetable Synth** — 5 algorithmic wavetable types with position morphing, SVF filter, LFO modulation, sub oscillator, unison
 - **Granular Synth** — Sample-based granular synthesis with 4 window shapes, position/spread/spray, scan, pitch jitter, stereo width
 - **Vocoder** — Band-based vocoder with 4 carrier types (Saw/Square/Pulse/Noise), 4–32 bands, envelope followers, formant shift
-- **Multisampler** — Multi-zone sample player with key/velocity mapping, per-zone tuning/volume/pan/loop, velocity crossfade, dual ADSR
+- **Multisampler** — Multi-zone sample player with key/velocity mapping, per-zone tuning/volume/pan/loop, velocity crossfade, dual ADSR, zone-list + per-zone editor UI. Build instruments in minutes via the integrated [Auto-Sampler](#auto-sampler) — no VB-CABLE, no Stereo Mix, no third-party tools
 - **Instrument Rack** — Multi-chain container (up to 8 chains) with key/velocity zones, per-chain volume/pan, chain enable/disable toggle, visual zone bars, add/remove chain UI
 - **Drum Rack** — 128 pads with 4×4 grid display, 8-page navigation, per-pad sample loading via drag & drop, per-pad volume/pan/pitch knobs, waveform preview, playing/sample indicators
 - **DrumSlop** — Loop slicer drum machine: auto/even/manual slicing, 16 pads with ADSR, SVF filter, per-pad effect chains, configurable MIDI base note
+
+### Auto-Sampler
+
+*Build a Multisampler instrument from any MIDI source — hardware synth, soft synth, VST3 plugin, the GS Wavetable Synth Windows ships with — by sweeping a note grid, capturing the audio response, and slicing the keymap automatically. The AI taught itself how to auto-sample a synth before learning what a synth was. Then it wrote a tuner. The numbers were wrong, the AI said "Ah, I see the issue!" 14 times, and now they're right.*
+
+- **MIDI grid drive** — Sweep a (note × velocity-layer) matrix through any open MIDI output. Defaults: C2–C7, every major-third, **4 velocity layers** (matches Logic Sampler Auto / Redmatica / SampleRobot defaults), 2.0 s note hold + 1.5 s release tail
+- **Lock-free private capture** — Per-note recording via a SPSC side-channel on the audio engine, independent of transport / clip / track recording. Captures interleaved float WAVs at the engine's running sample rate
+- **WASAPI loopback (Windows)** — Capture system playback **without** VB-CABLE, Voicemeeter, or Stereo Mix. Every Windows playback endpoint shows up in YAWN's input device dropdown as `[loopback]`; pick one, point your synth at the same output, done. Stream rate is auto-negotiated against the device's mix format (typically 48 kHz) and every rate-cached subsystem (instruments, effects, transport, clip engines) is re-pinned to `Pa_GetStreamInfo()`'s truth so a 44.1 ↔ 48 kHz step doesn't pitch the whole engine 147 cents off (a bug we found, fixed, and have a story about)
+- **Test Note button** — Toggles a sustained C4 v100 over the chosen MIDI port. Live **VU meter** shows input peak with the user-set **Level knob** (–24 dB to +24 dB) baked in — what you see in the meter is what hits disk, so you dial gain against the meter and ride the loudest preset just below 0 dBFS
+- **Per-note silence trim** — Configurable threshold (default −60 dBFS) trims dead air at the start of each capture; preserves the attack with a 10 ms safety margin
+- **Auto zone slicing** — Key ranges split at midpoints between adjacent root notes; velocity ranges split at midpoints between adjacent layers. Playback covers the whole keyboard seamlessly across zones
+- **Folder layout** — `<project>.yawn/samples/<sanitized_capture_name>/<root>_v<vel>.wav` plus a `manifest.json` describing the run. Default capture name is derived from the track name (`midi_1_capture`, `piano_capture`, etc.) and sanitized to filename-safe form
+
+#### Workflow
+
+1. Add a Multisampler to a track (or pick one)
+2. Click **Auto-Sample…** in the device's display panel
+3. Pick MIDI port + channel, audio input + mono/stereo, note range + step, velocity layer count, note-length / release-tail timing
+4. Hit **Test Note** — verify the synth speaks and the VU meter swings; dial the **Level** knob until the loudest preset peaks just below 0 dBFS
+5. **Capture** → progress bar + live "Now: C4 vel 100" status, ~3–4 minutes for a default 64-sample run
+6. Done → zones populate the Multisampler, project marks dirty, samples + manifest land in the project's `samples/` folder. Save the project to keep them
+
+#### Saving a preset
+
+- **Save Preset…** on the Multisampler captures the full instrument: 14 global params (Amp ADSR / Filter / Filt Env / Glide / Vel Crossfade / Volume) **plus** every zone's audio + keymap (root, key range, vel range, tune, vol, pan, loop). Per-zone WAVs are written to `<presets>/multisampler/<preset>/zone_NN.wav` with `sampleRate` stamped into the JSON so playback compensates for engine-rate changes
+- **Project-local mirror** — When a project is open, every Save Preset writes a copy into `<project>.yawn/presets/multisampler/` so the project folder is self-contained for sharing / archiving. The preset menu unions both lists (project-local wins on name collision)
+- The Browser's Presets tab refreshes on every save (no app-restart required)
 
 ### MIDI
 - **MIDI Engine** — Internal 16-bit velocity, 32-bit CC resolution (MIDI 2.0 ready)

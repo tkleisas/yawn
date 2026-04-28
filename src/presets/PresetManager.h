@@ -36,6 +36,11 @@ struct PresetData {
     std::string deviceId;
     std::string deviceName;
     json        params;                    // name → float
+    // Instrument-specific state outside the parameter list (Multisampler
+    // zones, DrumRack pads, Sampler buffer, …). May reference asset
+    // files in <preset-folder>/<preset-stem>/ — see PresetManager
+    // ::presetAssetDir().
+    json        extraState;                // empty json{} when absent
     std::vector<uint8_t> vst3State;        // optional binary processor state
     std::vector<uint8_t> vst3ControllerState; // optional binary controller state
     std::string genre;                     // comma-separated tags (e.g. "ambient,pad")
@@ -52,6 +57,22 @@ public:
     // Returns the device-specific presets directory, creating it if needed.
     static fs::path presetsDir(const std::string& deviceId);
 
+    // ── Project-local presets ───────────────────────────────────────────
+    // When a project is open, presets save to both the global library
+    // (so they're reusable in any future project) AND a per-project
+    // copy (so the project folder is self-contained for sharing /
+    // archiving). The Browser's device-level "Preset" menu unions
+    // both lists; project-local wins on a name collision.
+    //
+    // App calls setProjectRoot when the project changes (new / open /
+    // save-as / close). An empty path disables the project-local
+    // path entirely — saves go to the global library only.
+    static void   setProjectRoot(fs::path root);
+    static fs::path projectRoot();
+    static fs::path projectPresetsDir(const std::string& deviceId);
+    static fs::path projectPresetAssetDir(const std::string& deviceId,
+                                            const std::string& presetName);
+
     // ── Listing ─────────────────────────────────────────────────────────
 
     // List all presets available for a given device, sorted by name.
@@ -67,8 +88,17 @@ public:
                                const std::string& deviceId,
                                const std::string& deviceName,
                                const json& params,
+                               const json& extraState = {},
                                const std::vector<uint8_t>& vst3State = {},
                                const std::vector<uint8_t>& vst3ControllerState = {});
+
+    // Per-preset asset directory: <presetsDir>/<deviceId>/<sanitized-name>/.
+    // Used by instruments with non-parametric state (Multisampler zones,
+    // DrumRack pads) to store sample WAVs alongside the .json. Returns
+    // a path even when the directory doesn't yet exist; saveExtraState
+    // is responsible for creating it on save.
+    static fs::path presetAssetDir(const std::string& deviceId,
+                                    const std::string& presetName);
 
     // Load a preset from disk. Returns true on success.
     static bool loadPreset(const fs::path& filePath, PresetData& outData);

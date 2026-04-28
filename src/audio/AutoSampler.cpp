@@ -299,6 +299,18 @@ void AutoSampleWorker::saveCurrentSample() {
         // Still record it — empty zone is better than silently skipping.
     }
 
+    // Apply the user-set recording level (in-place, before trim
+    // analysis, so the silence threshold sees the boosted signal).
+    // Skip the multiplication when gain is unity to avoid touching
+    // the buffer in the common case.
+    if (m_cfg.recordingLevelDb != 0.0f && framesWritten > 0) {
+        const float gain = std::pow(10.0f, m_cfg.recordingLevelDb / 20.0f);
+        const int64_t total = framesWritten * channels;
+        for (int64_t i = 0; i < total; ++i) {
+            m_request->buffer[i] *= gain;
+        }
+    }
+
     // Optional leading-silence trim. Walks frame-by-frame from the start
     // until peak across channels exceeds the threshold; truncates the
     // buffer to the post-trim region. Always leaves at least a few
@@ -422,6 +434,10 @@ void AutoSampleWorker::finalizeAndAddZones() {
         z.sampleData     = cs.buffer;
         z.sampleFrames   = cs.frames;
         z.sampleChannels = cs.channels;
+        // Stamp the engine's current rate at capture time. Without
+        // this, a 48-kHz capture (e.g. WASAPI loopback override)
+        // played by a 44.1-kHz engine would be ~147 cents flat.
+        z.sampleRate     = static_cast<int>(m_engine.sampleRate());
         z.rootNote = cs.note;
         auto kr = keyRangeForRoot(cs.note);
         z.lowKey  = kr.first;

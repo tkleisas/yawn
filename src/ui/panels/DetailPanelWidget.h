@@ -178,6 +178,15 @@ public:
         m_onParamRightClick = std::move(cb);
     }
 
+    // Auto-Sample request — fired when the user clicks the "Auto-Sample"
+    // button in MultisamplerDisplayPanel. App opens the AutoSampleDialog
+    // with the supplied Multisampler as the capture target.
+    using AutoSampleRequestCallback =
+        std::function<void(instruments::Multisampler*)>;
+    void setOnAutoSampleRequested(AutoSampleRequestCallback cb) {
+        m_onAutoSampleRequested = std::move(cb);
+    }
+
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
 
     void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
@@ -1424,11 +1433,14 @@ private:
                 ms->removeZone(zoneIdx);
             });
 
-            msPanel->setOnAutoSampleClicked([]() {
-                // Hooked up in the auto-sampler commit. Emits a toast
-                // for now so the click isn't completely silent during
-                // the in-progress feature build.
-                LOG_INFO("UI", "Auto-Sample button clicked (dialog not yet wired)");
+            msPanel->setOnAutoSampleClicked([this, inst]() {
+                // Forward the click up to App, which owns the
+                // FwAutoSampleDialog and the engine/midi context the
+                // dialog needs to open with.
+                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
+                if (ms && m_onAutoSampleRequested) {
+                    m_onAutoSampleRequested(ms);
+                }
             });
 
             // Push fresh zone rows from the instrument each frame.
@@ -1617,6 +1629,7 @@ private:
     ParamTouchCallback     m_onParamTouch;
     ParamRightClickCallback m_onParamRightClick;
     PresetClickCallback m_onPresetClick;
+    AutoSampleRequestCallback m_onAutoSampleRequested;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;

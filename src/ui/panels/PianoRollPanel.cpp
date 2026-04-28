@@ -261,6 +261,11 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
         m_userHeight = std::clamp(
             m_handleDragStartH + delta, kMinPanelH, kMaxPanelH);
         m_targetHeight = m_userHeight;
+        // 1:1 user-driven resize should snap, not animate — the
+        // 20%/frame lerp in updateAnimation would feel like the
+        // handle is sliding through molasses on a pointer drag.
+        m_animatedHeight = m_userHeight;
+        invalidate();
         return true;
     }
 

@@ -91,8 +91,16 @@ inline std::filesystem::path saveDevicePreset(const std::string& presetName,
     }
 #endif
 
+    // Capture instrument-specific extra state (Multisampler zones,
+    // DrumRack pads, …). The Instrument writes any binary assets
+    // (per-zone WAVs etc.) into the per-preset asset directory and
+    // returns a JSON manifest pointing at them.
+    const std::filesystem::path assetDir =
+        PresetManager::presetAssetDir(inst.id(), presetName);
+    json extra = inst.saveExtraState(assetDir);
+
     return PresetManager::savePreset(presetName, inst.id(), inst.name(),
-                                     params, vst3State, vst3CtrlState);
+                                     params, extra, vst3State, vst3CtrlState);
 }
 
 inline std::filesystem::path saveDevicePreset(const std::string& presetName,
@@ -139,6 +147,16 @@ inline bool loadDevicePreset(const std::filesystem::path& filePath,
 #endif
 
     deserializeDeviceParams(inst, data.params);
+    // Restore instrument-specific extra state (zones / pads / sample
+    // buffers). assetDir mirrors the save side: same parent folder as
+    // the .json, named after the preset stem. Native instruments with
+    // no extra state ignore this — the base Instrument default is a
+    // no-op.
+    if (!data.extraState.is_null() && !data.extraState.empty()) {
+        const std::filesystem::path assetDir =
+            filePath.parent_path() / filePath.stem();
+        inst.loadExtraState(data.extraState, assetDir);
+    }
     return true;
 }
 

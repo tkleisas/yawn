@@ -51,6 +51,14 @@ public:
         std::vector<float> sampleData;   // interleaved audio
         int sampleFrames   = 0;
         int sampleChannels = 1;
+        // Sample rate the audio was originally recorded at. 0 = legacy
+        // / unknown — falls back to "match engine rate" so old saves
+        // sound the same as before this field existed. When non-zero,
+        // playback speed compensates for the engine/sample-rate ratio
+        // (e.g. a 48000-Hz capture played by a 44100-Hz engine plays
+        // 48000/44100 ≈ 1.088× faster, otherwise it'd be ~147 cents
+        // flat).
+        int sampleRate     = 0;
         int rootNote       = 60;
         int lowKey         = 0;
         int highKey        = 127;
@@ -122,6 +130,24 @@ public:
     Zone* zone(int idx) {
         return (idx >= 0 && idx < m_zoneCount) ? m_zones[idx].get() : nullptr;
     }
+
+    // ── Preset extra state ──────────────────────────────────────────
+    // Multisampler stores its zones (sample data + key/velocity map +
+    // tune/vol/pan/loop) outside the parameter list, so device-preset
+    // save/load needs special handling. We mirror the project-side
+    // serializer's layout: per-zone WAVs in `assetDir`, plus a JSON
+    // array of zone metadata referencing them by relative filename.
+    //
+    // Preset asset folder layout:
+    //   <preset>.json        ← params + extraState (zone metadata)
+    //   <preset>/            ← assetDir (created on save)
+    //       zone_00.wav
+    //       zone_01.wav
+    //       ...
+    nlohmann::json saveExtraState(
+            const std::filesystem::path& assetDir) const override;
+    void loadExtraState(const nlohmann::json& state,
+                         const std::filesystem::path& assetDir) override;
 
     int parameterCount() const override { return kParamCount; }
 

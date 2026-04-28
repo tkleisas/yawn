@@ -4467,6 +4467,15 @@ bool App::init() {
                     if (!saved.empty()) {
                         m_detailPanel->setDevicePresetName(type, chainIndex, name);
                         LOG_INFO("Preset", "Saved '%s' for %s", name.c_str(), deviceName.c_str());
+                        // Re-scan the presets folder so the new file lands
+                        // in the library DB → Browser's Presets tab picks
+                        // it up on its next render. Without this, the file
+                        // is on disk but the DB-backed list stays stale
+                        // until the next full library scan / app restart.
+                        // scanPresets() is async (worker thread) and does
+                        // an UPSERT per file, so re-running it on every
+                        // save is cheap (~ms for hundreds of files).
+                        if (m_libraryScanner) m_libraryScanner->scanPresets();
                     }
                 });
         }});
@@ -4509,6 +4518,70 @@ bool App::init() {
 
         ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
                                  ui::fw::Point{mx, my});
+    });
+
+    // Wire Auto-Sample request from MultisamplerDisplayPanel.
+    // Builds the dialog Context from current project + engine state and
+    // opens the modal. Refreshes the detail panel on completion so newly-
+    // populated zones show up in the zone list.
+    m_detailPanel->setOnAutoSampleRequested([this](instruments::Multisampler* ms) {
+        if (!ms) return;
+        if (m_projectPath.empty()) {
+            // Captured samples live under <project>/samples/, so we need
+            // a saved project as the destination root. Surface this as a
+            // visible modal rather than just a log line — silently
+            // doing nothing is the worst kind of UX feedback.
+            LOG_WARN("AutoSample",
+                "Save the project first — captured samples live under "
+                "<project>/samples/.");
+            ui::fw2::DialogSpec spec;
+            spec.title   = "Save Project First";
+            spec.message =
+                "Auto-Sample captures land in <project>/samples/<name>/, "
+                "which needs a saved project to write to.\n\n"
+                "Use File → Save As… to give this project a folder, "
+                "then click Auto-Sample again.";
+            spec.buttons = { {"OK", {}, /*primary*/true, /*cancel*/true} };
+            ui::fw2::Dialog::show(std::move(spec));
+            return;
+        }
+        // Build a default capture name from the current track's name,
+        // so a track called "MIDI 1" gets "midi_1_capture" by default.
+        std::string trackName;
+        if (m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks()) {
+            trackName = m_project.track(m_selectedTrack).name;
+        }
+
+        ui::fw2::FwAutoSampleDialog::Context ctx;
+        ctx.engine             = &m_audioEngine;
+        ctx.midi               = &m_midiEngine;
+        ctx.target             = ms;
+        ctx.samplesRoot        = m_projectPath / "samples";
+        ctx.defaultCaptureName = audio::defaultCaptureName(trackName);
+
+        m_autoSampleDialog.setOnResult(
+            [this](ui::fw2::FwAutoSampleDialog::Result r) {
+                // Always release SDL text-input mode on close so
+                // subsequent focus changes don't keep the IME armed.
+                SDL_StopTextInput(m_mainWindow.getHandle());
+                if (r == ui::fw2::FwAutoSampleDialog::Result::Done) {
+                    // Force the detail panel to rebuild so the new zones
+                    // populated by the worker show up in the zone list.
+                    m_detailPanel->clear();
+                    markDirty();
+                    LOG_INFO("AutoSample", "Capture finished — zones added");
+                } else if (r == ui::fw2::FwAutoSampleDialog::Result::Cancelled) {
+                    LOG_INFO("AutoSample", "Capture cancelled");
+                } else {
+                    LOG_ERROR("AutoSample", "Capture failed");
+                }
+            });
+        // Capture-name field needs SDL text-input mode active to receive
+        // keystrokes. We start it on open and stop it in the result
+        // callback above; the in-dialog onKey path forwards Backspace /
+        // Delete / arrows etc. directly to FwTextInput::onKeyDown.
+        SDL_StartTextInput(m_mainWindow.getHandle());
+        m_autoSampleDialog.open(ctx);
     });
 
 #ifdef YAWN_HAS_VST3
@@ -5480,6 +5553,11 @@ void App::processEvents() {
                     m_textInputDialog.takeTextInput(event.text.text);
                     break;
                 }
+                // Auto-Sample dialog (modal) — capture-name field.
+                if (m_autoSampleDialog.isOpen()) {
+                    m_autoSampleDialog.takeTextInput(event.text.text);
+                    break;
+                }
                 // Track rename text input
                 if (m_sessionPanel->isRenamingTrack()) {
                     m_sessionPanel->handleRenameTextInput(event.text.text);
@@ -6113,6 +6191,19 @@ void App::update() {
     // panel's local version so the next measure() pass picks it up.
     m_detailPanel->tick();
 
+    // Piano roll uses the same animated-height + measure-cache pattern
+    // — tick() advances the open/close animation and invalidates so
+    // the new height is visible on the next frame. Without this, the
+    // panel opens to a stub that shows only the toolbar (cached at the
+    // first sampled m_animatedHeight) and the resize handle does
+    // nothing visible.
+    m_pianoRoll->tick();
+
+    // Auto-Sample dialog — runs the worker state machine each frame
+    // when a capture is in progress, and resolves the test-note Note-Off
+    // wall-clock timer regardless. Cheap when the dialog is idle.
+    m_autoSampleDialog.tick();
+
     // Transport stop: whenever the stop-counter advances (even while
     // transport is already stopped), clear every visual layer so
     // session-launched shaders / models / videos go dark in lockstep
@@ -6686,6 +6777,8 @@ void App::newProject() {
 
         m_projectPath.clear();
         m_projectDirty = false;
+        // No project open → preset saves go to the global library only.
+        PresetManager::setProjectRoot({});
         m_undoManager.clear();
         m_midiLearnManager.clearAll();
         m_selectedTrack = 0;
@@ -6754,6 +6847,8 @@ void App::doSaveProject(const std::filesystem::path& path) {
     if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
         m_projectPath = projectDir;
         m_projectDirty = false;
+        // Subsequent preset saves now mirror into <project>.yawn/presets/.
+        PresetManager::setProjectRoot(m_projectPath);
         updateWindowTitle();
         LOG_INFO("Project", "Saved to: %s", projectDir.string().c_str());
         m_toastManager.show("Saved: " + projectDir.filename().string());
@@ -6784,6 +6879,9 @@ void App::doOpenProject(const std::filesystem::path& path) {
         syncTracksToEngine();
         m_projectPath = projectDir;
         m_projectDirty = false;
+        // Project-local preset folder (if any) is now visible to the
+        // device Preset menu via PresetManager::listPresetsForDevice.
+        PresetManager::setProjectRoot(m_projectPath);
         m_undoManager.clear();
         m_selectedTrack = 0;
         m_detailTarget = DetailTarget::Track;

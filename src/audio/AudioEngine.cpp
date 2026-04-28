@@ -4,6 +4,14 @@
 #include <cmath>
 #include <algorithm>
 
+#if defined(_WIN32)
+// PortAudio WASAPI extensions (PaWasapi_IsLoopback for tagging
+// loopback capture devices in enumerateDevices). Header lives in
+// PortAudio's include/ root; CMake wires the include path via
+// portaudio_static's PUBLIC includes.
+#include <pa_win_wasapi.h>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -31,6 +39,19 @@ std::vector<AudioDevice> AudioEngine::enumerateDevices() {
         d.maxInputChannels = info->maxInputChannels;
         d.maxOutputChannels = info->maxOutputChannels;
         d.defaultSampleRate = info->defaultSampleRate;
+#if defined(_WIN32)
+        // PortAudio's WASAPI host enumerates synthetic loopback entries
+        // (one per render endpoint, exposed as input devices). Flag
+        // them so the UI can label them as "(loopback)" — picking one
+        // captures whatever Windows is sending to that output, which
+        // is exactly what the Auto-Sampler needs to record a software
+        // synth like Microsoft GS Wavetable Synth without a virtual
+        // audio cable.
+        const int loopbackState = PaWasapi_IsLoopback(i);
+        if (loopbackState == 1) {
+            d.isLoopback = true;
+        }
+#endif
         devices.push_back(d);
     }
     return devices;
@@ -135,21 +156,105 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     if (inputDev != paNoDevice) {
         const PaDeviceInfo* inInfo = Pa_GetDeviceInfo(inputDev);
-        if (inInfo && inInfo->maxInputChannels >= config.inputChannels) {
+        if (!inInfo) {
+            LOG_WARN("Audio",
+                "Input device idx=%d returned null PaDeviceInfo — skipping",
+                static_cast<int>(inputDev));
+        } else if (inInfo->maxInputChannels < 1) {
+            LOG_WARN("Audio",
+                "Input device '%s' (idx=%d) reports maxInputChannels=0 — "
+                "skipping. (Output-only endpoint mistakenly selected as "
+                "input?)",
+                inInfo->name ? inInfo->name : "?", static_cast<int>(inputDev));
+        } else {
+            // Be permissive: open with min(requested, max-available) so a
+            // mono loopback or 1-channel hardware input still works
+            // instead of getting silently dropped because we asked for 2
+            // channels. The audio thread already handles per-channel
+            // mixing for monitoring + capture, so a smaller actual input
+            // count just means inputs[c >= 1] read as zeros.
+            const int requested = config.inputChannels;
+            const int actualCh =
+                std::min(requested, inInfo->maxInputChannels);
+            if (actualCh != requested) {
+                LOG_INFO("Audio",
+                    "Input '%s' has %d channel(s); requested %d. Opening "
+                    "with %d (mismatch is fine — extra channels read silent).",
+                    inInfo->name ? inInfo->name : "?",
+                    inInfo->maxInputChannels, requested, actualCh);
+            }
             inputParams.device = inputDev;
-            inputParams.channelCount = config.inputChannels;
+            inputParams.channelCount = actualCh;
             inputParams.sampleFormat = paFloat32;
             inputParams.suggestedLatency = inInfo->defaultLowInputLatency;
             inputParams.hostApiSpecificStreamInfo = nullptr;
             inputParamsPtr = &inputParams;
+            // Reflect the actual channel count we'll feed downstream so
+            // peak metering, monitoring, and private capture all see
+            // consistent counts.
+            m_config.inputChannels = actualCh;
+        }
+    } else {
+        LOG_WARN("Audio",
+            "No input device selected (config.inputDevice=%d, default=%d)",
+            config.inputDevice, static_cast<int>(Pa_GetDefaultInputDevice()));
+    }
+
+    // ── Sample-rate override for WASAPI loopback ──
+    // WASAPI shared-mode capture (which is how loopback runs) is locked
+    // to the render endpoint's mix format — typically 48000 Hz on
+    // modern Windows. If we open the stream at YAWN's configured rate
+    // (default 44100), Pa_OpenStream returns paInvalidSampleRate and
+    // we lose input entirely. Probe the input device's defaultSampleRate
+    // and use that for the stream when it's a loopback. The transport,
+    // mixer, clip engines etc. all read m_config.sampleRate, so we
+    // update the engine's view to match — losing some rate-conversion
+    // accuracy in the project's a/v clips is a far smaller cost than
+    // not capturing at all.
+    double streamSampleRate = config.sampleRate;
+#if defined(_WIN32)
+    if (inputParamsPtr) {
+        const PaDeviceInfo* inInfo = Pa_GetDeviceInfo(inputParams.device);
+        if (inInfo && PaWasapi_IsLoopback(inputParams.device) == 1) {
+            const double devRate = inInfo->defaultSampleRate;
+            if (devRate > 0.0 && std::abs(devRate - config.sampleRate) > 1.0) {
+                LOG_INFO("Audio",
+                    "WASAPI loopback '%s' requires %.0f Hz (shared-mode mix "
+                    "format); overriding requested %.0f Hz for the stream.",
+                    inInfo->name ? inInfo->name : "?",
+                    devRate, config.sampleRate);
+                streamSampleRate = devRate;
+                m_config.sampleRate = devRate;
+                m_transport.setSampleRate(devRate);
+                m_clipEngine.setSampleRate(devRate);
+                m_midiClipEngine.setSampleRate(devRate);
+                m_arrPlayback.setSampleRate(devRate);
+                m_metronome.init(devRate, config.framesPerBuffer);
+                for (int t = 0; t < kMaxMidiTracks; ++t)
+                    m_midiEffectChains[t].init(devRate);
+                // CRITICAL: also re-init instruments so their oscillator
+                // phase increments, envelope timings and filter coeffs
+                // match the new rate. Instruments cache m_sampleRate at
+                // init() time; without this every note would play at
+                // the wrong pitch (the original / new ratio off — a
+                // 44.1→48 jump = ~147 cents sharp). Symptom is the
+                // tuner reading off-by-most-of-a-semitone on every
+                // synth, not just samplers.
+                for (int t = 0; t < kMaxTracks; ++t) {
+                    if (m_instruments[t])
+                        m_instruments[t]->init(devRate,
+                                                config.framesPerBuffer);
+                }
+            }
         }
     }
+#endif
 
     err = Pa_OpenStream(
         &m_stream,
         inputParamsPtr,  // nullptr if no input device
         &outputParams,
-        config.sampleRate,
+        streamSampleRate,
         config.framesPerBuffer,
         paClipOff,
         &AudioEngine::paCallback,
@@ -165,7 +270,7 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
             &m_stream,
             nullptr,
             &outputParams,
-            config.sampleRate,
+            streamSampleRate,
             config.framesPerBuffer,
             paClipOff,
             &AudioEngine::paCallback,
@@ -180,16 +285,88 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
 
     m_hasInputDevice = (inputParamsPtr != nullptr);
 
+    // ── Stream-rate truth: Pa_GetStreamInfo wins ──
+    // PortAudio's docs are explicit that the rate we *requested* via
+    // Pa_OpenStream is only a hint; the actual stream rate may differ
+    // (WASAPI shared-mode in particular forces the device's mix-format
+    // rate, even when we asked for something else). If we don't pin
+    // every downstream consumer (instruments, transport, clip engines)
+    // to the actual rate, oscillators run at one rate while the
+    // callback feeds them at another → ~147 cents of pitch error per
+    // 44.1↔48 step. So query the truth here and re-init if needed.
+    if (const PaStreamInfo* sinfo = Pa_GetStreamInfo(m_stream)) {
+        const double actualRate = sinfo->sampleRate;
+        if (actualRate > 0.0) {
+            // Pin EVERY rate-cached subsystem to the stream's actual
+            // rate, unconditionally. We can land here in three states:
+            //   (a) actualRate == config.sampleRate          → no-op
+            //   (b) actualRate matches the loopback override → effects
+            //        weren't yet re-init'd in the override block
+            //   (c) WASAPI shared-mode renegotiated silently  → nothing
+            //        downstream has been told yet
+            // Rather than compare-and-branch per case, just re-init
+            // everything. Init is cheap, and one of the bugs that this
+            // is fixing was exactly the "I think I'm at X but the
+            // stream's actually at Y" class of error.
+            //
+            // Tuner is the canonical example for AUDIO effects:
+            //   freq = sampleRate / detected_period_in_frames
+            // so a stale 44100 cached here makes A4 (440 Hz) read at
+            // 404 Hz = ~147 cents flat even when the synth is dead-on.
+            // Filter coefficients, reverb tail timings, envelope
+            // ballistics — all sample-rate-dependent in the same way.
+            const bool changed =
+                std::abs(actualRate - m_config.sampleRate) > 1.0;
+            if (changed) {
+                LOG_INFO("Audio",
+                    "Stream opened at %.0f Hz (engine had %.0f Hz) — "
+                    "re-syncing all rate-cached subsystems to truth.",
+                    actualRate, m_config.sampleRate);
+            }
+            m_config.sampleRate = actualRate;
+            m_transport.setSampleRate(actualRate);
+            m_clipEngine.setSampleRate(actualRate);
+            m_midiClipEngine.setSampleRate(actualRate);
+            m_arrPlayback.setSampleRate(actualRate);
+            m_metronome.init(actualRate, m_config.framesPerBuffer);
+            for (int t = 0; t < kMaxMidiTracks; ++t)
+                m_midiEffectChains[t].init(actualRate);
+            for (int t = 0; t < kMaxTracks; ++t) {
+                if (m_instruments[t])
+                    m_instruments[t]->init(actualRate, m_config.framesPerBuffer);
+            }
+            for (int t = 0; t < kMaxTracks; ++t)
+                m_mixer.trackEffects(t).init(actualRate,
+                                              m_config.framesPerBuffer);
+            for (int b = 0; b < kMaxReturnBuses; ++b)
+                m_mixer.returnEffects(b).init(actualRate,
+                                               m_config.framesPerBuffer);
+            m_mixer.masterEffects().init(actualRate,
+                                          m_config.framesPerBuffer);
+        }
+    }
+
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
     LOG_INFO("Audio", "Output device: %s", devInfo->name);
     if (m_hasInputDevice) {
         const PaDeviceInfo* inDevInfo = Pa_GetDeviceInfo(inputParams.device);
-        LOG_INFO("Audio", "Input device: %s (%d ch)", inDevInfo->name, config.inputChannels);
+#if defined(_WIN32)
+        const bool isLoop = (PaWasapi_IsLoopback(inputParams.device) == 1);
+#else
+        const bool isLoop = false;
+#endif
+        LOG_INFO("Audio", "Input device: %s (%d ch%s)",
+                 inDevInfo->name,
+                 m_config.inputChannels,
+                 isLoop ? ", WASAPI loopback" : "");
     } else {
         LOG_INFO("Audio", "No audio input device (recording disabled)");
     }
+    // Read the post-truth rate (m_config.sampleRate, after Pa_GetStreamInfo
+    // sync). Earlier this read config.sampleRate (the parameter) which
+    // would lie when the override or the stream renegotiated the rate.
     LOG_INFO("Audio", "Sample rate: %.0f Hz, Buffer: %d frames, Channels: %d",
-        config.sampleRate, config.framesPerBuffer, config.outputChannels);
+        m_config.sampleRate, m_config.framesPerBuffer, m_config.outputChannels);
 
     return true;
 }
@@ -374,6 +551,34 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     int nc = m_config.outputChannels;
     int nf = static_cast<int>(numFrames);
     int inCh = m_config.inputChannels;
+
+    // ── Input level metering ──
+    // Scan input once per block and CAS-merge each channel's peak into
+    // the atomic array. The UI thread (e.g. AutoSampleDialog) reads
+    // these via consumeInputPeak(ch) which atomically swaps to zero,
+    // so the next poll sees only "peak since last poll" — exactly
+    // what a VU/peak meter wants.
+    if (input && inCh > 0) {
+        const int peakCh = std::min(inCh, kMaxInputPeakChannels);
+        for (int c = 0; c < peakCh; ++c) {
+            float blockPeak = 0.0f;
+            for (int f = 0; f < nf; ++f) {
+                const float s = std::abs(input[f * inCh + c]);
+                if (s > blockPeak) blockPeak = s;
+            }
+            // CAS-update: replace stored peak only if our block's peak
+            // is higher. Avoids the lost-update if the UI raced an
+            // exchange in between (which would just mean the current
+            // poll sees this block's peak, fine).
+            float prev = m_inputPeak[c].load(std::memory_order_relaxed);
+            while (blockPeak > prev) {
+                if (m_inputPeak[c].compare_exchange_weak(prev, blockPeak,
+                        std::memory_order_release,
+                        std::memory_order_relaxed))
+                    break;
+            }
+        }
+    }
 
     // Clear per-track buffers (pointers already set up in init)
     for (int t = 0; t < kMaxTracks; ++t) {

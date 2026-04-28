@@ -77,6 +77,11 @@ inline std::string groupedShortenLabel(const std::string& name) {
     if (s == "Algorithm")   return "Algo";
     if (s == "Feedback")    return "FB";
     if (s == "Volume")      return "Vol";
+    // Multisampler — "Vel Crossfade" is too wide for the standard
+    // 52-px knob cell and bleeds into the neighbouring knob's label.
+    // Abbreviated form mirrors how Logic/Kontakt/Falcon label velocity
+    // crossfade controls in their compact macro views.
+    if (s == "Vel Crossfade") return "VelXFd";
     if (s == "Level")       return "Lvl";
     if (s == "Attack")      return "Atk";
     if (s == "Release")     return "Rel";
@@ -340,7 +345,8 @@ public:
 
     bool onMouseDown(MouseEvent& e) override {
         // Forward clicks into the display slot first (e.g. DrumSlop pad
-        // grid, DrumRack pad / page nav, InstrumentRack chain rows).
+        // grid, DrumRack pad / page nav, InstrumentRack chain rows,
+        // MultisamplerDisplayPanel toolbar buttons + zone-list rows).
         if (m_display) {
             const auto& db = m_display->bounds();
             if (e.x >= db.x && e.x < db.x + db.w &&
@@ -348,9 +354,29 @@ public:
                 MouseEvent ev = e;
                 ev.lx = e.x - db.x;
                 ev.ly = e.y - db.y;
+                // Snapshot the global capture before dispatching so we
+                // can detect whether a descendant auto-captured (knob,
+                // number-input, button gesture SM). If one did, we MUST
+                // NOT call captureMouse() ourselves — that would stomp
+                // the descendant's capture per the framework gotcha
+                // documented in Widget::captureMouse(), and mouseUp
+                // would never reach the descendant (so e.g. Auto-Sample
+                // button would visually press but never fire its
+                // onClick callback).
+                Widget* prevCap = Widget::capturedWidget();
                 if (m_display->dispatchMouseDown(ev)) {
-                    m_draggingDisplay = true;
-                    captureMouse();
+                    Widget* curCap = Widget::capturedWidget();
+                    const bool descendantCaptured =
+                        curCap != nullptr && curCap != prevCap && curCap != this;
+                    if (!descendantCaptured) {
+                        // Display consumed the click without spawning a
+                        // descendant capture (DrumSlop pad sweep, etc.).
+                        // We capture so subsequent moves keep streaming
+                        // into the display — that's what enables drag-
+                        // across-pads behaviour.
+                        m_draggingDisplay = true;
+                        captureMouse();
+                    }
                     return true;
                 }
             }

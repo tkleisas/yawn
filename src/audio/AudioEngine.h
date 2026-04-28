@@ -31,6 +31,12 @@ struct AudioDevice {
     int maxInputChannels = 0;
     int maxOutputChannels = 0;
     double defaultSampleRate = kDefaultSampleRate;
+    // True for synthetic WASAPI loopback capture devices (Windows-only).
+    // PortAudio's WASAPI host enumerates one loopback entry per render
+    // endpoint with maxInputChannels > 0; UI uses this flag to label
+    // them distinctly ("(loopback)") so the user knows they're picking
+    // system-playback capture rather than a microphone input.
+    bool isLoopback = false;
 };
 
 struct AudioEngineConfig {
@@ -211,6 +217,21 @@ public:
     const AudioEngineConfig& config() const { return m_config; }
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
+    // ─── Input level metering ───────────────────────────────────────
+    // Per-channel peak |sample| seen by the audio callback since the
+    // last consumeInputPeak(ch) call. Designed for UI meter polling at
+    // ~60 Hz: the audio thread CAS-updates with each block's peak, the
+    // UI thread atomically swaps to zero so each polling interval
+    // observes the maximum since the previous poll. Safe and lock-free.
+    //
+    // Returns 0 for out-of-range channels (so callers don't have to
+    // check inputChannels themselves).
+    static constexpr int kMaxInputPeakChannels = 8;
+    float consumeInputPeak(int ch) {
+        if (ch < 0 || ch >= kMaxInputPeakChannels) return 0.0f;
+        return m_inputPeak[ch].exchange(0.0f, std::memory_order_acq_rel);
+    }
+
     // Render a single buffer offline (for export). Must be called with stream stopped.
     void renderBuffer(float* output, unsigned long numFrames) {
         processAudio(nullptr, output, numFrames);
@@ -352,6 +373,12 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<uint32_t> m_callbackStatusFlags{0};
     bool m_paInitialized = false;
+
+    // Per-channel input peak (read-and-reset by UI). Sized to
+    // kMaxInputPeakChannels rather than m_config.inputChannels so the
+    // array is fixed-size across config changes — extra channels just
+    // stay at zero. See consumeInputPeak() above for the design note.
+    std::atomic<float> m_inputPeak[kMaxInputPeakChannels]{};
 
     // Single-slot active private capture. UI thread CASes this in via
     // startPrivateCapture; audio thread reads + writes the request's

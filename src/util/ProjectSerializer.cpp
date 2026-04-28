@@ -201,6 +201,9 @@ json serializeInstrument(const instruments::Instrument& inst,
                                   z->sampleChannels, static_cast<int>(kDefaultSampleRate));
             json zj;
             zj["sampleFile"] = "samples/" + filename;
+            zj["sampleRate"] = (z->sampleRate > 0)
+                ? z->sampleRate
+                : static_cast<int>(kDefaultSampleRate);
             zj["rootNote"]   = z->rootNote;
             zj["lowKey"]     = z->lowKey;
             zj["highKey"]    = z->highKey;
@@ -382,6 +385,7 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             }
             z.sampleFrames   = nf;
             z.sampleChannels = nc;
+            z.sampleRate = zj.value("sampleRate", 0);
             z.rootNote  = zj.value("rootNote", 60);
             z.lowKey    = zj.value("lowKey",   0);
             z.highKey   = zj.value("highKey",  127);

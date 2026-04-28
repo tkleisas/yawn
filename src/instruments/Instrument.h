@@ -2,9 +2,11 @@
 
 #include "midi/MidiTypes.h"
 #include "core/ParameterInfo.h"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 
 namespace yawn {
 namespace instruments {
@@ -48,6 +50,34 @@ public:
     void setSidechainInput(const float* buffer) { m_sidechainBuffer = buffer; }
     const float* sidechainInput() const { return m_sidechainBuffer; }
     virtual bool supportsSidechain() const { return false; }
+
+    // ── Preset extra state ──────────────────────────────────────────
+    // Optional hook for instrument-specific state that lives outside
+    // the parameter list (e.g. Multisampler zones, DrumRack pads,
+    // Sampler buffer). The implementation may write supporting binary
+    // files (typically WAVs) into `assetDir` and store paths-relative-
+    // to-assetDir inside the returned JSON. Default: no extra state
+    // (used by purely parametric synths — Subtractive, Wavetable, FM,
+    // …, where everything is captured by serializeDeviceParams).
+    //
+    // Lifecycle:
+    //   * saveExtraState  — called by saveDevicePreset right before
+    //     the JSON is written. assetDir is created on demand by the
+    //     caller; remove existing files yourself if overwrite-cleanup
+    //     matters for your data layout.
+    //   * loadExtraState  — called by loadDevicePreset after the
+    //     parameter table has been deserialised. assetDir is the
+    //     same folder save wrote into; read the supporting files
+    //     from there.
+    virtual nlohmann::json saveExtraState(
+            const std::filesystem::path& assetDir) const {
+        (void)assetDir;
+        return {};
+    }
+    virtual void loadExtraState(const nlohmann::json& state,
+                                 const std::filesystem::path& assetDir) {
+        (void)state; (void)assetDir;
+    }
 
 protected:
     double m_sampleRate   = kDefaultSampleRate;

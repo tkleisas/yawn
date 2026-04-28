@@ -202,12 +202,30 @@ public:
     // ─── Measure / Layout ───────────────────────────────────────────────
 
     Size onMeasure(Constraints c, UIContext&) override {
-        updateAnimation();
         return c.constrain({c.maxW, m_animatedHeight});
     }
 
     void onLayout(Rect bounds, UIContext&) override {
         m_bounds = bounds;
+    }
+
+    // Per-frame animation step — advances open/close height toward
+    // m_targetHeight and invalidates the measure cache so the next
+    // layout pass picks up the new height.
+    //
+    // Must be called once per frame (App::update does this). Without
+    // this, fw2's measure cache (keyed on epoch + localVersion +
+    // constraints) would short-circuit subsequent measure() calls and
+    // freeze m_animatedHeight at its first sampled value — symptom:
+    // panel opens to a tiny stub showing only the toolbar, and the
+    // resize-handle drag has no visible effect because the cached
+    // measure stays stale even as m_userHeight grows.
+    //
+    // Mirrors DetailPanelWidget::tick(), which solved the same bug.
+    void tick() {
+        const float prev = m_animatedHeight;
+        updateAnimation();
+        if (m_animatedHeight != prev) invalidate();
     }
 
     // ─── Rendering ──────────────────────────────────────────────────────

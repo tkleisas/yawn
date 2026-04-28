@@ -6,8 +6,34 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <unordered_set>
 
 namespace yawn {
+
+// Global state for the active project root. Set by App when projects
+// open / close / save-as. Empty path = no project, save to global only.
+namespace {
+    fs::path g_projectRoot;
+}
+
+void PresetManager::setProjectRoot(fs::path root) {
+    g_projectRoot = std::move(root);
+}
+
+fs::path PresetManager::projectRoot() {
+    return g_projectRoot;
+}
+
+fs::path PresetManager::projectPresetsDir(const std::string& deviceId) {
+    if (g_projectRoot.empty()) return {};
+    return g_projectRoot / "presets" / sanitizeName(deviceId);
+}
+
+fs::path PresetManager::projectPresetAssetDir(const std::string& deviceId,
+                                                const std::string& presetName) {
+    if (g_projectRoot.empty()) return {};
+    return projectPresetsDir(deviceId) / sanitizeName(presetName);
+}
 
 // ─── Directory resolution ────────────────────────────────────────────────────
 
@@ -43,19 +69,41 @@ fs::path PresetManager::presetsDir(const std::string& deviceId)
 std::vector<PresetInfo> PresetManager::listPresetsForDevice(const std::string& deviceId)
 {
     std::vector<PresetInfo> result;
-    fs::path dir = presetsDir(deviceId);
+    std::unordered_set<std::string> seenNames;
     std::error_code ec;
-    if (!fs::exists(dir, ec)) return result;
 
-    for (auto& entry : fs::directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file()) continue;
-        if (entry.path().extension() != ".json") continue;
-        PresetInfo info;
-        info.name     = entry.path().stem().string();
-        info.deviceId = deviceId;
-        info.filePath = entry.path();
-        result.push_back(std::move(info));
+    // Project-local wins on collision: scan it first and remember the
+    // names so we skip global duplicates. This lets a project keep a
+    // tweaked variant of a globally-named preset without renaming.
+    const fs::path projectDir = projectPresetsDir(deviceId);
+    if (!projectDir.empty() && fs::exists(projectDir, ec)) {
+        for (auto& entry : fs::directory_iterator(projectDir, ec)) {
+            if (!entry.is_regular_file()) continue;
+            if (entry.path().extension() != ".json") continue;
+            PresetInfo info;
+            info.name     = entry.path().stem().string();
+            info.deviceId = deviceId;
+            info.filePath = entry.path();
+            seenNames.insert(info.name);
+            result.push_back(std::move(info));
+        }
     }
+
+    const fs::path dir = presetsDir(deviceId);
+    if (fs::exists(dir, ec)) {
+        for (auto& entry : fs::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file()) continue;
+            if (entry.path().extension() != ".json") continue;
+            std::string name = entry.path().stem().string();
+            if (seenNames.count(name)) continue;        // shadowed by project copy
+            PresetInfo info;
+            info.name     = std::move(name);
+            info.deviceId = deviceId;
+            info.filePath = entry.path();
+            result.push_back(std::move(info));
+        }
+    }
+
     std::sort(result.begin(), result.end(),
               [](const PresetInfo& a, const PresetInfo& b) { return a.name < b.name; });
     return result;
@@ -91,10 +139,16 @@ std::vector<PresetInfo> PresetManager::listAllPresets()
 
 // ─── Save / Load ─────────────────────────────────────────────────────────────
 
+fs::path PresetManager::presetAssetDir(const std::string& deviceId,
+                                        const std::string& presetName) {
+    return presetsDir(deviceId) / sanitizeName(presetName);
+}
+
 fs::path PresetManager::savePreset(const std::string& name,
                                    const std::string& deviceId,
                                    const std::string& deviceName,
                                    const json& params,
+                                   const json& extraState,
                                    const std::vector<uint8_t>& vst3State,
                                    const std::vector<uint8_t>& vst3ControllerState)
 {
@@ -112,6 +166,8 @@ fs::path PresetManager::savePreset(const std::string& name,
     j["deviceId"]   = deviceId;
     j["deviceName"] = deviceName;
     j["params"]     = params;
+    if (!extraState.is_null() && !extraState.empty())
+        j["extraState"] = extraState;
 
     if (!vst3State.empty())
         j["vst3State"] = toHex(vst3State);
@@ -131,6 +187,43 @@ fs::path PresetManager::savePreset(const std::string& name,
     file.close();
 
     LOG_INFO("Preset", "saved preset '%s' to %s", name.c_str(), path.string().c_str());
+
+    // ── Mirror to project-local presets folder ──
+    // Keeps the .yawn project self-contained for sharing / archiving.
+    // We copy the JSON we just wrote, plus the per-preset asset folder
+    // (where saveExtraState dropped any sample WAVs). Failures here
+    // are logged but non-fatal — the global save already succeeded
+    // and is the canonical location.
+    if (!g_projectRoot.empty()) {
+        std::error_code ec;
+        const fs::path projDir = projectPresetsDir(deviceId);
+        fs::create_directories(projDir, ec);
+        const fs::path projPath = projDir / (safeName + ".json");
+        fs::copy_file(path, projPath, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_WARN("Preset", "couldn't mirror to project ('%s'): %s",
+                     projPath.string().c_str(), ec.message().c_str());
+        } else {
+            // Mirror the asset folder too (per-zone WAVs etc.). Wipe
+            // the destination first so a smaller new save doesn't
+            // leave orphans alongside the new files.
+            const fs::path globalAssets = dir / safeName;
+            const fs::path projAssets   = projDir / safeName;
+            if (fs::exists(globalAssets, ec)) {
+                fs::remove_all(projAssets, ec);
+                fs::copy(globalAssets, projAssets,
+                          fs::copy_options::recursive, ec);
+                if (ec) {
+                    LOG_WARN("Preset",
+                        "couldn't mirror asset dir to project: %s",
+                        ec.message().c_str());
+                }
+            }
+            LOG_INFO("Preset",
+                "mirrored '%s' to project at %s",
+                name.c_str(), projPath.string().c_str());
+        }
+    }
     return path;
 }
 
@@ -155,6 +248,7 @@ bool PresetManager::loadPreset(const fs::path& filePath, PresetData& outData)
     outData.deviceId   = j.value("deviceId", "");
     outData.deviceName = j.value("deviceName", "");
     outData.params     = j.value("params", json::object());
+    outData.extraState = j.value("extraState", json::object());
 
     if (j.contains("vst3State"))
         outData.vst3State = fromHex(j["vst3State"].get<std::string>());

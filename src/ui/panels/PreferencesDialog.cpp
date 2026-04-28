@@ -234,7 +234,14 @@ void FwPreferencesDialog::syncDropdownsToState() {
     m_inputDeviceIds.clear();
     for (const auto& d : m_audioDevices) {
         if (d.maxInputChannels > 0) {
-            inLabels.push_back(d.name);
+            // Tag WASAPI loopback entries so the user can tell "Speakers
+            // (Realtek) [loopback]" apart from a real microphone input.
+            // Selecting one captures whatever Windows is sending to that
+            // output endpoint — used by the Auto-Sampler to record
+            // software synths without VB-CABLE.
+            std::string label = d.name;
+            if (d.isLoopback) label += "  [loopback]";
+            inLabels.push_back(std::move(label));
             m_inputDeviceIds.push_back(d.id);
         }
     }

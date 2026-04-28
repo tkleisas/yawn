@@ -126,6 +126,24 @@ public:
         setRelayoutBoundary(true);
         // Own-dispatch container — see fw2::Widget gotcha note.
         setAutoCaptureOnUnhandledPress(false);
+
+        // Register the interactive widgets as proper children so
+        // FlexBox::onMouseMove / onMouseUp can resolve them via
+        // isCapturedDescendant when one of them owns the mouse capture.
+        // Without this, mouseUp falls through the hit-test fallback to
+        // TransportPanel (no override → no-op) and the captured child's
+        // gesture SM never sees the release: TAP/MET buttons silently
+        // drop their click, BPM drag stays "stuck pressed", and the
+        // moment the cursor strays outside the panel during a drag the
+        // moves stop arriving entirely (giving the tell-tale "only
+        // small changes possible" feel). Layout + render still happen
+        // manually inside this class, so addChild is purely for the
+        // event-routing parent chain.
+        addChild(&m_bpmInput);
+        addChild(&m_tsNumInput);
+        addChild(&m_tsDenInput);
+        addChild(&m_tapBtn);
+        addChild(&m_metroBtn);
     }
 
     void init(Project* project, audio::AudioEngine* engine,
@@ -222,9 +240,11 @@ protected:
 #ifdef YAWN_TEST_BUILD
     bool onMouseDown(MouseEvent&)     override { return false; }
     bool onMouseMove(MouseMoveEvent&) override { return false; }
+    bool onMouseUp  (MouseEvent&)     override { return false; }
 #else
     bool onMouseDown(MouseEvent& e)     override;
     bool onMouseMove(MouseMoveEvent& e) override;
+    bool onMouseUp  (MouseEvent& e)     override;
 #endif
 
 public:

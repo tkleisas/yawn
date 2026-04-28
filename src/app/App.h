@@ -18,6 +18,7 @@
 #include "ui/framework/v2/TextInputDialog.h"
 #include "ui/panels/PreferencesDialog.h"
 #include "ui/framework/v2/ExportDialog.h"
+#include "ui/framework/v2/AutoSampleDialog.h"
 #include "ui/framework/v2/FlexBox.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/FontAdapter.h"
@@ -218,6 +219,11 @@ private:
     // no longer a Widget subclass; lifetime is the App itself.
     ui::fw2::FwPreferencesDialog  m_preferencesDialog;
     ui::fw2::FwExportDialog       m_exportDialog;
+    // Auto-Sample dialog — modal that drives audio::AutoSampleWorker
+    // when the user clicks "Auto-Sample" on a Multisampler instrument.
+    // tick() runs each frame from App::update() to advance the worker
+    // and resolve the test-note Note-Off timer.
+    ui::fw2::FwAutoSampleDialog   m_autoSampleDialog;
 
     // v2 UI framework (ui-v2 in-progress). Coexists with v1 for now —
     // we'll migrate panels over one by one. FontAdapter bridges v1's

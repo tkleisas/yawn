@@ -631,6 +631,27 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
     return false;
 }
 
+bool TransportPanel::onMouseUp(MouseEvent& e) {
+    // Symmetric to onMouseMove: TransportPanel's children (m_bpmInput,
+    // m_tapBtn, m_metroBtn, m_tsNumInput, m_tsDenInput) are member
+    // fields rather than addChild'd subwidgets, so the FlexBox above us
+    // can't find them via isCapturedDescendant. Without this override,
+    // mouseUp falls back to the hit-test path which dispatches to *us*
+    // (no override → Widget::onMouseUp no-op) — and the captured
+    // child's gesture SM never sees the release. Symptoms: TAP/MET
+    // never fire onClick, BPM drag never disengages, drag-to-edit
+    // "sticks" after release.
+    if (Widget* cap = Widget::capturedWidget()) {
+        const auto& b = cap->bounds();
+        MouseEvent ev = e;
+        ev.lx = e.x - b.x;
+        ev.ly = e.y - b.y;
+        cap->dispatchMouseUp(ev);
+        return true;
+    }
+    return false;
+}
+
 bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
     // If a v2 child has captured the mouse, route all moves there.
     if (Widget* cap = Widget::capturedWidget()) {

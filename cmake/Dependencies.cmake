@@ -35,8 +35,16 @@ glad_add_library(glad STATIC REPRODUCIBLE LOADER API gl:core=3.3)
 FetchContent_Declare(
     portaudio
     GIT_REPOSITORY https://github.com/PortAudio/portaudio.git
-    GIT_TAG        v19.7.0
-    GIT_SHALLOW    TRUE
+    # v19.7.0 (Feb 2020) predates WASAPI-loopback support in the
+    # upstream WASAPI host. This commit (post-loopback-PR master) ships
+    # synthetic loopback capture devices alongside regular devices —
+    # Pa_GetDeviceCount enumerates them with maxInputChannels > 0 and
+    # PaWasapi_IsLoopback(idx) flags which entries are loopback render
+    # endpoints. Lets YAWN capture system playback on Windows for the
+    # Auto-Sampler with no third-party drivers (VB-CABLE, Stereo Mix).
+    # Pinned to a specific hash for reproducible builds — bump
+    # explicitly if upstream regressions need to be picked up.
+    GIT_TAG        375345a752822e795bf6daeaa8e9ba981389c0ca
 )
 set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

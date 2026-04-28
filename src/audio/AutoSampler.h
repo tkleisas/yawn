@@ -54,7 +54,11 @@ struct AutoSampleConfig {
     int     lowNote                = 36;           // MIDI 0..127 (C2)
     int     highNote               = 96;           // (C7)
     int     noteStep               = 4;            // every N semitones (default = major third)
-    std::vector<int> velocityLayers = {40, 80, 120}; // velocities to sample (1..127)
+    // Default 4 velocity layers — industry standard (Logic Sampler Auto,
+    // SampleRobot, Redmatica AutoSampler all default here). Captures
+    // pp / mp / mf / ff dynamics without making the run unreasonably
+    // long. velocityLayerPreset(4) returns evenly-spaced [16..127].
+    std::vector<int> velocityLayers = {44, 72, 99, 127};
     float   noteLengthSec          = 2.0f;         // how long the note is held
     float   releaseTailSec         = 1.5f;         // post-Note-Off recording tail
     float   preRollSec             = 0.3f;         // silence before each note (lets prev release fade)
@@ -62,6 +66,14 @@ struct AutoSampleConfig {
     bool    replaceExistingZones   = true;
     bool    trimLeadingSilence     = true;
     float   silenceThresholdDb     = -60.0f;
+    // Software gain applied to captured samples before save / trim
+    // analysis. 0 dB = pass-through. Lets the user trim a too-hot
+    // synth or boost a quiet preset without retracking — the VU meter
+    // in the dialog reflects pre-gain input level so the knob's
+    // "right" setting is whatever lands the loudest preset just below
+    // 0 dBFS in the meter once gain is applied (UI multiplies the
+    // displayed peak by the same gain for that visual feedback loop).
+    float   recordingLevelDb       = 0.0f;
 };
 
 // Public state of the running worker — polled by the dialog for the

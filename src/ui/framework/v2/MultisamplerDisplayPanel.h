@@ -144,38 +144,44 @@ public:
         const float edH = h - kToolbarH - 8;
         m_editorRect = {edX, edY, edW, edH};
 
+        // Editor header band ("Zone N — file.wav") owns the top
+        // strip; the field grid starts below it so labels never
+        // overlap the header text.
+        const float headerH = 18.0f;
+        const float gridY = edY + headerH;
+
         // Editor 2-column grid. Two cols of equal width.
         const float colW = (edW - 8) * 0.5f;
         const float col0X = edX;
         const float col1X = edX + colW + 8;
-        const float rowH = 22.0f;
+        const float rowH = 24.0f;
         const float fieldW = colW;
-        const float labelH = 11.0f;     // tiny label above each field
+        const float labelH = 13.0f;     // small label above each field
 
         // Row 0: Root (col 0), Tune (col 1)
-        layoutField(m_rootInput,  col0X, edY + labelH,             fieldW, rowH - labelH, ctx);
-        layoutField(m_tuneKnob,   col1X, edY,                       fieldW, rowH * 1.6f,  ctx);
+        layoutField(m_rootInput,  col0X, gridY + labelH,            fieldW, rowH - labelH, ctx);
+        layoutField(m_tuneKnob,   col1X, gridY,                     fieldW, rowH * 1.6f,  ctx);
 
         // Row 1: Lo / Hi keys
-        layoutField(m_lowKeyInput, col0X,        edY + (rowH * 1.0f) + labelH,
+        layoutField(m_lowKeyInput, col0X,        gridY + (rowH * 1.0f) + labelH,
                     fieldW * 0.48f, rowH - labelH, ctx);
         layoutField(m_highKeyInput, col0X + fieldW * 0.52f,
-                    edY + (rowH * 1.0f) + labelH,
+                    gridY + (rowH * 1.0f) + labelH,
                     fieldW * 0.48f, rowH - labelH, ctx);
 
         // Row 2: Lo / Hi velocities (col 0); Vol knob (col 1, taller)
-        layoutField(m_lowVelInput, col0X,        edY + (rowH * 2.0f) + labelH,
+        layoutField(m_lowVelInput, col0X,        gridY + (rowH * 2.0f) + labelH,
                     fieldW * 0.48f, rowH - labelH, ctx);
         layoutField(m_highVelInput, col0X + fieldW * 0.52f,
-                    edY + (rowH * 2.0f) + labelH,
+                    gridY + (rowH * 2.0f) + labelH,
                     fieldW * 0.48f, rowH - labelH, ctx);
-        layoutField(m_volKnob, col1X, edY + rowH * 1.6f, fieldW, rowH * 1.6f, ctx);
+        layoutField(m_volKnob, col1X, gridY + rowH * 1.6f, fieldW, rowH * 1.6f, ctx);
 
         // Row 3: Pan knob (col 1)
-        layoutField(m_panKnob, col1X, edY + rowH * 3.2f, fieldW, rowH * 1.6f, ctx);
+        layoutField(m_panKnob, col1X, gridY + rowH * 3.2f, fieldW, rowH * 1.6f, ctx);
 
         // Row 3 (col 0): Loop toggle
-        layoutField(m_loopToggle, col0X, edY + rowH * 3.0f + 2.0f,
+        layoutField(m_loopToggle, col0X, gridY + rowH * 3.0f + 2.0f,
                     50.0f, rowH - 4, ctx);
     }
 
@@ -216,18 +222,23 @@ public:
         if (m_selected >= 0 && m_selected < static_cast<int>(m_zones.size())) {
             renderEditor(ctx);
         } else if (tm) {
+            // Fill the editor area so the empty-state isn't drawn over
+            // a flat scrim — gives the prompt some visual weight.
+            r.drawRect(m_editorRect.x, m_editorRect.y,
+                       m_editorRect.w, m_editorRect.h,
+                       Color{32, 32, 36, 255});
             tm->drawText(r, "No zone selected",
                          m_editorRect.x + 8, m_editorRect.y + 8,
-                         kFsLabel, Color{120, 120, 120, 255});
+                         kFsLabel, Color{170, 170, 175, 255});
             if (m_zones.empty()) {
                 tm->drawText(r,
                              "Drop a sample on the panel,",
-                             m_editorRect.x + 8, m_editorRect.y + 28,
-                             kFsLabel, Color{140, 140, 140, 255});
+                             m_editorRect.x + 8, m_editorRect.y + 32,
+                             kFsLabel, Color{150, 150, 155, 255});
                 tm->drawText(r,
                              "or click Auto-Sample…",
-                             m_editorRect.x + 8, m_editorRect.y + 44,
-                             kFsLabel, Color{140, 140, 140, 255});
+                             m_editorRect.x + 8, m_editorRect.y + 52,
+                             kFsLabel, Color{150, 150, 155, 255});
             }
         }
     }
@@ -279,13 +290,15 @@ public:
 
 private:
     static constexpr float kToolbarH    = 22.0f;
-    static constexpr float kListW       = 132.0f;
-    static constexpr float kListHeaderH = 12.0f;
-    static constexpr float kListRowH    = 14.0f;
-    // Pixel sizes (v1 Font baked at 48 px; we approximate the v1
-    // pt/26 scale used by other display panels).
-    static constexpr float kFsLabel = 7.0f  * (48.0f / 26.0f);
-    static constexpr float kFsTiny  = 6.0f  * (48.0f / 26.0f);
+    static constexpr float kListW       = 142.0f;
+    static constexpr float kListHeaderH = 16.0f;
+    static constexpr float kListRowH    = 17.0f;
+    // Pixel sizes — match Theme::metrics fontSize / fontSizeSmall so
+    // the panel reads at the same scale as the rest of the UI. The v1
+    // pt/26 scaling used by older panels rendered at ~11–13 px which
+    // was too small for label rows in this 196-px-tall panel.
+    static constexpr float kFsLabel = 14.0f;   // headline + section labels
+    static constexpr float kFsTiny  = 12.0f;   // list rows + field captions
 
     // ── Sub-widget setup ──
     void configureFieldWidgets() {
@@ -516,21 +529,18 @@ private:
 
         // Field labels above each input/knob
         if (tm) {
+            const float labelDy = -12.0f;   // baseline gap above field
+            const Color labelCol{170, 170, 175, 255};
             tm->drawText(r, "Root", m_rootInput.bounds().x,
-                         m_rootInput.bounds().y - 9, kFsTiny,
-                         Color{160, 160, 160, 255});
+                         m_rootInput.bounds().y + labelDy, kFsTiny, labelCol);
             tm->drawText(r, "Lo",   m_lowKeyInput.bounds().x,
-                         m_lowKeyInput.bounds().y - 9, kFsTiny,
-                         Color{160, 160, 160, 255});
+                         m_lowKeyInput.bounds().y + labelDy, kFsTiny, labelCol);
             tm->drawText(r, "Hi",   m_highKeyInput.bounds().x,
-                         m_highKeyInput.bounds().y - 9, kFsTiny,
-                         Color{160, 160, 160, 255});
+                         m_highKeyInput.bounds().y + labelDy, kFsTiny, labelCol);
             tm->drawText(r, "VLo",  m_lowVelInput.bounds().x,
-                         m_lowVelInput.bounds().y - 9, kFsTiny,
-                         Color{160, 160, 160, 255});
+                         m_lowVelInput.bounds().y + labelDy, kFsTiny, labelCol);
             tm->drawText(r, "VHi",  m_highVelInput.bounds().x,
-                         m_highVelInput.bounds().y - 9, kFsTiny,
-                         Color{160, 160, 160, 255});
+                         m_highVelInput.bounds().y + labelDy, kFsTiny, labelCol);
         }
 
         // Render every editor widget. They paint themselves.
