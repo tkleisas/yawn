@@ -208,6 +208,35 @@ bool AudioEngine::start() {
     return true;
 }
 
+// ─── Private capture (auto-sampler side channel) ─────────────────────
+
+bool AudioEngine::startPrivateCapture(PrivateCaptureRequest* req) {
+    if (!req) return false;
+    // Reset state in case the caller is reusing the struct.
+    req->framesWritten.store(0, std::memory_order_relaxed);
+    req->done.store(false,     std::memory_order_relaxed);
+    req->aborted.store(false,  std::memory_order_relaxed);
+    if (req->channels < 1) req->channels = 1;
+    if (req->frames < 0)   req->frames = 0;
+    if (static_cast<int64_t>(req->buffer.size()) <
+        req->frames * req->channels) {
+        req->buffer.resize(static_cast<size_t>(req->frames) * req->channels,
+                           0.0f);
+    }
+    PrivateCaptureRequest* expected = nullptr;
+    return m_privateCapture.compare_exchange_strong(
+        expected, req,
+        std::memory_order_release, std::memory_order_acquire);
+}
+
+void AudioEngine::abortPrivateCapture() {
+    PrivateCaptureRequest* req =
+        m_privateCapture.exchange(nullptr, std::memory_order_acq_rel);
+    if (!req) return;
+    req->aborted.store(true, std::memory_order_release);
+    req->done.store(true,    std::memory_order_release);
+}
+
 void AudioEngine::stop() {
     m_running.store(false, std::memory_order_release);
     // Use PA's own active-state check rather than m_running, which
@@ -381,6 +410,45 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                     dst[f * nc + 0] += input[f * inCh + ch0];
                     if (nc > 1) dst[f * nc + 1] += input[f * inCh + ch1];
                 }
+            }
+        }
+    }
+
+    // ── Private audio capture (auto-sampler / sample tools) ──
+    //
+    // Independent of transport state — runs whenever a request is in
+    // flight. Single-slot lock-free SPSC: load the pointer, write
+    // up to `frames` worth of input into the caller's interleaved
+    // buffer, signal done when filled, release the slot.
+    if (auto* req = m_privateCapture.load(std::memory_order_acquire)) {
+        const int64_t alreadyWritten =
+            req->framesWritten.load(std::memory_order_relaxed);
+        const int64_t remaining = req->frames - alreadyWritten;
+        if (remaining <= 0) {
+            // Already complete — release slot defensively. (Shouldn't
+            // happen: we usually clear the slot in the same iteration
+            // that fills it. But a UI thread that submits a frames=0
+            // request would land here.)
+            req->done.store(true, std::memory_order_release);
+            m_privateCapture.store(nullptr, std::memory_order_release);
+        } else {
+            const int64_t toCopy = std::min<int64_t>(nf, remaining);
+            const int reqCh = req->channels;
+            const int srcBase = std::max(0, std::min(req->inputChannel, inCh - 1));
+            const float* src = input;   // null-safe path below
+            float* dstBase = req->buffer.data() + alreadyWritten * reqCh;
+            for (int64_t f = 0; f < toCopy; ++f) {
+                for (int c = 0; c < reqCh; ++c) {
+                    const int sc = std::min(srcBase + c, std::max(0, inCh - 1));
+                    dstBase[f * reqCh + c] =
+                        (src && inCh > 0) ? src[f * inCh + sc] : 0.0f;
+                }
+            }
+            const int64_t newWritten = alreadyWritten + toCopy;
+            req->framesWritten.store(newWritten, std::memory_order_release);
+            if (newWritten >= req->frames) {
+                req->done.store(true, std::memory_order_release);
+                m_privateCapture.store(nullptr, std::memory_order_release);
             }
         }
     }

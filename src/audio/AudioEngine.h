@@ -216,6 +216,62 @@ public:
         processAudio(nullptr, output, numFrames);
     }
 
+    // Test helper: drive processAudio with a caller-supplied input
+    // buffer. Used by unit tests to exercise input-side code paths
+    // (e.g. private capture) without spinning up PortAudio. Output
+    // is written to a temp buffer that the caller doesn't see.
+    void pumpInputForTest(const float* input, unsigned long numFrames) {
+        std::vector<float> scratch(numFrames * m_config.outputChannels, 0.0f);
+        processAudio(input, scratch.data(), numFrames);
+    }
+
+    // ─── Private audio capture (auto-sampler, sample tools) ──────────
+    //
+    // A side channel for capturing input frames into a caller-owned
+    // buffer WITHOUT going through the per-track recording path
+    // (which is tied to clip slots + track arming). The audio thread
+    // copies input frames into the request's interleaved buffer until
+    // `frames` is reached, then signals `done`.
+    //
+    // Lock-free single-slot model: only one capture can be in flight
+    // at a time. The UI thread keeps the request alive until done==true
+    // (or abortPrivateCapture is called); the audio thread reads
+    // `framesWritten` / writes the buffer + atomics; no mutex.
+    //
+    // Typical use:
+    //   auto req = std::make_unique<PrivateCaptureRequest>();
+    //   req->inputChannel = 0;
+    //   req->channels     = 2;
+    //   req->frames       = sampleRate * 3;     // 3 seconds
+    //   req->buffer.resize(req->frames * req->channels);
+    //   if (engine.startPrivateCapture(req.get())) {
+    //       while (!req->done.load()) std::this_thread::sleep_for(...);
+    //       // req->buffer is now populated; ownership returns to caller
+    //   }
+    struct PrivateCaptureRequest {
+        int inputChannel = 0;       // 0-based hardware input channel
+        int channels     = 1;        // 1 (mono) or 2 (stereo); >2 caps to inputChannels
+        int64_t frames   = 0;        // total frames to capture
+        std::vector<float> buffer;   // interleaved [f0c0,f0c1,...,f1c0,f1c1,...]
+        std::atomic<int64_t> framesWritten{0};
+        std::atomic<bool>    done{false};
+        std::atomic<bool>    aborted{false};
+    };
+    // Submit a capture request. Returns false if a capture is already
+    // in flight. The caller MUST keep the request alive until done or
+    // aborted.
+    bool startPrivateCapture(PrivateCaptureRequest* req);
+
+    // Abort the currently active capture. No-op if none. Sets
+    // aborted=true and done=true on the request, then releases the
+    // capture slot. Safe to call from any thread.
+    void abortPrivateCapture();
+
+    // True if a capture is currently in flight.
+    bool isPrivateCaptureActive() const {
+        return m_privateCapture.load(std::memory_order_acquire) != nullptr;
+    }
+
     // MidiEngine integration — called from App after init
     void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
 
@@ -296,6 +352,12 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<uint32_t> m_callbackStatusFlags{0};
     bool m_paInitialized = false;
+
+    // Single-slot active private capture. UI thread CASes this in via
+    // startPrivateCapture; audio thread reads + writes the request's
+    // buffer + atomics; whoever fills/aborts the request stores
+    // nullptr back. Caller owns the request's lifetime.
+    std::atomic<PrivateCaptureRequest*> m_privateCapture{nullptr};
 
     TestTone m_testTone;
     int m_posUpdateCounter = 0;

@@ -312,3 +312,136 @@ TEST(AudioEngine, RecordedAudioDataInitialState) {
     EXPECT_EQ(data.trackIndex, -1);
     EXPECT_EQ(data.frameCount, 0);
 }
+
+// ==================== Private capture (auto-sampler side channel) ====
+
+TEST(AudioEngine, PrivateCaptureNoActiveByDefault) {
+    AudioEngine engine;
+    EXPECT_FALSE(engine.isPrivateCaptureActive());
+}
+
+TEST(AudioEngine, PrivateCaptureNullRequestRejected) {
+    AudioEngine engine;
+    EXPECT_FALSE(engine.startPrivateCapture(nullptr));
+    EXPECT_FALSE(engine.isPrivateCaptureActive());
+}
+
+TEST(AudioEngine, PrivateCaptureSecondRequestRejectedWhileFirstInFlight) {
+    AudioEngine engine;
+    AudioEngine::PrivateCaptureRequest a, b;
+    a.frames = 1024;  a.channels = 1;
+    b.frames = 1024;  b.channels = 1;
+    EXPECT_TRUE(engine.startPrivateCapture(&a));
+    EXPECT_TRUE(engine.isPrivateCaptureActive());
+    EXPECT_FALSE(engine.startPrivateCapture(&b));
+    engine.abortPrivateCapture();
+    EXPECT_FALSE(engine.isPrivateCaptureActive());
+    // After abort, the second request can claim the slot.
+    EXPECT_TRUE(engine.startPrivateCapture(&b));
+    engine.abortPrivateCapture();
+}
+
+TEST(AudioEngine, PrivateCaptureAbortMarksDoneAndAborted) {
+    AudioEngine engine;
+    AudioEngine::PrivateCaptureRequest req;
+    req.frames = 4096;  req.channels = 1;
+    ASSERT_TRUE(engine.startPrivateCapture(&req));
+    EXPECT_FALSE(req.done.load());
+    EXPECT_FALSE(req.aborted.load());
+    engine.abortPrivateCapture();
+    EXPECT_TRUE(req.done.load());
+    EXPECT_TRUE(req.aborted.load());
+    EXPECT_FALSE(engine.isPrivateCaptureActive());
+}
+
+TEST(AudioEngine, PrivateCaptureFillsBufferOverMultiplePumps) {
+    // Drives the audio-thread copy path via pumpInputForTest with a
+    // synthetic input ramp. Verifies that:
+    //   1. the request's buffer fills exactly `frames` samples
+    //   2. data lands at the correct offsets across multiple pumps
+    //   3. done flips and the slot releases when frames is reached
+    //   4. extra pumps after done don't keep writing
+    AudioEngine engine;
+    AudioEngineConfig cfg;
+    cfg.sampleRate = 44100.0;
+    cfg.framesPerBuffer = 256;
+    cfg.inputChannels = 2;
+    cfg.outputChannels = 2;
+    cfg.inputDevice = -1;
+    cfg.outputDevice = -1;
+    if (!engine.init(cfg)) {
+        GTEST_SKIP() << "PortAudio unavailable in test env";
+    }
+
+    constexpr int kBufFrames = 256;
+    constexpr int kCaptureFrames = 1024;   // 4 buffers' worth
+    AudioEngine::PrivateCaptureRequest req;
+    req.frames = kCaptureFrames;
+    req.channels = 1;
+    req.inputChannel = 0;
+    req.buffer.resize(kCaptureFrames, 0.0f);
+    ASSERT_TRUE(engine.startPrivateCapture(&req));
+
+    // Synthetic input: ramp 0..N where N = framesPushed * inCh + ch.
+    // Pump enough buffers to overfill — we expect exactly kCaptureFrames
+    // to land, no more.
+    std::vector<float> input(kBufFrames * cfg.inputChannels);
+    int64_t globalFrame = 0;
+    for (int pump = 0; pump < 6; ++pump) {
+        for (int f = 0; f < kBufFrames; ++f) {
+            for (int c = 0; c < cfg.inputChannels; ++c) {
+                input[f * cfg.inputChannels + c] =
+                    static_cast<float>(globalFrame + f) + c * 0.001f;
+            }
+        }
+        engine.pumpInputForTest(input.data(), kBufFrames);
+        globalFrame += kBufFrames;
+    }
+
+    EXPECT_TRUE(req.done.load());
+    EXPECT_FALSE(req.aborted.load());
+    EXPECT_EQ(req.framesWritten.load(), kCaptureFrames);
+    EXPECT_FALSE(engine.isPrivateCaptureActive());
+
+    // Verify the captured samples match our synthetic ramp.
+    for (int f = 0; f < kCaptureFrames; ++f) {
+        EXPECT_NEAR(req.buffer[f], static_cast<float>(f), 1e-3f)
+            << "mismatch at frame " << f;
+    }
+}
+
+TEST(AudioEngine, PrivateCaptureStereoChannelInterleaved) {
+    AudioEngine engine;
+    AudioEngineConfig cfg;
+    cfg.inputChannels = 2;
+    cfg.outputChannels = 2;
+    cfg.inputDevice = -1;
+    cfg.outputDevice = -1;
+    if (!engine.init(cfg)) {
+        GTEST_SKIP() << "PortAudio unavailable in test env";
+    }
+
+    constexpr int kBufFrames = 64;
+    constexpr int kCaptureFrames = 64;
+    AudioEngine::PrivateCaptureRequest req;
+    req.frames = kCaptureFrames;
+    req.channels = 2;
+    req.inputChannel = 0;
+    req.buffer.resize(kCaptureFrames * 2, 0.0f);
+    ASSERT_TRUE(engine.startPrivateCapture(&req));
+
+    // Distinct-per-channel input (left = +1, right = -1) so we can
+    // verify no channel cross-talk in the de-interleave.
+    std::vector<float> input(kBufFrames * 2);
+    for (int f = 0; f < kBufFrames; ++f) {
+        input[f * 2 + 0] = +1.0f;
+        input[f * 2 + 1] = -1.0f;
+    }
+    engine.pumpInputForTest(input.data(), kBufFrames);
+
+    EXPECT_TRUE(req.done.load());
+    for (int f = 0; f < kCaptureFrames; ++f) {
+        EXPECT_NEAR(req.buffer[f * 2 + 0], +1.0f, 1e-3f);
+        EXPECT_NEAR(req.buffer[f * 2 + 1], -1.0f, 1e-3f);
+    }
+}
