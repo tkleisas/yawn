@@ -5247,11 +5247,26 @@ void App::handleKeyEvent(const SDL_Event& event) {
         }
     }
 
-    // Virtual keyboard (intercepts musical keys before shortcuts)
-    // Skip when renaming a track — keys are for text input, not notes
-    if (!m_sessionPanel->isRenamingTrack() && !m_arrangementPanel->isRenamingTrack()) {
-        if (m_virtualKeyboard.onKeyDown(event.key.key))
-            return;
+    // Virtual keyboard (intercepts musical keys before shortcuts).
+    // Skip when ANY text-input gesture is active so the number-row
+    // keys (2/3/5/6/7/9/0 — all bound to black-key notes here) reach
+    // the editing target instead of triggering note-on. Without
+    // these guards, double-clicking a knob and typing a value
+    // silently plays MIDI notes and the typed digits get eaten.
+    {
+        const bool textInputActive =
+            m_sessionPanel->isRenamingTrack() ||
+            m_arrangementPanel->isRenamingTrack() ||
+            (m_showDetailPanel && m_detailPanel->hasEditingKnob()) ||
+            (m_visualParamsPanelW->visible() &&
+             m_visualParamsPanel->hasEditingKnob()) ||
+            m_browserPanel->hasEditingKnob() ||
+            m_transportPanel->isEditing() ||
+            m_textInputDialog.isOpen();
+        if (!textInputActive) {
+            if (m_virtualKeyboard.onKeyDown(event.key.key))
+                return;
+        }
     }
 
     // Detail panel arrow key navigation
