@@ -1,3 +1,29 @@
+// Windows headers FIRST — App.h transitively pulls ASIO (via Ableton
+// Link), which configures the Windows SDK in a way that hides
+// RtlCaptureStackBackTrace from a later windows.h include. Pin
+// _WIN32_WINNT to Win7 and pull windows.h + dbghelp explicitly so the
+// crash-handler symbols below are always declared.
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+// NOMINMAX before windows.h so the std::min / std::max calls in
+// transitively-included headers (TextRasterizer, etc.) aren't
+// hijacked by windows.h's all-caps macros.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// WIN32_LEAN_AND_MEAN skips the legacy WinSock include from
+// windows.h — ASIO (pulled in via Link/App.h) needs WinSock2 and
+// errors out if WinSock is already in scope.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+#endif
+
 #include "app/App.h"
 #include "util/Logger.h"
 #include <cstdio>
@@ -6,11 +32,7 @@
 #include <exception>
 #include <ctime>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <dbghelp.h>
-#pragma comment(lib, "dbghelp.lib")
-#else
+#ifndef _WIN32
 #include <execinfo.h>
 #endif
 
