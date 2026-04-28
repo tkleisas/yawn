@@ -3,16 +3,47 @@
 #include <filesystem>
 #include <fstream>
 
+#if defined(_WIN32)
+#  include <process.h>
+#  define YAWN_GETPID() static_cast<unsigned>(_getpid())
+#else
+#  include <unistd.h>
+#  define YAWN_GETPID() static_cast<unsigned>(::getpid())
+#endif
+
 namespace fs = std::filesystem;
 using namespace yawn;
 
-// Test fixture that creates a temp directory and cleans up after
+// Test fixture that creates a temp directory and cleans up after.
+//
+// gtest_discover_tests + ctest --parallel turns every TEST_F in this
+// file into its own ctest entry, and ctest happily fires up multiple
+// test-binary processes simultaneously. A shared literal
+// "/tmp/yawn_test_presets" path used to mean Test A's TearDown could
+// `remove_all` the directory mid-walk of Test B's
+// `directory_iterator`, depending on scheduler luck — flaky enough to
+// stay green on most runs and bite specific CI runners (e.g. Linux
+// Release Linux failed where Linux CI passed on the same commit).
+//
+// Fix: per-test-name + per-pid unique temp dir so each test owns its
+// own filesystem subtree end-to-end. Test name alone is enough under
+// gtest_discover_tests (which runs each test in its own process via
+// --gtest_filter), but the PID suffix is harmless belt-and-suspenders
+// for any future where the test binary loops the same TEST_F twice.
 class PresetManagerTest : public ::testing::Test {
 protected:
     fs::path m_tempDir;
 
     void SetUp() override {
-        m_tempDir = fs::temp_directory_path() / "yawn_test_presets";
+        const auto* info =
+            ::testing::UnitTest::GetInstance()->current_test_info();
+        const std::string suite = info ? info->test_suite_name() : "PMT";
+        const std::string tname = info ? info->name()             : "?";
+        m_tempDir = fs::temp_directory_path() /
+            ("yawn_test_presets_" + suite + "_" + tname + "_" +
+             std::to_string(YAWN_GETPID()));
+        std::error_code ec;
+        fs::remove_all(m_tempDir, ec);   // start clean — kills stale runs
         fs::create_directories(m_tempDir);
     }
 
