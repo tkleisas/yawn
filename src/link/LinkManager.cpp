@@ -17,13 +17,17 @@ int LinkManager::numPeers() const {
     return static_cast<int>(m_link.numPeers());
 }
 
-void LinkManager::onAudioCallback(double& ioBpm, double& ioBeatPosition, bool isPlaying) {
+void LinkManager::onAudioCallback(double& ioBpm, double& ioBeatPosition,
+                                    bool isPlaying, bool localTempoChanged) {
     if (!m_enabled.load(std::memory_order_acquire)) return;
 
     const auto sessionState = m_link.captureAudioSessionState();
 
-    if (m_link.numPeers() > 0) {
-        // Read tempo from Link session
+    // Local-edit wins for this buffer — see header comment. Without
+    // the !localTempoChanged guard, the user can never change tempo
+    // when peers are connected (every edit gets clobbered by the
+    // stale sessionState.tempo() read here).
+    if (m_link.numPeers() > 0 && !localTempoChanged) {
         ioBpm = sessionState.tempo();
 
         // Read beat position synced to Link timeline
@@ -31,7 +35,8 @@ void LinkManager::onAudioCallback(double& ioBpm, double& ioBeatPosition, bool is
         ioBeatPosition = sessionState.beatAtTime(hostTime, 4.0);
     }
 
-    // Commit local state to Link
+    // Always commit the resolved tempo (whether it came from the
+    // network or from a local edit) so peers stay in sync.
     auto state = m_link.captureAppSessionState();
     state.setTempo(ioBpm, state.timeAtBeat(ioBeatPosition, 4.0));
     state.setIsPlaying(isPlaying, state.timeAtBeat(ioBeatPosition, 4.0));
@@ -44,7 +49,7 @@ LinkManager::LinkManager() = default;
 LinkManager::~LinkManager() = default;
 void LinkManager::enable(bool) {}
 int LinkManager::numPeers() const { return 0; }
-void LinkManager::onAudioCallback(double&, double&, bool) {}
+void LinkManager::onAudioCallback(double&, double&, bool, bool) {}
 
 #endif
 

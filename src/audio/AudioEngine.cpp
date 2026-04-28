@@ -313,14 +313,21 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Process any pending commands from the UI thread
     // (also populates m_liveInputMidi for virtual keyboard MIDI)
     for (int t = 0; t < kMaxTracks; ++t) m_liveInputMidi[t].clear();
+    // Snapshot the transport BPM BEFORE processing commands so we can
+    // tell whether the queue carried a local tempo edit. The flag is
+    // forwarded into LinkManager so a UI-driven change isn't clobbered
+    // by the Link session-tempo read on the same buffer (race that
+    // made the BPM box behave as read-only when peers were connected).
+    const double bpmBeforeCmds = m_transport.bpm();
     processCommands();
+    const bool localTempoChanged = (m_transport.bpm() != bpmBeforeCmds);
 
     // Ableton Link: sync tempo and beat position from network peers
     {
         double bpm = m_transport.bpm();
         double beat = m_transport.positionInBeats();
         bool playing = m_transport.isPlaying() && !m_transport.isCountingIn();
-        m_linkManager.onAudioCallback(bpm, beat, playing);
+        m_linkManager.onAudioCallback(bpm, beat, playing, localTempoChanged);
         if (m_linkManager.enabled() && m_linkManager.numPeers() > 0) {
             m_transport.setBPM(bpm);
             if (!playing) {

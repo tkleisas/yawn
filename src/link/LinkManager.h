@@ -25,9 +25,21 @@ public:
     int numPeers() const;
 
     // Called from the audio thread on each callback.
-    // Reads Link's current tempo into bpm and beat reference.
-    // If playing, advances the transport beat position.
-    void onAudioCallback(double& ioBpm, double& ioBeatPosition, bool isPlaying);
+    //
+    // When `localTempoChanged` is true (the user just typed/turned the
+    // BPM box, or any code path called Transport::setBPM via the
+    // command queue), THIS BUFFER's local tempo wins: ioBpm is left
+    // alone and pushed out to Link so peers adopt it. Without this
+    // gate, every UI tempo edit gets clobbered on the very next
+    // audio buffer because we'd read the stale session tempo back
+    // over the user's new value (race that hides local edits).
+    //
+    // When `localTempoChanged` is false and peers > 0, ioBpm is
+    // overwritten with the session tempo so we follow the network.
+    // The committed app session state always carries the resolved
+    // ioBpm so other peers see the latest authoritative value.
+    void onAudioCallback(double& ioBpm, double& ioBeatPosition,
+                          bool isPlaying, bool localTempoChanged);
 
 private:
 #ifdef YAWN_HAS_LINK

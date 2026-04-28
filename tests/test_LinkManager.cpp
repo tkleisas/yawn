@@ -28,7 +28,7 @@ TEST(LinkManager, AudioCallbackNoOpWhenDisabled) {
     LinkManager lm;
     double bpm = 120.0;
     double beat = 0.0;
-    lm.onAudioCallback(bpm, beat, false);
+    lm.onAudioCallback(bpm, beat, false, /*localTempoChanged*/ false);
     EXPECT_DOUBLE_EQ(bpm, 120.0);
     EXPECT_DOUBLE_EQ(beat, 0.0);
 }
@@ -38,10 +38,24 @@ TEST(LinkManager, AudioCallbackPreservesValuesWhenNoPeers) {
     lm.enable(true);
     double bpm = 140.0;
     double beat = 4.0;
-    lm.onAudioCallback(bpm, beat, true);
+    lm.onAudioCallback(bpm, beat, true, /*localTempoChanged*/ false);
     // With Link enabled but no peers, bpm/beat should be preserved
     // (they get committed back to Link, but local values stay)
     EXPECT_GT(bpm, 0.0);
+}
+
+TEST(LinkManager, LocalTempoEditPreservedWhenFlagSet) {
+    // Regression: when localTempoChanged=true, the call must NOT
+    // overwrite ioBpm with the session tempo, even if peers > 0.
+    // Without this guard the BPM box behaves as read-only whenever
+    // any Link peer is connected — every UI edit gets clobbered on
+    // the very next audio buffer.
+    LinkManager lm;
+    lm.enable(true);
+    double bpm = 137.0;
+    double beat = 0.0;
+    lm.onAudioCallback(bpm, beat, false, /*localTempoChanged*/ true);
+    EXPECT_DOUBLE_EQ(bpm, 137.0);
 }
 
 TEST(LinkManager, EnumeratePeersAfterEnable) {
