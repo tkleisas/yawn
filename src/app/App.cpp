@@ -5217,6 +5217,16 @@ void App::handleKeyEvent(const SDL_Event& event) {
             return;
         }
     }
+    // Visual params panel knob text-edit mode (Enter/Esc/Backspace
+    // for any knob inside that panel — A..H, source, chain, post-fx).
+    if (m_visualParamsPanelW->visible() &&
+        m_visualParamsPanel->hasEditingKnob()) {
+        if (m_visualParamsPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
+            if (!m_visualParamsPanel->hasEditingKnob())
+                SDL_StopTextInput(m_mainWindow.getHandle());
+            return;
+        }
+    }
     // Browser panel knob text-edit mode
     if (m_browserPanel->hasEditingKnob()) {
         if (m_browserPanel->forwardKeyDown(static_cast<int>(event.key.key))) {
@@ -5503,6 +5513,16 @@ void App::processEvents() {
                     m_detailPanel->forwardTextInput(event.text.text);
                     break;
                 }
+                // Visual-params panel knob text-edit mode (A..H,
+                // source-shader knobs, chain pass knobs, post-FX
+                // knobs all funnel through the same editingKnob()
+                // search). Without this the user could enter edit
+                // mode but typed digits would be ignored.
+                if (m_visualParamsPanelW->visible() &&
+                    m_visualParamsPanel->hasEditingKnob()) {
+                    m_visualParamsPanel->forwardTextInput(event.text.text);
+                    break;
+                }
                 // Browser panel knob text-edit mode
                 if (m_browserPanel->hasEditingKnob()) {
                     m_browserPanel->forwardTextInput(event.text.text);
@@ -5644,6 +5664,8 @@ void App::processEvents() {
                 // Detail panel — dispatch via widget tree
                 bool rightClick = (btn == SDL_BUTTON_RIGHT);
                 bool hadEditingKnob = m_showDetailPanel && m_detailPanel->hasEditingKnob();
+                bool hadVisualPanelKnob = m_visualParamsPanelW->visible() &&
+                                            m_visualParamsPanel->hasEditingKnob();
                 if (m_showDetailPanel) {
                     // Visual-params panel is shown in place of detail panel
                     // when the selected track is a Visual track. Dispatch
@@ -5653,7 +5675,20 @@ void App::processEvents() {
                         me.x = mx; me.y = my;
                         me.button = rightClick ? ui::fw::MouseButton::Right
                                                 : ui::fw::MouseButton::Left;
-                        if (m_visualParamsPanelW->onMouseDown(me)) break;
+                        if (m_visualParamsPanelW->onMouseDown(me)) {
+                            // Toggle SDL text input around the knob's
+                            // edit gesture, same as the detail/browser
+                            // panels do — without this, double-clicking
+                            // a knob in here enters edit mode but no
+                            // SDL_EVENT_TEXT_INPUT events ever fire.
+                            const bool nowEditing =
+                                m_visualParamsPanel->hasEditingKnob();
+                            if (nowEditing && !hadVisualPanelKnob)
+                                SDL_StartTextInput(m_mainWindow.getHandle());
+                            else if (!nowEditing && hadVisualPanelKnob)
+                                SDL_StopTextInput(m_mainWindow.getHandle());
+                            break;
+                        }
                     }
                     if (m_detailPanel->visible()) {
                         if (rightClick) {

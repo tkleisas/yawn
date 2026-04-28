@@ -169,6 +169,51 @@ public:
         for (int i = 0; i < 8; ++i) m_knobAH[i]->setModulatedValue(vals8[i]);
     }
 
+    // ─── Inline knob text-edit (double-click) routing ───────────────
+    // Mirrors the API DetailPanelWidget exposes to App.cpp's
+    // SDL_EVENT_TEXT_INPUT / KEYDOWN handlers. Without these, double-
+    // clicking a knob in this panel enters edit mode but typed digits
+    // never reach the knob — the App's text-input dispatcher only
+    // knew about DetailPanel and BrowserPanel.
+    FwKnob* editingKnob() const {
+        for (int i = 0; i < 8; ++i)
+            if (m_knobAH[i] && m_knobAH[i]->isEditing()) return m_knobAH[i].get();
+        for (auto& k : m_customKnobs)
+            if (k && k->isEditing()) return k.get();
+        for (auto& e : m_chain)
+            for (auto& k : e.knobs)
+                if (k && k->isEditing()) return k.get();
+        for (auto& e : m_postFX)
+            for (auto& k : e.knobs)
+                if (k && k->isEditing()) return k.get();
+        return nullptr;
+    }
+    bool hasEditingKnob() const { return editingKnob() != nullptr; }
+
+    bool forwardTextInput(const char* text) {
+        if (auto* k = editingKnob()) {
+            k->takeTextInput(text ? text : "");
+            return true;
+        }
+        return false;
+    }
+
+    // FwKnob's edit mode consumes only Enter / Escape / Backspace
+    // from the key stream; digits + minus + dot arrive via
+    // forwardTextInput (SDL TEXT_INPUT event).
+    bool forwardKeyDown(int sdlKey) {
+        auto* k = editingKnob();
+        if (!k) return false;
+        KeyEvent ke;
+        switch (sdlKey) {
+            case 27 /*SDLK_ESCAPE*/:    ke.key = Key::Escape;    break;
+            case 13 /*SDLK_RETURN*/:    ke.key = Key::Enter;     break;
+            case 8  /*SDLK_BACKSPACE*/: ke.key = Key::Backspace; break;
+            default: return false;
+        }
+        return k->dispatchKeyDown(ke);
+    }
+
     void rebuildCustom(const std::vector<visual::VisualEngine::LayerParamInfo>& params,
                        const std::string& shaderName) {
         m_shaderName = shaderName;
