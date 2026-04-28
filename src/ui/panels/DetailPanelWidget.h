@@ -417,6 +417,10 @@ public:
         m_scroll.setSnapPoints(snapPoints);
         m_scroll.setGap(kDeviceGap);
         setOpen(true);
+        // See comment in setDeviceChain: m_scroll's invalidations don't
+        // bubble to us (it's a member, not a child), so we have to
+        // invalidate the panel ourselves to force onLayout to re-run.
+        invalidate();
     }
 
     void clearClipView() {
@@ -603,6 +607,16 @@ public:
 
         // Auto-open when devices are populated
         if (!m_deviceWidgets.empty()) setOpen(true);
+
+        // Invalidate the panel's layout cache. m_scroll lives as a
+        // member (not an fw2 child), so the addChild calls above only
+        // bumped m_scroll's own version — they did NOT bubble up to us.
+        // Without this, switching between two tracks while the panel
+        // is already visible leaves the new device widgets with stale
+        // (0,0,0,0) bounds: the panel.onLayout cache hits, m_scroll
+        // .layout never runs, the user sees empty space and has to
+        // toggle D twice to force a relayout.
+        invalidate();
     }
 
     void clear() {
