@@ -103,6 +103,18 @@ public:
         m_zoneCount = 0;
     }
 
+    // Remove a single zone, sliding remaining zones down to keep
+    // contiguous indices. Same UI-thread / no-mid-audio caveat as
+    // addZone — the audio thread reads m_zoneCount + zone pointers
+    // without a lock.
+    void removeZone(int idx) {
+        if (idx < 0 || idx >= m_zoneCount) return;
+        for (int i = idx; i < m_zoneCount - 1; ++i)
+            m_zones[i] = std::move(m_zones[i + 1]);
+        m_zones[m_zoneCount - 1].reset();
+        --m_zoneCount;
+    }
+
     int zoneCount() const { return m_zoneCount; }
     const Zone* zone(int idx) const {
         return (idx >= 0 && idx < m_zoneCount) ? m_zones[idx].get() : nullptr;

@@ -14,6 +14,7 @@
 #include "ui/framework/v2/SubSynthDisplayPanel.h"
 #include "ui/framework/v2/FMAlgorithmWidget.h"
 #include "ui/framework/v2/SamplerDisplayPanel.h"
+#include "ui/framework/v2/MultisamplerDisplayPanel.h"
 #include "ui/framework/v2/WavetableDisplayPanel.h"
 #include "ui/framework/v2/GranularDisplayPanel.h"
 #include "ui/framework/v2/VocoderDisplayPanel.h"
@@ -37,6 +38,7 @@
 #include "audio/TransientDetector.h"
 #include "instruments/Instrument.h"
 #include "instruments/Sampler.h"
+#include "instruments/Multisampler.h"
 #include "instruments/DrumSlop.h"
 #include "instruments/DrumRack.h"
 #include "instruments/InstrumentRack.h"
@@ -1374,6 +1376,88 @@ private:
                     ci.enabled = ch.enabled;
                     irPanel->setChain(i, ci);
                 }
+            });
+        } else if (nm == "Multisampler") {
+            auto* msPanel = new MultisamplerDisplayPanel();
+            config.display = msPanel;
+            // Wider than other display panels because it hosts both
+            // a zone list and a per-zone editor side-by-side.
+            config.displayWidth = 360.0f;
+            // Multisampler param indices (Multisampler::Param):
+            //   0..3  Amp ADSR
+            //   4..6  Filter (Cutoff, Reso, Env amount)
+            //   7..10 Filter ADSR
+            //   11    Glide
+            //   12    VelXfade
+            //   13    Volume
+            config.sections = {
+                {"Amp",      {0, 1, 2, 3}},
+                {"Filter",   {4, 5, 6}},
+                {"Filt Env", {7, 8, 9, 10}},
+                {"Misc",     {11, 12, 13}},
+            };
+
+            // Edit a single zone's metadata in place. The audio thread
+            // reads zone fields without a lock, same caveat as
+            // addZone / clearZones — UI-thread mutation is racy in
+            // theory but harmless in practice for one-int writes.
+            msPanel->setOnZoneFieldChange([inst](int zoneIdx,
+                    const MultisamplerDisplayPanel::ZoneRow& src) {
+                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
+                if (!ms) return;
+                auto* z = ms->zone(zoneIdx);
+                if (!z) return;
+                z->rootNote = src.rootNote;
+                z->lowKey   = src.lowKey;
+                z->highKey  = src.highKey;
+                z->lowVel   = src.lowVel;
+                z->highVel  = src.highVel;
+                z->tune     = src.tune;
+                z->volume   = src.volume;
+                z->pan      = src.pan;
+                z->loop     = src.loop;
+            });
+
+            msPanel->setOnRemoveZone([inst](int zoneIdx) {
+                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
+                if (!ms) return;
+                ms->removeZone(zoneIdx);
+            });
+
+            msPanel->setOnAutoSampleClicked([]() {
+                // Hooked up in the auto-sampler commit. Emits a toast
+                // for now so the click isn't completely silent during
+                // the in-progress feature build.
+                LOG_INFO("UI", "Auto-Sample button clicked (dialog not yet wired)");
+            });
+
+            // Push fresh zone rows from the instrument each frame.
+            // setZones short-circuits when nothing changed, so the
+            // user's mid-edit knob values aren't stomped.
+            m_displayUpdaters.push_back([msPanel, inst]() {
+                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
+                if (!ms) return;
+                std::vector<MultisamplerDisplayPanel::ZoneRow> rows;
+                rows.reserve(ms->zoneCount());
+                for (int i = 0; i < ms->zoneCount(); ++i) {
+                    const auto* z = ms->zone(i);
+                    if (!z) continue;
+                    MultisamplerDisplayPanel::ZoneRow r;
+                    r.rootNote     = z->rootNote;
+                    r.lowKey       = z->lowKey;
+                    r.highKey      = z->highKey;
+                    r.lowVel       = z->lowVel;
+                    r.highVel      = z->highVel;
+                    r.tune         = z->tune;
+                    r.volume       = z->volume;
+                    r.pan          = z->pan;
+                    r.loop         = z->loop;
+                    r.sampleFrames = z->sampleFrames;
+                    // filename: derived in the auto-sampler / drop
+                    // path (commit 3) — empty for now.
+                    rows.push_back(r);
+                }
+                msPanel->setZones(std::move(rows));
             });
         } else {
             return false;
