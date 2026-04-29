@@ -35,6 +35,7 @@
 #include "effects/Tuner.h"
 #include "effects/Bitcrusher.h"
 #include "effects/NoiseGate.h"
+#include "effects/PingPongDelay.h"
 
 #include "midi/MidiEffect.h"
 #include "midi/Arpeggiator.h"
@@ -96,6 +97,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"tuner",       [] { return std::make_unique<effects::Tuner>(); }},
         {"bitcrusher",  [] { return std::make_unique<effects::Bitcrusher>(); }},
         {"noisegate",   [] { return std::make_unique<effects::NoiseGate>(); }},
+        {"pingpongdelay",[] { return std::make_unique<effects::PingPongDelay>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -174,6 +176,7 @@ inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const
     if (n == "Tuner")             return std::make_unique<yawn::effects::Tuner>();
     if (n == "Bitcrusher")        return std::make_unique<yawn::effects::Bitcrusher>();
     if (n == "Noise Gate")        return std::make_unique<yawn::effects::NoiseGate>();
+    if (n == "Ping-Pong Delay")   return std::make_unique<yawn::effects::PingPongDelay>();
     return nullptr;
 }
 
