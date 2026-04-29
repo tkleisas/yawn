@@ -16,7 +16,7 @@ class Vocoder : public Instrument {
 public:
     static constexpr int kMaxVoices  = 8;
     static constexpr int kMaxBands   = 32;
-    static constexpr int kParamCount = 16;
+    static constexpr int kParamCount = 17;
 
     // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
     static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
@@ -42,6 +42,7 @@ public:
         kVolume,          // 0–1
         kFreezeFormants,  // 0/1 toggle — sample-and-hold per-band envelopes
         kCarrierDetune,   // 0–25 cents — per-voice L/R detune for stereo width
+        kCarrierFromSC,   // 0/1 toggle — use sidechain audio as carrier (talkbox)
     };
 
     const char* name() const override { return "Vocoder"; }
@@ -138,6 +139,17 @@ public:
             // genuine stereo width rather than just a stereo modulator
             // image painted onto a mono carrier.
             {"Detune",        0.0f,   25.0f,   0.0f, "ct",  false, false, WidgetHint::DentedKnob},
+            // Talkbox: when on, the carrier oscillator is bypassed
+            // and the routed sidechain audio becomes the carrier
+            // instead. The MIDI amp envelope still gates the signal
+            // so playing keys controls when the vocoded result is
+            // audible — this is the "talkbox" / cross-synthesis mode
+            // (vocode one external sound through another's spectral
+            // envelope). Modulator source still determines what
+            // shapes the spectrum; routing both modulator AND carrier
+            // from the same sidechain is allowed but mostly produces
+            // an identity-ish passthrough.
+            {"Talkbox",       0.0f,    1.0f,   0.0f, "",    false, false, WidgetHint::Toggle},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }

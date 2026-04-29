@@ -303,6 +303,14 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
     // monophonic-pitch interaction with downstream effects.
     const float detuneCents  = m_params[kCarrierDetune];
     const double detuneRatio = std::pow(2.0, detuneCents / 1200.0);
+    // When on, replace the internal oscillator with the sidechain
+    // audio as the carrier signal (talkbox / cross-synthesis). MIDI
+    // envelope still gates output, so the user controls timing via
+    // the keyboard. If no sidechain is routed, the path falls back
+    // to the internal oscillator silently — the toggle is harmless
+    // when no source is selected.
+    const bool  carrierFromSC = (m_params[kCarrierFromSC] >= 0.5f) &&
+                                (m_sidechainBuffer != nullptr);
     // Freeze formants: when on, the per-band envelope followers stop
     // tracking the modulator entirely — bs.envLevel_L/R keep their
     // last-snapshot values. The carrier keeps being shaped by that
@@ -381,23 +389,47 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
         const float modAbs0 = std::max(std::abs(modL), std::abs(modR));
         if (modAbs0 > blockModPeak) blockModPeak = modAbs0;
 
-        // ── Carrier (stereo via per-voice detune) ──
-        // Per-side phase accumulators stepped by per-side increments.
-        // detuneRatio == 1 collapses this to mono: phaseL == phaseR
-        // forever and carrierSigL == carrierSigR exactly. detuneRatio
-        // > 1 drifts the R side sharp, decorrelating the waveforms
-        // for genuine stereo width on the carrier path.
+        // ── Carrier ──
+        // Two paths:
+        //
+        //   carrierFromSC == true  → talkbox mode. The routed sidechain
+        //     audio (already L/R-split) is the carrier. We still walk
+        //     the voice list to compute the MIDI envelope sum, so
+        //     playing keys gates the signal — release all keys and
+        //     output goes silent even if the sidechain is loud. This
+        //     keeps the panel-level workflow consistent: the keyboard
+        //     drives WHEN you hear the vocoded result, regardless of
+        //     where the carrier audio comes from.
+        //
+        //   carrierFromSC == false → internal oscillator (Phase 3.2
+        //     stereo carrier). Per-side phase accumulators with
+        //     detune-driven decorrelation, summed over voices.
         float carrierSigL = 0.0f, carrierSigR = 0.0f;
-        for (auto& v : m_voices) {
-            if (!v.active) continue;
-            float e = v.ampEnv.process();
-            if (v.ampEnv.isIdle()) { v.active = false; continue; }
-            const float freq = noteToFreq(v.note);
-            const double incL = freq / m_sampleRate;
-            const double incR = (freq * detuneRatio) / m_sampleRate;
-            const float gain = e * v.velocity;
-            carrierSigL += generateCarrier(v.phaseL, incL, carrierType) * gain;
-            carrierSigR += generateCarrier(v.phaseR, incR, carrierType) * gain;
+        if (carrierFromSC) {
+            float voiceGainSum = 0.0f;
+            for (auto& v : m_voices) {
+                if (!v.active) continue;
+                float e = v.ampEnv.process();
+                if (v.ampEnv.isIdle()) { v.active = false; continue; }
+                voiceGainSum += e * v.velocity;
+            }
+            const float scL = m_sidechainBuffer[s * numChannels];
+            const float scR = stereoOut ? m_sidechainBuffer[s * numChannels + 1]
+                                        : scL;
+            carrierSigL = scL * voiceGainSum;
+            carrierSigR = scR * voiceGainSum;
+        } else {
+            for (auto& v : m_voices) {
+                if (!v.active) continue;
+                float e = v.ampEnv.process();
+                if (v.ampEnv.isIdle()) { v.active = false; continue; }
+                const float freq = noteToFreq(v.note);
+                const double incL = freq / m_sampleRate;
+                const double incR = (freq * detuneRatio) / m_sampleRate;
+                const float gain = e * v.velocity;
+                carrierSigL += generateCarrier(v.phaseL, incL, carrierType) * gain;
+                carrierSigR += generateCarrier(v.phaseR, incR, carrierType) * gain;
+            }
         }
 
         // ── Per-band analysis (split L/R) + synthesis ──
