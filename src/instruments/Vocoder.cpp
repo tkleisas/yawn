@@ -268,6 +268,21 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
     if (m_bypassed) return;
 
     const int   numBands     = static_cast<int>(m_params[kBands]);
+    // Band-count compensation. The synthesis sum is N parallel
+    // bandpass slices of the carrier, each weighted by its band
+    // envelope. With partially correlated band outputs (typical for
+    // adjacent-Q bandpass filters with overlapping skirts) the sum
+    // grows roughly as sqrt(N) — without this scale, dialling the
+    // Bands knob from 4 → 32 makes the perceived output ~3x louder
+    // and the resulting vocoder is hot enough to clip the master
+    // bus on a mid-volume modulator. 1/sqrt(N) keeps the apparent
+    // loudness flat as you sweep the band count, so the knob's
+    // perceptual character is "spectral resolution" rather than
+    // "loudness × resolution". Empirically this also lands the
+    // typical "16 bands, 0.8 volume" preset around -6 dBFS on a
+    // fully-modulated saw carrier, which is sane headroom-wise.
+    const float bandGain     = 1.0f /
+        std::sqrt(static_cast<float>(std::max(1, numBands)));
     const int   carrierType  = static_cast<int>(m_params[kCarrierType]);
     const int   modSource    = static_cast<int>(m_params[kModSource]);
     const float envAtk       = m_params[kAttack] * 0.001f;
@@ -399,7 +414,7 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
             }
 
             const float carrBand = biquadProcess(carrierSig, bs.carrBQ);
-            const float gT = tiltGains[b];
+            const float gT = tiltGains[b] * bandGain;   // see bandGain comment
             vocodedL += carrBand * bs.envLevel_L * gT;
             vocodedR += carrBand * bs.envLevel_R * gT;
 
