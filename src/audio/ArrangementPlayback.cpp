@@ -105,11 +105,34 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
         double scanEnd   = std::min(clipLocalEnd, clip.offsetBeats + clip.lengthBeats);
         if (scanStart >= scanEnd) continue;
 
-        // Scan notes
+        // Two-pass scan to keep Note-Offs ahead of Note-Ons in the
+        // emitted buffer. When a buffer boundary doesn't align with
+        // a beat (the common case), Note-A.endBeat == Note-B.startBeat
+        // makes both events land at the same frame. If the on lands
+        // first, the synth allocates a new voice for B, then the
+        // delayed Note-Off (matching pitch P) kills the new voice
+        // instead of A's lingering one — back-to-back same-pitch
+        // notes end up sounding as one held note (no re-articulation).
+        // Off-then-on guarantees clean release-then-attack at the
+        // boundary regardless of frame collisions.
+
+        // --- Pass 1: Note-Offs ---
         for (int i = 0; i < mc.noteCount(); ++i) {
             const auto& note = mc.note(i);
+            double noteEnd = note.startBeat + note.duration;
+            if (noteEnd >= scanStart && noteEnd < scanEnd) {
+                double beatInBuffer = (noteEnd - clipLocalStart);
+                int frameOff = static_cast<int>(beatInBuffer * samplesPerBeat);
+                frameOff = std::clamp(frameOff, 0, numFrames - 1);
 
-            // Note-on in range?
+                midiBuffer.addMessage(
+                    midi::MidiMessage::noteOff(note.channel, note.pitch, 0, frameOff));
+            }
+        }
+
+        // --- Pass 2: Note-Ons ---
+        for (int i = 0; i < mc.noteCount(); ++i) {
+            const auto& note = mc.note(i);
             if (note.startBeat >= scanStart && note.startBeat < scanEnd) {
                 double beatInBuffer = (note.startBeat - clipLocalStart);
                 int frameOff = static_cast<int>(beatInBuffer * samplesPerBeat);
@@ -122,17 +145,6 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
 
                 midiBuffer.addMessage(
                     midi::MidiMessage::noteOn(note.channel, note.pitch, vel7, frameOff));
-            }
-
-            // Note-off in range?
-            double noteEnd = note.startBeat + note.duration;
-            if (noteEnd >= scanStart && noteEnd < scanEnd) {
-                double beatInBuffer = (noteEnd - clipLocalStart);
-                int frameOff = static_cast<int>(beatInBuffer * samplesPerBeat);
-                frameOff = std::clamp(frameOff, 0, numFrames - 1);
-
-                midiBuffer.addMessage(
-                    midi::MidiMessage::noteOff(note.channel, note.pitch, 0, frameOff));
             }
         }
 

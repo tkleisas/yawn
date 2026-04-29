@@ -84,6 +84,71 @@ TEST_F(MidiClipEngineTest, EmitsNoteOnForNoteInBuffer) {
     EXPECT_TRUE(foundNoteOn);
 }
 
+// Regression: two same-pitch notes back-to-back must re-articulate.
+// When a buffer boundary doesn't align with a beat (the common case),
+// Note-A.endBeat == Note-B.startBeat puts both events at the same
+// frame in the same buffer. If the Note-On is emitted before the
+// Note-Off, the synth allocates a new voice for B then the delayed
+// Note-Off matching pitch P kills the new voice instead of A's
+// lingering one — back-to-back notes sound like one held note.
+//
+// Fix is in MidiClipEngine::scanAndEmit: Note-Offs are emitted in a
+// pass before Note-Ons so the buffer always lists offs first at any
+// given frame. This test pins that ordering invariant down.
+TEST_F(MidiClipEngineTest, BackToBackSamePitchEmitsOffBeforeOn) {
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    // Two same-pitch notes joined at beat 0.1.
+    //   Note A: [0.0, 0.1)  → noteOff at 0.1
+    //   Note B: [0.1, 0.2)  → noteOn  at 0.1
+    // We pick a short note span so a single 4096-frame buffer at
+    // 120 BPM / 44.1 kHz (≈ 0.186 beats per buffer) covers both
+    // events — that's exactly the scenario where the buffer boundary
+    // doesn't align with a beat, so the off + on can collide on the
+    // same frame.
+    clip.addNote({0.0, 0.1, 60, 0, 32000, 0, 0, 0, 0});
+    clip.addNote({0.1, 0.1, 60, 0, 32000, 0, 0, 0, 0});
+
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
+    m_engine.checkAndFirePending();
+    m_transport.play();
+
+    const int numFrames = 4096;
+    m_engine.process(m_buffers, numFrames);
+
+    // Find the indices of the offending Note-Off (note 60) and the
+    // re-articulation Note-On (also note 60) in the emitted buffer.
+    int offIdx = -1, onIdx = -1;
+    int offCount = 0, onCount = 0;
+    for (int i = 0; i < m_buffers[0].count(); ++i) {
+        const auto& msg = m_buffers[0][i];
+        if (msg.note != 60) continue;
+        if (msg.type == MidiMessage::Type::NoteOff) {
+            ++offCount;
+            if (offIdx < 0) offIdx = i;
+        } else if (msg.type == MidiMessage::Type::NoteOn) {
+            ++onCount;
+            // The re-articulation is the SECOND note-on (the first is
+            // the kick-off at beat 0). Track the index of the last
+            // note-on we see — that's the re-articulation.
+            onIdx = i;
+        }
+    }
+
+    // Both events must have been emitted.
+    ASSERT_GE(offCount, 1) << "Note A's noteOff was not emitted";
+    ASSERT_GE(onCount,  2) << "Expected two noteOns (initial + re-articulation)";
+
+    // The critical invariant: at the boundary, the noteOff (A's end)
+    // must come BEFORE the noteOn (B's start) in the buffer so the
+    // synth releases A's voice before allocating B's. If on-then-off,
+    // the synth would kill the freshly-allocated B voice.
+    EXPECT_LT(offIdx, onIdx)
+        << "Note-Off must precede the second Note-On in the buffer "
+           "for back-to-back same-pitch notes to re-articulate. "
+           "offIdx=" << offIdx << " onIdx=" << onIdx;
+}
+
 TEST_F(MidiClipEngineTest, EmitsNoteOffWhenNoteEnds) {
     MidiClip clip;
     clip.setLengthBeats(4.0);

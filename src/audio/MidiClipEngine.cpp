@@ -207,28 +207,27 @@ void MidiClipEngine::scanAndEmit(midi::MidiBuffer& buffer,
                                  double scanStart, double scanEnd,
                                  double offsetBeat, double samplesPerBeat,
                                  int numFrames) {
-    // --- Note-Ons ---
-    m_noteIndices.clear();
-    clip->getNotesInRange(scanStart, scanEnd, m_noteIndices);
-    for (int idx : m_noteIndices) {
-        const auto& n = clip->note(idx);
-        double beatInBuf = n.startBeat - offsetBeat;
-        int frame = static_cast<int>(beatInBuf * samplesPerBeat);
-        frame = std::max(0, std::min(frame, numFrames - 1));
-
-        // Convert 16-bit velocity to 7-bit for standard MIDI
-        uint8_t vel7 = static_cast<uint8_t>(
-            std::min(127, static_cast<int>(n.velocity >> 9)));
-        if (vel7 == 0) vel7 = 1; // NoteOn with vel=0 is NoteOff
-
-        buffer.addMessage(
-            midi::MidiMessage::noteOn(n.channel, n.pitch, vel7, frame));
-    }
-
-    // --- Note-Offs: check if any note ends within this range ---
-    // We need to scan all notes that could have note-offs in this range.
-    // A note-off occurs at startBeat + duration.
-    // Scan notes that started before scanEnd and whose end falls in range.
+    // ── Event ordering rationale ──
+    //
+    // EMIT NOTE-OFFS FIRST. When a buffer boundary doesn't land
+    // exactly on a beat (the common case), it can straddle the end of
+    // one note and the start of the next at the same beat — i.e.,
+    // Note A.endBeat == Note B.startBeat. Both events land at the
+    // same frame in the same buffer. If we emit the Note-On before
+    // the Note-Off, the synth allocates a new voice for B, then the
+    // delayed Note-Off (which says "kill pitch P") matches the new
+    // voice and kills it instead of A's lingering one. Symptom:
+    // back-to-back same-pitch notes play as one held note (no
+    // re-articulation).
+    //
+    // By emitting offs first, the synth releases A's voice cleanly
+    // and then allocates a fresh voice for B. Two distinct notes,
+    // proper attack/release each.
+    //
+    // --- Note-Offs ---
+    // A note-off occurs at startBeat + duration. Scan all notes whose
+    // end falls in (scanStart, scanEnd] — a note ending exactly at
+    // the buffer-end fires this buffer.
     for (int i = 0; i < clip->noteCount(); ++i) {
         const auto& n = clip->note(i);
         double noteEnd = n.startBeat + n.duration;
@@ -245,6 +244,24 @@ void MidiClipEngine::scanAndEmit(midi::MidiBuffer& buffer,
         }
         // Early exit: if note starts after scanEnd, no more note-offs possible
         if (n.startBeat >= scanEnd) break;
+    }
+
+    // --- Note-Ons ---
+    m_noteIndices.clear();
+    clip->getNotesInRange(scanStart, scanEnd, m_noteIndices);
+    for (int idx : m_noteIndices) {
+        const auto& n = clip->note(idx);
+        double beatInBuf = n.startBeat - offsetBeat;
+        int frame = static_cast<int>(beatInBuf * samplesPerBeat);
+        frame = std::max(0, std::min(frame, numFrames - 1));
+
+        // Convert 16-bit velocity to 7-bit for standard MIDI
+        uint8_t vel7 = static_cast<uint8_t>(
+            std::min(127, static_cast<int>(n.velocity >> 9)));
+        if (vel7 == 0) vel7 = 1; // NoteOn with vel=0 is NoteOff
+
+        buffer.addMessage(
+            midi::MidiMessage::noteOn(n.channel, n.pitch, vel7, frame));
     }
 
     // --- CC Events ---
