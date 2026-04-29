@@ -1103,6 +1103,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Filter",      [](){ return std::make_unique<effects::Filter>(); });
     addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
+    addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
     addFxItem("Tape Emulation", [](){ return std::make_unique<effects::TapeEmulation>(); });
     addFxItem("Amp Simulator",  [](){ return std::make_unique<effects::AmpSimulator>(); });
     addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
@@ -3904,6 +3905,7 @@ bool App::init() {
         addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
         addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
+        addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
         addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
         addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
         addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });

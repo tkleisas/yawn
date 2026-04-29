@@ -33,6 +33,7 @@
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include "effects/Tuner.h"
+#include "effects/Bitcrusher.h"
 
 #include "midi/MidiEffect.h"
 #include "midi/Arpeggiator.h"
@@ -92,6 +93,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"oscilloscope",[] { return std::make_unique<effects::Oscilloscope>(); }},
         {"spectrum",    [] { return std::make_unique<effects::SpectrumAnalyzer>(); }},
         {"tuner",       [] { return std::make_unique<effects::Tuner>(); }},
+        {"bitcrusher",  [] { return std::make_unique<effects::Bitcrusher>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -168,6 +170,7 @@ inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const
     if (n == "Oscilloscope")      return std::make_unique<yawn::effects::Oscilloscope>();
     if (n == "Spectrum Analyzer" || n == "Spectrum") return std::make_unique<yawn::effects::SpectrumAnalyzer>();
     if (n == "Tuner")             return std::make_unique<yawn::effects::Tuner>();
+    if (n == "Bitcrusher")        return std::make_unique<yawn::effects::Bitcrusher>();
     return nullptr;
 }
 

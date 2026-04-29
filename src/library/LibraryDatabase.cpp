@@ -40,7 +40,8 @@ static bool isBuiltInEffect(const std::string& n) {
     // Audio effects.
     if (n == "Reverb"       || n == "Delay"        || n == "EQ" ||
         n == "Compressor"   || n == "Filter"       || n == "Chorus" ||
-        n == "Distortion"   || n == "Tape Emulation" || n == "Amp Simulator" ||
+        n == "Distortion"   || n == "Bitcrusher"   || n == "Tape Emulation" ||
+        n == "Amp Simulator" ||
         n == "Oscilloscope" || n == "Spectrum Analyzer" || n == "Spectrum" ||
         n == "Tuner")
         return true;
