@@ -85,8 +85,17 @@ public:
 
     // Vocoder::kModSource value (0=Sample, 1..5=Formant A/E/I/O/U,
     // 6=Sidechain). Drives whether the source dropdown is visible
-    // and what the centre area shows.
-    void setModSource(int idx)     { m_modSource = std::clamp(idx, 0, 6); }
+    // and what the centre area shows. Mutating this requires a
+    // re-layout so the dropdown row's height (22 px when SC, 0 px
+    // otherwise) gets recomputed and the dropdown's bounds become
+    // non-zero — otherwise the dropdown paints into a 0×0 rect and
+    // looks like it's not there.
+    void setModSource(int idx) {
+        const int next = std::clamp(idx, 0, 6);
+        if (next == m_modSource) return;
+        m_modSource = next;
+        invalidate();
+    }
 
     // Live modulator-input peak from Vocoder::consumeModulatorLevel(),
     // polled by displayUpdater each frame. UI-side decay smooths
@@ -128,8 +137,8 @@ public:
 
     void onLayout(Rect bounds, UIContext& ctx) override {
         Widget::onLayout(bounds, ctx);
-        const float headerH    = 14.0f;
-        const float ddH        = (m_modSource == 6) ? 22.0f : 0.0f;  // Sidechain mode
+        const float headerH    = 18.0f;          // 14 px text + 4 px padding
+        const float ddH        = (m_modSource == 6) ? 22.0f : 0.0f;
         const float bandH      = 10.0f;
         const float pad        = 2.0f;
         const float midY       = bounds.y + headerH + ddH;
@@ -138,9 +147,11 @@ public:
         m_headerRect = {bounds.x + pad,           bounds.y + 1,
                          bounds.w - pad * 2,       headerH};
         if (ddH > 0.0f) {
-            const float ddX = bounds.x + 60.0f;   // leave room for "Source:" label
-            m_sourceDD.layout({ddX, midY + 1,
-                                bounds.w - 60.0f - pad, ddH - 2}, ctx);
+            // No "Source:" label — the dropdown's content tells you
+            // what's selected, and the panel's already cramped. Shave
+            // 4 px off each side.
+            m_sourceDD.layout({bounds.x + 4, bounds.y + headerH + 1,
+                                bounds.w - 8, ddH - 2}, ctx);
             m_ddRect = m_sourceDD.bounds();
         } else {
             m_ddRect = {0, 0, 0, 0};
@@ -158,7 +169,6 @@ public:
         if (!isVisible()) return;
         if (!ctx.renderer) return;
         auto& r = *ctx.renderer;
-        auto* tm = ctx.textMetrics;
 
         // UI-side level decay for VU-style ballistics (~250 ms 0→silent).
         // Per-frame factor (assuming 60 Hz UI tick) ≈ 0.96.
@@ -166,7 +176,11 @@ public:
                                        m_modLevelDisplay * 0.96f);
         m_modLevelTarget *= 0.0f;   // consumed; next setModLevel re-arms
 
-        const float lblFs = 12.0f;
+        // Theme baseline is 15/13 px; we go a bit smaller to fit the
+        // panel but not so small it disappears. Header is bumped vs
+        // the body text so "MODULATOR" is readable on its own row.
+        const float headerFs = 13.0f;
+        const float lblFs    = 12.0f;
 
         r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
                    Color{20, 20, 26, 255});
@@ -174,15 +188,13 @@ public:
                           Color{50, 50, 60, 255});
 
         // ── Header: "MODULATOR  ← Source"  + level meter ──
-        renderHeader(ctx, lblFs);
+        renderHeader(ctx, headerFs);
 
         // ── Sidechain dropdown row (only when modSource == SC) ──
+        // We dropped the "Source:" label — the dropdown content
+        // already says what's selected, and the panel is too cramped
+        // to spend 60 px on a redundant label.
         if (m_modSource == 6) {
-            if (tm)
-                tm->drawText(r, "Source:",
-                              m_bounds.x + 4,
-                              m_ddRect.y + 4,
-                              lblFs, ::yawn::ui::Theme::textDim);
             m_sourceDD.render(ctx);
         }
 
@@ -217,32 +229,45 @@ public:
 
 private:
 #ifndef YAWN_TEST_BUILD
-    void renderHeader(UIContext& ctx, float lblFs) {
+    void renderHeader(UIContext& ctx, float headerFs) {
         if (!ctx.renderer || !ctx.textMetrics) return;
         auto& r = *ctx.renderer;
         auto& tm = *ctx.textMetrics;
 
-        tm.drawText(r, "MODULATOR",
-                    m_headerRect.x + 1, m_headerRect.y,
-                    lblFs, ::yawn::ui::Theme::textDim);
+        // Layout strategy: meter pinned right (~50 px wide); MODULATOR
+        // label pinned left; source-name badge in between, only drawn
+        // if there's room. On narrow panels we drop the badge rather
+        // than overlap.
+        const float meterW = 50.0f;
+        const float meterX = m_headerRect.x + m_headerRect.w - meterW - 2;
+        const float meterY = m_headerRect.y + 3;
+        const float meterH = m_headerRect.h - 6;
 
-        // Source-name badge — picks a label from the current state.
-        std::string srcLabel = currentSourceLabel();
-        if (!srcLabel.empty()) {
-            tm.drawText(r, srcLabel,
-                        m_headerRect.x + 80, m_headerRect.y,
-                        lblFs, Color{180, 200, 255, 220});
+        const float titleW = tm.textWidth("MODULATOR", headerFs);
+        const float titleX = m_headerRect.x + 2;
+        const float titleY = m_headerRect.y + 1;
+        tm.drawText(r, "MODULATOR", titleX, titleY,
+                    headerFs, Color{180, 180, 190, 255});
+
+        // Source-name badge between title and meter.
+        const float badgeStart = titleX + titleW + 6;
+        const float badgeMaxW  = meterX - badgeStart - 4;
+        if (badgeMaxW > 30.0f) {
+            std::string srcLabel = currentSourceLabel();
+            if (!srcLabel.empty()) {
+                const float w = tm.textWidth(srcLabel, headerFs);
+                if (w <= badgeMaxW) {
+                    tm.drawText(r, srcLabel,
+                                badgeStart, titleY,
+                                headerFs, Color{180, 200, 255, 220});
+                }
+            }
         }
 
         // Level meter — right-aligned strip in the header.
-        const float meterW = 64.0f;
-        const float meterX = m_headerRect.x + m_headerRect.w - meterW - 2;
-        const float meterY = m_headerRect.y + 2;
-        const float meterH = m_headerRect.h - 4;
         r.drawRect(meterX, meterY, meterW, meterH, Color{15, 15, 20, 255});
         const float fill = std::clamp(m_modLevelDisplay, 0.0f, 1.0f);
         if (fill > 0.0f) {
-            // Green → yellow → red (clip).
             Color c = (fill > 0.95f) ? Color{255, 60, 60, 255}
                     : (fill > 0.7f)  ? Color{255, 200, 60, 255}
                                      : Color{80, 220, 100, 255};

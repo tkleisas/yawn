@@ -1305,10 +1305,13 @@ private:
         } else if (nm == "Vocoder") {
             auto* vocPanel = new VocoderDisplayPanel();
             config.display = vocPanel;
-            // Wider than other display panels because the sidechain
-            // source dropdown lives inside it (visible only in SC
-            // mode). Track-name labels need real estate.
-            config.displayWidth = 260;
+            // Slightly wider than the original 130 px so the sidechain
+            // source dropdown has room when it appears, but not so wide
+            // that the section knobs to the right get squeezed and
+            // start their labels overlapping. 180 px fits "(none)" /
+            // "Track 1" / "Audio 1" comfortably — long names get
+            // ellipsised by the dropdown painter.
+            config.displayWidth = 180;
             config.sections = {
                 {"Source",   {1, 2}},
                 {"Bands",    {0, 3, 6}},
