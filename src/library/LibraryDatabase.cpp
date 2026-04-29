@@ -41,7 +41,7 @@ static bool isBuiltInEffect(const std::string& n) {
     if (n == "Reverb"       || n == "Delay"        || n == "EQ" ||
         n == "Compressor"   || n == "Filter"       || n == "Chorus" ||
         n == "Distortion"   || n == "Bitcrusher"   || n == "Noise Gate" ||
-        n == "Ping-Pong Delay" ||
+        n == "Ping-Pong Delay" || n == "Envelope Follower" ||
         n == "Tape Emulation" ||
         n == "Amp Simulator" ||
         n == "Oscilloscope" || n == "Spectrum Analyzer" || n == "Spectrum" ||
