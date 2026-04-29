@@ -108,6 +108,20 @@ public:
     // Band-count strip across the bottom.
     void setBandCount(int bands)   { m_bandCount = std::clamp(bands, 4, 32); }
 
+    // Live per-band envelope levels driving the spectrum-strip bar
+    // heights. Caller hands us up to 32 entries (kMaxBands) drained
+    // from Vocoder::consumeBandLevels(). UI-side decay smooths
+    // flicker — peak values rise instantly, then fall over ~250ms,
+    // matching VU-meter ballistics. Slots beyond m_bandCount are
+    // ignored at render time.
+    void setBandLevels(const float* levels, int n) {
+        const int copy = std::min(n, 32);
+        for (int i = 0; i < copy; ++i)
+            m_bandLevelTarget[i] = std::max(0.0f, levels[i]);
+        for (int i = copy; i < 32; ++i)
+            m_bandLevelTarget[i] = 0.0f;
+    }
+
     // Vocoder::kModSource value (0=Sample, 1..5=Formant A/E/I/O/U,
     // 6=Sidechain). The dropdown row's bounds are stable across mode
     // switches now (always reserved) — render() decides whether to
@@ -170,7 +184,12 @@ public:
     void onLayout(Rect bounds, UIContext& ctx) override {
         Widget::onLayout(bounds, ctx);
         const float headerH    = 18.0f;          // 14 px text + 4 px padding
-        const float bandH      = 10.0f;
+        // Band strip is now a live spectrum bar graph rather than a
+        // static gradient — needs more vertical room so the bars
+        // have a meaningful dynamic range to grow into. ~28 px lets
+        // each bar rise enough that vowel formant peaks are clearly
+        // distinguishable from quieter bands.
+        const float bandH      = 28.0f;
         const float pad        = 2.0f;
         // ALWAYS reserve the dropdown row, even when modSource != 6.
         // The display panel is held as a raw Widget* by GroupedKnobBody
@@ -238,16 +257,51 @@ public:
         // ── Modulator viz ──
         renderModView(ctx, lblFs);
 
-        // ── Band-count gradient strip ──
+        // ── Live band spectrum strip ──
+        // Each band gets a vertical bar whose height tracks its
+        // current envelope-follower output. Colour is keyed to band
+        // position (low = green-ish, high = magenta-ish) so the
+        // spectrum shape is readable at a glance even when several
+        // bars are at the same height. UI-side ballistics: bars
+        // snap up to a new peak, decay ~25% per frame at 60 Hz so
+        // brief vowel transients stay visible long enough to read.
         if (m_bandRect.w > 4 && m_bandRect.h > 2) {
             const float barW = m_bandRect.w / m_bandCount;
+            // Background — faint gradient rectangle hints at where
+            // the spectrum lives even at silence, so the panel
+            // doesn't look "empty" before any audio plays.
+            r.drawRect(m_bandRect.x, m_bandRect.y, m_bandRect.w, m_bandRect.h,
+                       Color{12, 12, 18, 255});
             for (int b = 0; b < m_bandCount; ++b) {
+                // UI decay (separately maintained per-band so each bar
+                // bobs independently). Snap to incoming peak, decay
+                // toward zero. ~0.78 per frame ≈ 250ms half-life.
+                if (m_bandLevelTarget[b] > m_bandLevelDisplay[b])
+                    m_bandLevelDisplay[b] = m_bandLevelTarget[b];
+                else
+                    m_bandLevelDisplay[b] *= 0.78f;
+                m_bandLevelTarget[b] = 0.0f;   // consumed
+
                 const float bx = m_bandRect.x + b * barW;
                 const float t = static_cast<float>(b) / std::max(1, m_bandCount - 1);
                 const uint8_t cr = static_cast<uint8_t>(80 + t * 150);
                 const uint8_t cg = static_cast<uint8_t>(180 - t * 120);
-                r.drawRect(bx + 0.5f, m_bandRect.y, barW - 1, m_bandRect.h,
-                           Color{cr, cg, 220, 160});
+
+                // Background tick — a 2 px dim base hints the bar's
+                // "home position" so the panel doesn't look entirely
+                // dark when silent.
+                r.drawRect(bx + 0.5f, m_bandRect.y + m_bandRect.h - 2,
+                           barW - 1, 2,
+                           Color{cr, cg, 220, 60});
+
+                const float lvl = std::clamp(m_bandLevelDisplay[b], 0.0f, 1.0f);
+                if (lvl > 0.001f) {
+                    const float bh = lvl * m_bandRect.h;
+                    r.drawRect(bx + 0.5f,
+                               m_bandRect.y + m_bandRect.h - bh,
+                               barW - 1, bh,
+                               Color{cr, cg, 220, 230});
+                }
             }
         }
     }
@@ -445,6 +499,15 @@ private:
     // Live level metering (host pushes, UI decays).
     float m_modLevelTarget = 0.0f;
     float m_modLevelDisplay = 0.0f;
+
+    // Per-band live envelope levels, sized to kMaxBands (32). Same
+    // host-pushes / UI-decays pattern as m_modLevelTarget but per
+    // bar in the spectrum strip. Slots beyond m_bandCount are
+    // ignored at render time. UI-side decay is applied in render()
+    // so the bars settle smoothly even if the audio thread pushes
+    // bursty peaks.
+    float m_bandLevelTarget[32] = {};
+    float m_bandLevelDisplay[32] = {};
 
     FwDropDown m_sourceDD;
     SourceChangeCallback m_onSidechainChange;

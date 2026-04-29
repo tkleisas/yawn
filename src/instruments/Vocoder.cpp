@@ -326,6 +326,13 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
     // still drives the meter on whichever side has signal.
     float blockModPeak = 0.0f;
 
+    // Per-band running peak across this block, CAS-merged into
+    // m_bandPeak[] at the end. Drives the live spectrum-style band
+    // display in VocoderDisplayPanel. Stack-local so the per-sample
+    // band loop does no atomic ops at all — one CAS per band per
+    // block, not per sample.
+    float blockBandPeak[kMaxBands] = {};
+
     const bool stereoOut = (numChannels > 1);
 
     for (int s = 0; s < numFrames; ++s) {
@@ -397,6 +404,13 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
             vocodedR += carrBand * bs.envLevel_R * gT;
 
             if (b >= numBands * 2 / 3) unvoicedAccum += (absL + absR) * 0.5f;
+
+            // Track this band's peak envelope for the UI spectrum
+            // display. max(L,R) — we want the visualisation to track
+            // whichever side has signal so a panned modulator still
+            // shows up on the bars rather than averaging to half.
+            const float bandLvl = std::max(bs.envLevel_L, bs.envLevel_R);
+            if (bandLvl > blockBandPeak[b]) blockBandPeak[b] = bandLvl;
         }
 
         // Unvoiced/sibilant noise injection — independent random
@@ -454,6 +468,21 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
                 std::memory_order_release,
                 std::memory_order_relaxed))
             break;
+    }
+
+    // Same pattern for the per-band peaks driving the spectrum
+    // display. One CAS per active band per block — even at 32 bands
+    // and a tiny block size that's well under the noise compared to
+    // the per-sample biquad work.
+    for (int b = 0; b < numBands; ++b) {
+        float bp = m_bandPeak[b].load(std::memory_order_relaxed);
+        while (blockBandPeak[b] > bp) {
+            if (m_bandPeak[b].compare_exchange_weak(
+                    bp, blockBandPeak[b],
+                    std::memory_order_release,
+                    std::memory_order_relaxed))
+                break;
+        }
     }
 }
 

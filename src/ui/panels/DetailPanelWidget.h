@@ -1344,6 +1344,16 @@ private:
                 vocPanel->setModSource(
                     static_cast<int>(voc->getParameter(instruments::Vocoder::kModSource)));
                 vocPanel->setModLevel(voc->consumeModulatorLevel());
+                // Drain the per-band envelope peaks into the display
+                // panel so the spectrum strip animates with the
+                // modulator's spectral content. Sized to kMaxBands
+                // (32); trailing entries are simply ignored at the
+                // current band count.
+                float bandLevels[instruments::Vocoder::kMaxBands] = {};
+                voc->consumeBandLevels(bandLevels,
+                                       instruments::Vocoder::kMaxBands);
+                vocPanel->setBandLevels(bandLevels,
+                                        instruments::Vocoder::kMaxBands);
 
                 // Pull the latest project track list + current sidechain
                 // source so the dropdown stays in sync with whatever

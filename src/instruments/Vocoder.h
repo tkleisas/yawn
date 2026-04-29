@@ -91,6 +91,18 @@ public:
         return m_modLevelPeak.exchange(0.0f, std::memory_order_acq_rel);
     }
 
+    // Per-band envelope peak meter. Drains the kMaxBands atomic peaks
+    // into `out` (caller-owned, length kMaxBands; trailing entries
+    // beyond the active band count read as 0). Each slot reflects the
+    // max of envLevel_L / envLevel_R seen by process() since the last
+    // poll — exactly what the spectrum-analyzer-style band display
+    // wants. Same exchange-to-zero pattern as consumeModulatorLevel.
+    void consumeBandLevels(float* out, int outSize) {
+        const int n = std::min(outSize, kMaxBands);
+        for (int i = 0; i < n; ++i)
+            out[i] = m_bandPeak[i].exchange(0.0f, std::memory_order_acq_rel);
+    }
+
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
@@ -238,6 +250,14 @@ private:
     // bands — works the same whether the modulator is a sample, a
     // formant generator, or a sidechain.
     std::atomic<float> m_modLevelPeak{0.0f};
+
+    // Per-band envelope peaks, refilled once per audio block (CAS-merge
+    // of max(envLevel_L, envLevel_R)) and drained by the display panel
+    // via consumeBandLevels() at UI rate. Lets the panel render a
+    // proper spectrum-analyzer view that visibly tracks the modulator's
+    // formant content rather than just a static colour gradient. The
+    // size is fixed at kMaxBands; only [0, currentBands) carry signal.
+    std::atomic<float> m_bandPeak[kMaxBands] = {};
 };
 
 } // namespace yawn::instruments
