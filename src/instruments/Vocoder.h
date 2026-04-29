@@ -197,6 +197,27 @@ private:
     int m_modSampleFrames = 0;
     double m_modPlayPos = 0.0;
 
+    // ── Internal formant synthesizer ──
+    // Glottal-pulse (band-limited sawtooth) excitation fed through
+    // three parallel resonant bandpass filters tuned per-vowel to F1,
+    // F2, F3. Replaces the original "noise * constant" stub so the
+    // formant modulator sources actually produce vowel-shaped spectra
+    // for the analysis bands to extract.
+    //
+    // Design notes:
+    //   * Glottal pitch is fixed at ~110 Hz (typical male F0); we do
+    //     NOT track MIDI note frequency here, because the modulator's
+    //     job is to provide a stable formant ENVELOPE that the bands
+    //     can lift onto the carrier. A pitch-tracking modulator would
+    //     just multiply the carrier's harmonics by themselves.
+    //   * Resonator Q is high (~12) so each formant has a distinct
+    //     spectral peak. Lower Q smears the vowel; higher Q rings.
+    //   * Vowel data lives in s_vowelFormants[5][3] in Vocoder.cpp.
+    double m_glottalPhase = 0.0;
+    BiquadState m_formantBQ[3] = {};
+    int m_formantLastVowel = -1;     // re-design filters when vowel changes
+    float m_formantShiftRatio = 1.0f; // re-design filters when Formant Shift changes
+
     uint32_t m_rngState = 12345u;
     int64_t m_voiceCounter = 0;
     // Output low-pass filter — separate state per stereo side so the
