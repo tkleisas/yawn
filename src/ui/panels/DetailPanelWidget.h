@@ -187,6 +187,35 @@ public:
         m_onAutoSampleRequested = std::move(cb);
     }
 
+    // ── Sidechain source plumbing ───────────────────────────────────
+    // Used by sidechain-aware instrument panels (Vocoder for now;
+    // ring-mod / gate / etc. when they grow sidechain UI). The
+    // DetailPanelWidget itself doesn't know about the Project — App
+    // wires three callbacks to bridge:
+    //
+    //   * Names provider: returns one display string per project
+    //     track in track-index order. Drives the source dropdown's
+    //     items.
+    //   * Source provider: returns the currently-routed sidechain
+    //     source for the given track (-1 = none, else absolute track
+    //     index). Driven into the panel each frame so the dropdown
+    //     stays in sync if changed elsewhere (e.g. Mixer I/O).
+    //   * Source setter: applied to project + audio engine when the
+    //     user picks a new source from the device-side dropdown.
+    using TrackNamesProvider = std::function<std::vector<std::string>()>;
+    using SidechainSourceProvider = std::function<int(int trackIdx)>;
+    using SetSidechainSourceCallback =
+        std::function<void(int trackIdx, int sourceIdx)>;
+    void setTrackNamesProvider(TrackNamesProvider cb) {
+        m_trackNamesProvider = std::move(cb);
+    }
+    void setSidechainSourceProvider(SidechainSourceProvider cb) {
+        m_sidechainSourceProvider = std::move(cb);
+    }
+    void setOnSetSidechainSource(SetSidechainSourceCallback cb) {
+        m_setSidechainSource = std::move(cb);
+    }
+
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
 
     void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
@@ -1276,7 +1305,10 @@ private:
         } else if (nm == "Vocoder") {
             auto* vocPanel = new VocoderDisplayPanel();
             config.display = vocPanel;
-            config.displayWidth = 130;
+            // Wider than other display panels because the sidechain
+            // source dropdown lives inside it (visible only in SC
+            // mode). Track-name labels need real estate.
+            config.displayWidth = 260;
             config.sections = {
                 {"Source",   {1, 2}},
                 {"Bands",    {0, 3, 6}},
@@ -1285,7 +1317,18 @@ private:
                 {"Amp",      {10, 11}},
                 {"",         {12, 13}},
             };
-            m_displayUpdaters.push_back([vocPanel, inst]() {
+
+            // Wire the device-side sidechain picker → App callback.
+            // App-side handler updates project.track[t].sidechainSource
+            // and sends SetSidechainSourceMsg to the audio engine.
+            vocPanel->setOnSidechainSourceChanged(
+                [this](int sourceIdx) {
+                    if (m_autoTrackIndex < 0) return;
+                    if (m_setSidechainSource)
+                        m_setSidechainSource(m_autoTrackIndex, sourceIdx);
+                });
+
+            m_displayUpdaters.push_back([this, vocPanel, inst]() {
                 auto* voc = dynamic_cast<instruments::Vocoder*>(inst);
                 if (!voc) return;
                 if (voc->hasModulatorSample())
@@ -1295,6 +1338,21 @@ private:
                 vocPanel->setPlaying(voc->isPlaying());
                 vocPanel->setBandCount(
                     static_cast<int>(voc->getParameter(instruments::Vocoder::kBands)));
+                vocPanel->setModSource(
+                    static_cast<int>(voc->getParameter(instruments::Vocoder::kModSource)));
+                vocPanel->setModLevel(voc->consumeModulatorLevel());
+
+                // Pull the latest project track list + current sidechain
+                // source so the dropdown stays in sync with whatever
+                // the Mixer I/O strip might have changed.
+                if (m_trackNamesProvider) {
+                    vocPanel->setAvailableSources(
+                        m_trackNamesProvider(), m_autoTrackIndex);
+                }
+                if (m_sidechainSourceProvider && m_autoTrackIndex >= 0) {
+                    vocPanel->setSidechainSource(
+                        m_sidechainSourceProvider(m_autoTrackIndex));
+                }
             });
         } else if (nm == "Drum Rack") {
             auto* drPanel = new DrumRackDisplayPanel();
@@ -1630,6 +1688,9 @@ private:
     ParamRightClickCallback m_onParamRightClick;
     PresetClickCallback m_onPresetClick;
     AutoSampleRequestCallback m_onAutoSampleRequested;
+    TrackNamesProvider          m_trackNamesProvider;
+    SidechainSourceProvider     m_sidechainSourceProvider;
+    SetSidechainSourceCallback  m_setSidechainSource;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;

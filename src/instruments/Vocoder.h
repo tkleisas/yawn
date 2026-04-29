@@ -6,6 +6,7 @@
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
 #include "effects/FreqMap.h"
+#include <atomic>
 #include <vector>
 #include <algorithm>
 
@@ -77,6 +78,16 @@ public:
     bool isPlaying() const {
         for (auto& v : m_voices) if (v.active) return true;
         return false;
+    }
+
+    // Modulator-input level meter — returns the peak |modSig| seen by
+    // process() since the last call, atomically swapped to zero so the
+    // next read sees only "peak since last poll". Used by the Vocoder
+    // display panel to render a live level meter regardless of which
+    // modulator source is selected (sample, formant, sidechain). Cheap
+    // when no audio is flowing through the vocoder.
+    float consumeModulatorLevel() {
+        return m_modLevelPeak.exchange(0.0f, std::memory_order_acq_rel);
     }
 
     int parameterCount() const override { return kParamCount; }
@@ -179,6 +190,13 @@ private:
     uint32_t m_rngState = 12345u;
     int64_t m_voiceCounter = 0;
     float m_outFilterIc[2] = {};
+
+    // Atomic peak |modSig| seen during process(), drained by the UI
+    // via consumeModulatorLevel(). Allows the display panel to render
+    // a meter that reflects the actual signal hitting the analysis
+    // bands — works the same whether the modulator is a sample, a
+    // formant generator, or a sidechain.
+    std::atomic<float> m_modLevelPeak{0.0f};
 };
 
 } // namespace yawn::instruments

@@ -4584,6 +4584,33 @@ bool App::init() {
         m_autoSampleDialog.open(ctx);
     });
 
+    // ── Sidechain plumbing for sidechain-aware instrument panels ──
+    // Vocoder's display panel hosts an inline source dropdown — these
+    // three callbacks bridge it to the project + audio engine without
+    // pulling Project into DetailPanelWidget directly. (Same surface
+    // is reusable for ring-mod / gate / etc. when they grow sidechain
+    // UIs.)
+    m_detailPanel->setTrackNamesProvider([this]() {
+        std::vector<std::string> names;
+        const int n = m_project.numTracks();
+        names.reserve(n);
+        for (int i = 0; i < n; ++i) names.push_back(m_project.track(i).name);
+        return names;
+    });
+    m_detailPanel->setSidechainSourceProvider([this](int trackIdx) {
+        if (trackIdx < 0 || trackIdx >= m_project.numTracks()) return -1;
+        return m_project.track(trackIdx).sidechainSource;
+    });
+    m_detailPanel->setOnSetSidechainSource([this](int trackIdx, int sourceIdx) {
+        if (trackIdx < 0 || trackIdx >= m_project.numTracks()) return;
+        // Sanity: refuse self-routing (the picker hides self anyway,
+        // but defensive — Mixer I/O could in theory push junk).
+        if (sourceIdx == trackIdx) sourceIdx = -1;
+        m_project.track(trackIdx).sidechainSource = sourceIdx;
+        m_audioEngine.sendCommand(audio::SetSidechainSourceMsg{trackIdx, sourceIdx});
+        markDirty();
+    });
+
 #ifdef YAWN_HAS_VST3
     // Initialize VST3 plugin scanner
     m_vst3Scanner = std::make_unique<vst3::VST3Scanner>();

@@ -217,6 +217,11 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
     for (auto& v : m_voices) if (v.active) ++activeVoices;
     if (activeVoices == 0) return;
 
+    // Per-block running peak for the UI meter — CAS-merged into the
+    // atomic at the end of the block so we don't pay an atomic op
+    // every sample.
+    float blockModPeak = 0.0f;
+
     for (int s = 0; s < numFrames; ++s) {
         // Generate modulator sample
         float modSig;
@@ -228,6 +233,8 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
         } else {
             modSig = getModulatorSample(modSource);
         }
+        const float modAbs0 = std::abs(modSig);
+        if (modAbs0 > blockModPeak) blockModPeak = modAbs0;
 
         // Generate carrier: sum of all voices
         float carrierSig = 0.0f;
@@ -292,6 +299,18 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
         buffer[s * numChannels] += out;
         if (numChannels > 1)
             buffer[s * numChannels + 1] += out;
+    }
+
+    // CAS-merge the block's modulator peak into the atomic so the UI
+    // meter reads "max since last poll". Cheap — one atomic op per
+    // block, not per sample.
+    float prev = m_modLevelPeak.load(std::memory_order_relaxed);
+    while (blockModPeak > prev) {
+        if (m_modLevelPeak.compare_exchange_weak(
+                prev, blockModPeak,
+                std::memory_order_release,
+                std::memory_order_relaxed))
+            break;
     }
 }
 
