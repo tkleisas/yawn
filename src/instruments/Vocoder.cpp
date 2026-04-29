@@ -277,6 +277,15 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
     const float dryCarrier   = m_params[kDryCarrier];
     const float filterCut    = cutoffNormToHz(m_params[kFilterCutoff]);
     const float volume       = m_params[kVolume];
+    // Freeze formants: when on, the per-band envelope followers stop
+    // tracking the modulator entirely — bs.envLevel_L/R keep their
+    // last-snapshot values. The carrier keeps being shaped by that
+    // frozen spectral envelope, so the held vowel/timbre persists
+    // even after the modulator goes silent. Modulator analysis
+    // (biquad filtering) still runs because we use bandL/bandR for
+    // the unvoiced-noise injection level — but the envelope SAMPLE
+    // step that's normally absR-driven is skipped.
+    const bool  freeze       = m_params[kFreezeFormants] >= 0.5f;
 
     // Envelope follower coefficients
     const float atkCoeff = std::exp(-1.0f / std::max(0.001f, envAtk * (float)m_sampleRate));
@@ -365,16 +374,22 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
             const float absL  = std::abs(bandL);
             const float absR  = std::abs(bandR);
 
-            // Envelope followers (per side)
-            if (absL > bs.envLevel_L)
-                bs.envLevel_L = atkCoeff * bs.envLevel_L + (1.0f - atkCoeff) * absL;
-            else
-                bs.envLevel_L = relCoeff * bs.envLevel_L + (1.0f - relCoeff) * absL;
+            // Envelope followers (per side). Skipped when Freeze is
+            // engaged so the previous block's envelope levels persist
+            // — that's the entire effect: hold whatever spectral
+            // envelope the modulator was painting at the moment of
+            // freeze.
+            if (!freeze) {
+                if (absL > bs.envLevel_L)
+                    bs.envLevel_L = atkCoeff * bs.envLevel_L + (1.0f - atkCoeff) * absL;
+                else
+                    bs.envLevel_L = relCoeff * bs.envLevel_L + (1.0f - relCoeff) * absL;
 
-            if (absR > bs.envLevel_R)
-                bs.envLevel_R = atkCoeff * bs.envLevel_R + (1.0f - atkCoeff) * absR;
-            else
-                bs.envLevel_R = relCoeff * bs.envLevel_R + (1.0f - relCoeff) * absR;
+                if (absR > bs.envLevel_R)
+                    bs.envLevel_R = atkCoeff * bs.envLevel_R + (1.0f - atkCoeff) * absR;
+                else
+                    bs.envLevel_R = relCoeff * bs.envLevel_R + (1.0f - relCoeff) * absR;
+            }
 
             const float carrBand = biquadProcess(carrierSig, bs.carrBQ);
             const float gT = tiltGains[b];

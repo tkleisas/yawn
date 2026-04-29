@@ -1318,7 +1318,7 @@ private:
                 {"Envelope", {4, 5}},
                 {"Mix",      {7, 8, 9}},
                 {"Amp",      {10, 11}},
-                {"",         {12, 13}},
+                {"Output",   {12, 13, 14}},
             };
 
             // Wire the device-side sidechain picker → App callback.

@@ -16,7 +16,7 @@ class Vocoder : public Instrument {
 public:
     static constexpr int kMaxVoices  = 8;
     static constexpr int kMaxBands   = 32;
-    static constexpr int kParamCount = 14;
+    static constexpr int kParamCount = 15;
 
     // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
     static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
@@ -40,6 +40,7 @@ public:
         kAmpRelease,      // 1–5000 ms
         kFilterCutoff,    // 0..1 normalized → 20..20000 Hz (log) output LP
         kVolume,          // 0–1
+        kFreezeFormants,  // 0/1 toggle — sample-and-hold per-band envelopes
     };
 
     const char* name() const override { return "Vocoder"; }
@@ -111,6 +112,11 @@ public:
             {"Output Filter",0.0f,1.0f,1.0f,"", false, false,
                 WidgetHint::Knob, nullptr, 0, &formatCutoffHz},
             {"Volume",        0.0f,    1.0f,   0.8f, "",    false, false, WidgetHint::DentedKnob},
+            // Freeze: when on, the per-band envelope followers stop
+            // updating and the carrier keeps imposing the last
+            // spectral envelope it saw — turn the knob to 1, sing a
+            // vowel, the carrier holds that vowel forever.
+            {"Freeze",        0.0f,    1.0f,   0.0f, "",    false, false, WidgetHint::Toggle},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }
