@@ -17,6 +17,7 @@
 #include "instruments/Vocoder.h"
 #include "instruments/Multisampler.h"
 #include "instruments/InstrumentRack.h"
+#include "instruments/DrumSynth.h"
 
 #include "effects/AudioEffect.h"
 #include "effects/Reverb.h"
@@ -69,6 +70,7 @@ inline std::unique_ptr<instruments::Instrument> createInstrument(const std::stri
         {"vocoder",    [] { return std::make_unique<instruments::Vocoder>(); }},
         {"multisampler",[] { return std::make_unique<instruments::Multisampler>(); }},
         {"instrack",   [] { return std::make_unique<instruments::InstrumentRack>(); }},
+        {"drumsynth", [] { return std::make_unique<instruments::DrumSynth>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -141,6 +143,7 @@ inline std::unique_ptr<yawn::instruments::Instrument> createInstrumentByName(con
     if (n == "FM Synth")          return std::make_unique<yawn::instruments::FMSynth>();
     if (n == "Sampler")           return std::make_unique<yawn::instruments::Sampler>();
     if (n == "Drum Rack")         return std::make_unique<yawn::instruments::DrumRack>();
+    if (n == "Drum Synth")        return std::make_unique<yawn::instruments::DrumSynth>();
     if (n == "DrumSlop")          return std::make_unique<yawn::instruments::DrumSlop>();
     if (n == "Karplus-Strong")    return std::make_unique<yawn::instruments::KarplusStrong>();
     if (n == "Wavetable Synth")   return std::make_unique<yawn::instruments::WavetableSynth>();

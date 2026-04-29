@@ -30,7 +30,8 @@ namespace library {
 
 static bool isBuiltInInstrument(const std::string& n) {
     return n == "Subtractive Synth" || n == "FM Synth" || n == "Sampler" ||
-           n == "Drum Rack"         || n == "DrumSlop" || n == "Karplus-Strong" ||
+           n == "Drum Rack"         || n == "Drum Synth" ||
+           n == "DrumSlop"          || n == "Karplus-Strong" ||
            n == "Wavetable Synth"   || n == "Granular Synth" || n == "Vocoder" ||
            n == "Multisampler"      || n == "Instrument Rack";
 }

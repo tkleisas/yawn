@@ -1367,6 +1367,29 @@ private:
                         m_sidechainSourceProvider(m_autoTrackIndex));
                 }
             });
+        } else if (nm == "Drum Synth") {
+            // 8 sections, one per drum, in MIDI-ascending order (matches
+            // the DrumRoll's row order — bottom = Kick (note 36), top
+            // = Tambourine (note 54)). Kick has 7 params (the only drum
+            // with sine/white/pink mix knobs); the others have the
+            // standard 4 (tune, attack, decay, drive).
+            //
+            // GroupedKnobBody packs 7 knobs into a 4×2 grid (cols=
+            // ceil(7/2)=4) and 4 knobs into a 2×2 grid (cols=ceil(4/2)
+            // =2), so the kick strip is roughly twice as wide as each
+            // other-drum strip. Total body width ≈ 1230 px which fits
+            // comfortably on a 1280-px screen with horizontal scroll
+            // for narrower displays.
+            config.sections = {
+                {"Kick",  { 0,  1,  2,  3,  4,  5,  6}},
+                {"Snare", { 7,  8,  9, 10}},
+                {"Clap",  {11, 12, 13, 14}},
+                {"Tom1",  {15, 16, 17, 18}},
+                {"CHH",   {19, 20, 21, 22}},
+                {"OHH",   {23, 24, 25, 26}},
+                {"Tom2",  {27, 28, 29, 30}},
+                {"Tamb",  {31, 32, 33, 34}},
+            };
         } else if (nm == "Drum Rack") {
             auto* drPanel = new DrumRackDisplayPanel();
             config.display = drPanel;

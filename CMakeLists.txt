@@ -256,6 +256,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/InstrumentRack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumRack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/Multisampler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumSynth.cpp
     # Audio effects (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Reverb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Delay.cpp

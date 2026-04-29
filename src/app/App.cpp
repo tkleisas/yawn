@@ -1034,6 +1034,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addInstrItem("FM Synth", [](){ return std::make_unique<instruments::FMSynth>(); });
     addInstrItem("Sampler", [](){ return std::make_unique<instruments::Sampler>(); });
     addInstrItem("Drum Rack", [](){ return std::make_unique<instruments::DrumRack>(); });
+    addInstrItem("Drum Synth", [](){ return std::make_unique<instruments::DrumSynth>(); });
     addInstrItem("DrumSlop", [](){ return std::make_unique<instruments::DrumSlop>(); });
     addInstrItem("Karplus-Strong", [](){ return std::make_unique<instruments::KarplusStrong>(); });
     addInstrItem("Wavetable Synth", [](){ return std::make_unique<instruments::WavetableSynth>(); });
