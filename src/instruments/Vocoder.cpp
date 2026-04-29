@@ -17,7 +17,8 @@ void Vocoder::reset() {
     m_modPlayPos = 0.0;
     m_rngState = 12345u;
     for (auto& b : m_bandState) b = BandState{};
-    m_outFilterIc[0] = m_outFilterIc[1] = 0.0f;
+    m_outFilterIcL[0] = m_outFilterIcL[1] = 0.0f;
+    m_outFilterIcR[0] = m_outFilterIcR[1] = 0.0f;
 }
 
 void Vocoder::designBandpass(BiquadState& bq, float freq, float q) const {
@@ -65,9 +66,14 @@ void Vocoder::initBands() {
         centerFreq = std::clamp(centerFreq, 20.0f, nyquist);
 
         float q = (2.0f + numBands * 0.3f) * bwMult;
-        designBandpass(m_bandState[b].modBQ, centerFreq, q);
-        designBandpass(m_bandState[b].carrBQ, shiftedFreq, q);
-        m_bandState[b].envLevel = 0.0f;
+        // Both modulator-side bandpass states get the same coefficients
+        // — they're independent only in their internal z1/z2 memory so
+        // L and R signals filter without crosstalk.
+        designBandpass(m_bandState[b].modBQ_L, centerFreq, q);
+        designBandpass(m_bandState[b].modBQ_R, centerFreq, q);
+        designBandpass(m_bandState[b].carrBQ,  shiftedFreq, q);
+        m_bandState[b].envLevel_L = 0.0f;
+        m_bandState[b].envLevel_R = 0.0f;
     }
 }
 
@@ -165,7 +171,8 @@ void Vocoder::resetParams() {
     m_voiceCounter = 0;
     m_modPlayPos = 0.0;
     m_rngState = 12345u;
-    m_outFilterIc[0] = m_outFilterIc[1] = 0.0f;
+    m_outFilterIcL[0] = m_outFilterIcL[1] = 0.0f;
+    m_outFilterIcR[0] = m_outFilterIcR[1] = 0.0f;
     for (auto& b : m_bandState) b = BandState{};
 }
 
@@ -219,86 +226,120 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
 
     // Per-block running peak for the UI meter — CAS-merged into the
     // atomic at the end of the block so we don't pay an atomic op
-    // every sample.
+    // every sample. Tracks max(|L|, |R|) so a hard-panned modulator
+    // still drives the meter on whichever side has signal.
     float blockModPeak = 0.0f;
 
+    const bool stereoOut = (numChannels > 1);
+
     for (int s = 0; s < numFrames; ++s) {
-        // Generate modulator sample
-        float modSig;
+        // ── Modulator (stereo) ──
+        // Split L/R when we have a real stereo source (sidechain on a
+        // stereo buffer); collapse to mono for sample / formant
+        // sources where the analysis is single-channel. Mono inputs
+        // produce identical L/R envelopes so the output is the same
+        // mono signal duplicated across channels (matches pre-stereo
+        // behaviour for mono modulator sources).
+        float modL, modR;
         if (modSource == 6 && m_sidechainBuffer) {
-            // Sidechain: mono downmix from interleaved stereo
-            float sL = m_sidechainBuffer[s * numChannels];
-            float sR = (numChannels > 1) ? m_sidechainBuffer[s * numChannels + 1] : sL;
-            modSig = (sL + sR) * 0.5f;
+            modL = m_sidechainBuffer[s * numChannels];
+            modR = stereoOut ? m_sidechainBuffer[s * numChannels + 1] : modL;
         } else {
-            modSig = getModulatorSample(modSource);
+            const float m = getModulatorSample(modSource);
+            modL = m;
+            modR = m;
         }
-        const float modAbs0 = std::abs(modSig);
+        const float modAbs0 = std::max(std::abs(modL), std::abs(modR));
         if (modAbs0 > blockModPeak) blockModPeak = modAbs0;
 
-        // Generate carrier: sum of all voices
+        // ── Carrier (mono — same MIDI-driven oscillator across L/R) ──
         float carrierSig = 0.0f;
-        float envSum = 0.0f;
         for (auto& v : m_voices) {
             if (!v.active) continue;
             float e = v.ampEnv.process();
-            envSum += e;
             if (v.ampEnv.isIdle()) { v.active = false; continue; }
             carrierSig += generateCarrier(v, carrierType) * e * v.velocity;
         }
 
-        // Vocoder processing: analyze modulator bands, apply to carrier bands
-        float vocodedOut = 0.0f;
-        float unvoicedOut = 0.0f;
+        // ── Per-band analysis (split L/R) + synthesis ──
+        // Each band runs two parallel envelope followers (one per
+        // modulator channel) but a single carrier bandpass. The
+        // carrier band's contribution is scaled by the per-side
+        // envelope, so the L/R balance of the modulator drives the
+        // L/R balance of the vocoded output.
+        float vocodedL = 0.0f, vocodedR = 0.0f;
+        float unvoicedAccum = 0.0f;     // mono — sums |modL|+|modR| above 2/3 band
 
         for (int b = 0; b < numBands; ++b) {
             auto& bs = m_bandState[b];
 
-            // Bandpass filter modulator
-            float modBand = biquadProcess(modSig, bs.modBQ);
+            const float bandL = biquadProcess(modL, bs.modBQ_L);
+            const float bandR = biquadProcess(modR, bs.modBQ_R);
+            const float absL  = std::abs(bandL);
+            const float absR  = std::abs(bandR);
 
-            // Envelope follower
-            float modAbs = std::abs(modBand);
-            if (modAbs > bs.envLevel)
-                bs.envLevel = atkCoeff * bs.envLevel + (1.0f - atkCoeff) * modAbs;
+            // Envelope followers (per side)
+            if (absL > bs.envLevel_L)
+                bs.envLevel_L = atkCoeff * bs.envLevel_L + (1.0f - atkCoeff) * absL;
             else
-                bs.envLevel = relCoeff * bs.envLevel + (1.0f - relCoeff) * modAbs;
+                bs.envLevel_L = relCoeff * bs.envLevel_L + (1.0f - relCoeff) * absL;
 
-            // Bandpass filter carrier
-            float carrBand = biquadProcess(carrierSig, bs.carrBQ);
+            if (absR > bs.envLevel_R)
+                bs.envLevel_R = atkCoeff * bs.envLevel_R + (1.0f - atkCoeff) * absR;
+            else
+                bs.envLevel_R = relCoeff * bs.envLevel_R + (1.0f - relCoeff) * absR;
 
-            // Apply modulator envelope to carrier band
-            vocodedOut += carrBand * bs.envLevel * tiltGains[b];
+            const float carrBand = biquadProcess(carrierSig, bs.carrBQ);
+            const float gT = tiltGains[b];
+            vocodedL += carrBand * bs.envLevel_L * gT;
+            vocodedR += carrBand * bs.envLevel_R * gT;
 
-            // Detect unvoiced (high frequency energy)
-            if (b >= numBands * 2 / 3)
-                unvoicedOut += modAbs;
+            if (b >= numBands * 2 / 3) unvoicedAccum += (absL + absR) * 0.5f;
         }
 
-        // Mix in noise for unvoiced regions (sibilants)
+        // Unvoiced/sibilant noise injection — independent random
+        // values per channel keep the noise tail stereo-decorrelated
+        // (otherwise you'd get a phantom-centre sibilance even on a
+        // hard-panned vocal).
         if (unvoicedSens > 0.0f) {
-            float noise = (randFloat() - 0.5f) * 2.0f;
-            vocodedOut += noise * unvoicedOut * unvoicedSens * 0.5f;
+            const float n0 = (randFloat() - 0.5f) * 2.0f;
+            const float n1 = (randFloat() - 0.5f) * 2.0f;
+            const float gain = unvoicedAccum * unvoicedSens * 0.5f;
+            vocodedL += n0 * gain;
+            vocodedR += n1 * gain;
         }
 
-        // Blend dry carrier
-        if (dryCarrier > 0.0f)
-            vocodedOut += carrierSig * dryCarrier;
+        if (dryCarrier > 0.0f) {
+            vocodedL += carrierSig * dryCarrier;
+            vocodedR += carrierSig * dryCarrier;
+        }
 
-        // Output LP filter
+        // Output low-pass filter — independent state per side so L/R
+        // don't bleed through the integrator memory.
         if (filterCut < 19999.0f) {
-            float v3 = vocodedOut - m_outFilterIc[1];
-            float v1 = fa1 * m_outFilterIc[0] + fa2 * v3;
-            float v2 = m_outFilterIc[1] + fa2 * m_outFilterIc[0] + fa3 * v3;
-            m_outFilterIc[0] = 2.0f * v1 - m_outFilterIc[0];
-            m_outFilterIc[1] = 2.0f * v2 - m_outFilterIc[1];
-            vocodedOut = v2;
+            {
+                float v3 = vocodedL - m_outFilterIcL[1];
+                float v1 = fa1 * m_outFilterIcL[0] + fa2 * v3;
+                float v2 = m_outFilterIcL[1] + fa2 * m_outFilterIcL[0] + fa3 * v3;
+                m_outFilterIcL[0] = 2.0f * v1 - m_outFilterIcL[0];
+                m_outFilterIcL[1] = 2.0f * v2 - m_outFilterIcL[1];
+                vocodedL = v2;
+            }
+            {
+                float v3 = vocodedR - m_outFilterIcR[1];
+                float v1 = fa1 * m_outFilterIcR[0] + fa2 * v3;
+                float v2 = m_outFilterIcR[1] + fa2 * m_outFilterIcR[0] + fa3 * v3;
+                m_outFilterIcR[0] = 2.0f * v1 - m_outFilterIcR[0];
+                m_outFilterIcR[1] = 2.0f * v2 - m_outFilterIcR[1];
+                vocodedR = v2;
+            }
         }
 
-        float out = vocodedOut * volume;
-        buffer[s * numChannels] += out;
-        if (numChannels > 1)
-            buffer[s * numChannels + 1] += out;
+        const float outL = vocodedL * volume;
+        const float outR = vocodedR * volume;
+        buffer[s * numChannels] += outL;
+        if (stereoOut)
+            buffer[s * numChannels + 1] += outR;
     }
 
     // CAS-merge the block's modulator peak into the atomic so the UI

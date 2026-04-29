@@ -136,9 +136,19 @@ private:
     };
 
     struct BandState {
-        BiquadState modBQ;   // modulator bandpass
-        BiquadState carrBQ;  // carrier bandpass
-        float envLevel = 0.0f;
+        // Two modulator-side bandpass filter states + envelope
+        // followers, one per stereo channel. With a sidechain source
+        // panned hard right, the right-channel envelope opens while
+        // the left stays low, so the carrier ducks asymmetrically and
+        // the vocoder output preserves the modulator's stereo image.
+        // For mono modulators (sample / formant) the engine feeds the
+        // same signal to both sides and envL == envR (output collapses
+        // to mono identically to the pre-stereo behaviour).
+        BiquadState modBQ_L;
+        BiquadState modBQ_R;
+        BiquadState carrBQ;  // carrier bandpass (mono — shared by L/R)
+        float envLevel_L = 0.0f;
+        float envLevel_R = 0.0f;
     };
 
     struct Voice {
@@ -189,7 +199,11 @@ private:
 
     uint32_t m_rngState = 12345u;
     int64_t m_voiceCounter = 0;
-    float m_outFilterIc[2] = {};
+    // Output low-pass filter — separate state per stereo side so the
+    // L/R signal paths don't bleed into each other through the shared
+    // integrator memory.
+    float m_outFilterIcL[2] = {};
+    float m_outFilterIcR[2] = {};
 
     // Atomic peak |modSig| seen during process(), drained by the UI
     // via consumeModulatorLevel(). Allows the display panel to render
