@@ -35,6 +35,18 @@ public:
         }
     }
 
+    // Fan the per-track sidechain pointer out to every effect in the
+    // chain. Same routing as the instrument — effects on a track read
+    // the same source the instrument does. Called by AudioEngine each
+    // block from the per-track sidechain dispatch (alongside the
+    // existing m_instruments[t]->setSidechainInput call). Effects
+    // that don't override supportsSidechain() simply ignore the
+    // pointer.
+    void setSidechainInput(const float* buffer) {
+        for (auto& slot : m_slots)
+            if (slot) slot->setSidechainInput(buffer);
+    }
+
     AudioEffect* insert(int slot, std::unique_ptr<AudioEffect> effect) {
         if (slot < 0 || slot >= kMaxEffectsPerChain) return nullptr;
         effect->init(m_sampleRate, m_maxBlockSize);

@@ -861,12 +861,18 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         // already been filled at the top of processAudio() with the
         // PortAudio input mapped to the output channel count.
         int scSrc = m_trackSidechainSource[t];
+        const float* scBuf = nullptr;
         if (scSrc == -2)
-            m_instruments[t]->setSidechainInput(m_inputAsSidechainBuf.data());
+            scBuf = m_inputAsSidechainBuf.data();
         else if (scSrc >= 0 && scSrc < kMaxTracks && scSrc != t)
-            m_instruments[t]->setSidechainInput(m_trackBufferPtrs[scSrc]);
-        else
-            m_instruments[t]->setSidechainInput(nullptr);
+            scBuf = m_trackBufferPtrs[scSrc];
+        m_instruments[t]->setSidechainInput(scBuf);
+        // Same routing for the track's audio-effect chain — the
+        // sidechain-aware effects (Noise Gate, Envelope Follower,
+        // future sidechain-compressor) consume it the same way the
+        // instrument does. Cheap fan-out — the chain just forwards
+        // the pointer to each slot.
+        m_mixer.trackEffects(t).setSidechainInput(scBuf);
 
         // Run MIDI effect chain on this track's MIDI buffer
         if (m_midiEffectChains[t].count() > 0) {

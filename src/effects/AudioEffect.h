@@ -45,11 +45,36 @@ public:
     virtual bool hasNewData() const { return false; }
     virtual void clearNewData() {}
 
+    // ── Sidechain input ────────────────────────────────────────────
+    // Mirrors Instrument's sidechain plumbing — set by AudioEngine
+    // each buffer cycle to point at the source track's interleaved
+    // stereo buffer (or nullptr when the effect has no sidechain
+    // routed). Effects that don't read it just ignore the pointer.
+    // supportsSidechain() advertises the capability so the routing
+    // UI can hide / disable the picker for effects that don't use
+    // it (the same convention Instrument uses).
+    void setSidechainInput(const float* buffer) { m_sidechainBuffer = buffer; }
+    const float* sidechainInput() const { return m_sidechainBuffer; }
+    virtual bool supportsSidechain() const { return false; }
+
+    // ── Modulation-source output ───────────────────────────────────
+    // Effects that produce a control-rate output for routing to
+    // other devices' parameters (Envelope Follower, future LFO-as-
+    // audio-effect, etc.) override hasModulationOutput() and
+    // modulationValue(). The audio engine polls modulationValue()
+    // once per block and feeds it into the modulation matrix the
+    // same way LFO MidiEffect output is consumed today. Default:
+    // no modulation output (LFO-style MIDI effects still own that
+    // role for synths; this is the audio-side counterpart).
+    virtual bool  hasModulationOutput() const { return false; }
+    virtual float modulationValue() const { return 0.0f; }
+
 protected:
     double m_sampleRate = kDefaultSampleRate;
     int    m_maxBlockSize = 4096;
     bool   m_bypassed = false;
     float  m_mix = 1.0f;
+    const float* m_sidechainBuffer = nullptr;
 };
 
 } // namespace effects
