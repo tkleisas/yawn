@@ -82,6 +82,20 @@ inline std::string groupedShortenLabel(const std::string& name) {
     // Abbreviated form mirrors how Logic/Kontakt/Falcon label velocity
     // crossfade controls in their compact macro views.
     if (s == "Vel Crossfade") return "VelXFd";
+
+    // Vocoder param names — most overflow the 52-px cell. Names match
+    // how typical hardware vocoders (Roland VP-330, EMS, Korg MS-20)
+    // label these on their front panels in compact form.
+    if (s == "Carrier Type")  return "Type";
+    if (s == "Mod Source")    return "Mod";
+    if (s == "Bandwidth")     return "BW";
+    if (s == "Formant Shift") return "Shift";
+    if (s == "HF Tilt")       return "Tilt";
+    if (s == "Unvoiced")      return "Unvc";
+    if (s == "Dry Carrier")   return "Dry";
+    if (s == "Env Attack")    return "Atk";
+    if (s == "Env Release")   return "Rel";
+    if (s == "Output Filter") return "Filt";
     if (s == "Level")       return "Lvl";
     if (s == "Attack")      return "Atk";
     if (s == "Release")     return "Rel";

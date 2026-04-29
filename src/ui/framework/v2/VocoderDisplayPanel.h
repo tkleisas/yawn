@@ -84,18 +84,11 @@ public:
     void setBandCount(int bands)   { m_bandCount = std::clamp(bands, 4, 32); }
 
     // Vocoder::kModSource value (0=Sample, 1..5=Formant A/E/I/O/U,
-    // 6=Sidechain). Drives whether the source dropdown is visible
-    // and what the centre area shows. Mutating this requires a
-    // re-layout so the dropdown row's height (22 px when SC, 0 px
-    // otherwise) gets recomputed and the dropdown's bounds become
-    // non-zero — otherwise the dropdown paints into a 0×0 rect and
-    // looks like it's not there.
-    void setModSource(int idx) {
-        const int next = std::clamp(idx, 0, 6);
-        if (next == m_modSource) return;
-        m_modSource = next;
-        invalidate();
-    }
+    // 6=Sidechain). The dropdown row's bounds are stable across mode
+    // switches now (always reserved) — render() decides whether to
+    // actually draw the dropdown based on m_modSource. So no
+    // invalidate() needed here; just mutate the field.
+    void setModSource(int idx) { m_modSource = std::clamp(idx, 0, 6); }
 
     // Live modulator-input peak from Vocoder::consumeModulatorLevel(),
     // polled by displayUpdater each frame. UI-side decay smooths
@@ -132,31 +125,39 @@ public:
 
     // ─── Layout / render ────────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext&) override {
-        return c.constrain({c.maxW, std::max(c.minH, 120.0f)});
+        // 18 (header) + 22 (dropdown row, always reserved) +
+        // ~60 (mod viz + band strip + padding) ≈ 110 px floor.
+        // Caller (DeviceWidget) typically gives us more.
+        return c.constrain({c.maxW, std::max(c.minH, 110.0f)});
     }
 
     void onLayout(Rect bounds, UIContext& ctx) override {
         Widget::onLayout(bounds, ctx);
         const float headerH    = 18.0f;          // 14 px text + 4 px padding
-        const float ddH        = (m_modSource == 6) ? 22.0f : 0.0f;
         const float bandH      = 10.0f;
         const float pad        = 2.0f;
+        // ALWAYS reserve the dropdown row, even when modSource != 6.
+        // The display panel is held as a raw Widget* by GroupedKnobBody
+        // (no addChild), so invalidate() can't propagate up the parent
+        // chain to force the body to re-call layout on us. Without
+        // this stable layout, switching to SC mode left the dropdown
+        // with stale 0×0 bounds until something else forced a relayout
+        // (e.g. window resize).
+        //
+        // Cost: ~22 px reserved when not in SC mode. Trade-off: the
+        // panel feels visually stable when toggling modes (header,
+        // mod-display, band strip stay put), and the dropdown
+        // actually shows up the moment SC is selected.
+        const float ddH        = 22.0f;
         const float midY       = bounds.y + headerH + ddH;
         const float midH       = bounds.h - headerH - ddH - bandH - pad * 2;
 
         m_headerRect = {bounds.x + pad,           bounds.y + 1,
                          bounds.w - pad * 2,       headerH};
-        if (ddH > 0.0f) {
-            // No "Source:" label — the dropdown's content tells you
-            // what's selected, and the panel's already cramped. Shave
-            // 4 px off each side.
-            m_sourceDD.layout({bounds.x + 4, bounds.y + headerH + 1,
-                                bounds.w - 8, ddH - 2}, ctx);
-            m_ddRect = m_sourceDD.bounds();
-        } else {
-            m_ddRect = {0, 0, 0, 0};
-        }
-        m_waveRect = {bounds.x + pad,             midY + ddH,
+        m_sourceDD.layout({bounds.x + 4, bounds.y + headerH + 1,
+                            bounds.w - 8, ddH - 2}, ctx);
+        m_ddRect = m_sourceDD.bounds();
+        m_waveRect = {bounds.x + pad,             midY,
                        bounds.w - pad * 2,         midH};
         m_bandRect = {bounds.x + pad,             bounds.y + bounds.h - bandH - pad,
                        bounds.w - pad * 2,         bandH};
