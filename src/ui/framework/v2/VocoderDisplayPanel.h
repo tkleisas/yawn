@@ -57,9 +57,27 @@ public:
 
         m_sourceDD.setItems({"(none)"});
         m_sourceDD.setOnChange([this](int idx, const std::string&) {
-            // Map dropdown idx (0=none, 1..=track) → absolute track id.
-            // selfIdx is hidden from the list, so we re-insert it
-            // when reconstructing the absolute index.
+            // FwDropDown::fireOnChange fires for both User AND
+            // Programmatic value-change sources (only Automation is
+            // filtered). When our displayUpdater calls
+            // setSidechainSource() each frame to keep the dropdown in
+            // sync with the project, the resulting setSelectedIndex
+            // also fires this callback — and without a guard, a
+            // legitimate user pick would immediately get clobbered:
+            //
+            //   1. User picks "Audio 1" (idx=1) → User → app sets
+            //      project[t].sidechainSource = 0 ✓
+            //   2. Next frame displayUpdater runs:
+            //      setAvailableSources → rebuildSourceDD →
+            //      setSidechainSource(stale m_sidechainSource = -1) →
+            //      setSelectedIndex(0, Programmatic) → fires this
+            //      callback with idx=0 → app sets project = -1 ✗
+            //   3. Dropdown visually reverts to "(none)".
+            //
+            // The suppress flag draws a clean line: changes initiated
+            // by us writing to the dropdown don't bounce back through
+            // the user-action path.
+            if (m_suppressDDChange) return;
             int trackIdx = -1;
             if (idx > 0) {
                 int t = idx - 1;
@@ -108,14 +126,22 @@ public:
     // Currently-routed sidechain source (absolute track index, -1=none).
     void setSidechainSource(int trackIdx) {
         m_sidechainSource = trackIdx;
-        // Reflect into the dropdown's selected index.
+        // Reflect into the dropdown's selected index. Suppress the
+        // change callback while we do it — fireOnChange() doesn't
+        // distinguish User vs Programmatic sources, so without this
+        // guard the displayUpdater's per-frame sync would re-fire the
+        // user-pick path and clobber the project's sidechain source
+        // to whatever the dropdown happened to read first (always
+        // "(none)" → -1).
         int ddIdx = 0;
         if (trackIdx >= 0) {
             int collapsed = trackIdx;
             if (m_selfIdx >= 0 && trackIdx > m_selfIdx) --collapsed;
             ddIdx = collapsed + 1;     // +1 for the "(none)" slot
         }
+        m_suppressDDChange = true;
         m_sourceDD.setSelectedIndex(ddIdx, ValueChangeSource::Programmatic);
+        m_suppressDDChange = false;
     }
 
     using SourceChangeCallback = std::function<void(int trackIdx)>;
@@ -408,6 +434,12 @@ private:
 
     FwDropDown m_sourceDD;
     SourceChangeCallback m_onSidechainChange;
+    // True while we're driving setSelectedIndex() from a programmatic
+    // sync path (rebuildSourceDD, setSidechainSource); the dropdown's
+    // onChange callback short-circuits when this is set so we don't
+    // re-enter the user-action path and clobber project state. See
+    // the long comment in the constructor's setOnChange lambda.
+    bool m_suppressDDChange = false;
 };
 
 } // namespace fw2
