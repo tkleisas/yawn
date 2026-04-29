@@ -76,36 +76,37 @@ void Vocoder::initBands() {
         // Both modulator-side bandpass states get the same coefficients
         // — they're independent only in their internal z1/z2 memory so
         // L and R signals filter without crosstalk.
-        designBandpass(m_bandState[b].modBQ_L, centerFreq, q);
-        designBandpass(m_bandState[b].modBQ_R, centerFreq, q);
-        designBandpass(m_bandState[b].carrBQ,  shiftedFreq, q);
+        designBandpass(m_bandState[b].modBQ_L,  centerFreq,  q);
+        designBandpass(m_bandState[b].modBQ_R,  centerFreq,  q);
+        designBandpass(m_bandState[b].carrBQ_L, shiftedFreq, q);
+        designBandpass(m_bandState[b].carrBQ_R, shiftedFreq, q);
         m_bandState[b].envLevel_L = 0.0f;
         m_bandState[b].envLevel_R = 0.0f;
     }
 }
 
-float Vocoder::generateCarrier(Voice& v, int type) {
-    float freq = noteToFreq(v.note);
-    double inc = freq / m_sampleRate;
+float Vocoder::generateCarrier(double& phase, double inc, int type) {
     float out = 0.0f;
-
     switch (type) {
     case 0: // Saw
-        out = static_cast<float>(2.0 * v.phase - 1.0);
+        out = static_cast<float>(2.0 * phase - 1.0);
         break;
     case 1: // Square
-        out = (v.phase < 0.5) ? 1.0f : -1.0f;
+        out = (phase < 0.5) ? 1.0f : -1.0f;
         break;
     case 2: // Pulse (25% duty)
-        out = (v.phase < 0.25) ? 1.0f : -1.0f;
+        out = (phase < 0.25) ? 1.0f : -1.0f;
         break;
     case 3: // Noise
+        // randFloat() is called per-side, so even at detune=0 the L
+        // and R noise carriers are decorrelated — that's a freebie:
+        // noise vocoders sound naturally wide without the user
+        // needing to dial in detune.
         out = (randFloat() - 0.5f) * 2.0f;
         break;
     }
-
-    v.phase += inc;
-    if (v.phase >= 1.0) v.phase -= 1.0;
+    phase += inc;
+    if (phase >= 1.0) phase -= 1.0;
     return out;
 }
 
@@ -230,7 +231,8 @@ void Vocoder::noteOn(uint8_t note, uint16_t vel16, uint8_t ch) {
     slot->channel = ch;
     slot->velocity = velocityToGain(vel16);
     slot->startOrder = m_voiceCounter++;
-    slot->phase = 0.0;
+    slot->phaseL = 0.0;
+    slot->phaseR = 0.0;
 
     float atkSec = m_params[kAmpAttack] * 0.001f;
     float relSec = m_params[kAmpRelease] * 0.001f;
@@ -292,6 +294,15 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
     const float dryCarrier   = m_params[kDryCarrier];
     const float filterCut    = cutoffNormToHz(m_params[kFilterCutoff]);
     const float volume       = m_params[kVolume];
+    // Carrier detune (cents → ratio). 0 cents → ratio == 1 → both
+    // sides increment identically and the carrier is mono. >0 cents
+    // → R side runs slightly sharp (multiplied by detuneRatio), L
+    // unchanged. We use full-detune-on-R (asymmetric) rather than
+    // ±half-detune (symmetric); the perceived width is identical and
+    // the L side stays pitch-locked to the MIDI note for accurate
+    // monophonic-pitch interaction with downstream effects.
+    const float detuneCents  = m_params[kCarrierDetune];
+    const double detuneRatio = std::pow(2.0, detuneCents / 1200.0);
     // Freeze formants: when on, the per-band envelope followers stop
     // tracking the modulator entirely — bs.envLevel_L/R keep their
     // last-snapshot values. The carrier keeps being shaped by that
@@ -370,13 +381,23 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
         const float modAbs0 = std::max(std::abs(modL), std::abs(modR));
         if (modAbs0 > blockModPeak) blockModPeak = modAbs0;
 
-        // ── Carrier (mono — same MIDI-driven oscillator across L/R) ──
-        float carrierSig = 0.0f;
+        // ── Carrier (stereo via per-voice detune) ──
+        // Per-side phase accumulators stepped by per-side increments.
+        // detuneRatio == 1 collapses this to mono: phaseL == phaseR
+        // forever and carrierSigL == carrierSigR exactly. detuneRatio
+        // > 1 drifts the R side sharp, decorrelating the waveforms
+        // for genuine stereo width on the carrier path.
+        float carrierSigL = 0.0f, carrierSigR = 0.0f;
         for (auto& v : m_voices) {
             if (!v.active) continue;
             float e = v.ampEnv.process();
             if (v.ampEnv.isIdle()) { v.active = false; continue; }
-            carrierSig += generateCarrier(v, carrierType) * e * v.velocity;
+            const float freq = noteToFreq(v.note);
+            const double incL = freq / m_sampleRate;
+            const double incR = (freq * detuneRatio) / m_sampleRate;
+            const float gain = e * v.velocity;
+            carrierSigL += generateCarrier(v.phaseL, incL, carrierType) * gain;
+            carrierSigR += generateCarrier(v.phaseR, incR, carrierType) * gain;
         }
 
         // ── Per-band analysis (split L/R) + synthesis ──
@@ -413,10 +434,18 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
                     bs.envLevel_R = relCoeff * bs.envLevel_R + (1.0f - relCoeff) * absR;
             }
 
-            const float carrBand = biquadProcess(carrierSig, bs.carrBQ);
+            // Per-side carrier bandpass — coefficients are identical
+            // (same shiftedFreq + Q) but the biquad memory diverges
+            // with the input signal, so detune > 0 produces genuinely
+            // different L/R band outputs. detune == 0 makes the
+            // inputs identical and the two biquads produce
+            // mathematically identical output (same coeffs + same
+            // input from t=0 + same zeroed memory ⇒ same output).
+            const float carrBandL = biquadProcess(carrierSigL, bs.carrBQ_L);
+            const float carrBandR = biquadProcess(carrierSigR, bs.carrBQ_R);
             const float gT = tiltGains[b] * bandGain;   // see bandGain comment
-            vocodedL += carrBand * bs.envLevel_L * gT;
-            vocodedR += carrBand * bs.envLevel_R * gT;
+            vocodedL += carrBandL * bs.envLevel_L * gT;
+            vocodedR += carrBandR * bs.envLevel_R * gT;
 
             if (b >= numBands * 2 / 3) unvoicedAccum += (absL + absR) * 0.5f;
 
@@ -441,8 +470,8 @@ void Vocoder::process(float* buffer, int numFrames, int numChannels,
         }
 
         if (dryCarrier > 0.0f) {
-            vocodedL += carrierSig * dryCarrier;
-            vocodedR += carrierSig * dryCarrier;
+            vocodedL += carrierSigL * dryCarrier;
+            vocodedR += carrierSigR * dryCarrier;
         }
 
         // Output low-pass filter — independent state per side so L/R

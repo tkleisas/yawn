@@ -16,7 +16,7 @@ class Vocoder : public Instrument {
 public:
     static constexpr int kMaxVoices  = 8;
     static constexpr int kMaxBands   = 32;
-    static constexpr int kParamCount = 15;
+    static constexpr int kParamCount = 16;
 
     // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
     static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
@@ -41,6 +41,7 @@ public:
         kFilterCutoff,    // 0..1 normalized → 20..20000 Hz (log) output LP
         kVolume,          // 0–1
         kFreezeFormants,  // 0/1 toggle — sample-and-hold per-band envelopes
+        kCarrierDetune,   // 0–25 cents — per-voice L/R detune for stereo width
     };
 
     const char* name() const override { return "Vocoder"; }
@@ -129,6 +130,14 @@ public:
             // spectral envelope it saw — turn the knob to 1, sing a
             // vowel, the carrier holds that vowel forever.
             {"Freeze",        0.0f,    1.0f,   0.0f, "",    false, false, WidgetHint::Toggle},
+            // Detune: per-voice L/R carrier-oscillator detune in
+            // cents. 0 = mono carrier (identical to pre-3.2 behaviour),
+            // >0 splits the carrier oscillator into a slightly-flat
+            // L and slightly-sharp R copy. Combined with the per-side
+            // band envelopes from Phase 2.1, this gives the carrier
+            // genuine stereo width rather than just a stereo modulator
+            // image painted onto a mono carrier.
+            {"Detune",        0.0f,   25.0f,   0.0f, "ct",  false, false, WidgetHint::DentedKnob},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }
@@ -154,17 +163,21 @@ private:
     };
 
     struct BandState {
-        // Two modulator-side bandpass filter states + envelope
-        // followers, one per stereo channel. With a sidechain source
-        // panned hard right, the right-channel envelope opens while
-        // the left stays low, so the carrier ducks asymmetrically and
-        // the vocoder output preserves the modulator's stereo image.
-        // For mono modulators (sample / formant) the engine feeds the
-        // same signal to both sides and envL == envR (output collapses
-        // to mono identically to the pre-stereo behaviour).
+        // Modulator-side bandpass + envelope followers, split L/R so
+        // a stereo modulator (sidechain or live input) drives the
+        // carrier ducking asymmetrically — the vocoded output then
+        // preserves the modulator's stereo image. Carrier-side
+        // bandpass is also split L/R so per-voice detune (kCarrierDetune)
+        // can produce a genuinely stereo carrier signal; with detune=0
+        // the L and R carrier signals are identical and the two
+        // biquads produce identical output (output collapses to the
+        // pre-3.2 mono-carrier behaviour exactly). Coefficients are
+        // shared between sides — only the z1/z2 biquad memory is
+        // independent so the channels filter without crosstalk.
         BiquadState modBQ_L;
         BiquadState modBQ_R;
-        BiquadState carrBQ;  // carrier bandpass (mono — shared by L/R)
+        BiquadState carrBQ_L;
+        BiquadState carrBQ_R;
         float envLevel_L = 0.0f;
         float envLevel_R = 0.0f;
     };
@@ -175,7 +188,15 @@ private:
         uint8_t channel = 0;
         float velocity = 0.0f;
         int64_t startOrder = 0;
-        double phase = 0.0;
+        // Per-side phase accumulators. With kCarrierDetune == 0 these
+        // are stepped by the same increment from the same starting
+        // value, so phaseL == phaseR forever and the carrier is
+        // mono. With detune > 0 the right side's increment is
+        // slightly higher, so the two phases drift apart and the
+        // resulting waveforms decorrelate — that's the entire effect.
+        // Reset to 0 on noteOn so re-articulation starts crisp.
+        double phaseL = 0.0;
+        double phaseR = 0.0;
         Envelope ampEnv;
     };
 
@@ -187,7 +208,10 @@ private:
     void initBands();
 
     // ── Carrier oscillator ──
-    float generateCarrier(Voice& v, int type);
+    // `phase` is updated by `inc` after sampling. Per-side detune is
+    // baked into the caller's `inc` value so this routine stays
+    // unaware of stereo bookkeeping.
+    float generateCarrier(double& phase, double inc, int type);
 
     // ── Modulator source ──
     float getModulatorSample(int source);

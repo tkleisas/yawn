@@ -1313,7 +1313,7 @@ private:
             // ellipsised by the dropdown painter.
             config.displayWidth = 180;
             config.sections = {
-                {"Source",   {1, 2}},
+                {"Source",   {1, 15, 2}},  // Carrier Type, Detune, Mod Source
                 {"Bands",    {0, 3, 6}},
                 {"Envelope", {4, 5}},
                 {"Mix",      {7, 8, 9}},
