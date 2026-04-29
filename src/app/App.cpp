@@ -1107,6 +1107,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Noise Gate",  [](){ return std::make_unique<effects::NoiseGate>(); });
     addFxItem("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
     addFxItem("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
+    addFxItem("Spline EQ",   [](){ return std::make_unique<effects::SplineEQ>(); });
     addFxItem("Tape Emulation", [](){ return std::make_unique<effects::TapeEmulation>(); });
     addFxItem("Amp Simulator",  [](){ return std::make_unique<effects::AmpSimulator>(); });
     addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
@@ -3912,6 +3913,7 @@ bool App::init() {
         addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
         addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
         addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
+        addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
         addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
         addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
         addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
