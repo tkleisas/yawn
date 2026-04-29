@@ -4606,6 +4606,22 @@ bool App::init() {
         // Sanity: refuse self-routing (the picker hides self anyway,
         // but defensive — Mixer I/O could in theory push junk).
         if (sourceIdx == trackIdx) sourceIdx = -1;
+        // Cycle guard: if dst → src would close a longer feedback
+        // loop (A→B→C→A …), reject the assignment outright. The
+        // engine has its own check as defense-in-depth, but doing it
+        // here keeps the project state consistent with what the
+        // engine will actually run, and lets us surface a warning to
+        // the user / log instead of silently dropping the request on
+        // the audio thread.
+        if (m_project.wouldCreateSidechainCycle(trackIdx, sourceIdx)) {
+            LOG_WARN("Sidechain",
+                     "Refused track %d <- track %d: would create feedback loop",
+                     trackIdx, sourceIdx);
+            // Re-sync UI to whatever the project actually has so the
+            // dropdown snaps back to the previous selection on next
+            // displayUpdater tick.
+            return;
+        }
         m_project.track(trackIdx).sidechainSource = sourceIdx;
         m_audioEngine.sendCommand(audio::SetSidechainSourceMsg{trackIdx, sourceIdx});
         markDirty();
@@ -6903,6 +6919,17 @@ void App::doOpenProject(const std::filesystem::path& path) {
     Project loadedProject;
     if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
         m_project = std::move(loadedProject);
+        // Defensive cleanup: a corrupt or maliciously crafted project
+        // file could carry a cyclic sidechain graph that the engine
+        // would refuse anyway, but having Project state inconsistent
+        // with engine state is its own bug. Repair before syncing so
+        // the engine sees a clean DAG.
+        const int repaired = m_project.repairSidechainCycles();
+        if (repaired > 0) {
+            LOG_WARN("Sidechain",
+                     "Project had %d sidechain cycle(s); cleared to -1",
+                     repaired);
+        }
         syncTracksToEngine();
         m_projectPath = projectDir;
         m_projectDirty = false;

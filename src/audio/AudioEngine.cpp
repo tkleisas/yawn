@@ -1477,7 +1477,36 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, SetSidechainSourceMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
-                    m_trackSidechainSource[msg.trackIndex] = msg.sourceTrack;
+                    const int dst = msg.trackIndex;
+                    const int src = msg.sourceTrack;
+                    // Cycle defense-in-depth. The UI threads (App,
+                    // Mixer) already check Project::wouldCreateSidechain-
+                    // Cycle before sending this message, but a malformed
+                    // project load, a Lua script, or an OSC/automation
+                    // path could in theory hand us a cyclic graph. Walk
+                    // forward from src; if we land on dst within
+                    // kMaxTracks hops the proposed edge dst→src would
+                    // close a cycle. Negative `src` (-1=none, -2=live
+                    // input) is always safe — those aren't track edges.
+                    bool wouldCycle = false;
+                    if (src == dst) {
+                        wouldCycle = true;
+                    } else if (src >= 0 && src < kMaxTracks) {
+                        int cur = src;
+                        for (int hops = 0; hops <= kMaxTracks; ++hops) {
+                            if (cur == dst) { wouldCycle = true; break; }
+                            const int next = m_trackSidechainSource[cur];
+                            if (next < 0 || next >= kMaxTracks) break;
+                            cur = next;
+                        }
+                    }
+                    if (!wouldCycle) {
+                        m_trackSidechainSource[dst] = src;
+                    }
+                    // On reject we leave the previous routing in place;
+                    // no log here (audio thread). The UI side already
+                    // emits LOG_WARN before sending — getting here means
+                    // someone else (script, automation) bypassed that.
                 }
             }
             else if constexpr (std::is_same_v<T, SetResampleSourceMsg>) {

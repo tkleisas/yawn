@@ -339,6 +339,59 @@ public:
         }
     }
 
+    // ── Sidechain graph helpers ─────────────────────────────────────
+    //
+    // Returns true if assigning track[dst].sidechainSource = src would
+    // create a cycle in the existing sidechain graph (including the
+    // proposed new edge). Negative `src` values (-1=none, -2=live
+    // input) are always cycle-free — they aren't track edges. Self-
+    // routing (src == dst) is a trivial cycle of length 1.
+    //
+    // Algorithm: walk forward from src following sidechainSource. If
+    // we land on dst within kMaxTracks hops, the proposed edge dst→src
+    // closes a cycle src→...→dst→src. Bounded to prevent runaway on a
+    // pre-existing cycle (which loadFromJSON's fixup is meant to
+    // prevent, but we don't trust it here).
+    bool wouldCreateSidechainCycle(int dst, int src) const {
+        if (src < 0) return false;            // -1 / -2: not a track edge
+        if (src == dst) return true;          // self-loop
+        const int n = static_cast<int>(m_tracks.size());
+        if (src >= n) return false;
+        int cur = src;
+        for (int hops = 0; hops < n + 1; ++hops) {
+            if (cur == dst) return true;
+            if (cur < 0 || cur >= n) return false;
+            int next = m_tracks[cur].sidechainSource;
+            if (next < 0) return false;       // hit a leaf (-1 / -2)
+            cur = next;
+        }
+        return true;   // pre-existing cycle in the graph; treat as unsafe
+    }
+
+    // Scan all tracks and break any cycles by clearing the
+    // cycle-creating edge to -1. Used after loading a project file —
+    // a corrupt or maliciously crafted project shouldn't leave the
+    // engine in a state where the audio thread infinite-loops a
+    // graph traversal. Returns the number of edges cleared.
+    int repairSidechainCycles() {
+        int cleared = 0;
+        const int n = static_cast<int>(m_tracks.size());
+        for (int i = 0; i < n; ++i) {
+            int s = m_tracks[i].sidechainSource;
+            if (s < 0 || s >= n) continue;
+            // Probe by temporarily clearing the edge and re-checking
+            // whether reinstating it would close a cycle in the rest
+            // of the graph.
+            m_tracks[i].sidechainSource = -1;
+            if (wouldCreateSidechainCycle(i, s)) {
+                ++cleared;
+            } else {
+                m_tracks[i].sidechainSource = s;
+            }
+        }
+        return cleared;
+    }
+
     void deleteTrack(int index) {
         if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
         if (m_tracks.size() <= 1) return; // keep at least 1 track

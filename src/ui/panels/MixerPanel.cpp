@@ -620,6 +620,17 @@ void MixerPanel::setupStripCallbacks(int t) {
             if (trackIdx >= t) trackIdx++;
             newVal = trackIdx;
         }
+        // Cycle guard — same logic as DetailPanel's vocoder picker.
+        // Mixer's source dropdown only offers track edges (no Live
+        // Input), so we don't need a -2 special case here.
+        if (m_project->wouldCreateSidechainCycle(t, newVal)) {
+            // Snap the dropdown back to the previous selection.
+            // Caller's setOnChange already wrote `newVal` into the
+            // dropdown's selectedIndex via the user click; we don't
+            // touch that here since the next layout tick will re-sync
+            // from project state via the panel's update loop.
+            return;
+        }
         m_project->track(t).sidechainSource = newVal;
         m_engine->sendCommand(audio::SetSidechainSourceMsg{t, newVal});
         if (m_undoManager) {
