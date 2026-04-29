@@ -346,14 +346,38 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
         autoExtend(n);
     } else if (m_dragMode == Drag::Move && !m_selectedNotes.empty()) {
         double beatDelta = xToBeat(mx) - xToBeat(m_dragStartX);
-        int pitchDelta = yToPitch(my) - yToPitch(m_dragStartY);
+        // In drum mode, pitches are non-contiguous (36/38/39/41/...),
+        // so a raw pitchDelta scalar would skip rows. We compute a
+        // *slot* delta (rows in the drum strip) instead and remap
+        // each note's slot when applying. In normal mode this falls
+        // back to the original pitch arithmetic.
+        int slotDelta = 0;
+        int pitchDelta = 0;
+        if (m_drumMode) {
+            int curSlot = (kNumDrumRows - 1) -
+                static_cast<int>((my - m_gy + m_scrollY) / m_rowH);
+            int origSlot = (kNumDrumRows - 1) -
+                static_cast<int>((m_dragStartY - m_gy + m_scrollY) / m_rowH);
+            slotDelta = curSlot - origSlot;
+        } else {
+            pitchDelta = yToPitch(my) - yToPitch(m_dragStartY);
+        }
         int i = 0;
         for (int idx : m_selectedNotes) {
             if (i < static_cast<int>(m_origPositions.size())) {
                 auto& n = m_clip->note(idx);
                 n.startBeat = snapBeat(std::max(0.0, m_origPositions[i].beat + beatDelta));
-                int np = static_cast<int>(m_origPositions[i].pitch) + pitchDelta;
-                n.pitch = static_cast<uint8_t>(std::clamp(np, 0, 127));
+                if (m_drumMode) {
+                    int origSlot = pitchToDrumSlot(m_origPositions[i].pitch);
+                    if (origSlot >= 0) {
+                        int newSlot = std::clamp(origSlot + slotDelta,
+                                                  0, kNumDrumRows - 1);
+                        n.pitch = static_cast<uint8_t>(drumSlotToPitch(newSlot));
+                    }
+                } else {
+                    int np = static_cast<int>(m_origPositions[i].pitch) + pitchDelta;
+                    n.pitch = static_cast<uint8_t>(std::clamp(np, 0, 127));
+                }
             }
             ++i;
         }
@@ -674,6 +698,21 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
 }
 
 void PianoRollPanel::renderPianoKeys(::yawn::ui::Renderer2D& r, TextMetrics& /*tm*/) {
+    if (m_drumMode) {
+        // Drum mode — 8 rows, slot 0 (Kick) at the bottom. We draw
+        // alternating shades so adjacent rows are easy to tell apart;
+        // the alternation isn't tied to "black/white" semantics since
+        // none of the drum notes share an octave structure.
+        for (int s = 0; s < kNumDrumRows; ++s) {
+            float y = pitchToY(kDrumNotes[s]);
+            if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
+            Color bg = (s & 1) ? Color{55, 55, 62} : Color{72, 72, 80};
+            r.drawRect(m_pianoX, y, kPianoW, m_rowH, bg);
+            r.drawRect(m_pianoX, y + m_rowH - 1, kPianoW, 1, Color{30, 30, 35});
+        }
+        r.drawRect(m_pianoX + kPianoW - 1, m_gy, 1, m_gh, Color{70, 70, 75});
+        return;
+    }
     for (int p = 127; p >= 0; --p) {
         float y = pitchToY(p);
         if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
@@ -690,6 +729,21 @@ void PianoRollPanel::renderPianoKeys(::yawn::ui::Renderer2D& r, TextMetrics& /*t
 void PianoRollPanel::renderPianoKeyLabels(::yawn::ui::Renderer2D& r, TextMetrics& tm) {
     const float fs = theme().metrics.fontSizeSmall;
     const float textH = fs;
+    if (m_drumMode) {
+        // Each drum row gets its name as the label. Rows are tall
+        // enough by default (24 px) for the small theme font to fit
+        // comfortably with a couple of pixels of padding.
+        for (int s = 0; s < kNumDrumRows; ++s) {
+            float y = pitchToY(kDrumNotes[s]);
+            if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
+            const char* lbl = kDrumLabels[s];
+            float textY = std::clamp(y + (m_rowH - textH) * 0.5f - 1.0f,
+                                      m_gy, m_gy + m_gh - textH);
+            tm.drawText(r, lbl, m_pianoX + 4, textY, fs,
+                         Color{220, 220, 225, 255});
+        }
+        return;
+    }
     for (int p = 127; p >= 0; --p) {
         float y = pitchToY(p);
         if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
@@ -706,6 +760,18 @@ void PianoRollPanel::renderPianoKeyLabels(::yawn::ui::Renderer2D& r, TextMetrics
 }
 
 void PianoRollPanel::renderGrid(::yawn::ui::Renderer2D& r) {
+    if (m_drumMode) {
+        // Drum mode: 8 alternating-shade rows. No octave / black-key
+        // accenting — just a clean striped grid that lines up with
+        // the labelled drum-name keys to the left.
+        for (int s = 0; s < kNumDrumRows; ++s) {
+            float y = pitchToY(kDrumNotes[s]);
+            if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
+            Color bg = (s & 1) ? Color{32, 32, 36} : Color{38, 38, 42};
+            r.drawRect(m_gx, y, m_gw, m_rowH, bg);
+            r.drawRect(m_gx, y + m_rowH - 1, m_gw, 1, Color{45, 45, 50});
+        }
+    } else {
     for (int p = 127; p >= 0; --p) {
         float y = pitchToY(p);
         if (y + m_rowH < m_gy || y > m_gy + m_gh) continue;
@@ -718,6 +784,7 @@ void PianoRollPanel::renderGrid(::yawn::ui::Renderer2D& r) {
         r.drawRect(m_gx, y, m_gw, m_rowH, bg);
         Color lineC = (p % 12 == 0) ? Color{55, 55, 62} : Color{45, 45, 50};
         r.drawRect(m_gx, y + m_rowH - 1, m_gw, 1, lineC);
+    }
     }
 
     double bpb = beatsPerBar();

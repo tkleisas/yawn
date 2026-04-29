@@ -567,6 +567,16 @@ void App::buildWidgetTree() {
             if (ac.type == ArrangementClip::Type::Midi && ac.midiClip) {
                 m_pianoRoll->setClip(ac.midiClip.get(), track,
                     ui::fw2::PianoRollPanel::Source::Arrangement);
+                {
+                    // DrumRoll mode: tracks hosting a DrumSynth get
+                    // the 8-row drum view instead of the chromatic
+                    // piano roll. Cheap to check at open time and
+                    // doesn't touch the clip data — only the display
+                    // layer.
+                    auto* di = m_audioEngine.instrument(track);
+                    m_pianoRoll->setDrumMode(
+                        di && std::string(di->id()) == "drumsynth");
+                }
                 // Sync arrangement-clip duration from the MIDI clip
                 // whenever it's edited (x2 / /2 / Clr / loop-drag /
                 // autoExtend on note-draw). Without this the grid
@@ -5790,6 +5800,11 @@ void App::processEvents() {
                         if (slot && slot->midiClip) {
                             m_pianoRoll->setClip(slot->midiClip.get(), dblTrack);
                             m_pianoRoll->setOnLengthChanged(nullptr);
+                            {
+                                auto* di = m_audioEngine.instrument(dblTrack);
+                                m_pianoRoll->setDrumMode(
+                                    di && std::string(di->id()) == "drumsynth");
+                            }
                             m_pianoRoll->setOpen(true);
                             m_selectedTrack = dblTrack;
                             break;
@@ -5805,6 +5820,11 @@ void App::processEvents() {
                             m_project.setMidiClip(ct, cs, std::move(newClip));
                             m_pianoRoll->setClip(clipPtr, ct);
                             m_pianoRoll->setOnLengthChanged(nullptr);
+                            {
+                                auto* di = m_audioEngine.instrument(ct);
+                                m_pianoRoll->setDrumMode(
+                                    di && std::string(di->id()) == "drumsynth");
+                            }
                             m_pianoRoll->setOpen(true);
                             m_selectedTrack = ct;
                             markDirty();

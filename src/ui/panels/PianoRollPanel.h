@@ -69,6 +69,51 @@ public:
     static constexpr int   kNPitch      = 128;
     static constexpr uint16_t kDefVel   = 32512;
 
+    // ─── Drum mode ──────────────────────────────────────────────────
+    // When the panel hosts a clip on a DrumSynth track, only the 8
+    // GM drum rows are visible. Pitch values stored in the clip stay
+    // standard MIDI (note 36 = kick, etc.) so external drum hardware
+    // / templates keep working — drum mode is purely a display layer
+    // that virtualises pitchToY / yToPitch / row rendering to the 8
+    // drums. Order is MIDI-ascending (bottom = lowest note).
+    static constexpr int kNumDrumRows = 8;
+    static constexpr int kDrumNotes[kNumDrumRows] = {
+        36,  // Kick     (slot 0, bottom row)
+        38,  // Snare    (slot 1)
+        39,  // Clap     (slot 2)
+        41,  // Tom1     (slot 3)
+        42,  // ClosedHH (slot 4)
+        46,  // OpenHH   (slot 5)
+        50,  // Tom2     (slot 6)
+        54,  // Tamb     (slot 7, top row)
+    };
+    static constexpr const char* kDrumLabels[kNumDrumRows] = {
+        "Kick", "Snare", "Clap", "Tom1", "CHH", "OHH", "Tom2", "Tamb"
+    };
+
+    void setDrumMode(bool on) {
+        if (m_drumMode == on) return;
+        m_drumMode = on;
+        // Drum mode shows only 8 rows; the natural row height is much
+        // taller than the chromatic-roll default (8 rows × 24 px =
+        // 192 px ≪ ~340 px grid). Bump m_rowH so the drum names are
+        // legible and clicks don't need pixel precision.
+        m_rowH = on ? 24.0f : 12.0f;
+        m_scrollY = 0.0f;   // pitchToY uses slot indexing in drum mode
+        invalidate();
+    }
+    bool drumMode() const { return m_drumMode; }
+
+    // Pitch ↔ drum slot. Linear scan; only 8 entries so cheap.
+    static int pitchToDrumSlot(int p) {
+        for (int i = 0; i < kNumDrumRows; ++i)
+            if (kDrumNotes[i] == p) return i;
+        return -1;
+    }
+    static int drumSlotToPitch(int s) {
+        return (s >= 0 && s < kNumDrumRows) ? kDrumNotes[s] : -1;
+    }
+
     PianoRollPanel() {
         // Tool picker — radio-style: exactly one of the three toggles
         // stays lit, corresponding to m_tool. onChange enforces that
@@ -607,8 +652,33 @@ private:
 
     float  beatToX(double b)  const { return m_gx + static_cast<float>(b * m_pxBeat) - m_scrollX; }
     double xToBeat(float x)   const { return (x - m_gx + m_scrollX) / m_pxBeat; }
-    float  pitchToY(int p)    const { return m_gy + (127 - p) * m_rowH - m_scrollY; }
-    int    yToPitch(float y)  const { return 127 - static_cast<int>((y - m_gy + m_scrollY) / m_rowH); }
+    // pitchToY: drum mode uses the slot index (0=bottom = Kick, 7=top
+    // = Tamb) so the 8 drum notes occupy a contiguous visual block
+    // regardless of the actual MIDI gaps between them. Pitches that
+    // aren't part of the drum kit return a far-off-screen Y so any
+    // stray notes (e.g. clip authored externally with extra pitches)
+    // simply don't render in drum mode rather than causing havoc.
+    float  pitchToY(int p)    const {
+        if (m_drumMode) {
+            const int s = pitchToDrumSlot(p);
+            if (s < 0) return -1e6f;
+            return m_gy + (kNumDrumRows - 1 - s) * m_rowH - m_scrollY;
+        }
+        return m_gy + (127 - p) * m_rowH - m_scrollY;
+    }
+    // yToPitch: in drum mode, derive a slot from y-position then map
+    // back to its GM note number. Clamps to the visible range; the
+    // caller already handles "outside grid" via inGrid() so an
+    // out-of-band y → -1 is safe.
+    int    yToPitch(float y)  const {
+        if (m_drumMode) {
+            int s = (kNumDrumRows - 1) -
+                static_cast<int>((y - m_gy + m_scrollY) / m_rowH);
+            if (s < 0 || s >= kNumDrumRows) return -1;
+            return drumSlotToPitch(s);
+        }
+        return 127 - static_cast<int>((y - m_gy + m_scrollY) / m_rowH);
+    }
 
     bool inPanel(float x, float y) const {
         return x >= m_px && x < m_px + m_pw && y >= m_py && y < m_py + m_bounds.h;
@@ -733,13 +803,24 @@ private:
     void clampScroll() {
         float gh = m_gh > 0 ? m_gh : 276.0f;
         float gw = m_gw > 0 ? m_gw : 800.0f;
-        float totalH = kNPitch * m_rowH;
+        // Drum mode: total visible "pitch" range is just the 8 drums,
+        // which usually fits the grid height entirely — clamp to 0
+        // so vertical scroll is a no-op (no scroll bar / scroll bias).
+        const int pitchRows = m_drumMode ? kNumDrumRows : kNPitch;
+        float totalH = pitchRows * m_rowH;
         m_scrollY = std::clamp(m_scrollY, 0.0f, std::max(0.0f, totalH - gh));
         float totalW = maxBeats() * m_pxBeat;
         m_scrollX = std::clamp(m_scrollX, 0.0f, std::max(0.0f, totalW - gw));
     }
 
     void centerOnContent() {
+        if (m_drumMode) {
+            // Drum mode: 8 rows fit the grid; just pin scroll to 0.
+            m_scrollY = 0;
+            m_scrollX = 0;
+            clampScroll();
+            return;
+        }
         if (!m_clip || m_clip->noteCount() == 0) {
             // Center on C4–C5 area
             float gh = m_gh > 0 ? m_gh : 276.0f;
@@ -863,6 +944,10 @@ private:
     bool  m_velDragging = false;
     int   m_velDragNoteIdx = -1;
     float m_velDragStartVel = 0;
+
+    // Drum mode flag — toggled by App.cpp when the active clip's
+    // track has a DrumSynth instrument. See setDrumMode() above.
+    bool  m_drumMode = false;
 };
 
 } // namespace fw2
