@@ -126,6 +126,13 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     // Allocate input buffer for deinterleaving
     m_inputBufferHeap.resize(config.inputChannels * kMaxFramesPerBuffer, 0.0f);
 
+    // Allocate the "live input as sidechain" scratch buffer at the
+    // OUTPUT channel count. Instruments expect their sidechain buffer
+    // interleaved with the same channel stride as the rendering buffer
+    // they're processing into, so we map input → output here at the
+    // start of each block (see processAudio).
+    m_inputAsSidechainBuf.resize(config.outputChannels * kMaxFramesPerBuffer, 0.0f);
+
     // Open audio stream (full-duplex if input device available, output-only otherwise)
     PaStreamParameters outputParams;
     outputParams.device = (config.outputDevice >= 0)
@@ -580,6 +587,40 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
     }
 
+    // ── Live input → sidechain scratch ──
+    // Map the interleaved PortAudio input (inCh-wide) into our
+    // output-shaped scratch buffer (nc-wide) so any track using the
+    // "Live Input" sidechain sentinel (-2) sees a buffer whose stride
+    // matches the rendering buffer it's mixed against. Cheap; runs
+    // unconditionally so the scratch is always coherent the moment a
+    // track switches to sentinel -2 (no per-track conditional on the
+    // hot path of the per-track loop).
+    //   * mono input → duplicate to both output channels
+    //   * stereo input → direct copy
+    //   * multi-channel input → first two channels (the first stereo
+    //     pair); higher pairs aren't reachable from the single Vocoder
+    //     dropdown today, but if/when we add a per-track input-channel
+    //     selector this is the place to consult m_trackAudioInputCh.
+    if (input && inCh > 0) {
+        const int copyCh = std::min(nc, std::max(1, inCh));
+        for (int f = 0; f < nf; ++f) {
+            const float* src = input + f * inCh;
+            float* dst = m_inputAsSidechainBuf.data() + f * nc;
+            if (inCh == 1) {
+                const float v = src[0];
+                for (int c = 0; c < nc; ++c) dst[c] = v;
+            } else {
+                for (int c = 0; c < copyCh; ++c) dst[c] = src[c];
+                // If output is wider than input (rare), pad by mirroring
+                // the last copied channel rather than leaving silence.
+                for (int c = copyCh; c < nc; ++c) dst[c] = src[copyCh - 1];
+            }
+        }
+    } else {
+        std::memset(m_inputAsSidechainBuf.data(), 0,
+                    nf * nc * sizeof(float));
+    }
+
     // Clear per-track buffers (pointers already set up in init)
     for (int t = 0; t < kMaxTracks; ++t) {
         std::memset(m_trackBufferPtrs[t], 0, nf * nc * sizeof(float));
@@ -812,9 +853,17 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             continue;
         }
 
-        // Set sidechain input from designated source track
+        // Set sidechain input from designated source track.
+        //   -1  → none (clear)
+        //   -2  → live audio input (mapped to output layout above)
+        //   0..kMaxTracks-1 → that track's pre-mixer rendered buffer
+        // The -2 path goes through m_inputAsSidechainBuf which has
+        // already been filled at the top of processAudio() with the
+        // PortAudio input mapped to the output channel count.
         int scSrc = m_trackSidechainSource[t];
-        if (scSrc >= 0 && scSrc < kMaxTracks && scSrc != t)
+        if (scSrc == -2)
+            m_instruments[t]->setSidechainInput(m_inputAsSidechainBuf.data());
+        else if (scSrc >= 0 && scSrc < kMaxTracks && scSrc != t)
             m_instruments[t]->setSidechainInput(m_trackBufferPtrs[scSrc]);
         else
             m_instruments[t]->setSidechainInput(nullptr);

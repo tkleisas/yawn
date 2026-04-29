@@ -78,9 +78,16 @@ public:
             // by us writing to the dropdown don't bounce back through
             // the user-action path.
             if (m_suppressDDChange) return;
+            // Dropdown layout:
+            //   0           → "(none)"      → -1
+            //   1           → "Live Input"  → -2
+            //   2..N+1      → track[k]      → absolute track idx (with
+            //                                  selfIdx skipped for self-loop)
             int trackIdx = -1;
-            if (idx > 0) {
-                int t = idx - 1;
+            if (idx == 1) {
+                trackIdx = -2;     // sentinel: live audio interface input
+            } else if (idx > 1) {
+                int t = idx - 2;
                 if (m_selfIdx >= 0 && t >= m_selfIdx) ++t;
                 trackIdx = t;
             }
@@ -123,7 +130,8 @@ public:
         rebuildSourceDD();
     }
 
-    // Currently-routed sidechain source (absolute track index, -1=none).
+    // Currently-routed sidechain source.
+    //   -1 = none, -2 = live audio input, else absolute track index.
     void setSidechainSource(int trackIdx) {
         m_sidechainSource = trackIdx;
         // Reflect into the dropdown's selected index. Suppress the
@@ -134,10 +142,12 @@ public:
         // to whatever the dropdown happened to read first (always
         // "(none)" → -1).
         int ddIdx = 0;
-        if (trackIdx >= 0) {
+        if (trackIdx == -2) {
+            ddIdx = 1;                  // "Live Input" slot
+        } else if (trackIdx >= 0) {
             int collapsed = trackIdx;
             if (m_selfIdx >= 0 && trackIdx > m_selfIdx) --collapsed;
-            ddIdx = collapsed + 1;     // +1 for the "(none)" slot
+            ddIdx = collapsed + 2;      // +2 for "(none)" and "Live Input"
         }
         m_suppressDDChange = true;
         m_sourceDD.setSelectedIndex(ddIdx, ValueChangeSource::Programmatic);
@@ -368,7 +378,9 @@ private:
             }
         } else if (m_modSource == 6) {
             // Sidechain — render a hint when no source is selected.
-            if (m_sidechainSource < 0 && tm) {
+            // -2 (Live Input) is a real source, so only show the hint
+            // for -1 (none).
+            if (m_sidechainSource == -1 && tm) {
                 const char* msg = "Pick a sidechain source above";
                 const float tw = tm->textWidth(msg, lblFs);
                 const float tx = px + (pw - tw) * 0.5f;
@@ -394,7 +406,8 @@ private:
             return std::string("← Formant ") + kV[m_modSource - 1];
         }
         if (m_modSource == 6) {
-            if (m_sidechainSource < 0) return "← (no source)";
+            if (m_sidechainSource == -2) return "← Live Input";
+            if (m_sidechainSource < 0)   return "← (no source)";
             if (m_sidechainSource < static_cast<int>(m_trackNames.size()))
                 return "← " + m_trackNames[m_sidechainSource];
             return "← Track " + std::to_string(m_sidechainSource + 1);
@@ -405,8 +418,9 @@ private:
 
     void rebuildSourceDD() {
         std::vector<std::string> items;
-        items.reserve(m_trackNames.size() + 1);
+        items.reserve(m_trackNames.size() + 2);
         items.emplace_back("(none)");
+        items.emplace_back("Live Input");   // → trackIdx == -2 sentinel
         for (int i = 0; i < static_cast<int>(m_trackNames.size()); ++i) {
             if (i == m_selfIdx) continue;     // hide self to block A→A loops
             items.push_back(m_trackNames[i]);

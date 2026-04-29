@@ -220,7 +220,7 @@ struct SetTrackMidiOutputMsg {
 
 struct SetSidechainSourceMsg {
     int trackIndex;
-    int sourceTrack; // -1=none, 0..kMaxTracks-1
+    int sourceTrack; // -1=none, -2=live audio input, 0..kMaxTracks-1
 };
 
 struct SetResampleSourceMsg {

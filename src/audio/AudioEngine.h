@@ -472,6 +472,15 @@ private:
     std::vector<float> m_inputBufferHeap;   // inputChannels * kMaxFramesPerBuffer
     bool m_hasInputDevice = false;
 
+    // Live audio input mapped to OUTPUT channel layout, used as a
+    // sidechain source when a track has m_trackSidechainSource[t] == -2
+    // (the "Live Input" sentinel). Refilled at the top of every
+    // processAudio() block from the PortAudio input pointer; channel
+    // mapping (mono → L=R, stereo → direct, multi → first 2) keeps the
+    // buffer in the same interleaved layout instruments already expect
+    // for sidechain (which is sized by output channels, not input).
+    std::vector<float> m_inputAsSidechainBuf;  // outputChannels * kMaxFramesPerBuffer
+
     // Per-track scratch buffers for mixer routing (heap-allocated, preallocated in init)
     std::vector<float> m_trackBufferHeap;     // kMaxTracks * kMaxFramesPerBuffer * 2
     float* m_trackBufferPtrs[kMaxTracks] = {};
