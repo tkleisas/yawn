@@ -212,7 +212,11 @@ if(YAWN_HAS_NAM)
             ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nam_shim
         )
         target_link_libraries(nam PUBLIC nlohmann_json::nlohmann_json)
-        target_compile_definitions(nam PUBLIC NAM_ENABLE_A2_FAST)
+        # NAM_SAMPLE_FLOAT switches NAM_SAMPLE typedef from double
+        # to float. YAWN audio is float; using float natively
+        # avoids per-block double↔float conversion in the
+        # NeuralAmp::process hot loop.
+        target_compile_definitions(nam PUBLIC NAM_ENABLE_A2_FAST NAM_SAMPLE_FLOAT)
         if(WIN32)
             target_compile_definitions(nam PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
         endif()
@@ -308,6 +312,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumRack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/Multisampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumSynth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
     # Audio effects (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Reverb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Delay.cpp
@@ -397,6 +402,23 @@ target_link_libraries(yawn_core PUBLIC
 if(YAWN_VST3)
     target_link_libraries(yawn_core PUBLIC vst3_hosting)
     target_compile_definitions(yawn_core PUBLIC YAWN_HAS_VST3=1)
+endif()
+
+# NAM (Neural Amp Modeler) link — only when YAWN_HAS_NAM resolved.
+# NeuralAmp.cpp is the only TU that includes <NAM/...> headers.
+# Compile JUST that file as C++20 (NAM requires C++20; the rest of
+# yawn_core stays C++17). PUBLIC YAWN_HAS_NAM define lets the
+# header & the .cpp branch on the feature without leaking NAM
+# headers anywhere else in the build.
+if(YAWN_HAS_NAM AND TARGET nam)
+    target_link_libraries(yawn_core PUBLIC nam)
+    target_compile_definitions(yawn_core PUBLIC YAWN_HAS_NAM=1)
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+    )
 endif()
 
 # Ableton Link include paths and platform defines

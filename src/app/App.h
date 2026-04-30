@@ -62,7 +62,7 @@
 
 namespace yawn {
 
-namespace effects { class ConvolutionReverb; }
+namespace effects { class ConvolutionReverb; class NeuralAmp; }
 
 class App {
 public:
@@ -330,6 +330,9 @@ private:
     // captures, so the effect pointer is stashed here between
     // dialog-open and callback-fires.
     effects::ConvolutionReverb* m_pendingConvIRReverb = nullptr;
+    // Same SDL-callback userdata stash trick for .nam loading
+    // on the NeuralAmp device's "Load Model…" button.
+    effects::NeuralAmp*         m_pendingNamEffect    = nullptr;
     // Target slot for the pending "Set Video…" file dialog.
     int m_pendingVideoTrack = -1;
     int m_pendingVideoScene = -1;

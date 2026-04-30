@@ -20,6 +20,7 @@
 #include "ui/framework/v2/VocoderDisplayPanel.h"
 #include "ui/framework/v2/SplineEQDisplayPanel.h"
 #include "ui/framework/v2/ConvReverbDisplayPanel.h"
+#include "ui/framework/v2/NeuralAmpDisplayPanel.h"
 #include "ui/framework/v2/DrumSlopDisplayPanel.h"
 #include "ui/framework/v2/DrumRackDisplayPanel.h"
 #include "ui/framework/v2/InstrumentRackDisplayPanel.h"
@@ -53,6 +54,7 @@
 #include "effects/Filter.h"
 #include "effects/SplineEQ.h"
 #include "effects/ConvolutionReverb.h"
+#include "effects/NeuralAmp.h"
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/LFO.h"
@@ -230,6 +232,15 @@ public:
     using LoadConvIRCallback = std::function<void(effects::ConvolutionReverb*)>;
     void setOnLoadConvIR(LoadConvIRCallback cb) {
         m_onLoadConvIR = std::move(cb);
+    }
+
+    // Same pattern for the NeuralAmp device's "Load Model…" button.
+    // App-side handler opens an SDL file dialog scoped to .nam,
+    // then calls effect->setModelPath which kicks off the actual
+    // NAM library load + Reset + prewarm.
+    using LoadNamModelCallback = std::function<void(effects::NeuralAmp*)>;
+    void setOnLoadNamModel(LoadNamModelCallback cb) {
+        m_onLoadNamModel = std::move(cb);
     }
 
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
@@ -1674,6 +1685,34 @@ private:
             return true;
         }
 
+        if (id == "neuralamp") {
+            // Same CustomDeviceBody pattern as Conv Reverb. Buttons
+            // drive an App-side handler that opens an SDL file
+            // dialog scoped to .nam, then calls effect->setModelPath
+            // (which kicks off the NAM library load + Reset +
+            // prewarm inside NeuralAmp::setModelPath).
+            auto* disp = new NeuralAmpDisplayPanel();
+            auto* na   = static_cast<effects::NeuralAmp*>(fx);
+            disp->setOnParamChange([ref](int idx, float v) {
+                DeviceRef r = ref; r.setParam(idx, v);
+            });
+            disp->setOnLoadRequest([this, na]() {
+                if (m_onLoadNamModel) m_onLoadNamModel(na);
+            });
+            disp->setOnClearRequest([na]() { na->setModelPath(""); });
+            dw->setCustomBody(disp);
+            configureDeviceWidget(dw, ref);
+            m_displayUpdaters.push_back([disp, na]() {
+                std::string p = na->modelPath();
+                std::string base = p;
+                const auto slash = p.find_last_of("/\\");
+                if (slash != std::string::npos) base = p.substr(slash + 1);
+                disp->setModelName(base);
+                disp->setLoadedFlag(na->hasModel());
+            });
+            return true;
+        }
+
         if (id == "filter") {
             auto* disp = new FilterDisplayWidget();
             dw->setCustomPanel(disp, 52.0f, 200.0f);
@@ -1798,6 +1837,7 @@ private:
     SidechainSourceProvider     m_sidechainSourceProvider;
     SetSidechainSourceCallback  m_setSidechainSource;
     LoadConvIRCallback          m_onLoadConvIR;
+    LoadNamModelCallback        m_onLoadNamModel;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;

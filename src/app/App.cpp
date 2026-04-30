@@ -4659,6 +4659,30 @@ bool App::init() {
     // ConvolutionReverb pointer in m_pendingConvIRReverb because
     // SDL_ShowOpenFileDialog's callback signature is C-style with
     // a void* userdata, and lambda captures don't survive that.
+    // Neural Amp .nam loader — mirrors the Conv Reverb IR loader
+    // exactly. Stash the effect ptr in m_pendingNamEffect because
+    // SDL_ShowOpenFileDialog's C-style callback only carries a
+    // void* userdata. NAM's actual file read + Reset + prewarm
+    // happens inside NeuralAmp::setModelPath; we just hand it the
+    // path the user picked.
+    m_detailPanel->setOnLoadNamModel([this](effects::NeuralAmp* na) {
+        if (!na) return;
+        m_pendingNamEffect = na;
+        static SDL_DialogFileFilter filter{"Neural Amp Models", "nam"};
+        SDL_ShowOpenFileDialog(
+            [](void* ud, const char* const* filelist, int) {
+                auto* self = static_cast<App*>(ud);
+                auto* eff  = self->m_pendingNamEffect;
+                self->m_pendingNamEffect = nullptr;
+                if (!eff || !filelist || !filelist[0]) return;
+                eff->setModelPath(filelist[0]);
+            },
+            this, m_mainWindow.getHandle(),
+            &filter, 1,
+            /*default_location*/ nullptr,
+            /*allow_many*/ false);
+    });
+
     m_detailPanel->setOnLoadConvIR([this](effects::ConvolutionReverb* cr) {
         if (!cr) return;
         m_pendingConvIRReverb = cr;
@@ -7069,19 +7093,34 @@ void App::rehydrateConvolutionIRs() {
     // Walk every effect chain in the mixer (per-track + return
     // buses + master) and reload any ConvolutionReverb whose IR
     // path was preserved in extraState but whose engine is empty
-    // (i.e. the file hasn't been re-read yet). Cheap enough — most
-    // sessions have a handful of effects, the IR-load itself is
-    // gated by !hasIR() so already-loaded ones are skipped.
+    // (i.e. the file hasn't been re-read yet). Same loop also
+    // catches NeuralAmp .nam paths — both effects use the
+    // saveExtraState path-storage pattern; NAM's model load is
+    // self-contained inside setModelPath so we don't need a
+    // separate App-side helper for it.
     auto walk = [this](effects::EffectChain& chain) {
         for (int i = 0; i < chain.count(); ++i) {
             auto* fx = chain.effectAt(i);
             if (!fx) continue;
-            if (std::string(fx->id()) != "convreverb") continue;
-            auto* cr = static_cast<effects::ConvolutionReverb*>(fx);
-            if (cr->hasIR()) continue;            // already loaded
-            const std::string p = cr->irPath();
-            if (p.empty()) continue;              // no path to rehydrate from
-            loadIRIntoConvReverb(cr, p);
+            const std::string fid = fx->id();
+            if (fid == "convreverb") {
+                auto* cr = static_cast<effects::ConvolutionReverb*>(fx);
+                if (cr->hasIR()) continue;
+                const std::string p = cr->irPath();
+                if (p.empty()) continue;
+                loadIRIntoConvReverb(cr, p);
+            } else if (fid == "neuralamp") {
+                auto* na = static_cast<effects::NeuralAmp*>(fx);
+                if (na->hasModel()) continue;
+                const std::string p = na->modelPath();
+                if (p.empty()) continue;
+                // NeuralAmp::setModelPath does the load + Reset +
+                // prewarm internally. setModelPath is idempotent
+                // for the path itself; the modelPath field already
+                // got restored via loadExtraState, so we set it
+                // again to trigger the actual file read.
+                na->setModelPath(p);
+            }
         }
     };
     auto& mixer = m_audioEngine.mixer();

@@ -1,38 +1,32 @@
 #pragma once
 // NeuralAmp — Neural Amp Modeler (.nam) loader / inference effect.
 //
-// STAGE 1 (this commit): device shell. The full chain is wired up
-// EXCEPT the actual NAM model inference call — that's Stage 2,
-// which adds the NeuralAmpModelerCore + Eigen dependencies via
-// FetchContent and replaces the passthrough at the marked site
-// with the real DSP. Until Stage 2 lands, this device behaves as
-// a clean gain stage with input level / output level / mix knobs;
-// loading a .nam file stores the path in extra state (so projects
-// preserve it across save/load) but doesn't yet run inference.
+// PIMPL split: this header stays clean C++17 so it can be included
+// from anywhere in YAWN. The .cpp file is the only translation
+// unit that includes <NAM/...> headers (which require C++20) and
+// is compiled standalone with set_source_files_properties to bump
+// just that TU to C++20. NeuralAmp::Impl is forward-declared here
+// and defined in the .cpp.
 //
-// Why ship Stage 1 separately:
-//   - The YAWN-side architecture (params, file picker, project
-//     persistence, UI) gets shaken out independently of the
-//     third-party-library build complexity. NAM bundles its own
-//     Eigen submodule which doesn't FetchContent cleanly, so the
-//     library wiring needs a focused pass.
-//   - Users can already drop the device on a track, see it in the
-//     menu, and use it as a gain stage. Stage 2 swap is invisible.
+// Behaviour:
+//   * No model loaded → device is a clean gain stage with In / Out
+//     gain + Mix, mono-summing the input.
+//   * Model loaded → input gets fed through nam::DSP::process(), the
+//     output replaces the wet signal in the standard dry/wet blend.
+//     NAM models are mono in / mono out; we sum the stereo input
+//     for the network and duplicate the output to both sides.
 //
-// Stage 2 changes will be:
-//   - Add NAM + Eigen via FetchContent + custom static-lib wrapper
-//   - Add YAWN_HAS_NAM compile flag (default ON when build deps
-//     resolve, OFF otherwise)
-//   - Replace the marked passthrough loop body with nam::DSP::process
-//   - Bundle 1–2 public-domain .nam models in assets/nam/
+// File loading: NeuralAmp itself just stores the model path (via
+// setModelPath / extra state). The actual file-read happens
+// host-side (App::loadNamModel) via the AudioEffect extra-state
+// hook + an SDL file dialog, mirroring how Conv Reverb loads IRs.
 //
-// Parameters (4): Input Gain / Output Gain / Mix / [model file path
-// stored separately via saveExtraState since strings don't fit the
-// flat float param list].
+// Parameters (3): Input Gain / Output Gain / Mix.
 
 #include "effects/AudioEffect.h"
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <string>
 
 namespace yawn {
@@ -47,61 +41,15 @@ public:
         kParamCount
     };
 
+    NeuralAmp();
+    ~NeuralAmp() override;
+
     const char* name() const override { return "Neural Amp"; }
     const char* id()   const override { return "neuralamp"; }
 
-    void init(double sampleRate, int maxBlockSize) override {
-        m_sampleRate = sampleRate;
-        m_maxBlockSize = maxBlockSize;
-        reset();
-    }
-
-    void reset() override {
-        // Stage 2: also call m_namDsp->reset() / equivalent here.
-    }
-
-    void process(float* buffer, int numFrames, int numChannels) override {
-        if (m_bypassed) return;
-
-        const float inGainDb  = m_params[kInputGain];
-        const float outGainDb = m_params[kOutputGain];
-        const float mix       = std::clamp(m_params[kMix], 0.0f, 1.0f);
-        const float inGain    = std::pow(10.0f, inGainDb  / 20.0f);
-        const float outGain   = std::pow(10.0f, outGainDb / 20.0f);
-
-        const bool stereo = (numChannels > 1);
-
-        for (int i = 0; i < numFrames; ++i) {
-            const float dryL = buffer[i * numChannels];
-            const float dryR = stereo ? buffer[i * numChannels + 1] : dryL;
-
-            // Pre-NAM: input gain + mono sum (NAM models are mono).
-            const float preGained = (dryL + dryR) * 0.5f * inGain;
-
-            // ── Stage-2 marker ──
-            // Replace the next two lines with:
-            //   const float wet = m_namDsp ? m_namDsp->process(preGained)
-            //                              : preGained;
-            // when the NAM library lands. Until then this is a clean
-            // passthrough of the gained signal; the device still
-            // works as a coloured gain stage with the user's input/
-            // output gain values acting as a hard-clipping-prone
-            // pre/post couple. Useful enough on its own that the
-            // shell isn't dead weight.
-            const float wet = preGained;
-
-            const float postGained = wet * outGain;
-
-            // Mono → fake stereo (NAM is mono-out; we duplicate to
-            // both sides). When Stage 2 lands, IR convolution on the
-            // post-NAM path can re-stereoise via a stereo cab IR.
-            const float w = mix * m_mix;
-            const float d = 1.0f - w;
-            buffer[i * numChannels]     = dryL * d + postGained * w;
-            if (stereo)
-                buffer[i * numChannels + 1] = dryR * d + postGained * w;
-        }
-    }
+    void init(double sampleRate, int maxBlockSize) override;
+    void reset() override;
+    void process(float* buffer, int numFrames, int numChannels) override;
 
     int parameterCount() const override { return kParamCount; }
 
@@ -126,33 +74,26 @@ public:
     }
 
     // ── Model file management ───────────────────────────────────────
-    // The .nam path is the only piece of state outside the param list.
-    // Stored as the path relative to the project's assetDir on save
-    // (so projects move cleanly between machines), absolute on
-    // run-time loads via the file picker.
-    void setModelPath(const std::string& path) {
-        m_modelPath = path;
-        // Stage 2: m_namDsp = nam::get_dsp(path); error handling here.
-    }
-    const std::string& modelPath() const { return m_modelPath; }
-    bool hasModel() const { return !m_modelPath.empty(); }
+    // setModelPath kicks off NAM model loading (when YAWN_HAS_NAM).
+    // Empty path or load-failure clears the model and the device
+    // falls back to gain-stage passthrough behaviour.
+    void               setModelPath(const std::string& path);
+    const std::string& modelPath() const;
+    bool               hasModel() const;
 
-    nlohmann::json saveExtraState(
-            const std::filesystem::path& /*assetDir*/) const override {
-        nlohmann::json j;
-        if (!m_modelPath.empty()) j["modelPath"] = m_modelPath;
-        return j;
-    }
+    nlohmann::json saveExtraState(const std::filesystem::path& assetDir) const override;
     void loadExtraState(const nlohmann::json& state,
-                         const std::filesystem::path& /*assetDir*/) override {
-        if (state.contains("modelPath"))
-            setModelPath(state["modelPath"].get<std::string>());
-    }
+                         const std::filesystem::path& assetDir) override;
 
 private:
     float m_params[kParamCount] = {0.0f, 0.0f, 1.0f};
-    std::string m_modelPath;
-    // Stage 2: std::unique_ptr<nam::DSP> m_namDsp;
+
+    // PIMPL — the impl struct holds NAM-specific state (a
+    // std::unique_ptr<nam::DSP>, scratch buffers) when YAWN_HAS_NAM
+    // is enabled, plus the model path and a couple of housekeeping
+    // bits regardless. Defined in the .cpp.
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
 };
 
 } // namespace effects
