@@ -425,12 +425,25 @@ if(YAWN_HAS_NAM AND TARGET nam)
     target_link_libraries(yawn_core PUBLIC
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>")
     target_compile_definitions(yawn_core PUBLIC YAWN_HAS_NAM=1)
-    set_source_files_properties(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-    )
+    # NeuralAmp.cpp does NOT need a per-file C++20 standard — even
+    # though NAM itself requires C++20, the headers that consumer
+    # code (= NeuralAmp.cpp) actually includes (<NAM/dsp.h>,
+    # <NAM/get_dsp.h>) compile cleanly at C++17. Verified locally:
+    # all 97 yawn_core TUs build at /std:c++17 including
+    # NeuralAmp.cpp, and the resulting object file links against
+    # nam.lib (which IS built at C++20) without ABI issues — the
+    # ABI surface is just std::filesystem::path + std::unique_ptr,
+    # both stable across the standards.
+    #
+    # An earlier version of this CMake set CXX_STANDARD 20 on
+    # NeuralAmp.cpp via set_source_files_properties. That collided
+    # with yawn_core's precompiled header (built at C++17): MSVC /
+    # MSBuild rejects a TU whose standard differs from the PCH
+    # it's force-included into. Local incremental builds silently
+    # ignored the property; clean CI builds caught the conflict
+    # and failed compilation. Removing the property is the right
+    # fix — the PIMPL split in NeuralAmp.h means no other TU ever
+    # sees a NAM header, so C++17 throughout is fine.
 endif()
 
 # Ableton Link include paths and platform defines
