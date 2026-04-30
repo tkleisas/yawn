@@ -169,6 +169,20 @@ private:
     void startExportRender(const std::string& filePath);
     void syncTracksToEngine();
     void setupDefaultTracks();
+    // Load an IR file into a ConvolutionReverb effect (read via
+    // FileIO::loadAudioFile, resample to host rate if needed,
+    // mono-sum, push to engine, store path). Shared by the
+    // user-clicks-Load-IR dialog callback AND the project-load
+    // rehydration path so the same decode/resample/mono-sum logic
+    // applies to both. Returns true on success.
+    bool loadIRIntoConvReverb(effects::ConvolutionReverb* eff,
+                               const std::string& path);
+    // After project load, walk every effect on every chain and re-
+    // read any IR files referenced by ConvolutionReverb extra-state.
+    // Without this the IR path is preserved but the actual sample
+    // data isn't, so the device sounds passthrough until the user
+    // re-clicks Load.
+    void rehydrateConvolutionIRs();
     void resetEngineState();
     void insertSceneAtSelection();
     void updateWindowTitle();

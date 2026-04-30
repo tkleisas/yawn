@@ -4669,53 +4669,7 @@ bool App::init() {
                 auto* eff  = self->m_pendingConvIRReverb;
                 self->m_pendingConvIRReverb = nullptr;
                 if (!eff || !filelist || !filelist[0]) return;
-                const std::string path = filelist[0];
-                util::AudioFileInfo info;
-                auto buf = util::loadAudioFile(path, &info);
-                if (!buf || buf->numFrames() <= 0) {
-                    LOG_WARN("ConvReverb", "Failed to load IR: %s", path.c_str());
-                    return;
-                }
-                // Resample to host sample rate if needed — convolution
-                // engine assumes the IR matches the audio it'll be
-                // convolving with. Without this, an IR captured at
-                // 44.1k convolved against a 48k host would play
-                // ~9% lower in pitch (and shorter in time).
-                const double hostRate = self->m_audioEngine.sampleRate();
-                std::shared_ptr<audio::AudioBuffer> ir = buf;
-                if (info.sampleRate > 0 &&
-                    static_cast<double>(info.sampleRate) != hostRate) {
-                    ir = util::resampleBuffer(*buf,
-                        static_cast<double>(info.sampleRate), hostRate);
-                }
-                // Mono-sum the IR. ConvolutionEngine is mono per
-                // channel; for stereo IRs we average across channels
-                // for the single mono kernel both L/R engines share.
-                // True stereo IRs (4-way LL/LR/RL/RR) are a future
-                // upgrade — captured in the v1 design notes.
-                // AudioBuffer is non-interleaved (channel-major) so
-                // we walk channels via channelData(c).
-                const int frames = ir->numFrames();
-                const int ch     = ir->numChannels();
-                std::vector<float> mono(frames, 0.0f);
-                if (ch == 1) {
-                    std::memcpy(mono.data(), ir->channelData(0),
-                                 frames * sizeof(float));
-                } else if (ch > 1) {
-                    const float invCh = 1.0f / static_cast<float>(ch);
-                    for (int c = 0; c < ch; ++c) {
-                        const float* src = ir->channelData(c);
-                        for (int i = 0; i < frames; ++i)
-                            mono[i] += src[i] * invCh;
-                    }
-                }
-                eff->loadIRMono(mono.data(),
-                                 static_cast<int>(mono.size()),
-                                 hostRate);
-                eff->setIRPath(path);
-                LOG_INFO("ConvReverb",
-                         "Loaded IR: %s (%d frames, %d ch, %d Hz src)",
-                         path.c_str(), frames, ch, info.sampleRate);
+                self->loadIRIntoConvReverb(eff, filelist[0]);
             },
             this, m_mainWindow.getHandle(),
             &filter, 1,
@@ -7037,6 +6991,14 @@ void App::doOpenProject(const std::filesystem::path& path) {
                      repaired);
         }
         syncTracksToEngine();
+        // Re-read any IR files referenced by ConvolutionReverb
+        // effects in this project. ProjectSerializer's extra-state
+        // hook preserves the file PATH (cheap, portable across
+        // machines) but doesn't read the file itself — we do that
+        // here on the UI thread, after the engine is wired up but
+        // before audio starts touching the (currently empty) IR
+        // engines.
+        rehydrateConvolutionIRs();
         m_projectPath = projectDir;
         m_projectDirty = false;
         // Project-local preset folder (if any) is now visible to the
@@ -7056,6 +7018,76 @@ void App::doOpenProject(const std::filesystem::path& path) {
                      projectDir.string().c_str());
         m_toastManager.show("Load failed", 2.5f, ui::ToastManager::Severity::Error);
     }
+}
+
+bool App::loadIRIntoConvReverb(effects::ConvolutionReverb* eff,
+                                 const std::string& path) {
+    if (!eff || path.empty()) return false;
+    util::AudioFileInfo info;
+    auto buf = util::loadAudioFile(path, &info);
+    if (!buf || buf->numFrames() <= 0) {
+        LOG_WARN("ConvReverb", "Failed to load IR: %s", path.c_str());
+        return false;
+    }
+    // Resample to host rate if the IR was captured at a different
+    // sample rate. Without this a 44.1 kHz IR on a 48 kHz host
+    // plays ~9 % low and short; on the project-load path that
+    // would silently corrupt restored sessions.
+    const double hostRate = m_audioEngine.sampleRate();
+    std::shared_ptr<audio::AudioBuffer> ir = buf;
+    if (info.sampleRate > 0 &&
+        static_cast<double>(info.sampleRate) != hostRate) {
+        ir = util::resampleBuffer(*buf,
+            static_cast<double>(info.sampleRate), hostRate);
+    }
+    // Mono-sum (channel-major non-interleaved layout).
+    const int frames = ir->numFrames();
+    const int ch     = ir->numChannels();
+    std::vector<float> mono(frames, 0.0f);
+    if (ch == 1) {
+        std::memcpy(mono.data(), ir->channelData(0),
+                     frames * sizeof(float));
+    } else if (ch > 1) {
+        const float invCh = 1.0f / static_cast<float>(ch);
+        for (int c = 0; c < ch; ++c) {
+            const float* src = ir->channelData(c);
+            for (int i = 0; i < frames; ++i)
+                mono[i] += src[i] * invCh;
+        }
+    }
+    eff->loadIRMono(mono.data(),
+                     static_cast<int>(mono.size()),
+                     hostRate);
+    eff->setIRPath(path);
+    LOG_INFO("ConvReverb",
+             "Loaded IR: %s (%d frames, %d ch, %d Hz src)",
+             path.c_str(), frames, ch, info.sampleRate);
+    return true;
+}
+
+void App::rehydrateConvolutionIRs() {
+    // Walk every effect chain in the mixer (per-track + return
+    // buses + master) and reload any ConvolutionReverb whose IR
+    // path was preserved in extraState but whose engine is empty
+    // (i.e. the file hasn't been re-read yet). Cheap enough — most
+    // sessions have a handful of effects, the IR-load itself is
+    // gated by !hasIR() so already-loaded ones are skipped.
+    auto walk = [this](effects::EffectChain& chain) {
+        for (int i = 0; i < chain.count(); ++i) {
+            auto* fx = chain.effectAt(i);
+            if (!fx) continue;
+            if (std::string(fx->id()) != "convreverb") continue;
+            auto* cr = static_cast<effects::ConvolutionReverb*>(fx);
+            if (cr->hasIR()) continue;            // already loaded
+            const std::string p = cr->irPath();
+            if (p.empty()) continue;              // no path to rehydrate from
+            loadIRIntoConvReverb(cr, p);
+        }
+    };
+    auto& mixer = m_audioEngine.mixer();
+    for (int t = 0; t < kMaxTracks; ++t) walk(mixer.trackEffects(t));
+    for (int r = 0; r < kMaxReturnBuses; ++r) walk(mixer.returnEffects(r));
+    walk(mixer.masterEffects());
 }
 
 void App::syncTracksToEngine() {
