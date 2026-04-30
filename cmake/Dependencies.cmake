@@ -212,6 +212,57 @@ endif()
 # ──────────────────────────────────────────────
 option(YAWN_HAS_LINK "Enable Ableton Link support (network beat/tempo sync)" ON)
 
+# ──────────────────────────────────────────────
+# Neural Amp Modeler Core (.nam model inference) — optional
+# ──────────────────────────────────────────────
+# NAM bundles Eigen as a git submodule; FetchContent doesn't pull
+# submodules, so we fetch Eigen separately and tell NAM where to
+# find it via a custom include path on the static-library target
+# we build below. Same trick for nlohmann::json — NAM expects a
+# bundled "json.hpp" but we already have nlohmann::json fetched
+# (line above), so a one-line shim in third_party/nam_shim/json.hpp
+# pulls in the version YAWN uses everywhere else.
+#
+# NAM requires C++20. We ONLY apply the C++20 standard to the nam
+# library target itself; the rest of YAWN stays on C++17. Public
+# headers of nam are NOT exposed to YAWN code — the NeuralAmp
+# effect uses a PIMPL so its .cpp (compiled as C++20) is the only
+# translation unit that sees NAM's headers. The .h stays clean
+# C++17 so it can be included from anywhere in YAWN.
+option(YAWN_HAS_NAM "Enable Neural Amp Modeler (.nam) inference" ON)
+if(YAWN_HAS_NAM)
+    FetchContent_Declare(
+        eigen
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        # Eigen 3.4.0 (2021) lacks placeholders::lastN which NAM
+        # uses in lstm.h. NAM bundles Eigen at a newer commit on
+        # master via submodule; we mirror that with a fresh master
+        # pull. Pinned to a specific commit would be cleaner long-
+        # term but Eigen has no recent tagged release to anchor on.
+        GIT_TAG        master
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_GetProperties(eigen)
+    if(NOT eigen_POPULATED)
+        # Eigen's own CMake is heavy and triggers a full Doxygen
+        # build by default. We only need the headers, so use
+        # FetchContent_Populate (no add_subdirectory) and reference
+        # the populated source directory directly via include path.
+        FetchContent_Populate(eigen)
+    endif()
+
+    FetchContent_Declare(
+        neural_amp_modeler_core
+        GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
+        GIT_TAG        main
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_GetProperties(neural_amp_modeler_core)
+    if(NOT neural_amp_modeler_core_POPULATED)
+        FetchContent_Populate(neural_amp_modeler_core)
+    endif()
+endif()
+
 if(YAWN_HAS_LINK)
     # ASIO standalone (header-only networking, needed by Link)
     FetchContent_Declare(

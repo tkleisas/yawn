@@ -178,6 +178,57 @@ if(MSVC)
     target_compile_definitions(lua54 PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+# ────────────────────────────────────────────────────────────────────
+# NAM (Neural Amp Modeler Core) — wrapped as a YAWN-built static lib.
+# NAM's own CMake doesn't expose a clean library target (its tools/
+# subdirectory builds executables that link the source files directly)
+# so we glob the .cpp files ourselves and apply the include paths /
+# compile flags it needs:
+#   * Eigen headers from the separate FetchContent above
+#   * json.hpp shim (third_party/nam_shim/) so NAM's `#include
+#     "json.hpp"` lands on YAWN's nlohmann::json
+#   * NAM's own NAM/ root (so `#include "activations.h"` etc. resolve)
+#   * C++20 (NAM uses C++20 features; YAWN's default is C++17 — we
+#     scope the C++20 to this target only, the rest of the build
+#     stays on C++17)
+#   * NAM_ENABLE_A2_FAST defined per upstream default
+# ────────────────────────────────────────────────────────────────────
+if(YAWN_HAS_NAM)
+    file(GLOB NAM_SOURCES
+        ${neural_amp_modeler_core_SOURCE_DIR}/NAM/*.cpp
+        ${neural_amp_modeler_core_SOURCE_DIR}/NAM/wavenet/*.cpp
+    )
+    if(NAM_SOURCES)
+        add_library(nam STATIC ${NAM_SOURCES})
+        set_target_properties(nam PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_include_directories(nam PUBLIC
+            ${neural_amp_modeler_core_SOURCE_DIR}
+            ${neural_amp_modeler_core_SOURCE_DIR}/NAM
+            ${eigen_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nam_shim
+        )
+        target_link_libraries(nam PUBLIC nlohmann_json::nlohmann_json)
+        target_compile_definitions(nam PUBLIC NAM_ENABLE_A2_FAST)
+        if(WIN32)
+            target_compile_definitions(nam PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+        endif()
+        if(MSVC)
+            # NAM has lots of conversion / signed-vs-unsigned noise
+            # under /W4. Keep it from polluting YAWN's warning gate.
+            target_compile_options(nam PRIVATE /W0)
+        endif()
+    else()
+        message(WARNING "YAWN_HAS_NAM is ON but no NAM sources found "
+                "(${neural_amp_modeler_core_SOURCE_DIR}/NAM/*.cpp empty). "
+                "Disabling NAM support.")
+        set(YAWN_HAS_NAM OFF CACHE BOOL "" FORCE)
+    endif()
+endif()
+
 # Collect sources
 file(GLOB_RECURSE YAWN_SOURCES
     src/*.cpp
