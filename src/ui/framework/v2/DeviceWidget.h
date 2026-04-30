@@ -607,6 +607,16 @@ public:
                 if (m_customPanel->dispatchScroll(e)) return true;
             }
         }
+        // Same for the custom body (GroupedKnobBody host that wraps
+        // a display widget — Multisampler's zone-list, SplineEQ etc.
+        // need wheel events to reach their inner display).
+        if (m_customBody) {
+            const auto& bb = m_customBody->bounds();
+            if (e.x >= bb.x && e.x < bb.x + bb.w &&
+                e.y >= bb.y && e.y < bb.y + bb.h) {
+                if (m_customBody->dispatchScroll(e)) return true;
+            }
+        }
         return false;
     }
 

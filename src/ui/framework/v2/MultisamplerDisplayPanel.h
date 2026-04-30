@@ -29,6 +29,8 @@
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/Knob.h"
 #include "ui/framework/v2/NumberInput.h"
+#include "ui/framework/v2/MultisamplerZoneRow.h"
+#include "ui/framework/v2/MultisamplerZoneMapWidget.h"
 #include "ui/Theme.h"
 #include "util/NoteNames.h"
 
@@ -51,25 +53,17 @@ public:
     // Mirror of Multisampler::Zone scoped to display fields. Pure view
     // model: the host pushes these in via setZones() each frame; the
     // panel echoes user edits back via the FieldCallback.
-    struct ZoneRow {
-        int   rootNote = 60;
-        int   lowKey   = 0;
-        int   highKey  = 127;
-        int   lowVel   = 1;
-        int   highVel  = 127;
-        float tune     = 0.0f;
-        float volume   = 1.0f;
-        float pan      = 0.0f;
-        bool  loop     = false;
-        // Display-only — basename of the source file or "<auto-sampled>".
-        std::string filename;
-        int   sampleFrames = 0;
-    };
+    //
+    // Defined in MultisamplerZoneRow.h — shared with the
+    // MultisamplerZoneMapWidget so both can talk the same view-model
+    // without a circular include between this header and the map.
+    using ZoneRow = MultisamplerZoneRow;
 
     using FieldCallback   = std::function<void(int zoneIdx, const ZoneRow&)>;
     using SelectCallback  = std::function<void(int zoneIdx)>;
     using IndexCallback   = std::function<void(int zoneIdx)>;
     using VoidCallback    = std::function<void()>;
+    using WidthCallback   = std::function<void(float newWidth)>;
 
     MultisamplerDisplayPanel() {
         setName("MultisamplerDisplay");
@@ -85,7 +79,50 @@ public:
             if (m_selected >= 0 && m_onRemoveZone) m_onRemoveZone(m_selected);
         });
 
+        m_mapToggleBtn.setLabel("Map ▶");
+        m_mapToggleBtn.setOnClick([this]() {
+            m_mapExpanded = !m_mapExpanded;
+            m_mapToggleBtn.setLabel(m_mapExpanded ? "Map ◀" : "Map ▶");
+            // Tell the host the panel wants more (or less) horizontal
+            // room. The wired GroupedKnobBody flips its m_displayWidth
+            // and the device strip re-flows on the next measure pass.
+            if (m_onPreferredWidthChanged) {
+                m_onPreferredWidthChanged(m_mapExpanded ? kExpandedW : kCollapsedW);
+            }
+            // invalidate() bubbles up only until the first relayout
+            // boundary (the DeviceWidget). The device strip's
+            // SnapScrollContainer never sees the change without a
+            // wholesale measure-cache flush, so it keeps drawing at
+            // the old width until a window resize forces a re-layout.
+            // bumpEpoch() invalidates every widget's measure cache —
+            // same mechanism the framework uses for DPI / theme
+            // changes — and is cheap enough for a one-off click.
+            UIContext::global().bumpEpoch();
+            invalidate();
+        });
+
         configureFieldWidgets();
+
+        // 2D zone map — selection + drag-edit feeds into the same
+        // path the per-field editors use, so the host wires nothing
+        // extra. Map → panel → existing notifyZoneChanged → host's
+        // setOnZoneFieldChange.
+        m_zoneMap.setOnSelectionChanged([this](int idx) {
+            // Mirror the map's selection into the panel's selection so
+            // the editor on the right and the list highlight follow.
+            // Skip-if-equal — setSelectedZone re-emits to the host.
+            if (idx == m_selected) return;
+            setSelectedZone(idx);
+        });
+        m_zoneMap.setOnZoneFieldChange([this](int idx, const ZoneRow& row) {
+            if (idx < 0 || idx >= static_cast<int>(m_zones.size())) return;
+            m_zones[idx] = row;
+            // Keep the per-field editors in sync with what the user
+            // is dragging in the map (otherwise the "Lo C2" knob
+            // displays a stale value while the map shows the new one).
+            if (idx == m_selected) syncEditorFromZone(idx);
+            notifyZoneChanged(idx);
+        });
     }
 
     // ─── Host-driven state ──────────────────────────────────────────
@@ -99,6 +136,11 @@ public:
                 m_selected = m_zones.empty() ? -1 : 0;
             if (m_selected < 0 && !m_zones.empty()) m_selected = 0;
             syncEditorFromZone(m_selected);
+            // Forward to the 2D map (its own skip-if-equal handles
+            // the case where the host's per-frame push is identical).
+            m_zoneMap.setZones(m_zones);
+            m_zoneMap.setSelectedZone(m_selected);
+            scrollListToSelection();   // no-op until first layout
         }
     }
 
@@ -108,6 +150,10 @@ public:
         if (idx == m_selected) return;
         m_selected = idx;
         syncEditorFromZone(idx);
+        m_zoneMap.setSelectedZone(idx);
+        scrollListToSelection();   // keep the list row visible — user
+                                   // may have selected via the 2D map
+                                   // and the row could be off-screen
         if (m_onSelect) m_onSelect(idx);
     }
 
@@ -116,10 +162,25 @@ public:
     void setOnSelectionChanged(SelectCallback cb){ m_onSelect     = std::move(cb); }
     void setOnRemoveZone(IndexCallback cb)      { m_onRemoveZone = std::move(cb); }
     void setOnAutoSampleClicked(VoidCallback cb){ m_onAutoSample = std::move(cb); }
+    // Fires when the Map toggle is clicked; argument is the panel's
+    // new preferred width. Host wires this to GroupedKnobBody's
+    // setDisplayWidth so the device strip re-flows.
+    void setOnPreferredWidthChanged(WidthCallback cb) {
+        m_onPreferredWidthChanged = std::move(cb);
+    }
+    float currentPreferredWidth() const {
+        return m_mapExpanded ? kExpandedW : kCollapsedW;
+    }
 
     // ─── Layout / render ────────────────────────────────────────────
+    // Width depends on the map toggle: collapsed = original 360 px
+    // (existing list+editor only), expanded = 360 + map area. Height
+    // unchanged from the original ~196 px panel — map shares the
+    // existing vertical band with list+editor when expanded.
     Size onMeasure(Constraints c, UIContext&) override {
-        return c.constrain({c.maxW, std::max(c.minH, 196.0f)});
+        const float preferredW = currentPreferredWidth();
+        const float preferredH = kToolbarH + kListEditorH;
+        return c.constrain({preferredW, std::max(c.minH, preferredH)});
     }
 
     void onLayout(Rect bounds, UIContext& ctx) override {
@@ -132,53 +193,95 @@ public:
         m_autoSampleBtn.layout({x + 4, y + 2, 90.0f, kToolbarH - 4}, ctx);
         // Remove button — visible only when a zone is selected.
         m_removeZoneBtn.layout({x + 100, y + 2, 60.0f, kToolbarH - 4}, ctx);
+        // Map toggle button — far right of the toolbar.
+        const float toggleW = 56.0f;
+        m_mapToggleBtn.layout({x + w - toggleW - 4, y + 2,
+                               toggleW, kToolbarH - 4}, ctx);
 
-        const float listX = x;
-        const float listY = y + kToolbarH;
-        const float listH = h - kToolbarH;
-        m_listRect = {listX, listY, kListW, listH};
+        const float bandY = y + kToolbarH;
+        const float bandH = std::max(40.0f, h - kToolbarH);
 
+        // List on the far left.
+        m_listRect = {x, bandY, kListW, bandH};
+
+        // Editor pane sits to the right of the list. When the map is
+        // expanded, it shrinks to leave room for the map column.
         const float edX = x + kListW + 4;
-        const float edY = y + kToolbarH + 4;
-        const float edW = w - kListW - 8;
-        const float edH = h - kToolbarH - 8;
+        const float edY = bandY + 4;
+        const float edAvailW = w - kListW - 8
+                             - (m_mapExpanded ? (kMapW + kMapGap) : 0.0f);
+        const float edW = std::max(80.0f, edAvailW);
+        const float edH = bandH - 8;
         m_editorRect = {edX, edY, edW, edH};
+
+        // Map column on the right (only when expanded).
+        if (m_mapExpanded) {
+            const float mapX = edX + edW + kMapGap;
+            const float mapY = bandY + 4;
+            const float mapW = std::max(40.0f, x + w - mapX - 4);
+            const float mapH = bandH - 8;
+            m_zoneMap.setVisible(true);
+            m_zoneMap.layout({mapX, mapY, mapW, mapH}, ctx);
+        } else {
+            m_zoneMap.setVisible(false);
+            m_zoneMap.layout({x, y + h, 0, 0}, ctx);
+        }
+
+        // First layout (or post-resize) — m_listRect.h is now real,
+        // so any deferred scroll-to-selection from setZones / ctor
+        // takes effect now. Idempotent on subsequent calls.
+        scrollListToSelection();
 
         // Editor header band ("Zone N — file.wav") owns the top
         // strip; the field grid starts below it so labels never
         // overlap the header text.
-        const float headerH = 18.0f;
+        const float headerH = 24.0f;
         const float gridY = edY + headerH;
 
-        // Editor 2-column grid. Two cols of equal width.
-        const float colW = (edW - 8) * 0.5f;
+        // Editor 2-column grid. Number-input column (left) is
+        // narrower because note names + velocities are 2-3 chars max;
+        // knob column (right) gets the bulk of the width so Tune /
+        // Vol / Pan render at a usable size instead of as 38-px
+        // postage stamps.
+        const float kKnobColPx = 64.0f;   // wide enough for the knob arc + label
+        const float numColW    = std::max(78.0f, edW - kKnobColPx - 8);
+        const float knobColW   = std::max(56.0f, edW - numColW - 8);
         const float col0X = edX;
-        const float col1X = edX + colW + 8;
-        const float rowH = 24.0f;
-        const float fieldW = colW;
-        const float labelH = 13.0f;     // small label above each field
+        const float col1X = edX + numColW + 8;
+        // rowH = label band + field band. labelH must be >= line
+        // height of kFsTiny (15 × ~1.2 = 18) so the label glyph never
+        // dips into the field's background — was 13 with a 12-px
+        // font, became a clip when the font went up to 15.
+        const float rowH = 30.0f;
+        const float labelH = 18.0f;
 
-        // Row 0: Root (col 0), Tune (col 1)
-        layoutField(m_rootInput,  col0X, gridY + labelH,            fieldW, rowH - labelH, ctx);
-        layoutField(m_tuneKnob,   col1X, gridY,                     fieldW, rowH * 1.6f,  ctx);
+        // Knob column starts 8 px above the grid top — gives the
+        // bottom-most knob (Pan) clearance from the editor's lower
+        // edge without sacrificing the label-band spacing on the
+        // numeric-input column.
+        const float knobColY = gridY - 8.0f;
 
-        // Row 1: Lo / Hi keys
+        // Row 0: Root (col 0), Tune (col 1, vertical knob)
+        layoutField(m_rootInput, col0X, gridY + labelH, numColW, rowH - labelH, ctx);
+        layoutField(m_tuneKnob,  col1X, knobColY,        knobColW, rowH * 1.8f, ctx);
+
+        // Row 1: Lo / Hi keys (col 0)
         layoutField(m_lowKeyInput, col0X,        gridY + (rowH * 1.0f) + labelH,
-                    fieldW * 0.48f, rowH - labelH, ctx);
-        layoutField(m_highKeyInput, col0X + fieldW * 0.52f,
+                    numColW * 0.48f, rowH - labelH, ctx);
+        layoutField(m_highKeyInput, col0X + numColW * 0.52f,
                     gridY + (rowH * 1.0f) + labelH,
-                    fieldW * 0.48f, rowH - labelH, ctx);
+                    numColW * 0.48f, rowH - labelH, ctx);
 
-        // Row 2: Lo / Hi velocities (col 0); Vol knob (col 1, taller)
+        // Row 2: Lo / Hi velocities (col 0); Vol knob (col 1)
         layoutField(m_lowVelInput, col0X,        gridY + (rowH * 2.0f) + labelH,
-                    fieldW * 0.48f, rowH - labelH, ctx);
-        layoutField(m_highVelInput, col0X + fieldW * 0.52f,
+                    numColW * 0.48f, rowH - labelH, ctx);
+        layoutField(m_highVelInput, col0X + numColW * 0.52f,
                     gridY + (rowH * 2.0f) + labelH,
-                    fieldW * 0.48f, rowH - labelH, ctx);
-        layoutField(m_volKnob, col1X, gridY + rowH * 1.6f, fieldW, rowH * 1.6f, ctx);
+                    numColW * 0.48f, rowH - labelH, ctx);
+        layoutField(m_volKnob, col1X, knobColY + rowH * 1.8f, knobColW, rowH * 1.8f, ctx);
 
         // Row 3: Pan knob (col 1)
-        layoutField(m_panKnob, col1X, gridY + rowH * 3.2f, fieldW, rowH * 1.6f, ctx);
+        layoutField(m_panKnob, col1X, knobColY + rowH * 3.6f, knobColW, rowH * 1.8f, ctx);
 
         // Row 3 (col 0): Loop toggle
         layoutField(m_loopToggle, col0X, gridY + rowH * 3.0f + 2.0f,
@@ -204,13 +307,15 @@ public:
         m_autoSampleBtn.render(ctx);
         m_removeZoneBtn.setVisible(m_selected >= 0);
         if (m_removeZoneBtn.isVisible()) m_removeZoneBtn.render(ctx);
+        m_mapToggleBtn.render(ctx);
 
         if (tm) {
+            // "Zones: N" label sits LEFT of the Map toggle button.
             char buf[32];
             std::snprintf(buf, sizeof(buf), "Zones: %d",
                           static_cast<int>(m_zones.size()));
             tm->drawText(r, buf,
-                         m_toolbarRect.x + m_toolbarRect.w - 60,
+                         m_mapToggleBtn.bounds().x - 64,
                          m_toolbarRect.y + 4, kFsLabel,
                          Color{180, 180, 180, 255});
         }
@@ -241,6 +346,9 @@ public:
                              kFsLabel, Color{150, 150, 155, 255});
             }
         }
+
+        // ── 2D zone map (only when expanded via toolbar toggle) ──
+        if (m_mapExpanded) m_zoneMap.render(ctx);
     }
 #endif
 
@@ -252,11 +360,35 @@ public:
             if (m_removeZoneBtn.isVisible() &&
                 rectContains(m_removeZoneBtn.bounds(), e.x, e.y))
                 return m_removeZoneBtn.dispatchMouseDown(e);
+            if (rectContains(m_mapToggleBtn.bounds(), e.x, e.y))
+                return m_mapToggleBtn.dispatchMouseDown(e);
             return false;
         }
 
-        // Zone list — click selects.
+        // Zone list — click selects, or drag scrollbar thumb.
         if (rectContains(m_listRect, e.x, e.y)) {
+            // Scrollbar hit-test takes precedence so a press on the
+            // thumb starts a drag rather than selecting a row that
+            // happens to sit behind the scrollbar.
+            if (rectContains(m_scrollbarRect, e.x, e.y)) {
+                const Rect th = scrollbarThumbRect();
+                if (rectContains(th, e.x, e.y)) {
+                    m_scrollbarDragActive  = true;
+                    m_scrollbarDragOffsetY = e.y - th.y;
+                    captureMouse();
+                    return true;
+                }
+                // Click on track outside the thumb — page-jump in
+                // that direction (one page = rowsVisible).
+                const int rowsVisible = visibleListRows();
+                const int total = static_cast<int>(m_zones.size());
+                const int maxScroll = std::max(0, total - rowsVisible);
+                m_listScroll = std::clamp(
+                    m_listScroll + (e.y < th.y ? -rowsVisible : rowsVisible),
+                    0, maxScroll);
+                invalidate();
+                return true;
+            }
             const float rowH = kListRowH;
             const int row = static_cast<int>(
                 (e.y - m_listRect.y - kListHeaderH) / rowH);
@@ -274,15 +406,54 @@ public:
                 return w->dispatchMouseDown(e);
             }
         }
+
+        // 2D zone map (right side when expanded).
+        if (m_mapExpanded && rectContains(m_zoneMap.bounds(), e.x, e.y)) {
+            return m_zoneMap.dispatchMouseDown(e);
+        }
         return false;
     }
 
     bool onScroll(ScrollEvent& e) override {
         if (rectContains(m_listRect, e.x, e.y)) {
+            // Scroll one row per detent. SDL's wheel typically reports
+            // dy = ±1 per tick on a regular wheel; trackpad smooth-
+            // scroll sends more frequent fractional events, which
+            // also work fine through this clamp.
             const int dir = (e.dy > 0 ? -1 : (e.dy < 0 ? 1 : 0));
             const int maxScroll = std::max(
                 0, static_cast<int>(m_zones.size()) - visibleListRows());
             m_listScroll = std::clamp(m_listScroll + dir, 0, maxScroll);
+            invalidate();
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_scrollbarDragActive) {
+            const Rect t = scrollbarTrackRect();
+            const Rect th = scrollbarThumbRect();
+            const float travel = std::max(1.0f, t.h - th.h);
+            const float pos = std::clamp(
+                e.y - t.y - m_scrollbarDragOffsetY, 0.0f, travel);
+            const int total = static_cast<int>(m_zones.size());
+            const int rowsVisible = visibleListRows();
+            const int maxScroll = std::max(0, total - rowsVisible);
+            m_listScroll = static_cast<int>(std::round(
+                pos / travel * static_cast<float>(maxScroll)));
+            m_listScroll = std::clamp(m_listScroll, 0, maxScroll);
+            invalidate();
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_scrollbarDragActive) {
+            m_scrollbarDragActive = false;
+            releaseMouse();
+            invalidate();
             return true;
         }
         return false;
@@ -290,15 +461,33 @@ public:
 
 private:
     static constexpr float kToolbarH    = 22.0f;
-    static constexpr float kListW       = 142.0f;
-    static constexpr float kListHeaderH = 16.0f;
-    static constexpr float kListRowH    = 17.0f;
+    // Wider list trades visible-row count for legibility — ~7 rows
+    // at the new 22-px row height is fine since wheel/scrollbar
+    // both work and the 2D map is the primary navigation tool.
+    static constexpr float kListW       = 184.0f;
+    static constexpr float kListHeaderH = 22.0f;
+    static constexpr float kListRowH    = 22.0f;
+    static constexpr float kScrollbarW  = 8.0f;   // visible track + thumb
+    // List + editor band sits beneath the toolbar. Tall enough for
+    // the new 1.8×rowH Tune/Vol/Pan knob stack (rowH*5.4 + header +
+    // padding ≈ 220).
+    static constexpr float kListEditorH = 230.0f;
+    // Map column (horizontal layout). Sits to the right of the editor
+    // when the toolbar's "Map ▶" toggle is on. Width chosen so each
+    // MIDI key gets ~3.75 px (480/128) — text labels readable, zone
+    // index labels fit, no awkward octave-label pile-ups.
+    static constexpr float kMapW        = 480.0f;
+    static constexpr float kMapGap      = 6.0f;
+    // Panel widths: collapsed = original list+editor only;
+    // expanded   = adds the map column.
+    static constexpr float kCollapsedW  = 360.0f;
+    static constexpr float kExpandedW   = kCollapsedW + kMapGap + kMapW;
     // Pixel sizes — match Theme::metrics fontSize / fontSizeSmall so
     // the panel reads at the same scale as the rest of the UI. The v1
     // pt/26 scaling used by older panels rendered at ~11–13 px which
     // was too small for label rows in this 196-px-tall panel.
     static constexpr float kFsLabel = 14.0f;   // headline + section labels
-    static constexpr float kFsTiny  = 12.0f;   // list rows + field captions
+    static constexpr float kFsTiny  = 15.0f;   // list rows + field captions
 
     // ── Sub-widget setup ──
     void configureFieldWidgets() {
@@ -448,6 +637,30 @@ private:
         return std::max(1, static_cast<int>(usable / kListRowH));
     }
 
+    // Bring the selected zone's row into the visible window. Called
+    // whenever the selection changes (map click, host push, etc.) so
+    // a zone selected via the 2D map at index 50 doesn't leave the
+    // user staring at a list still scrolled to row 0. Standard
+    // "scroll just enough" behaviour: only moves the view when the
+    // selection is outside [m_listScroll, m_listScroll + visible).
+    void scrollListToSelection() {
+        if (m_selected < 0) return;
+        // Defer until first layout — setZones can fire before
+        // onLayout runs, in which case m_listRect.h = 0 and
+        // visibleListRows() collapses to 1, scrolling the list off
+        // the bottom for any selection > 0.
+        if (m_listRect.h <= 0) return;
+        const int rows = visibleListRows();
+        const int total = static_cast<int>(m_zones.size());
+        const int maxScroll = std::max(0, total - rows);
+        if (m_selected < m_listScroll) {
+            m_listScroll = m_selected;
+        } else if (m_selected >= m_listScroll + rows) {
+            m_listScroll = m_selected - rows + 1;
+        }
+        m_listScroll = std::clamp(m_listScroll, 0, maxScroll);
+    }
+
     static bool rectContains(const Rect& r, float x, float y) {
         return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
     }
@@ -457,12 +670,15 @@ private:
         auto& r = *ctx.renderer;
         auto* tm = ctx.textMetrics;
         const auto& lr = m_listRect;
+        // Reserve space at the right for the visible scrollbar so row
+        // text doesn't run under the thumb.
+        const float contentR = lr.x + lr.w - kScrollbarW - 2;
         r.drawRect(lr.x, lr.y, lr.w, lr.h, Color{25, 25, 28, 255});
         r.drawRect(lr.x, lr.y, lr.w, kListHeaderH, Color{40, 40, 46, 255});
         if (tm) {
-            tm->drawText(r, "#  Root  Key      Vel",
-                         lr.x + 4, lr.y + 1, kFsTiny,
-                         Color{170, 170, 170, 255});
+            tm->drawText(r, "# Root  Key       Vel",
+                         lr.x + 4, lr.y + 3, kFsTiny,
+                         Color{180, 180, 185, 255});
         }
 
         const int rowsVisible = visibleListRows();
@@ -474,38 +690,60 @@ private:
         for (int i = firstIdx; i < lastIdx; ++i) {
             const float ry = lr.y + kListHeaderH + (i - firstIdx) * kListRowH;
             const bool sel = (i == m_selected);
-            r.drawRect(lr.x, ry, lr.w, kListRowH - 1,
+            r.drawRect(lr.x, ry, contentR - lr.x, kListRowH - 1,
                        sel ? Color{55, 70, 95, 255}
                             : (i % 2 ? Color{32, 32, 36, 255}
                                       : Color{28, 28, 32, 255}));
             if (!tm) continue;
             const auto& z = m_zones[i];
             char buf[64];
-            std::snprintf(buf, sizeof(buf), "%-2d %-4s %s-%s  %d-%d",
+            std::snprintf(buf, sizeof(buf), "%-2d %-4s %s-%s %d-%d",
                 i,
                 ::yawn::util::midiNoteName(z.rootNote).c_str(),
                 ::yawn::util::midiNoteName(z.lowKey).c_str(),
                 ::yawn::util::midiNoteName(z.highKey).c_str(),
                 z.lowVel, z.highVel);
-            tm->drawText(r, buf, lr.x + 4, ry + 1, kFsTiny,
+            tm->drawText(r, buf, lr.x + 4, ry + 3, kFsTiny,
                          sel ? Color{240, 240, 240, 255}
                              : Color{200, 200, 200, 255});
         }
 
-        // Scroll indicator dots
+        // Visible draggable scrollbar (8 px wide track + brighter
+        // thumb). Dragging the thumb is wired in onMouseDown /
+        // onMouseMove via m_scrollbarDragActive.
         if (static_cast<int>(m_zones.size()) > rowsVisible) {
-            const float trackX = lr.x + lr.w - 4;
-            r.drawRect(trackX, lr.y + kListHeaderH, 2, lr.h - kListHeaderH,
+            m_scrollbarRect = scrollbarTrackRect();
+            r.drawRect(m_scrollbarRect.x, m_scrollbarRect.y,
+                       m_scrollbarRect.w, m_scrollbarRect.h,
                        Color{20, 20, 24, 255});
-            const float thumbH = std::max(8.0f,
-                (lr.h - kListHeaderH) *
-                static_cast<float>(rowsVisible) / m_zones.size());
-            const float thumbY = lr.y + kListHeaderH +
-                ((lr.h - kListHeaderH - thumbH) *
-                 static_cast<float>(m_listScroll) /
-                 std::max(1, static_cast<int>(m_zones.size()) - rowsVisible));
-            r.drawRect(trackX, thumbY, 2, thumbH, Color{120, 120, 130, 255});
+            const Rect th = scrollbarThumbRect();
+            const Color thumbCol = m_scrollbarDragActive
+                ? Color{200, 200, 215, 255}
+                : Color{150, 150, 165, 255};
+            r.drawRect(th.x + 1, th.y, th.w - 2, th.h, thumbCol);
+        } else {
+            m_scrollbarRect = {};
         }
+    }
+
+    Rect scrollbarTrackRect() const {
+        return { m_listRect.x + m_listRect.w - kScrollbarW - 1,
+                 m_listRect.y + kListHeaderH,
+                 kScrollbarW,
+                 m_listRect.h - kListHeaderH };
+    }
+
+    Rect scrollbarThumbRect() const {
+        const Rect t = scrollbarTrackRect();
+        const int rowsVisible = visibleListRows();
+        const int total = static_cast<int>(m_zones.size());
+        const int maxScroll = std::max(1, total - rowsVisible);
+        const float thumbH = std::max(20.0f,
+            t.h * static_cast<float>(rowsVisible) / std::max(1, total));
+        const float travel = t.h - thumbH;
+        const float thumbY = t.y + travel *
+            static_cast<float>(m_listScroll) / maxScroll;
+        return { t.x, thumbY, t.w, thumbH };
     }
 
     void renderEditor(UIContext& ctx) {
@@ -527,10 +765,13 @@ private:
             }
         }
 
-        // Field labels above each input/knob
+        // Field labels above each input/knob. labelDy ≈ -lineHeight
+        // so the label's glyph box sits cleanly in the row's label
+        // band without dipping into the field's background. Was -12
+        // when fonts were 12 px; bumped here to match kFsTiny=15.
         if (tm) {
-            const float labelDy = -12.0f;   // baseline gap above field
-            const Color labelCol{170, 170, 175, 255};
+            const float labelDy = -18.0f;
+            const Color labelCol{180, 180, 185, 255};
             tm->drawText(r, "Root", m_rootInput.bounds().x,
                          m_rootInput.bounds().y + labelDy, kFsTiny, labelCol);
             tm->drawText(r, "Lo",   m_lowKeyInput.bounds().x,
@@ -552,46 +793,41 @@ private:
 
     // ── State ──
     std::vector<ZoneRow> m_zones;
-    int m_selected   = -1;
-    int m_listScroll = 0;
+    int m_selected     = -1;
+    int m_listScroll   = 0;
+    bool m_mapExpanded = false;  // toggled by toolbar's "Map ▶" button
 
     Rect m_toolbarRect{};
     Rect m_listRect{};
     Rect m_editorRect{};
+    Rect m_scrollbarRect{};   // computed in renderZoneList; used by hit-test
 
-    FwButton       m_autoSampleBtn;
-    FwButton       m_removeZoneBtn;
-    FwNumberInput  m_rootInput;
-    FwNumberInput  m_lowKeyInput;
-    FwNumberInput  m_highKeyInput;
-    FwNumberInput  m_lowVelInput;
-    FwNumberInput  m_highVelInput;
-    FwKnob         m_tuneKnob;
-    FwKnob         m_volKnob;
-    FwKnob         m_panKnob;
-    FwToggle       m_loopToggle;
+    // Scrollbar drag state.
+    bool  m_scrollbarDragActive  = false;
+    float m_scrollbarDragOffsetY = 0.0f;
+
+    FwButton                    m_autoSampleBtn;
+    FwButton                    m_removeZoneBtn;
+    FwButton                    m_mapToggleBtn;
+    FwNumberInput               m_rootInput;
+    FwNumberInput               m_lowKeyInput;
+    FwNumberInput               m_highKeyInput;
+    FwNumberInput               m_lowVelInput;
+    FwNumberInput               m_highVelInput;
+    FwKnob                      m_tuneKnob;
+    FwKnob                      m_volKnob;
+    FwKnob                      m_panKnob;
+    FwToggle                    m_loopToggle;
+    MultisamplerZoneMapWidget   m_zoneMap;
 
     FieldCallback  m_onZoneChange;
     SelectCallback m_onSelect;
     IndexCallback  m_onRemoveZone;
     VoidCallback   m_onAutoSample;
+    WidthCallback  m_onPreferredWidthChanged;
 };
 
-// ZoneRow equality so setZones can short-circuit when the host pushes
-// the same data each frame.
-inline bool operator==(const MultisamplerDisplayPanel::ZoneRow& a,
-                       const MultisamplerDisplayPanel::ZoneRow& b) {
-    return a.rootNote == b.rootNote && a.lowKey == b.lowKey &&
-           a.highKey  == b.highKey  && a.lowVel == b.lowVel &&
-           a.highVel  == b.highVel  && a.tune   == b.tune   &&
-           a.volume   == b.volume   && a.pan    == b.pan    &&
-           a.loop     == b.loop     && a.filename == b.filename &&
-           a.sampleFrames == b.sampleFrames;
-}
-inline bool operator!=(const MultisamplerDisplayPanel::ZoneRow& a,
-                       const MultisamplerDisplayPanel::ZoneRow& b) {
-    return !(a == b);
-}
+// (operator== / != live in MultisamplerZoneRow.h alongside the type.)
 
 } // namespace fw2
 } // namespace ui

@@ -263,6 +263,18 @@ public:
         return w;
     }
 
+    // Runtime-mutable display width — for display panels that
+    // grow/shrink (e.g. MultisamplerDisplayPanel toggling its 2D
+    // zone-map). The configured `displayWidth` from configure() is
+    // the initial value; callers can flip it later and the device
+    // strip re-flows on the next measure pass.
+    void setDisplayWidth(float w) {
+        if (w == m_displayWidth) return;
+        m_displayWidth = w;
+        invalidate();
+    }
+    float displayWidth() const { return m_displayWidth; }
+
     void setOnParamChange(std::function<void(int, float)> cb) override {
         m_onParamChange = std::move(cb);
     }
@@ -356,6 +368,24 @@ public:
 #endif
 
     // ─── Events ─────────────────────────────────────────────────────
+
+    bool onScroll(ScrollEvent& e) override {
+        // Forward wheel events to the display widget when the cursor
+        // is over it. Without this, the display panel never sees
+        // wheel events at all — DeviceWidget's onScroll only forwards
+        // to m_customPanel, not m_customBody, so a panel set via
+        // setCustomBody (Multisampler, SplineEQ, ConvReverb) is
+        // wheel-deaf. This unblocks list scrolling in
+        // MultisamplerDisplayPanel and Q-on-hover-node in SplineEQ.
+        if (m_display) {
+            const auto& db = m_display->bounds();
+            if (e.x >= db.x && e.x < db.x + db.w &&
+                e.y >= db.y && e.y < db.y + db.h) {
+                if (m_display->dispatchScroll(e)) return true;
+            }
+        }
+        return false;
+    }
 
     bool onMouseDown(MouseEvent& e) override {
         // Forward clicks into the display slot first (e.g. DrumSlop pad

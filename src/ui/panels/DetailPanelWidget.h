@@ -1592,6 +1592,11 @@ private:
                 }
                 msPanel->setZones(std::move(rows));
             });
+            // Width-change wiring (deferred to AFTER the GroupedKnobBody
+            // is constructed below; we have to capture the body* once it
+            // exists, so the actual setOnPreferredWidthChanged() call
+            // lives just past the body/setCustomBody sequence).
+            m_pendingMsPanelWidthHook = msPanel;
         } else {
             return false;
         }
@@ -1616,6 +1621,16 @@ private:
         // Set initial values
         for (int p = 0; p < count; ++p)
             body->updateParamValue(p, ref.getParam(p));
+
+        // Multisampler panel toggles its 2D map → reports a new
+        // preferred display width → body re-flows. Wired here, after
+        // the body exists. Captures `body` only — the panel pointer
+        // was stashed in m_pendingMsPanelWidthHook a few lines up.
+        if (m_pendingMsPanelWidthHook) {
+            m_pendingMsPanelWidthHook->setOnPreferredWidthChanged(
+                [body](float newWidth) { body->setDisplayWidth(newWidth); });
+            m_pendingMsPanelWidthHook = nullptr;
+        }
 
         // Bypass / remove callbacks
         dw->setOnBypassToggle([ref](bool) { DeviceRef r = ref; r.toggleBypass(); });
@@ -1802,6 +1817,13 @@ private:
     std::vector<DeviceRef>     m_deviceRefs;     // parallel to m_deviceWidgets
     std::vector<ExpandState>   m_expandStates;
     std::vector<std::function<void()>> m_displayUpdaters;  // instrument display updaters
+
+    // Two-stage wiring shim — the Multisampler panel's
+    // preferred-width callback needs the GroupedKnobBody*, which
+    // doesn't exist when we set up the panel itself. Stash the panel
+    // here, then connect once the body is constructed in the same
+    // setupInstrumentDisplay call. Always nulled out before returning.
+    fw2::MultisamplerDisplayPanel* m_pendingMsPanelWidthHook = nullptr;
 
     bool m_open         = false;
     bool m_panelFocused = false;
