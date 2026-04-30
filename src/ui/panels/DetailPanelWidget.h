@@ -1624,7 +1624,13 @@ private:
             disp->setOnParamChange([ref](int idx, float v) {
                 DeviceRef r = ref; r.setParam(idx, v);
             });
-            dw->setCustomPanel(disp, 400.0f, 200.0f);
+            // setCustomPanel(panel, h, minW): panel HEIGHT first,
+            // then MIN WIDTH. The EQ wants 200 px tall × at least
+            // 400 px wide (the device strip will stretch wider
+            // wherever the layout has room). Earlier I had this
+            // reversed — 400 as h pushed the panel off-screen and
+            // the body looked empty.
+            dw->setCustomPanel(disp, 200.0f, 400.0f);
             configureDeviceWidget(dw, ref);
             return true;
         }
