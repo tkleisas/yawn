@@ -16,6 +16,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -37,7 +38,14 @@ public:
         m_onParamChange = std::move(cb);
     }
 
-    void setModelName(const std::string& s) { m_modelName = s; }
+    void setModelName(const std::string& s) {
+        if (m_modelName == s) return;
+        m_modelName = s;
+        // Reset marquee scroll state when the name changes — otherwise
+        // the new (shorter) string can land mid-animation and look
+        // garbled. Cheap, fires only on actual change.
+        m_marqueeFrame = 0.0f;
+    }
     void setLoadedFlag(bool loaded)         { m_loaded = loaded; }
     void setOnLoadRequest(std::function<void()> cb)  { m_onLoadRequest  = std::move(cb); }
     void setOnClearRequest(std::function<void()> cb) { m_onClearRequest = std::move(cb); }
@@ -68,14 +76,58 @@ public:
             tm->drawText(r, "NAM", m_bounds.x + pad, m_bounds.y + 4,
                           titleFs, Color{180, 180, 200, 255});
 
+        // ── Filename row ──
+        // Marquee-scroll long filenames so users with long
+        // pelennor-style "<Capturer> <Amp> <Channel> <Settings>.nam"
+        // names can read the whole thing without the panel
+        // overflowing. Behaviour:
+        //   * Text fits → render normally, no animation
+        //   * Text overflows → scroll left at ~40 px/sec with a
+        //     ~1 s pause at start + end. Render is clipped to the
+        //     panel-internal width so nothing escapes the bounds
+        //     even mid-scroll.
+        // Frame counter is incremented inside render() so the
+        // animation runs at the UI frame rate (typically 60 Hz).
         const float nameY = m_bounds.y + 4 + titleFs + 4;
         if (tm) {
             const std::string display = m_modelName.empty()
                 ? std::string("(no model loaded)") : m_modelName;
-            tm->drawText(r, display, m_bounds.x + pad, nameY, fs,
-                          m_modelName.empty()
-                            ? Color{120, 120, 140, 220}
-                            : Color{220, 220, 235, 255});
+            const Color textC = m_modelName.empty()
+                ? Color{120, 120, 140, 220}
+                : Color{220, 220, 235, 255};
+            const float availW = m_bounds.w - pad * 2;
+            const float textW  = tm->textWidth(display, fs);
+
+            r.pushClip(m_bounds.x + pad, nameY,
+                        availW, fs + 4);
+            float drawX = m_bounds.x + pad;
+            if (textW > availW) {
+                // Compute marquee offset from frame counter.
+                // Phases (in frames at ~60 Hz):
+                //   * pause   — kPauseFrames at offset = 0
+                //   * scroll  — linear ramp 0 → maxOffset over kScrollFrames
+                //   * pause   — kPauseFrames at offset = maxOffset
+                //   * snap    — instant return to 0 (start of next loop)
+                // 0.66 px/frame ≈ 40 px/sec scroll speed; readable
+                // without feeling sluggish on the long pelennor names.
+                constexpr float kPauseFrames = 60.0f;
+                constexpr float kPxPerFrame  = 0.66f;
+                const float maxOffset  = textW - availW + 12.0f;
+                const float scrollFr   = maxOffset / kPxPerFrame;
+                const float totalFr    = scrollFr + 2.0f * kPauseFrames;
+                const float t = std::fmod(m_marqueeFrame, totalFr);
+                float offset;
+                if (t < kPauseFrames)                       offset = 0.0f;
+                else if (t < kPauseFrames + scrollFr)
+                    offset = (t - kPauseFrames) * kPxPerFrame;
+                else                                         offset = maxOffset;
+                drawX -= offset;
+                m_marqueeFrame += 1.0f;
+            } else {
+                m_marqueeFrame = 0.0f;
+            }
+            tm->drawText(r, display, drawX, nameY, fs, textC);
+            r.popClip();
         }
 
         // "Loaded" / "Not loaded" status indicator.
@@ -154,6 +206,12 @@ private:
 
     Rect m_loadBtnRect{}, m_clearBtnRect{};
     bool m_loadBtnHover = false, m_clearBtnHover = false;
+
+    // Marquee animation state for long filenames. Reset to 0 on
+    // model-name change (setModelName) so a freshly loaded short
+    // name doesn't inherit a stale offset from the previous long
+    // one. render() is non-const so no mutable needed.
+    float m_marqueeFrame = 0.0f;
 };
 
 } // namespace fw2
