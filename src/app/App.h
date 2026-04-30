@@ -62,6 +62,8 @@
 
 namespace yawn {
 
+namespace effects { class ConvolutionReverb; }
+
 class App {
 public:
     App() = default;
@@ -308,6 +310,12 @@ private:
     // Target slot for the pending "Load Shader…" file dialog.
     int m_pendingShaderTrack = -1;
     int m_pendingShaderScene = -1;
+    // Target effect for the pending "Load IR…" dialog from the
+    // ConvolutionReverb display panel. SDL_ShowOpenFileDialog's
+    // C-style callback only carries a void* userdata, not arbitrary
+    // captures, so the effect pointer is stashed here between
+    // dialog-open and callback-fires.
+    effects::ConvolutionReverb* m_pendingConvIRReverb = nullptr;
     // Target slot for the pending "Set Video…" file dialog.
     int m_pendingVideoTrack = -1;
     int m_pendingVideoScene = -1;

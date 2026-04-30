@@ -19,6 +19,7 @@
 #include "ui/framework/v2/GranularDisplayPanel.h"
 #include "ui/framework/v2/VocoderDisplayPanel.h"
 #include "ui/framework/v2/SplineEQDisplayPanel.h"
+#include "ui/framework/v2/ConvReverbDisplayPanel.h"
 #include "ui/framework/v2/DrumSlopDisplayPanel.h"
 #include "ui/framework/v2/DrumRackDisplayPanel.h"
 #include "ui/framework/v2/InstrumentRackDisplayPanel.h"
@@ -51,6 +52,7 @@
 #include "effects/EffectChain.h"
 #include "effects/Filter.h"
 #include "effects/SplineEQ.h"
+#include "effects/ConvolutionReverb.h"
 #include "midi/MidiEffect.h"
 #include "midi/MidiEffectChain.h"
 #include "midi/LFO.h"
@@ -216,6 +218,18 @@ public:
     }
     void setOnSetSidechainSource(SetSidechainSourceCallback cb) {
         m_setSidechainSource = std::move(cb);
+    }
+
+    // ── IR-loader callback for ConvolutionReverb (and any future
+    // IR-loading effect like NeuralAmp Stage 2 with .nam files).
+    // Implemented App-side: opens an SDL file dialog, reads the
+    // chosen file via libsndfile (or whatever decoder the format
+    // needs), and pushes the data into the effect via its own
+    // load API. Display panel just emits "user wants to load" —
+    // doesn't touch SDL or the filesystem.
+    using LoadConvIRCallback = std::function<void(effects::ConvolutionReverb*)>;
+    void setOnLoadConvIR(LoadConvIRCallback cb) {
+        m_onLoadConvIR = std::move(cb);
     }
 
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
@@ -1628,6 +1642,38 @@ private:
             return true;
         }
 
+        if (id == "convreverb") {
+            // Same CustomDeviceBody pattern as the Spline EQ — the
+            // panel replaces the per-param knob list. Buttons drive
+            // an App-side IR loader (file dialog + libsndfile decode
+            // + push to effect via loadIRMono). Per-frame updater
+            // keeps the panel's filename / waveform thumbnail in
+            // sync with the underlying effect.
+            auto* disp = new ConvReverbDisplayPanel();
+            auto* cr   = static_cast<effects::ConvolutionReverb*>(fx);
+            disp->setOnParamChange([ref](int idx, float v) {
+                DeviceRef r = ref; r.setParam(idx, v);
+            });
+            disp->setOnLoadRequest([this, cr]() {
+                if (m_onLoadConvIR) m_onLoadConvIR(cr);
+            });
+            disp->setOnClearRequest([cr]() { cr->clearIR(); });
+            dw->setCustomBody(disp);
+            configureDeviceWidget(dw, ref);
+            m_displayUpdaters.push_back([disp, cr]() {
+                // Pull filename from the effect's stored path
+                // (just the basename, not the full path — fits the
+                // panel better).
+                std::string p = cr->irPath();
+                std::string base = p;
+                const auto slash = p.find_last_of("/\\");
+                if (slash != std::string::npos) base = p.substr(slash + 1);
+                disp->setIRName(base);
+                disp->setIRWaveform(cr->irData(), cr->irDataLength());
+            });
+            return true;
+        }
+
         if (id == "filter") {
             auto* disp = new FilterDisplayWidget();
             dw->setCustomPanel(disp, 52.0f, 200.0f);
@@ -1751,6 +1797,7 @@ private:
     TrackNamesProvider          m_trackNamesProvider;
     SidechainSourceProvider     m_sidechainSourceProvider;
     SetSidechainSourceCallback  m_setSidechainSource;
+    LoadConvIRCallback          m_onLoadConvIR;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;

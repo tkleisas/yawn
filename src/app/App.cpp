@@ -1109,6 +1109,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
     addFxItem("Spline EQ",   [](){ return std::make_unique<effects::SplineEQ>(); });
     addFxItem("Neural Amp",  [](){ return std::make_unique<effects::NeuralAmp>(); });
+    addFxItem("Conv Reverb", [](){ return std::make_unique<effects::ConvolutionReverb>(); });
     addFxItem("Tape Emulation", [](){ return std::make_unique<effects::TapeEmulation>(); });
     addFxItem("Amp Simulator",  [](){ return std::make_unique<effects::AmpSimulator>(); });
     addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
@@ -3916,6 +3917,7 @@ bool App::init() {
         addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
         addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
         addFx("Neural Amp",      [](){ return std::make_unique<effects::NeuralAmp>(); });
+        addFx("Conv Reverb",     [](){ return std::make_unique<effects::ConvolutionReverb>(); });
         addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
         addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
         addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
@@ -4648,6 +4650,77 @@ bool App::init() {
         m_project.track(trackIdx).sidechainSource = sourceIdx;
         m_audioEngine.sendCommand(audio::SetSidechainSourceMsg{trackIdx, sourceIdx});
         markDirty();
+    });
+
+    // ConvolutionReverb IR loader — opens an SDL file dialog,
+    // decodes via FileIO::loadAudioFile (libsndfile), sums to mono,
+    // pushes into the effect's loadIRMono. The Conv Reverb display
+    // panel triggers this via its "Load IR…" button. Stashes the
+    // ConvolutionReverb pointer in m_pendingConvIRReverb because
+    // SDL_ShowOpenFileDialog's callback signature is C-style with
+    // a void* userdata, and lambda captures don't survive that.
+    m_detailPanel->setOnLoadConvIR([this](effects::ConvolutionReverb* cr) {
+        if (!cr) return;
+        m_pendingConvIRReverb = cr;
+        static SDL_DialogFileFilter filter{"Audio files", "wav;flac;aif;aiff;ogg;mp3"};
+        SDL_ShowOpenFileDialog(
+            [](void* ud, const char* const* filelist, int) {
+                auto* self = static_cast<App*>(ud);
+                auto* eff  = self->m_pendingConvIRReverb;
+                self->m_pendingConvIRReverb = nullptr;
+                if (!eff || !filelist || !filelist[0]) return;
+                const std::string path = filelist[0];
+                util::AudioFileInfo info;
+                auto buf = util::loadAudioFile(path, &info);
+                if (!buf || buf->numFrames() <= 0) {
+                    LOG_WARN("ConvReverb", "Failed to load IR: %s", path.c_str());
+                    return;
+                }
+                // Resample to host sample rate if needed — convolution
+                // engine assumes the IR matches the audio it'll be
+                // convolving with. Without this, an IR captured at
+                // 44.1k convolved against a 48k host would play
+                // ~9% lower in pitch (and shorter in time).
+                const double hostRate = self->m_audioEngine.sampleRate();
+                std::shared_ptr<audio::AudioBuffer> ir = buf;
+                if (info.sampleRate > 0 &&
+                    static_cast<double>(info.sampleRate) != hostRate) {
+                    ir = util::resampleBuffer(*buf,
+                        static_cast<double>(info.sampleRate), hostRate);
+                }
+                // Mono-sum the IR. ConvolutionEngine is mono per
+                // channel; for stereo IRs we average across channels
+                // for the single mono kernel both L/R engines share.
+                // True stereo IRs (4-way LL/LR/RL/RR) are a future
+                // upgrade — captured in the v1 design notes.
+                // AudioBuffer is non-interleaved (channel-major) so
+                // we walk channels via channelData(c).
+                const int frames = ir->numFrames();
+                const int ch     = ir->numChannels();
+                std::vector<float> mono(frames, 0.0f);
+                if (ch == 1) {
+                    std::memcpy(mono.data(), ir->channelData(0),
+                                 frames * sizeof(float));
+                } else if (ch > 1) {
+                    const float invCh = 1.0f / static_cast<float>(ch);
+                    for (int c = 0; c < ch; ++c) {
+                        const float* src = ir->channelData(c);
+                        for (int i = 0; i < frames; ++i)
+                            mono[i] += src[i] * invCh;
+                    }
+                }
+                eff->loadIRMono(mono.data(),
+                                 static_cast<int>(mono.size()),
+                                 hostRate);
+                eff->setIRPath(path);
+                LOG_INFO("ConvReverb",
+                         "Loaded IR: %s (%d frames, %d ch, %d Hz src)",
+                         path.c_str(), frames, ch, info.sampleRate);
+            },
+            this, m_mainWindow.getHandle(),
+            &filter, 1,
+            /*default_location*/ nullptr,
+            /*allow_many*/ false);
     });
 
 #ifdef YAWN_HAS_VST3
