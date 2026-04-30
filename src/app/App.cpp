@@ -26,6 +26,7 @@
 #include "effects/Limiter.h"
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
+#include "effects/Phaser.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
 #include "effects/AmpSimulator.h"
@@ -1115,6 +1116,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Limiter",     [](){ return std::make_unique<effects::Limiter>(); });
     addFxItem("Filter",      [](){ return std::make_unique<effects::Filter>(); });
     addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
+    addFxItem("Phaser",      [](){ return std::make_unique<effects::Phaser>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
     addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
     addFxItem("Noise Gate",  [](){ return std::make_unique<effects::NoiseGate>(); });
@@ -3923,6 +3925,7 @@ bool App::init() {
         addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
         addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
         addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
+        addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
         addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
         addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });

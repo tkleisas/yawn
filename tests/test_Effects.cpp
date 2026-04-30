@@ -13,6 +13,7 @@
 #include "effects/TapeEmulation.h"
 #include "effects/AmpSimulator.h"
 #include "effects/NoiseGate.h"
+#include "effects/Phaser.h"
 #include "effects/Convolution.h"
 #include "effects/ConvolutionReverb.h"
 #include "effects/Oscilloscope.h"
@@ -978,6 +979,7 @@ TEST(Latency, ZeroLatencyEffectsReportZero) {
     Compressor   c;        c.init(kSampleRate, kBlockSize);
     Filter       f;        f.init(kSampleRate, kBlockSize);
     Chorus       ch;       ch.init(kSampleRate, kBlockSize);
+    Phaser       ph;       ph.init(kSampleRate, kBlockSize);
     Distortion   dist;     dist.init(kSampleRate, kBlockSize);
     TapeEmulation t;       t.init(kSampleRate, kBlockSize);
     AmpSimulator amp;      amp.init(kSampleRate, kBlockSize);
@@ -990,6 +992,7 @@ TEST(Latency, ZeroLatencyEffectsReportZero) {
     EXPECT_EQ(c.latencySamples(),    0);
     EXPECT_EQ(f.latencySamples(),    0);
     EXPECT_EQ(ch.latencySamples(),   0);
+    EXPECT_EQ(ph.latencySamples(),   0);
     EXPECT_EQ(dist.latencySamples(), 0);
     EXPECT_EQ(t.latencySamples(),    0);
     EXPECT_EQ(amp.latencySamples(),  0);
@@ -1102,4 +1105,138 @@ TEST(Latency, ConvolutionReverbReportsThroughTheEngine) {
 
     rev.clearIR();
     EXPECT_EQ(rev.latencySamples(), 0);
+}
+
+// ========================= Phaser =========================
+//
+// All-pass cascade with LFO modulation. The all-pass network is
+// sample-by-sample causal (zero latency), and at mix=0 the dry
+// path passes through unchanged. Beyond that we mostly want to
+// confirm: the cascade actually colours the signal, the mix knob
+// behaves at endpoints, parameter access works, and bypass is a
+// pass-through.
+
+TEST(Phaser, Init) {
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(p.parameterCount(), Phaser::kParamCount);
+    // Defaults are inside the documented ranges.
+    for (int i = 0; i < p.parameterCount(); ++i) {
+        const auto& info = p.parameterInfo(i);
+        EXPECT_GE(p.getParameter(i), info.minValue);
+        EXPECT_LE(p.getParameter(i), info.maxValue);
+    }
+    EXPECT_EQ(p.latencySamples(), 0);  // sample-by-sample causal
+}
+
+TEST(Phaser, MixZeroIsDry) {
+    // mix = 0 → no wet contribution → output equals input. This
+    // pins the "dry path is sample-accurate" claim from the
+    // file-level latency comment.
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    p.setParameter(Phaser::kMix, 0.0f);
+
+    constexpr int N = kBlockSize;
+    constexpr int CH = 2;
+    float buf[N * CH];
+    fillSine(buf, N, CH, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + N * CH);
+    p.process(buf, N, CH);
+
+    for (int i = 0; i < N * CH; ++i) {
+        EXPECT_NEAR(buf[i], input[i], 1e-6f);
+    }
+}
+
+TEST(Phaser, ProducesOutput) {
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    p.setParameter(Phaser::kMix, 0.5f);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    p.process(buf, kBlockSize, 2);
+    EXPECT_TRUE(hasSignal(buf, kBlockSize, 2));
+}
+
+TEST(Phaser, BypassIsExactlyDry) {
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    p.setBypassed(true);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + kBlockSize * 2);
+    p.process(buf, kBlockSize, 2);
+
+    for (int i = 0; i < kBlockSize * 2; ++i) {
+        EXPECT_FLOAT_EQ(buf[i], input[i]);
+    }
+}
+
+TEST(Phaser, ParameterAccess) {
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    p.setParameter(Phaser::kRate, 2.0f);
+    EXPECT_FLOAT_EQ(p.getParameter(Phaser::kRate), 2.0f);
+    p.setParameter(Phaser::kStages, 8.0f);
+    EXPECT_FLOAT_EQ(p.getParameter(Phaser::kStages), 8.0f);
+    p.setParameter(Phaser::kFeedback, -0.5f);
+    EXPECT_FLOAT_EQ(p.getParameter(Phaser::kFeedback), -0.5f);
+
+    // Out-of-range index is a no-op (no crash).
+    p.setParameter(-1, 0.5f);
+    p.setParameter(Phaser::kParamCount + 1, 0.5f);
+    EXPECT_EQ(p.getParameter(-1), 0.0f);
+    EXPECT_EQ(p.getParameter(Phaser::kParamCount + 1), 0.0f);
+}
+
+TEST(Phaser, ChangesSpectrumVsDry) {
+    // Run a sine through the phaser at full mix and compare to dry
+    // — the all-pass network, when summed with its own dry, should
+    // produce a notably different waveform. We do an L2-norm
+    // difference rather than assert specific notch frequencies (LFO
+    // is moving, so the notches drift).
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    p.setParameter(Phaser::kMix, 1.0f);          // wet only
+    p.setParameter(Phaser::kRate, 0.2f);         // slow sweep
+    p.setParameter(Phaser::kFeedback, 0.0f);     // disable for clean test
+    p.setParameter(Phaser::kStages, 6.0f);
+
+    constexpr int N = kBlockSize;
+    constexpr int CH = 2;
+    float buf[N * CH];
+    fillSine(buf, N, CH, 800.0f, 0.5f, kSampleRate);
+    std::vector<float> dry(buf, buf + N * CH);
+    p.process(buf, N, CH);
+
+    float diff = 0.0f;
+    for (int i = 0; i < N * CH; ++i) {
+        const float d = buf[i] - dry[i];
+        diff += d * d;
+    }
+    diff = std::sqrt(diff / (N * CH));
+    EXPECT_GT(diff, 0.01f) << "all-pass cascade left the signal unchanged";
+}
+
+TEST(Phaser, FeedbackStaysStable) {
+    // High feedback shouldn't blow up on a steady-state signal.
+    // We process several blocks and check the output stays bounded
+    // — phasers can self-resonate but they shouldn't diverge.
+    Phaser p;
+    p.init(kSampleRate, kBlockSize);
+    p.setParameter(Phaser::kFeedback, 0.9f);     // near max
+    p.setParameter(Phaser::kMix, 0.5f);
+
+    float buf[kBlockSize * 2];
+    for (int block = 0; block < 50; ++block) {
+        fillSine(buf, kBlockSize, 2, 440.0f, 0.3f, kSampleRate);
+        p.process(buf, kBlockSize, 2);
+        for (int i = 0; i < kBlockSize * 2; ++i) {
+            EXPECT_LT(std::abs(buf[i]), 10.0f)
+                << "phaser feedback exploded at block " << block;
+        }
+    }
 }
