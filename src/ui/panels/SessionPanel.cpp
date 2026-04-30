@@ -5,6 +5,7 @@
 #include "SessionPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
+#include "util/Logger.h"
 #include "../Renderer.h"
 #include "../Font.h"
 #include "ui/framework/v2/Theme.h"
@@ -78,6 +79,7 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
         float cmx = mx + m_scrollX;
         int ti = static_cast<int>((cmx - gridX) / ::yawn::ui::Theme::kTrackWidth);
         if (ti >= 0 && ti < m_project->numTracks()) {
+            LOG_INFO("User", "selectTrack %d (via session header)", ti);
             m_selectedTrack = ti;
             m_lastClickTrack = ti;
             if (clickCount >= 2) {
@@ -213,6 +215,8 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
             if (isSlotRecording) {
                 // Any click on a recording slot stops recording (takes priority over context menu)
                 auto recQ = m_project->track(ti).recordQuantize;
+                LOG_INFO("User", "click recording slot → stop record (track=%d scene=%d type=%s)",
+                         ti, si, trackType == Track::Type::Midi ? "midi" : "audio");
                 if (trackType == Track::Type::Midi)
                     m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
                 else if (trackType == Track::Type::Audio)
@@ -224,6 +228,7 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                 m_lastClickTrack = ti;
             } else if (slotLocalX < kIconZoneW + ::yawn::ui::Theme::kSlotPadding) {
                 if (isPlaying) {
+                    LOG_INFO("User", "click play-icon → stop clip (track=%d scene=%d)", ti, si);
                     if (slot->audioClip)
                         m_engine->sendCommand(audio::StopClipMsg{ti});
                     else if (slot->midiClip)
@@ -232,6 +237,11 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     m_project->track(ti).defaultScene = -1;
                 } else if (hasClip) {
                     auto lq = slot->launchQuantize;
+                    LOG_INFO("User", "click play-icon → launch clip (track=%d scene=%d type=%s)",
+                             ti, si,
+                             slot->audioClip ? "audio" :
+                             slot->midiClip  ? "midi"  :
+                             slot->visualClip ? "visual" : "?");
                     if (slot->audioClip)
                         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation, slot->followAction});
                     else if (slot->midiClip)
@@ -241,6 +251,8 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
                     int rlb = slot ? slot->recordLengthBars : 0;
+                    LOG_INFO("User", "click empty armed slot → start record (track=%d scene=%d type=%s rlb=%d)",
+                             ti, si, trackType == Track::Type::Midi ? "midi" : "audio", rlb);
                     if (trackType == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, true, rlb});
                     else if (trackType == Track::Type::Audio)
@@ -264,6 +276,9 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     captureMouse();  // ensure we receive mouse move events
                 } else if (trackArmed) {
                     int rlb = slot ? slot->recordLengthBars : 0;
+                    LOG_INFO("User", "click body of empty armed slot → start record (track=%d scene=%d type=%s overdub=%d rlb=%d)",
+                             ti, si, trackType == Track::Type::Midi ? "midi" : "audio",
+                             !shift ? 1 : 0, rlb);
                     if (trackType == Track::Type::Midi)
                         m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !shift, rlb});
                     else if (trackType == Track::Type::Audio)
@@ -289,11 +304,13 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
 
     if (isRecording) {
         auto recQ = m_project->track(ti).recordQuantize;
+        LOG_INFO("User", "launchOrStopSlot → stop record (track=%d scene=%d)", ti, si);
         if (trackType == Track::Type::Midi)
             m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
         else if (trackType == Track::Type::Audio)
             m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
     } else if (isPlaying) {
+        LOG_INFO("User", "launchOrStopSlot → stop clip (track=%d scene=%d)", ti, si);
         if (slot && slot->audioClip)
             m_engine->sendCommand(audio::StopClipMsg{ti});
         else if (slot && slot->midiClip)

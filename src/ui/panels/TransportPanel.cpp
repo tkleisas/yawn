@@ -2,6 +2,7 @@
 
 #include "TransportPanel.h"
 #include "app/Project.h"
+#include "util/Logger.h"
 #include "../Renderer.h"
 #include "../Font.h"
 #include "ui/framework/v2/V1MenuBridge.h"
@@ -596,10 +597,14 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
             m_engine->sendCommand(audio::TransportStopMsg{});
         else
             m_engine->sendCommand(audio::TransportPlayMsg{});
+        LOG_INFO("User", "transport play/stop button → %s",
+                 m_transportPlaying ? "stop" : "play");
         return true;
     }
     if (hitBtn(m_recBtnX, m_recBtnY, m_recBtnW, m_recBtnH, mx, my)) {
         const bool newState = !m_recording;
+        LOG_INFO("User", "transport record button → %s (scene=%d)",
+                 newState ? "arm" : "disarm", m_selectedScene);
         m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
         return true;
     }

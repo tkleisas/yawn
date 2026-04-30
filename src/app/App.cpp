@@ -535,6 +535,7 @@ void App::buildWidgetTree() {
     // Init arrangement panel
     m_arrangementPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_arrangementPanel->setOnTrackClick([this](int t) {
+        LOG_INFO("User", "selectTrack %d (via arrangement)", t);
         m_selectedTrack = t;
         m_detailTarget = DetailTarget::Track;
         m_sessionPanel->setSelectedTrack(t);
@@ -1094,6 +1095,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     std::vector<ui::ContextMenu::Item> fxItems;
     auto addFxItem = [&](const char* label, auto factory) {
         fxItems.push_back({label, [this, trackIndex, label, factory]() {
+            LOG_INFO("User", "addFx '%s' to track %d", label, trackIndex);
             auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
             chain.append(factory());
             int slot = chain.count() - 1;
@@ -1142,7 +1144,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             if (!info.vendor.empty()) label += " (" + info.vendor + ")";
             std::string modulePath = info.modulePath;
             std::string classID = info.classIDString;
-            fxItems.push_back({label, [this, trackIndex, modulePath, classID]() {
+            fxItems.push_back({label, [this, trackIndex, modulePath, classID, label]() {
+                LOG_INFO("User", "addFx VST3 '%s' to track %d (path=%s)",
+                         label.c_str(), trackIndex, modulePath.c_str());
                 auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
                 chain.append(std::make_unique<vst3::VST3Effect>(modulePath, classID));
                 markDirty();
@@ -3861,6 +3865,7 @@ bool App::init() {
         m_showReturns = show;
     });
     m_mixerPanel->setOnTrackSelected([this](int t) {
+        LOG_INFO("User", "selectTrack %d (via mixer)", t);
         m_selectedTrack = t;
         m_detailTarget = DetailTarget::Track;
         m_virtualKeyboard.setTargetTrack(t);
@@ -4010,6 +4015,7 @@ bool App::init() {
     m_controllerManager.setSelectedTrackGetter([this]() { return m_selectedTrack; });
     m_controllerManager.setSelectedTrackSetter([this](int t) {
         if (t >= 0 && t < m_project.numTracks()) {
+            LOG_INFO("User", "selectTrack %d (via controller)", t);
             m_selectedTrack = t;
             if (m_sessionPanel) m_sessionPanel->setSelectedTrack(t);
         }
@@ -4213,6 +4219,7 @@ bool App::init() {
 
     // Wire mixer arm button to MidiEngine
     m_mixerPanel->setOnTrackArmedChanged([this](int trackIndex, bool armed) {
+        LOG_INFO("User", "armTrack %d %s", trackIndex, armed ? "armed" : "disarmed");
         m_midiEngine.setTrackArmed(trackIndex, armed);
         // Arming a MIDI track selects it for virtual keyboard input
         if (armed && trackIndex < m_project.numTracks() &&
@@ -4236,6 +4243,20 @@ bool App::init() {
 
     // Wire up detail panel remove device callback
     m_detailPanel->setOnRemoveDevice([this](ui::fw2::DetailPanelWidget::DeviceType type, int chainIndex) {
+        const char* typeName =
+            (type == ui::fw2::DetailPanelWidget::DeviceType::MidiFx)     ? "midiFx" :
+            (type == ui::fw2::DetailPanelWidget::DeviceType::Instrument) ? "instrument" :
+            (type == ui::fw2::DetailPanelWidget::DeviceType::AudioFx)    ? "audioFx" :
+                                                                            "?";
+        const char* targetName =
+            (m_detailTarget == DetailTarget::Track)     ? "track" :
+            (m_detailTarget == DetailTarget::ReturnBus) ? "returnBus" :
+                                                          "master";
+        LOG_INFO("User", "removeDevice type=%s target=%s/%d chainIdx=%d",
+                 typeName, targetName,
+                 m_detailTarget == DetailTarget::Track     ? m_selectedTrack :
+                 m_detailTarget == DetailTarget::ReturnBus ? m_detailReturnBus : 0,
+                 chainIndex);
         // Resolve which effect chain to operate on based on detail target
         auto getAudioFxChain = [this]() -> effects::EffectChain* {
             switch (m_detailTarget) {
@@ -5496,6 +5517,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
             break;
 
         case SDLK_SPACE:
+            LOG_INFO("User", "Space → %s", m_displayPlaying ? "stop" : "play");
             if (m_displayPlaying) {
                 m_audioEngine.sendCommand(audio::TransportStopMsg{});
             } else {
@@ -6541,9 +6563,35 @@ void App::update() {
                     m_detailPanel->setClipPlaying(msg.playing);
                     m_detailPanel->setTransportBPM(m_audioEngine.transport().bpm());
                 }
-                // Forward MIDI playhead to piano roll
+                // Forward MIDI playhead to piano roll — only when the
+                // clip currently playing on this track is the SAME
+                // clip the piano roll is editing. Without this guard,
+                // launching scene 1 while the piano roll showed the
+                // scene-0 clip animated the playhead on scene 0's
+                // notes (the message's trackIndex matches but the
+                // clip identity doesn't). Arrangement-source piano
+                // roll keeps the existing behaviour for now (its
+                // playhead semantics depend on transport position +
+                // clip start offset, not on session-clip launch).
                 if (msg.isMidi && msg.trackIndex == m_pianoRoll->trackIndex() &&
-                    m_pianoRoll->isOpen()) {
+                    m_pianoRoll->isOpen() &&
+                    m_pianoRoll->source() == ui::fw2::PianoRollPanel::Source::Session) {
+                    auto* playingClip = (msg.playingScene >= 0 && msg.playing)
+                        ? m_project.getMidiClip(msg.trackIndex, msg.playingScene)
+                        : nullptr;
+                    if (playingClip == m_pianoRoll->clip()) {
+                        double beats = static_cast<double>(msg.playPosition) / 1000000.0;
+                        m_pianoRoll->setPlayBeat(beats, msg.playing);
+                    } else {
+                        // Different clip launched on this track (or
+                        // nothing playing) — freeze the piano roll's
+                        // playhead so it stops animating over notes
+                        // that aren't currently playing.
+                        m_pianoRoll->setPlayBeat(0.0, false);
+                    }
+                } else if (msg.isMidi && msg.trackIndex == m_pianoRoll->trackIndex() &&
+                           m_pianoRoll->isOpen()) {
+                    // Arrangement source — keep existing behaviour.
                     double beats = static_cast<double>(msg.playPosition) / 1000000.0;
                     m_pianoRoll->setPlayBeat(beats, msg.playing);
                 }
@@ -6929,6 +6977,7 @@ void App::setupDefaultTracks() {
 }
 
 void App::newProject() {
+    LOG_INFO("User", "newProject");
     auto doNew = [this]() {
         m_audioEngine.sendCommand(audio::TransportStopMsg{});
 
@@ -6972,6 +7021,7 @@ void App::newProject() {
 }
 
 void App::openProject() {
+    LOG_INFO("User", "openProject (showing folder dialog)");
     auto doOpen = [this]() {
         SDL_ShowOpenFolderDialog(onOpenFolderResult, this,
                                 m_mainWindow.getHandle(), nullptr, false);
@@ -6991,6 +7041,7 @@ void App::openProject() {
 }
 
 void App::saveProject() {
+    LOG_INFO("User", "saveProject path='%s'", m_projectPath.string().c_str());
     if (m_projectPath.empty()) {
         saveProjectAs();
         return;
@@ -6999,6 +7050,7 @@ void App::saveProject() {
 }
 
 void App::saveProjectAs() {
+    LOG_INFO("User", "saveProjectAs");
     SDL_ShowSaveFileDialog(onSaveFolderResult, this,
                            m_mainWindow.getHandle(), nullptr, 0, "Untitled.yawn");
 }
