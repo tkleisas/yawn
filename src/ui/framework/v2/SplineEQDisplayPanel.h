@@ -1,0 +1,375 @@
+#pragma once
+// fw2::SplineEQDisplayPanel — visualization panel for the Spline EQ.
+//
+// Phase B-1 (this commit): visualization only.
+//   - Log-frequency grid (octave lines + dB gridlines)
+//   - Pre-EQ spectrum (blue) and post-EQ spectrum (orange) overlaid
+//     using the SplineEQ's published inputSpectrum/outputSpectrum
+//     accessors
+//   - Cascaded magnitude response curve drawn through all enabled
+//     nodes, computed analytically per pixel column
+//   - Node markers (circles) at each enabled node's (freq, gain)
+//     position, coloured by node type
+//
+// Phase B-2 (next commit): mouse interaction.
+//   - Drag node → set freq/gain
+//   - Scroll wheel on hovered node → adjust Q
+//   - Shift-drag vertical → adjust Q (trackpad-friendly alternative)
+//   - Click empty area → add new node
+//   - Right-click node → context menu (Type / Delete)
+//
+// The panel is wired in via DetailPanelWidget::setupAudioEffectDisplay
+// at width 400 px (wider than the standard ~200 px display panels —
+// the EQ specifically needs the room for legible curves).
+
+#include "ui/framework/v2/Widget.h"
+#include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/Theme.h"
+#include "ui/Theme.h"
+#include "effects/SplineEQ.h"
+
+#ifndef YAWN_TEST_BUILD
+#include "ui/Renderer.h"
+#endif
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+namespace yawn {
+namespace ui {
+namespace fw2 {
+
+class SplineEQDisplayPanel : public Widget {
+public:
+    SplineEQDisplayPanel() {
+        setName("SplineEQDisplay");
+        setAutoCaptureOnUnhandledPress(false);
+    }
+
+    // ── Host-driven state ───────────────────────────────────────────
+    // The detail panel calls this each frame from displayUpdater.
+    // We keep a raw pointer to the live SplineEQ — its accessors
+    // are read at frame rate while audio thread mutates the same
+    // params; for visualisation that's fine (eventual consistency
+    // is the goal, not sample-accurate sync).
+    void setEQ(effects::SplineEQ* eq) { m_eq = eq; }
+    void setSampleRate(double sr)     { m_sampleRate = sr; }
+
+    Size onMeasure(Constraints c, UIContext&) override {
+        // Caller passes the slot height; we honour it directly so the
+        // panel fills whatever the device-strip layout gives us.
+        return c.constrain({c.maxW, std::max(c.minH, 100.0f)});
+    }
+
+#ifdef YAWN_TEST_BUILD
+    void render(UIContext&) override {}
+#else
+    void render(UIContext& ctx) override {
+        if (!isVisible()) return;
+        if (!ctx.renderer) return;
+        auto& r = *ctx.renderer;
+
+        // Background + outline
+        r.drawRect(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                   Color{18, 18, 24, 255});
+        r.drawRectOutline(m_bounds.x, m_bounds.y, m_bounds.w, m_bounds.h,
+                          Color{50, 50, 60, 255});
+
+        const float pad = 4.0f;
+        const float gx = m_bounds.x + pad;
+        const float gy = m_bounds.y + pad;
+        const float gw = m_bounds.w - pad * 2.0f;
+        const float gh = m_bounds.h - pad * 2.0f;
+        if (gw < 10 || gh < 10) return;
+
+        r.pushClip(gx, gy, gw, gh);
+
+        renderGridlines(r, ctx, gx, gy, gw, gh);
+        renderSpectrum(r, gx, gy, gw, gh);
+        renderResponseCurve(r, gx, gy, gw, gh);
+        renderNodes(r, ctx, gx, gy, gw, gh);
+
+        r.popClip();
+    }
+#endif
+
+private:
+#ifndef YAWN_TEST_BUILD
+
+    // ── Coordinate helpers ──
+    // X axis: log frequency 20 Hz – 20 kHz over the full grid width.
+    // Y axis: linear dB gain ±kMaxGainDb (default 18) — match the EQ
+    // engine's per-node clamp so a node maxed-out exactly hits the
+    // top/bottom of the panel.
+    static constexpr float kFreqLow  = 20.0f;
+    static constexpr float kFreqHigh = 20000.0f;
+    static constexpr float kMaxGainDb = 18.0f;
+
+    static float freqToX(float hz, float gx, float gw) {
+        const float t = std::log(std::clamp(hz, kFreqLow, kFreqHigh) / kFreqLow)
+                       / std::log(kFreqHigh / kFreqLow);
+        return gx + t * gw;
+    }
+    static float dbToY(float db, float gy, float gh) {
+        const float t = (db + kMaxGainDb) / (2.0f * kMaxGainDb);
+        return gy + (1.0f - std::clamp(t, 0.0f, 1.0f)) * gh;
+    }
+
+    void renderGridlines(::yawn::ui::Renderer2D& r, UIContext& ctx,
+                          float gx, float gy, float gw, float gh) {
+        // Vertical octave lines at 100 / 1k / 10k Hz with sub-decade
+        // accents. Keeps the panel readable without becoming busy.
+        const Color majC{60, 60, 70, 200};
+        const Color minC{40, 40, 48, 160};
+        for (float decade = 100.0f; decade <= 10000.0f; decade *= 10.0f) {
+            for (int m = 1; m <= 9; ++m) {
+                const float hz = decade * m;
+                if (hz < kFreqLow || hz > kFreqHigh) continue;
+                const float x = freqToX(hz, gx, gw);
+                const Color& c = (m == 1) ? majC : minC;
+                r.drawRect(x, gy, 1, gh, c);
+            }
+        }
+        // Horizontal dB lines: 0 (centre, brightest), ±6, ±12.
+        for (int db : {-12, -6, 6, 12}) {
+            const float y = dbToY(static_cast<float>(db), gy, gh);
+            r.drawRect(gx, y, gw, 1, minC);
+        }
+        const float zeroY = dbToY(0.0f, gy, gh);
+        r.drawRect(gx, zeroY, gw, 1, Color{90, 90, 105, 220});
+
+        // Frequency-axis labels — small, only at the major decades.
+        if (auto* tm = ctx.textMetrics) {
+            const float fs = 9.0f * (48.0f / 26.0f);   // ≈ 16.6 px
+            const Color lblC{120, 120, 140, 200};
+            for (auto [hz, lbl] : std::initializer_list<std::pair<float, const char*>>{
+                     {100.0f, "100"}, {1000.0f, "1k"}, {10000.0f, "10k"}}) {
+                const float x = freqToX(hz, gx, gw);
+                tm->drawText(r, lbl, x + 2, gy + gh - fs - 2, fs, lblC);
+            }
+        }
+    }
+
+    void renderSpectrum(::yawn::ui::Renderer2D& r,
+                         float gx, float gy, float gw, float gh) {
+        if (!m_eq) return;
+        const float* in  = m_eq->inputSpectrum();
+        const float* out = m_eq->outputSpectrum();
+        const int n = m_eq->spectrumSize();
+        if (!in || !out || n < 2) return;
+
+        // Convert linear magnitudes to dB and draw as filled regions
+        // from the bottom of the panel. Pre is blue-tinted, post is
+        // orange-tinted — both translucent so they overlay readably.
+        const Color preC {80,  140, 220, 110};
+        const Color postC{255, 160,  60, 130};
+
+        // Map spectrum bins (which are log-binned 20 Hz..Nyquist by
+        // SplineEQ) onto pixel columns. Bin index → freq → x.
+        const float nyq = static_cast<float>(m_sampleRate) * 0.5f;
+        const float logLow  = std::log(20.0f);
+        const float logHigh = std::log(nyq);
+
+        // Draw post first (so pre overlays as the brighter colour),
+        // then pre. Both as thin vertical bars at each bin.
+        // Magnitude → dB → screen Y. Floor at -60 dB so the noise
+        // floor doesn't fill the whole panel.
+        auto magToY = [&](float lin) {
+            const float db = 20.0f * std::log10(std::max(lin, 1e-6f));
+            const float clamped = std::clamp(db, -60.0f, 0.0f);
+            const float t = (clamped + 60.0f) / 60.0f;   // 0 at -60, 1 at 0
+            return gy + gh - t * gh * 0.65f;             // top 35% reserved for curve
+        };
+
+        for (int b = 0; b < n - 1; ++b) {
+            const float t   = static_cast<float>(b) /
+                              static_cast<float>(n - 1);
+            const float fc  = std::exp(logLow + t * (logHigh - logLow));
+            const float t2  = static_cast<float>(b + 1) /
+                              static_cast<float>(n - 1);
+            const float fc2 = std::exp(logLow + t2 * (logHigh - logLow));
+            const float x   = freqToX(fc,  gx, gw);
+            const float x2  = freqToX(fc2, gx, gw);
+            const float w   = std::max(1.0f, x2 - x);
+
+            const float yIn  = magToY(in[b]);
+            const float yOut = magToY(out[b]);
+            r.drawRect(x, yIn,  w, gy + gh - yIn,  preC);
+            r.drawRect(x, yOut, w, gy + gh - yOut, postC);
+        }
+    }
+
+    // Analytic biquad magnitude at frequency f. Computes the digital
+    // transfer-function magnitude |H(e^jω)| using the RBJ EQ-cookbook
+    // formulas — same coefficients the Biquad class uses internally,
+    // evaluated symbolically at the target frequency. Avoids
+    // exposing the per-node biquad state from SplineEQ.
+    static float nodeMagAt(effects::SplineEQ::NodeType type,
+                            float fc, float gainDb, float q,
+                            float f, double sr) {
+        const double w0 = 2.0 * 3.14159265358979323846 *
+                          static_cast<double>(fc) / sr;
+        const double cosw0 = std::cos(w0);
+        const double sinw0 = std::sin(w0);
+        const double alpha = sinw0 / (2.0 * std::max(0.05f, q));
+        const double A = (type == effects::SplineEQ::ntPeak ||
+                          type == effects::SplineEQ::ntLowShelf ||
+                          type == effects::SplineEQ::ntHighShelf)
+                          ? std::pow(10.0, gainDb / 40.0) : 1.0;
+        double b0 = 1, b1 = 0, b2 = 0, a0 = 1, a1 = 0, a2 = 0;
+        switch (type) {
+            case effects::SplineEQ::ntPeak:
+                b0 = 1 + alpha * A; b1 = -2 * cosw0; b2 = 1 - alpha * A;
+                a0 = 1 + alpha / A; a1 = -2 * cosw0; a2 = 1 - alpha / A;
+                break;
+            case effects::SplineEQ::ntLowShelf: {
+                const double sa = std::sqrt(A);
+                b0 = A * ((A + 1) - (A - 1) * cosw0 + 2 * sa * alpha);
+                b1 = 2 * A * ((A - 1) - (A + 1) * cosw0);
+                b2 = A * ((A + 1) - (A - 1) * cosw0 - 2 * sa * alpha);
+                a0 = (A + 1) + (A - 1) * cosw0 + 2 * sa * alpha;
+                a1 = -2 * ((A - 1) + (A + 1) * cosw0);
+                a2 = (A + 1) + (A - 1) * cosw0 - 2 * sa * alpha;
+                break;
+            }
+            case effects::SplineEQ::ntHighShelf: {
+                const double sa = std::sqrt(A);
+                b0 = A * ((A + 1) + (A - 1) * cosw0 + 2 * sa * alpha);
+                b1 = -2 * A * ((A - 1) + (A + 1) * cosw0);
+                b2 = A * ((A + 1) + (A - 1) * cosw0 - 2 * sa * alpha);
+                a0 = (A + 1) - (A - 1) * cosw0 + 2 * sa * alpha;
+                a1 = 2 * ((A - 1) - (A + 1) * cosw0);
+                a2 = (A + 1) - (A - 1) * cosw0 - 2 * sa * alpha;
+                break;
+            }
+            case effects::SplineEQ::ntNotch:
+                b0 = 1; b1 = -2 * cosw0; b2 = 1;
+                a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha;
+                break;
+            case effects::SplineEQ::ntLowCut:
+                b0 = (1 + cosw0) / 2; b1 = -(1 + cosw0); b2 = (1 + cosw0) / 2;
+                a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha;
+                break;
+            case effects::SplineEQ::ntHighCut:
+                b0 = (1 - cosw0) / 2; b1 = 1 - cosw0; b2 = (1 - cosw0) / 2;
+                a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha;
+                break;
+            default: break;
+        }
+        // Normalise by a0
+        b0 /= a0; b1 /= a0; b2 /= a0;
+        a1 /= a0; a2 /= a0;
+        // |H(e^jω)| = |B(e^jω)| / |A(e^jω)|
+        const double w = 2.0 * 3.14159265358979323846 *
+                         static_cast<double>(f) / sr;
+        const double cw = std::cos(w), sw = std::sin(w);
+        const double cw2 = std::cos(2 * w), sw2 = std::sin(2 * w);
+        const double bRe = b0 + b1 * cw + b2 * cw2;
+        const double bIm = -(b1 * sw + b2 * sw2);
+        const double aRe = 1 + a1 * cw + a2 * cw2;
+        const double aIm = -(a1 * sw + a2 * sw2);
+        const double bMag = std::sqrt(bRe * bRe + bIm * bIm);
+        const double aMag = std::sqrt(aRe * aRe + aIm * aIm);
+        return static_cast<float>(bMag / std::max(1e-9, aMag));
+    }
+
+    void renderResponseCurve(::yawn::ui::Renderer2D& r,
+                              float gx, float gy, float gw, float gh) {
+        if (!m_eq) return;
+        const Color curveC{255, 230, 100, 240};
+
+        // For each pixel column compute the cascaded magnitude across
+        // all enabled nodes (in dB, sum), map to Y, draw 1-px line
+        // segments. Skipping the analytic biquad math for disabled
+        // nodes keeps the inner loop lean — at most kMaxNodes ops
+        // per column.
+        const int cols = static_cast<int>(gw);
+        const float logLow  = std::log(kFreqLow);
+        const float logHigh = std::log(kFreqHigh);
+
+        float prevX = gx, prevY = dbToY(0.0f, gy, gh);
+        for (int i = 0; i <= cols; ++i) {
+            const float t  = static_cast<float>(i) / static_cast<float>(cols);
+            const float hz = std::exp(logLow + t * (logHigh - logLow));
+            float gainDb = 0.0f;
+            for (int n = 0; n < effects::SplineEQ::kMaxNodes; ++n) {
+                if (!m_eq->nodeEnabled(n)) continue;
+                const float lin = nodeMagAt(
+                    m_eq->nodeType(n),
+                    m_eq->nodeFreqHz(n),
+                    m_eq->nodeGainDb(n),
+                    m_eq->nodeQ(n),
+                    hz, m_sampleRate);
+                gainDb += 20.0f * std::log10(std::max(lin, 1e-6f));
+            }
+            const float x = gx + t * gw;
+            const float y = dbToY(gainDb, gy, gh);
+            // Thin two-pixel-wide line by drawing slightly above and
+            // below — cheaper than computing perpendicular offsets,
+            // visually equivalent at the curve's slope angles.
+            if (i > 0) {
+                const float x0 = std::min(prevX, x);
+                const float x1 = std::max(prevX, x);
+                const float ymin = std::min(prevY, y);
+                const float ymax = std::max(prevY, y);
+                r.drawRect(x0, ymin - 0.5f,
+                            std::max(1.0f, x1 - x0 + 1.0f),
+                            std::max(1.0f, ymax - ymin + 1.0f),
+                            curveC);
+            }
+            prevX = x;
+            prevY = y;
+        }
+    }
+
+    void renderNodes(::yawn::ui::Renderer2D& r, UIContext& ctx,
+                     float gx, float gy, float gw, float gh) {
+        if (!m_eq) return;
+        // Node colour by type — same accents the per-node knobs would
+        // get if we coloured them, so the panel's nodes are
+        // recognisable at a glance.
+        static const Color kNodeColors[6] = {
+            {255, 220,  80, 255},   // Peak     — yellow
+            {120, 200, 255, 255},   // LowShelf — light blue
+            {255, 160, 120, 255},   // HighShelf— light orange
+            {200, 120, 255, 255},   // Notch    — purple
+            {120, 255, 160, 255},   // LowCut   — green
+            {255, 120, 160, 255},   // HighCut  — pink
+        };
+        for (int n = 0; n < effects::SplineEQ::kMaxNodes; ++n) {
+            if (!m_eq->nodeEnabled(n)) continue;
+            const float fhz = m_eq->nodeFreqHz(n);
+            const float gdb = m_eq->nodeGainDb(n);
+            const int   t   = static_cast<int>(m_eq->nodeType(n));
+            const Color c   = kNodeColors[std::clamp(t, 0, 5)];
+
+            const float x = freqToX(fhz, gx, gw);
+            const float y = dbToY(gdb, gy, gh);
+
+            // Node disc: filled inside, outline ring, optional digit
+            // label so the user can correlate panel-side nodes with
+            // the regular knob list (which is indexed 1..8).
+            const float radius = 6.0f;
+            r.drawRect(x - radius, y - radius, radius * 2, radius * 2,
+                        Color{c.r, c.g, c.b,
+                              static_cast<uint8_t>(c.a * 0.5f)});
+            r.drawRectOutline(x - radius, y - radius, radius * 2, radius * 2,
+                              c);
+            if (auto* tm = ctx.textMetrics) {
+                char buf[4]; std::snprintf(buf, sizeof(buf), "%d", n + 1);
+                const float fs = 8.0f * (48.0f / 26.0f);   // ≈ 14.8 px
+                tm->drawText(r, buf, x - 3, y - 7, fs,
+                              Color{20, 20, 28, 255});
+            }
+        }
+    }
+#endif
+
+    effects::SplineEQ* m_eq = nullptr;
+    double m_sampleRate = 48000.0;
+};
+
+} // namespace fw2
+} // namespace ui
+} // namespace yawn
