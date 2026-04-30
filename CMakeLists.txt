@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(YAWN
     VERSION 0.51.0
     DESCRIPTION "Yet Another Audio Workstation New"
@@ -411,7 +411,19 @@ endif()
 # header & the .cpp branch on the feature without leaking NAM
 # headers anywhere else in the build.
 if(YAWN_HAS_NAM AND TARGET nam)
-    target_link_libraries(yawn_core PUBLIC nam)
+    # Force-link the whole nam library — MSVC's function-level
+    # dead-code-elimination strips nam::get_dsp even when
+    # NeuralAmp.obj clearly references it (only anonymous-namespace
+    # internals get pulled in, leaving the public API silently
+    # missing). gcc/clang's --gc-sections behaviour is less
+    # aggressive but for cross-platform consistency we apply
+    # WHOLE_ARCHIVE everywhere via CMake 3.24's portable
+    # $<LINK_LIBRARY:WHOLE_ARCHIVE,...> generator expression — it
+    # expands to /WHOLEARCHIVE:nam.lib on MSVC and
+    # -Wl,--whole-archive ... -Wl,--no-whole-archive on
+    # gcc/clang. Cost is ~6 MB of binary regardless of platform.
+    target_link_libraries(yawn_core PUBLIC
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>")
     target_compile_definitions(yawn_core PUBLIC YAWN_HAS_NAM=1)
     set_source_files_properties(
         ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
@@ -461,19 +473,11 @@ if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
 endif()
 
-# Force-include the entire nam.lib in YAWN.exe regardless of which
-# symbols the linker thinks are referenced. Without this, MSVC's
-# function-level dead-code-elimination strips nam::get_dsp & friends
-# even though NeuralAmp.cpp clearly references them — only the
-# anonymous-namespace internals (CoreVersionSupportChecker etc.)
-# get pulled in, leaving the public entry points missing and the
-# call site silently no-op. Symptoms: setModelPath logs run, NAM
-# diagnostic logs from inside get_dsp don't, "idle" status never
-# transitions to "ready". /WHOLEARCHIVE adds ~6 MB to YAWN.exe but
-# guarantees the inference engine is actually wired up.
-if(MSVC AND YAWN_HAS_NAM AND TARGET nam)
-    target_link_options(${PROJECT_NAME} PRIVATE "/WHOLEARCHIVE:nam.lib")
-endif()
+# NAM force-link is handled above via $<LINK_LIBRARY:WHOLE_ARCHIVE,nam>
+# on yawn_core, which propagates here through transitive linkage.
+# This block intentionally left empty — the generator expression
+# is the cross-platform replacement for the MSVC-specific
+# /WHOLEARCHIVE:nam.lib that lived here previously.
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
