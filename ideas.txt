@@ -18,16 +18,35 @@ Audio device -> Tape saturation
 Synth -> Physical Modelling?
 Autosampler workflow for multisampler
 
-Default view 4 tracks instead of 8.
-Default scenes 4 instead of 8
 Default view shows master and hides return channels
 Also maybe add Master for video slider?
 
-Equal power when playing multiple notes?
+Drum synth
+Synthesized drum with kick, snare, tom1, tom2, openhihat, closedhihat, tamburine, clap
+Individual parameters 
+For kick
+--------
+tuning
+attack
+decay
+sine component
+noise type1 white
+noise type2 pink
+drive (distortion)
 
-Virtual keyboard velocity setting?
+For snare, tom1, tom2, openhihat, closedhihat, tamburine, clap
+---------
+tuning
+attack
+decay
+drive (distortion)
 
-Allow setting of video resolution from 640x360 to 1280x720 (x4 original) up to 1920x1080 (x9 original)
+feel free to add any other features you think are necessary or useful
 
-Set Clip grid height to 16:9 ratio
+
+Can we add also Bitcrusher, Envelope follower, Noise Gate, ping - pong delay, convolution reverb and 4/6/8 graphic eq (with spectrum analyzer and bezier curves)
+
+Organ
+String synth
+Latency estimation
 

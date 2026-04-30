@@ -35,6 +35,16 @@
 > each other's mouse capture so often we had to add a runtime guard that yells at you when it happens.
 > They are now one framework, in three commits, totalling −2,960 lines. The build is faster. The dispatch
 > chain is shorter. The dials turn. *Probably.*
+>
+> **⚠️ Neural Amp Disclaimer:** YAWN now hosts WaveNet-style guitar amp captures inline via Neural Amp
+> Modeler. The first model loaded fine. The second model loaded fine. The third model use-after-freed
+> the audio thread on a freed `nam::DSP*` because the loader was destroying it from the UI thread
+> mid-`process()`. The fix is RCU-lite atomic pointer swap with a retired-list and deferred destruction
+> on the next load. We then wrote the same trick into Convolution Reverb because it had the same race
+> waiting to bite. Then MSVC silently dead-stripped `nam::get_dsp` so the device shipped showing "idle"
+> with the model path stored, fixed by `$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>` (cost: 6 MB binary, benefit:
+> the device actually does anything). All this so a guitarist can drop a `.nam` on a track and get a
+> Mesa Boogie sound out of a DAW the AI wrote without ever having played a guitar.
 
 ## Features
 
@@ -66,20 +76,35 @@
 
 ### Integrated Audio Effects
 
-*14 hand-crafted artisanal effects, each lovingly hallucinated by an AI that has never used a compressor but has read 47 papers about them.*
+*19 hand-crafted artisanal effects, each lovingly hallucinated by an AI that has never used a compressor but has read 47 papers about them. We doubled the count in one batch and the AI is now insufferable about it.*
 
 - **Reverb** — Schroeder/Moorer algorithmic reverb (4 comb + 2 allpass filters)
 - **Delay** — Stereo delay with tempo sync, feedback, and ping-pong mode
+- **Ping-Pong Delay** — Dedicated stereo bouncer with independent L/R times, explicit cross-feedback knob (vs. the original Delay's binary on/off ping-pong), width control over the dry-input split, per-side LP in the feedback path. Forked because tempo-synced 1/4-dotted-on-L + 1/8-on-R wants two Time knobs, not a workaround
 - **EQ** — 3-band parametric EQ (low shelf, mid peak, high shelf)
+- **Spline EQ** — 8-node parametric EQ with a custom drag-edit display panel: dual pre/post spectrum analyser overlay, RBJ-cookbook biquad response curve drawn through the cascaded filters, drag a node to set freq+gain, scroll-wheel or shift-drag for Q, click empty area to drop a new node (auto-grabs into a drag), right-click cycles type, double-click deletes. Per-node hover readout shows freq / gain / Q. The 40 underlying params remain settable via automation / preset / MIDI Learn — the panel just is the editor
 - **Compressor** — Dynamics compressor with threshold, ratio, attack, release, makeup gain
 - **Filter** — Multi-mode SVF filter (lowpass, highpass, bandpass, notch) with 2× oversampled stability
 - **Chorus** — Modulated delay with multiple voices
 - **Distortion** — Waveshaper with soft clip, hard clip, and tube saturation modes
+- **Bitcrusher** — Bit-depth quantization (1–16) + zero-order-hold sample-rate decimation (100 Hz – 48 kHz) + optional anti-alias pre-filter + TPDF dither toggle + dry/wet. Mid-tread quantizer so low bit depths don't add DC; aliasing is part of the sound, not a bug
+- **Noise Gate** — Full expander/gate with hysteresis (open ≥ close threshold), attack / hold / release state machine, 0–10 ms lookahead (audio path is delayed; detection reads the un-delayed input so fast attacks don't clip transients), sidechain detection toggle, ducking polarity-invert mode (close when sidechain is hot — classic "kick ducks pad" pump)
+- **Envelope Follower** — Audio level → control signal, optionally driving a built-in LP/HP/BP filter on the audio path (auto-wah). Sidechain input (Input/SC source toggle), Peak / RMS detection, asymmetric attack/release, depth in semitones-of-cutoff-offset, range up to 6 octaves. Doubles as a routable modulation source via `AudioEffect::hasModulationOutput / modulationValue` + an atomic `consumeEnvelope()` for cross-thread reads — set Filter Type = Off and the device exists purely to publish the envelope value for visual params or modulation depths elsewhere
+- **Convolution Reverb** — IR-based reverb via uniformly-partitioned FFT block convolution — 10s max IR @ host rate, ~30 MFLOP/s vs ~11 GFLOP/s direct convolution; one-block latency from sub-block buffering, inaudible for reverb. Pre-delay 0–200 ms, low-cut + high-cut on the wet path, IR gain trim, mix. Loader handles `.wav / .flac / .aif / .aiff / .ogg / .mp3` with auto-resample to host rate (a 44.1 kHz IR on a 48 kHz host would otherwise play 9 % low and short — easy to miss). RCU-lite atomic-engine-swap on IR load (audio thread acquire-loads a stable engine pointer per block; old engines park in a retired list and destruct on the NEXT load) so reloading IRs while audio is rolling can't use-after-free. Ships with **38 bundled Voxengo reverb IRs** so the device is usable on first install — file dialog opens at the bundled folder, license + attribution in `NOTICES.md`
+- **Neural Amp** — [Neural Amp Modeler](https://github.com/sdatkinson/NeuralAmpModelerCore) (`.nam`) inference effect with input gain / output gain / mix. NeuralAmpModelerCore + Eigen vendored via `FetchContent`, built as a C++20 static lib while the rest of YAWN stays C++17 — a PIMPL split keeps the C++20 NAM headers contained to a single TU. Linker forced to `WHOLE_ARCHIVE` because MSVC's function-level DCE was silently stripping `nam::get_dsp` (cost: ~6 MB binary, benefit: the device actually does anything). Same RCU-lite atomic-DSP-swap as Conv Reverb so loading models while audio plays doesn't crash on the third load. Bundled 4 community NAM amp captures (Clean / Crunch / High-gain / Bass) from `pelennor2170/NAM_models` under GPL v3 with capturer attribution preserved in filenames; load any other `.nam` from `tonehunt.org` / `tone3000.com`
 - **Tape Emulation** — Analog tape simulation with asymmetric saturation, wow/flutter, tape hiss, and tone rolloff
 - **Amp Simulator** — Guitar/bass amp modelling with 4 amp types (Clean/Crunch/Lead/High Gain), 3-band tone stack, cabinet simulation
 - **Tuner** — YIN pitch detection with frequency/cents/note display, reference pitch control (420–460 Hz), confidence indicator
 - **Oscilloscope** — Real-time waveform visualizer (non-destructive analysis effect)
 - **Spectrum Analyzer** — FFT-based frequency spectrum display (non-destructive analysis effect)
+
+#### Sidechain + modulation routing for effects
+
+`AudioEffect` carries the same `setSidechainInput(buffer)` / `supportsSidechain()` plumbing as `Instrument` — `AudioEngine` fans the per-track sidechain pointer (set via `SetSidechainSourceMsg`, sentinel `-2` = live audio interface input, `-1` = none, `0..N-1` = source track) to BOTH the instrument AND every effect on the same track. So a Noise Gate, Envelope Follower, or future sidechain-aware compressor on track B can react to track A's audio without per-effect routing UI.
+
+`AudioEffect::hasModulationOutput()` + `modulationValue()` mirror the existing LFO MidiEffect modulation source pattern on the audio side. Envelope Follower advertises both this and an atomic `consumeEnvelope()` accessor so the visual engine, knob displays, and any other UI/automation consumer can subscribe to the live envelope value without touching the audio thread.
+
+`AudioEffect::saveExtraState() / loadExtraState()` parallel `Instrument`'s preset-extra-state hooks. Conv Reverb persists the IR file path across project save/load and **rehydrates the actual sample data on project open** — `App::rehydrateConvolutionIRs` walks every effect chain after `syncTracksToEngine` and re-reads any IR file referenced in extraState. Same hook is wired for NeuralAmp's `.nam` path.
 
 ### VST3 Plugin Hosting
 
@@ -105,6 +130,7 @@
 - **Instrument Rack** — Multi-chain container (up to 8 chains) with key/velocity zones, per-chain volume/pan, chain enable/disable toggle, visual zone bars, add/remove chain UI
 - **Drum Rack** — 128 pads with 4×4 grid display, 8-page navigation, per-pad sample loading via drag & drop, per-pad volume/pan/pitch knobs, waveform preview, playing/sample indicators
 - **DrumSlop** — Loop slicer drum machine: auto/even/manual slicing, 16 pads with ADSR, SVF filter, per-pad effect chains, configurable MIDI base note
+- **Drum Synth** — Fully-synthesised 8-piece kit (Kick / Snare / Clap / Tom 1 / CHH / OHH / Tom 2 / Tamb), GM-mapped MIDI notes (C1 / D1 / E1 / F1 / F#1 / A#1 / G1 / G#1), per-drum DSP (sine + pitch sweep + click for the kick; metallic-ratio square sums for hats; tuned noise + envelope for snare/clap/toms; etc.), per-drum tune / decay / volume / pan, CHH/OHH choke group, sample-free so it travels anywhere the project does. Companion to Drum Rack for users who want a tweakable kit without managing samples
 
 ### Auto-Sampler
 
@@ -315,12 +341,36 @@
 - **Runtime guards** — Capture-stomp guard in `fw2::Widget::captureMouse` warns + asserts when an ancestor overwrites a descendant's capture; the recurring "dial doesn't turn" trap can't regress silently
 - **Sloptronic-grade stability** — Filters clamped, state variables leashed, resonance domesticated
 
+### Bundled Content
+
+*Devices that need third-party files to be useful (Conv Reverb wants IRs;
+Neural Amp wants `.nam` captures) ship with usable starter sets so the
+device works on first install. Attribution + license details live in
+[NOTICES.md](NOTICES.md); third-party files are kept verbatim.*
+
+- **38 Voxengo reverb IRs** — `assets/reverbs/voxengo/` — concert halls, plates,
+  rooms, ambient spaces. Royalty-free under Voxengo's free IR redistribution
+  license. Convolution Reverb's file dialog opens here by default
+- **4 NAM amp captures** — `assets/nam/` — Clean / Crunch / High-gain / Bass
+  amp captures from `pelennor2170/NAM_models` (GPL v3) with the original
+  capturers' names preserved in filenames. Neural Amp's file dialog opens here
+  by default
+- **25 visual shaders** — `assets/shaders/examples/` — original MIT-licensed
+  Shadertoy-style shaders covering plasma, palette sweeps, audio-reactive
+  spectrum bars, kaleidoscopes, etc.
+- **2 glTF 2.0 sample models** — `assets/examples/3d/Duck.glb`, `Fox.glb` —
+  CC-BY 4.0, from the Khronos sample-asset repository
+
 ### Planned
 
 - 🎛️ More controller scripts (Novation Launchpad, Akai APC, M-Audio whatever's-on-eBay-this-week)
 - 🖥️ Move OLED display — pending reverse-engineering of Ableton's proprietary USB pairing protocol (or until someone lifts the protocol and we feel ethically OK about it)
 - 🪪 Lua bindings for Undo/Mute/Copy and the remaining Move buttons that currently just no-op
 - 🪟 MIDI clock send/receive (Link covers most cases but some hardware still wants the old protocol)
+- 🌊 Phaser effect (multi-stage all-pass cascade)
+- 🎚️ Wah / Autowah as a dedicated standalone device
+- ⏱️ Per-effect latency estimation summed per-track + automatic delay compensation across the mixer's parallel routes
+- 🗺️ 2D key×velocity zone-map widget for Multisampler (current editor is a list — visual zones would be much faster to balance)
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
@@ -354,11 +404,13 @@
 | Video Import | `ffmpeg` binary (runtime) |
 | 3D Models (glTF 2.0) | tinygltf (optional) |
 | Scene Scripting | Lua 5.4 (vendored, sandboxed) |
-| Build System | CMake 3.20+ |
+| Neural Amp Modelling | NeuralAmpModelerCore + Eigen (optional, fetched via FetchContent — gated on `YAWN_HAS_NAM`, default ON; built as a C++20 static lib with the rest of YAWN on C++17) |
+| Convolution / FFT | KissFFT (optional — vendored fallback path; used by Convolution Reverb's uniformly-partitioned block convolver) |
+| Build System | CMake 3.24+ (needed for `$<LINK_LIBRARY:WHOLE_ARCHIVE>` generator expression — Neural Amp's static lib must not be DCE'd by the linker) |
 | Testing | Google Test 1.14 |
 | Platforms | Windows, Linux |
 
-All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. Lua 5.4 and SQLite3 are vendored as source amalgamations. The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
+All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. Lua 5.4 and SQLite3 are vendored as source amalgamations. NeuralAmpModelerCore + Eigen are FetchContent'd behind `YAWN_HAS_NAM` (default ON; flip OFF and the Neural Amp device falls back to a gain-stage passthrough). The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
 
 ## Building
 
@@ -368,8 +420,8 @@ All dependencies are fetched automatically via CMake FetchContent — no manual 
 
 ### Prerequisites
 
-- **CMake 3.20+**
-- **C++17 compiler** — MSVC 2019+ (Windows), GCC 8+ or Clang 8+ (Linux)
+- **CMake 3.24+** — needed for the `$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>` generator expression that keeps Neural Amp's static lib alive through linker dead-code elimination. Pre-3.24 builds work if you turn `YAWN_HAS_NAM=OFF`
+- **C++17 compiler** — MSVC 2019+ (Windows), GCC 8+ or Clang 8+ (Linux). The Neural Amp Modeler dependency itself needs C++20 but is kept behind a PIMPL split so YAWN's main targets stay on C++17
 - **Python 3 + jinja2** — required by glad2 (OpenGL loader generator)
 - **Git** — for FetchContent dependency downloads
 
@@ -573,7 +625,8 @@ cd build && ctest --output-on-failure -C Release
 yawn/
 ├── CMakeLists.txt              # Main build configuration
 ├── cmake/
-│   └── Dependencies.cmake      # FetchContent (SDL3, glad, PortAudio, libsndfile, RtMidi, stb, gtest)
+│   └── Dependencies.cmake      # FetchContent (SDL3, glad, PortAudio, libsndfile, RtMidi, stb,
+│                               #  gtest, NeuralAmpModelerCore + Eigen, KissFFT, Ableton Link, tinygltf)
 ├── src/
 │   ├── main.cpp                # Entry point, crash handler, stdout/stderr redirect
 │   ├── app/
@@ -605,16 +658,33 @@ yawn/
 │   ├── core/
 │   │   └── Constants.h         # Global limits (tracks, buses, buffer sizes)
 │   ├── effects/
-│   │   ├── AudioEffect.h       # Effect base class + parameter system
+│   │   ├── AudioEffect.h       # Effect base class + sidechain plumbing +
+│   │   │                       #  modulation-source hooks + saveExtraState/loadExtraState
 │   │   ├── EffectChain.h       # Ordered chain of up to 8 effects
 │   │   ├── Biquad.h            # Biquad filter primitives
 │   │   ├── Reverb.h            # Algorithmic reverb
 │   │   ├── Delay.h             # Stereo delay with tempo sync
+│   │   ├── PingPongDelay.h     # Dedicated ping-pong with independent L/R
+│   │   │                       #  times + cross-feedback + width
 │   │   ├── EQ.h                # 3-band parametric EQ
+│   │   ├── SplineEQ.h          # 8-node parametric EQ — drag-edit display
+│   │   │                       #  panel with dual pre/post FFT overlay
 │   │   ├── Compressor.h        # Dynamics compressor
 │   │   ├── Filter.h            # Multi-mode SVF filter
 │   │   ├── Chorus.h            # Modulated delay chorus
 │   │   ├── Distortion.h        # Waveshaper distortion
+│   │   ├── Bitcrusher.h        # Bit-depth quantize + sample-rate decimation
+│   │   │                       #  + AA pre-filter + TPDF dither
+│   │   ├── NoiseGate.h         # Expander / gate with hysteresis,
+│   │   │                       #  attack/hold/release SM, sidechain detect
+│   │   ├── EnvelopeFollower.h  # Audio → control signal + optional auto-wah
+│   │   │                       #  + routable modulation source
+│   │   ├── Convolution.h       # Uniformly-partitioned FFT block convolver
+│   │   ├── ConvolutionReverb.h # IR-based reverb — atomic-engine-swap loader,
+│   │   │                       #  pre-delay, low/high cut on the wet, IR resample
+│   │   ├── NeuralAmp.h         # Neural Amp Modeler shell (PIMPL — C++17 clean)
+│   │   ├── NeuralAmp.cpp       # NAM integration (only C++20 TU; isolated by PIMPL,
+│   │   │                       #  RCU-lite atomic DSP swap on model load)
 │   │   ├── TapeEmulation.h     # Analog tape simulation
 │   │   ├── AmpSimulator.h      # Guitar/bass amp + cabinet modelling
 │   │   ├── Tuner.h             # YIN pitch detection tuner
@@ -631,6 +701,8 @@ yawn/
 │   │   ├── InstrumentRack.h    # Multi-chain container (key/vel zones)
 │   │   ├── DrumRack.h          # 128-pad drum machine
 │   │   ├── DrumSlop.h          # Loop slicer drum machine (16 pads)
+│   │   ├── DrumSynth.h/.cpp    # Fully-synthesised 8-piece kit (sample-free,
+│   │   │                       #  GM-mapped, per-drum tune/decay/vol/pan, choke)
 │   │   ├── WavetableSynth.h    # 5 wavetable types with morphing
 │   │   ├── GranularSynth.h     # Sample-based granular synthesis
 │   │   ├── KarplusStrong.h     # Physical modelling string synth
@@ -740,11 +812,11 @@ yawn/
 │   ├── test_AudioBuffer.cpp    # Audio buffer operations
 │   ├── test_Automation.cpp     # Automation engine, envelopes, LFO
 │   ├── test_Clip.cpp / test_ClipEngine.cpp
-│   ├── test_Effects.cpp        # All 14 audio effects
+│   ├── test_Effects.cpp        # All 19 audio effects
 │   ├── test_FileIO.cpp / test_Serialization.cpp
 │   ├── test_FollowAction.cpp
 │   ├── test_FrameworkTypes.cpp # Geometric types only (Point/Size/Rect/etc.)
-│   ├── test_Instruments.cpp    # All 11 instruments
+│   ├── test_Instruments.cpp    # All 12 instruments
 │   ├── test_Integration.cpp    # Cross-component integration (DetailPanel + synth,
 │   │                           #  piano roll + transport, mixer, etc.)
 │   ├── test_LFO.cpp / test_LinkManager.cpp
@@ -765,6 +837,13 @@ yawn/
 │   ├── lua54/                  # Lua 5.4 vendored source
 │   └── sqlite3/                # SQLite3 vendored source
 └── assets/                     # Runtime assets (copied to build dir)
+    ├── shaders/                # Bundled MIT-licensed visual shaders + post-FX
+    ├── examples/3d/            # Khronos sample glTF models (CC-BY 4.0)
+    ├── reverbs/voxengo/        # 38 royalty-free Voxengo IRs (license + attribution
+    │                           #  in NOTICES.md) — Convolution Reverb default folder
+    └── nam/                    # 4 NAM amp captures from pelennor2170/NAM_models
+                                #  (GPL v3, capturer attribution in filenames)
+                                #  — Neural Amp default folder
 ```
 
 ## Implementation Phases
@@ -780,8 +859,8 @@ yawn/
 | 5. Mixer & Routing | ✅ Done | 64-track mixer, 8 send/return buses, master, metering |
 | 6. MIDI Engine | ✅ Done | MIDI 2.0-res internals, RtMidi I/O, MPE zones, MIDI clips |
 | 7. Metronome | ✅ Done | Synthesized click track, beat-synced, configurable |
-| 8. Audio Effects | ✅ Done | 12 built-in effects (+ 2 visualizers), effect chains, drag-to-reorder, 3-point insert |
-| 9. Integrated Instruments | ✅ Done | 11 instruments with full UI (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, Multisampler, InstrumentRack, DrumRack, DrumSlop) |
+| 8. Audio Effects | ✅ Done | 17 built-in effects (+ 2 visualizers), effect chains, drag-to-reorder, 3-point insert, sidechain + modulation routing on the `AudioEffect` base |
+| 9. Integrated Instruments | ✅ Done | 12 instruments with full UI (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, Multisampler, InstrumentRack, DrumRack, DrumSlop, DrumSynth) |
 | 10. MIDI Effects | ✅ Done | 8 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch, LFO) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
 | 12. UI Framework | ✅ Done | Widget tree, FlexBox layout, primitive widgets, dialog system, panel migration |
@@ -797,6 +876,7 @@ yawn/
 | 22. Visual / VJ Engine | ✅ Done | Per-track GPU layers, Shadertoy-compatible shader hot-reload, video import + live input, glTF 2.0 3D models with skeletal animation, Lua scene scripts, master post-FX chain, A–H knobs + LFOs + automation, arrangement timeline integration |
 | 23. Ableton Link | ✅ Done | LAN beat/tempo sync (peers from Live, Logic, Bitwig, iOS apps, etc.) with phase alignment. Local UI tempo edits gated through `localTempoChanged` so the audio thread doesn't clobber typed BPM with the previous-frame's stale session tempo (race condition we found, fixed, and wrote a regression test for) |
 | 24. UI Framework Migration | ✅ Done | Three-phase delete-heavy refactor: v1 Widget/FlexBox/EventSystem/UIContext + a 766-line bridge wrapper layer (`PanelWrappers.h`) all retired. Single `fw2::Widget` framework, single `dispatchMouseDown` walking the tree, single global capture slot. Net ~−2960 lines. Capture-stomp guard added to `fw2::Widget::captureMouse`. C4717-and-friends promoted to compile errors |
+| 25. Effects Batch II + DrumSynth + Bundled IRs/Models | ✅ Done | Five new effects (Ping-Pong Delay, Spline EQ, Bitcrusher, Noise Gate, Envelope Follower), a Convolution Reverb with full FFT block-convolver and 38 bundled Voxengo IRs, a Neural Amp Modeler integration with 4 bundled `.nam` captures from `pelennor2170/NAM_models`, a fully-synthesised DrumSynth instrument + Piano-Roll DrumRoll mode, and `AudioEffect`-base sidechain + modulation-source + extra-state-hooks plumbing — including project-load IR rehydration via `App::rehydrateConvolutionIRs`. RCU-lite atomic engine swap on both Conv Reverb and NAM so reloading IRs / models while audio is rolling can't use-after-free (the reproducible third-load crash). NAM linked with `$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>` after MSVC silently DCE'd `nam::get_dsp` and the device shipped showing "idle" with the model path stored. Linux CI extended to cover the NAM build path |
 
 ### Phase 16: Arrangement View (Done)
 
@@ -887,6 +967,63 @@ in favour of fw2. Net ~−2960 lines, behaviour preserved.
 - **Phase 3** — `src/ui/framework/` v1 directory deleted. `Widget.h`, `FlexBox.h`, `EventSystem.h`, `UIContext.h`, `FwGrid.h`, `V1EventBridge.h` gone. `Types.h` moved into `v2/`. Tests for v1 widgets retired (superseded by `test_fw2_*.cpp`)
 - **Hardening** — `fw2::Widget::captureMouse` now logs + asserts on ancestor-stomps-descendant capture (the recurring "dial doesn't turn" trap). MSVC `/we4717` (always-recursive function) is a compile error after `fileNameFromPath` recursed-on-all-paths and stack-overflowed during a file drop. `/we4715`, `/we4716`, `/we4172`, `/we4533`, `/we4701` similarly
 
+### Phase 25: Effects Batch II + DrumSynth + Bundled IRs/Models (Done)
+
+A two-week sprint that doubled the effect count, shipped a self-contained
+drum kit, bundled real IRs / amp captures so two of the new devices are
+useful out of the box, and quietly extended `AudioEffect` with the same
+sidechain + modulation + extra-state plumbing the `Instrument` base has
+had for ages. Released as **v0.51.x**.
+
+- **Five new effects** — `PingPongDelay`, `SplineEQ` (8-node parametric with a
+  drag-edit display panel + dual pre/post FFT overlay), `Bitcrusher`, `NoiseGate`
+  (full expander/gate with hysteresis, attack/hold/release SM, lookahead, sidechain
+  detect, ducking polarity-invert), `EnvelopeFollower` (audio → control + optional
+  auto-wah filter on the same path; doubles as a routable modulation source)
+- **Convolution Reverb** — Uniformly-partitioned FFT block convolver in
+  `Convolution.h`, wrapped by `ConvolutionReverb` with pre-delay, low-cut /
+  high-cut on the wet path, IR gain trim, mix. IR loader auto-resamples to host
+  rate so a 44.1 kHz IR on a 48 kHz host doesn't play 9 % low. RCU-lite atomic
+  engine-swap on IR load. **38 bundled Voxengo IRs** under their royalty-free
+  redistribution license — file dialog opens at the bundled folder
+- **Neural Amp Modeler** — `NeuralAmp` device wraps `nam::DSP` from
+  `NeuralAmpModelerCore` via PIMPL so the C++20-requiring NAM headers stay
+  contained to `NeuralAmp.cpp` (the rest of YAWN is C++17). RCU-lite atomic
+  DSP-swap on model load — fixes a reproducible use-after-free on the third
+  `.nam` load that came from the audio thread dereferencing a freed DSP while
+  the loader was building its replacement. Linker forced to `WHOLE_ARCHIVE` via
+  CMake 3.24's `$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>` because MSVC's function-level
+  DCE was silently stripping `nam::get_dsp` and the device shipped showing
+  "idle" with the model path stored. **4 bundled NAM amp captures**
+  (Clean / Crunch / High-gain / Bass) from `pelennor2170/NAM_models` under
+  GPL v3 with capturer attribution preserved in filenames; `tonehunt.org` /
+  `tone3000.com` for thousands more
+- **DrumSynth** — Fully-synthesised 8-piece kit, sample-free, GM-mapped MIDI
+  notes, per-drum DSP (sine + pitch sweep + click for kick; metallic-ratio
+  square sums for hats; tuned noise + envelope for snare/clap/toms; tambourine
+  pseudo-random shaker), per-drum tune / decay / volume / pan, CHH/OHH choke
+  group. Companion to Drum Rack for users who want a tweakable kit without
+  managing samples
+- **Piano-Roll DrumRoll mode** — When the selected track's instrument is a
+  drum device (DrumRack / DrumSlop / DrumSynth), the Piano Roll switches to a
+  step-grid layout: one row per pad with the pad's name, single-click toggles
+  notes on/off, snap-to-grid maps to step length. Roll editing for melodic
+  parts unchanged
+- **`AudioEffect` base improvements** — `setSidechainInput` / `supportsSidechain()`
+  plumbing identical to `Instrument`'s; `AudioEngine` fans the per-track
+  sidechain pointer to BOTH the instrument AND every effect on the same track.
+  `hasModulationOutput()` / `modulationValue()` mirror the LFO modulation source
+  pattern on the audio side. `saveExtraState()` / `loadExtraState()` parallel
+  `Instrument`'s preset-extra-state hooks — Conv Reverb persists the IR file
+  path across project save/load and `App::rehydrateConvolutionIRs` walks every
+  effect chain after `syncTracksToEngine` to re-read the IR data on project
+  open. Same hook is wired for NeuralAmp's `.nam` path
+- **CI** — GitHub Actions matrix already covered Linux + Windows; extended to
+  build with `YAWN_HAS_NAM=ON` on both. A first portable `WHOLE_ARCHIVE` attempt
+  failed CI because the per-file `CXX_STANDARD 20` on `NeuralAmp.cpp` collided
+  with the C++17 PCH on a clean build (incremental local builds silently
+  ignored it); the PIMPL split is the durable fix
+
 ## The Team
 
 | Role | Entity | Responsibilities |
@@ -928,6 +1065,9 @@ while (true) {
 13. **Member widgets are not children** — `m_scroll` as a value member doesn't get its `invalidate()` to bubble up to the panel. We learned this when a knob's neighbour stopped rendering on the second click. Fix is a one-line `invalidate()` after mutation; the lesson is "lifecycle ownership ≠ tree membership"
 14. **Ableton Link's audio-thread API is a foot-gun** — The user types BPM, you set the transport, next audio buffer reads back the OLD session tempo and overwrites your new one. Add a `localTempoChanged` flag. Write the regression test. Walk away
 15. **fw2 has a single capture slot** — Two widgets calling `captureMouse()` is one widget overwriting the other's capture. The AI hit this trap so many times that the framework now `assert`s + logs when an ancestor stomps a descendant's capture. The PM appreciates the framework that yells at you when you're about to break it
+16. **Audio-thread + UI-thread sharing a `unique_ptr` is a use-after-free waiting for its third opportunity** — Neural Amp's third `.nam` load wrote 0x0 because the audio thread was mid-`process()` on the DSP the UI thread was destroying. Fix: `std::atomic<DSP*>` + retired-list + deferred destruction on the NEXT load (RCU-lite). Audio thread acquire-loads a stable pointer once per block, UI thread atomic-exchanges and parks the old pointer; nothing dies while it's still in use. We then immediately wrote the same trick into Convolution Reverb because the bug was 1 user-event away from happening there too
+17. **MSVC's function-level dead-code elimination is a silent linker** — `nam::get_dsp` was in `nam.lib`, the obj file referenced it, the link succeeded, the device showed "idle" with the model path stored. `dumpbin /symbols` on the EXE: not a single `nam::` symbol survived. Fix: `$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>` (CMake 3.24+). Cost is binary size; benefit is the device working
+18. **Per-file `CXX_STANDARD 20` collides with a C++17 PCH on a clean build** — and doesn't on incremental ones (the stale `.obj` from before the PCH existed satisfies the link). The first portable `WHOLE_ARCHIVE` attempt passed the AI's local builds and failed CI. PIMPL the C++20 dependency behind a C++17-clean header and the conflict goes away
 
 *This is what software development looks like in 2026. One human with opinions and one AI with infinite patience. The future is sloppy, it ships, the warnings are errors, the dials turn, and honestly? It kinda slaps.*
 
