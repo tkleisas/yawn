@@ -461,6 +461,20 @@ if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
 endif()
 
+# Force-include the entire nam.lib in YAWN.exe regardless of which
+# symbols the linker thinks are referenced. Without this, MSVC's
+# function-level dead-code-elimination strips nam::get_dsp & friends
+# even though NeuralAmp.cpp clearly references them — only the
+# anonymous-namespace internals (CoreVersionSupportChecker etc.)
+# get pulled in, leaving the public entry points missing and the
+# call site silently no-op. Symptoms: setModelPath logs run, NAM
+# diagnostic logs from inside get_dsp don't, "idle" status never
+# transitions to "ready". /WHOLEARCHIVE adds ~6 MB to YAWN.exe but
+# guarantees the inference engine is actually wired up.
+if(MSVC AND YAWN_HAS_NAM AND TARGET nam)
+    target_link_options(${PROJECT_NAME} PRIVATE "/WHOLEARCHIVE:nam.lib")
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${stb_SOURCE_DIR}

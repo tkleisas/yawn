@@ -133,6 +133,22 @@ void NeuralAmp::process(float* buffer, int numFrames, int numChannels) {
 
 void NeuralAmp::setModelPath(const std::string& path) {
     m_impl->modelPath = path;
+    // Diagnostic — fires regardless of YAWN_HAS_NAM so the user
+    // sees a log entry every time setModelPath is called. Useful
+    // for narrowing "the panel shows the filename but the engine
+    // is idle" reports — distinguishes "wasn't called", "was
+    // called with bad path", "was called but YAWN_HAS_NAM is off",
+    // and "was called and load threw".
+    // Compile-time #ifdef flag captured into a runtime string so
+    // we can pass it through LOG_INFO's variadic args (preprocessor
+    // directives inside macro arguments are UB).
+#ifdef YAWN_HAS_NAM
+    const char* hasNamStr = "1";
+#else
+    const char* hasNamStr = "0";
+#endif
+    LOG_INFO("NeuralAmp", "setModelPath('%s') YAWN_HAS_NAM=%s",
+             path.c_str(), hasNamStr);
 #ifdef YAWN_HAS_NAM
     if (path.empty()) {
         m_impl->dsp.reset();
@@ -143,7 +159,10 @@ void NeuralAmp::setModelPath(const std::string& path) {
         // std::runtime_error on bad model files / unsupported
         // versions. We catch and clear so a bad load just leaves
         // the device in passthrough mode.
+        LOG_INFO("NeuralAmp", "  → calling nam::get_dsp(path)");
         m_impl->dsp = nam::get_dsp(std::filesystem::path(path));
+        LOG_INFO("NeuralAmp", "  ← nam::get_dsp returned (dsp=%p)",
+                 static_cast<void*>(m_impl->dsp.get()));
         if (m_impl->dsp) {
             // Reset configures the model for the host's sample
             // rate + buffer size; prewarm settles initial network
@@ -153,9 +172,19 @@ void NeuralAmp::setModelPath(const std::string& path) {
             m_impl->dsp->Reset(m_impl->sampleRate, m_impl->maxBlockSize);
             m_impl->dsp->prewarm();
             LOG_INFO("NeuralAmp", "Loaded NAM model: %s", path.c_str());
+        } else {
+            LOG_WARN("NeuralAmp",
+                     "nam::get_dsp returned null for %s", path.c_str());
         }
     } catch (const std::exception& e) {
         LOG_WARN("NeuralAmp", "Failed to load %s: %s", path.c_str(), e.what());
+        m_impl->dsp.reset();
+    } catch (...) {
+        // NAM may throw types other than std::exception (rare but
+        // possible per its source). Catch-all so a non-standard
+        // exception doesn't terminate the app.
+        LOG_WARN("NeuralAmp", "Failed to load %s: unknown exception",
+                 path.c_str());
         m_impl->dsp.reset();
     }
 #endif
