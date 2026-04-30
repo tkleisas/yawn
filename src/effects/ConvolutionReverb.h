@@ -82,12 +82,22 @@ public:
         m_preDelayWrite = 0;
         m_loCutL.reset(); m_loCutR.reset();
         m_hiCutL.reset(); m_hiCutR.reset();
-        // Re-prime the engines with the current IR (clear() above
-        // dropped them) so a transport reset doesn't leave the
-        // device passing-through.
-        if (!m_irData.empty())
-            loadIRMono(m_irData.data(), static_cast<int>(m_irData.size()),
-                        m_sampleRate);
+        // Re-prime the engines with the existing IR. We call setIR
+        // DIRECTLY rather than going through loadIRMono — going via
+        // loadIRMono would self-assign m_irData (m_irData.assign(
+        // m_irData.data(), …)), which is UB; the vector's assign
+        // is allowed to clear() before copying, destroying the
+        // source range, which left m_irData empty / dangling and
+        // produced a 0x0 read access violation in setIR's per-
+        // sample copy a moment later. Now we hand the engines our
+        // own buffer directly — they make their own copies, no
+        // self-assign anywhere.
+        if (!m_irData.empty()) {
+            m_engineL.setIR(m_irData.data(),
+                            static_cast<int>(m_irData.size()));
+            m_engineR.setIR(m_irData.data(),
+                            static_cast<int>(m_irData.size()));
+        }
     }
 
     void process(float* buffer, int numFrames, int numChannels) override {
@@ -182,13 +192,28 @@ public:
     // doesn't auto-resample). At init() time before sampleRate is
     // set we stash the IR in m_pendingIR and load it during init.
     void loadIRMono(const float* ir, int length, double irSampleRate) {
+        if (!ir || length <= 0) return;
         m_irSampleRate = irSampleRate;
-        m_irData.assign(ir, ir + length);
-        if (m_sampleRate > 0.0 && m_engineL.irLengthSamples() == 0
-            ? true : true) {  // always (re-)apply
+        // Self-assign guard: if the caller is handing us our own
+        // buffer's data() (which happens with a poorly-written
+        // reset() — fixed in this commit, but defended here too
+        // for any future caller who makes the same mistake),
+        // skip the assign. The engines' setIR() copies into their
+        // own internal storage, so we don't need m_irData updated
+        // when the data is the same.
+        const bool isSelfAssign =
+            (!m_irData.empty() && ir == m_irData.data()
+             && static_cast<size_t>(length) == m_irData.size());
+        if (!isSelfAssign) {
+            m_irData.assign(ir, ir + length);
+        }
+        if (m_sampleRate > 0.0) {
             m_engineL.setIR(ir, length);
             m_engineR.setIR(ir, length);
         } else {
+            // init() hasn't run yet (preset restore happens before
+            // engine wiring on cold-load); stash for re-application
+            // when init() finally fires.
             m_pendingIR.assign(ir, ir + length);
             m_pendingIRSampleRate = irSampleRate;
         }
