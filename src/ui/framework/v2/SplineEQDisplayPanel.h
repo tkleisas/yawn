@@ -25,6 +25,7 @@
 #include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Theme.h"
+#include "ui/framework/v2/GroupedKnobBody.h"   // CustomDeviceBody base
 #include "ui/Theme.h"
 #include "effects/SplineEQ.h"
 
@@ -40,11 +41,31 @@ namespace yawn {
 namespace ui {
 namespace fw2 {
 
-class SplineEQDisplayPanel : public Widget {
+// CustomDeviceBody (not plain Widget) so the panel REPLACES the
+// per-param knob list as the device's body. This matters because
+// DeviceWidget's preferredWidth() sums up the knob count to size
+// the device strip; with 40 EQ knobs that pushes the strip past
+// 1200 px and the custom panel inherits that wide bound. As a
+// custom body, the panel controls its own preferredBodyWidth() so
+// the strip sizes to whatever we want (270 px) regardless of knob
+// count. The knobs are still settable via automation / preset, just
+// not shown in the strip — the panel is the editor.
+class SplineEQDisplayPanel : public CustomDeviceBody {
 public:
     SplineEQDisplayPanel() {
         setName("SplineEQDisplay");
         setAutoCaptureOnUnhandledPress(false);
+    }
+
+    // ── CustomDeviceBody contract ───────────────────────────────────
+    float preferredBodyWidth() const override { return 270.0f; }
+    void  updateParamValue(int /*index*/, float /*value*/) override {
+        // No-op — the panel reads from the live SplineEQ pointer
+        // every frame, so external param changes show up
+        // automatically without needing an explicit notification.
+    }
+    void  setOnParamChange(std::function<void(int, float)> cb) override {
+        m_onParamChange = std::move(cb);
     }
 
     // ── Host-driven state ───────────────────────────────────────────
@@ -56,20 +77,19 @@ public:
     void setEQ(effects::SplineEQ* eq) { m_eq = eq; }
     void setSampleRate(double sr)     { m_sampleRate = sr; }
 
-    // ── Param-change callback ──
-    // Wired by DetailPanelWidget to a DeviceRef::setParam call so
-    // automation / MIDI Learn / preset save all work the same way
-    // they would if the user moved a knob. The panel never mutates
-    // the SplineEQ directly — it only reads.
-    using ParamChangeCallback = std::function<void(int paramIndex, float value)>;
-    void setOnParamChange(ParamChangeCallback cb) {
-        m_onParamChange = std::move(cb);
-    }
+    // setOnParamChange is inherited from CustomDeviceBody (declared
+    // above as the override). Callback signature is std::function<
+    // void(int paramIdx, float value)> — DetailPanelWidget wires it
+    // to DeviceRef::setParam so panel-side edits go through the
+    // same automation / MIDI Learn / preset path as knob edits.
 
     Size onMeasure(Constraints c, UIContext&) override {
-        // Caller passes the slot height; we honour it directly so the
-        // panel fills whatever the device-strip layout gives us.
-        return c.constrain({c.maxW, std::max(c.minH, 100.0f)});
+        // Match GroupedKnobBody's pattern (the other CustomDeviceBody
+        // implementor): take preferredBodyWidth on the X axis, fill
+        // available height on Y. The device strip's body height is
+        // typically ~150–200 px which is plenty for the curve +
+        // spectrum + node markers.
+        return c.constrain({preferredBodyWidth(), c.maxH});
     }
 
 #ifdef YAWN_TEST_BUILD
@@ -99,6 +119,7 @@ public:
         renderSpectrum(r, gx, gy, gw, gh);
         renderResponseCurve(r, gx, gy, gw, gh);
         renderNodes(r, ctx, gx, gy, gw, gh);
+        renderHoverInfo(r, ctx, gx, gy, gw, gh);
 
         r.popClip();
     }
@@ -129,6 +150,13 @@ public:
         }
 
         if (hit >= 0) {
+            // Double-click on a node deletes it (disables the node).
+            // Standard "click to interact, double-click to remove"
+            // discoverable pattern — no menu hunt required.
+            if (e.clickCount >= 2) {
+                emitParam(hit, effects::SplineEQ::pfEnabled, 0.0f);
+                return true;
+            }
             m_dragNodeIdx = hit;
             m_dragShift = (e.modifiers & ModifierKey::Shift) != 0;
             m_dragStartFreq = m_eq->nodeFreqHz(hit);
@@ -171,8 +199,16 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (m_dragNodeIdx < 0 || !m_eq) return false;
+        if (!m_eq) return false;
         const Rect r = gridRect();
+        // Hover tracking — drives the per-node info readout. We
+        // update m_hoverNode any time the mouse moves over the
+        // panel; while dragging we lock it to the dragged node so
+        // the readout doesn't flicker as the cursor sweeps over
+        // other nodes mid-drag.
+        if (m_dragNodeIdx >= 0) m_hoverNode = m_dragNodeIdx;
+        else                    m_hoverNode = hitTestNode(e.x, e.y, r);
+        if (m_dragNodeIdx < 0) return false;
         if (m_dragShift) {
             // Shift-drag: vertical motion = Q. Pixel scaling is
             // chosen so dragging the full grid height takes the Q
@@ -454,6 +490,50 @@ private:
         }
     }
 
+    // Per-node info readout — small floating panel showing freq /
+    // gain / Q for the currently hovered (or dragged) node. Sits
+    // above the node at a small offset; dodges the panel edges so
+    // it never clips off-screen.
+    void renderHoverInfo(::yawn::ui::Renderer2D& r, UIContext& ctx,
+                          float gx, float gy, float gw, float gh) {
+        if (!m_eq || m_hoverNode < 0) return;
+        if (!m_eq->nodeEnabled(m_hoverNode)) return;
+        auto* tm = ctx.textMetrics;
+        if (!tm) return;
+
+        const float fhz = m_eq->nodeFreqHz(m_hoverNode);
+        const float gdb = m_eq->nodeGainDb(m_hoverNode);
+        const float q   = m_eq->nodeQ(m_hoverNode);
+
+        char buf[64];
+        if (fhz >= 1000.0f) std::snprintf(buf, sizeof(buf),
+            "%d  %.2fkHz  %+.1fdB  Q%.2f", m_hoverNode + 1,
+            fhz / 1000.0f, gdb, q);
+        else                 std::snprintf(buf, sizeof(buf),
+            "%d  %.0fHz  %+.1fdB  Q%.2f", m_hoverNode + 1,
+            fhz, gdb, q);
+
+        const float fs = 9.0f * (48.0f / 26.0f);   // ≈ 16.6 px
+        const float pad = 4.0f;
+        const float tw  = tm->textWidth(buf, fs);
+        const float boxW = tw + pad * 2;
+        const float boxH = fs + pad;
+
+        // Anchor above the node, fall back to below if too close to
+        // the top edge. Keep within the grid horizontally.
+        const float nx = freqToX(fhz, gx, gw);
+        const float ny = dbToY(gdb,   gy, gh);
+        float boxX = std::clamp(nx - boxW * 0.5f,
+                                gx + 2.0f, gx + gw - boxW - 2.0f);
+        float boxY = ny - boxH - 12.0f;
+        if (boxY < gy + 2.0f) boxY = ny + 14.0f;     // flip below if no room above
+
+        r.drawRect(boxX, boxY, boxW, boxH, Color{12, 12, 18, 230});
+        r.drawRectOutline(boxX, boxY, boxW, boxH, Color{180, 180, 200, 220});
+        tm->drawText(r, buf, boxX + pad, boxY + pad * 0.5f, fs,
+                      Color{230, 230, 240, 255});
+    }
+
     void renderNodes(::yawn::ui::Renderer2D& r, UIContext& ctx,
                      float gx, float gy, float gw, float gh) {
         if (!m_eq) return;
@@ -538,7 +618,13 @@ private:
     effects::SplineEQ* m_eq = nullptr;
     double m_sampleRate = 48000.0;
 
-    ParamChangeCallback m_onParamChange;
+    std::function<void(int, float)> m_onParamChange;
+
+    // Hover state — drives the per-node info readout (freq / gain /
+    // Q). -1 when not over any node. Locked to m_dragNodeIdx during
+    // a drag so the readout doesn't flicker as the cursor sweeps
+    // past other nodes mid-drag.
+    int   m_hoverNode = -1;
 
     // Drag state. -1 when not dragging. m_dragShift selects between
     // freq/gain drag (false) and Q drag (true). The "start" snapshots

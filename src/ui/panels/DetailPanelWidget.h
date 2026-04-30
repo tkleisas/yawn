@@ -1607,32 +1607,23 @@ private:
         std::string id = fx->id();
 
         if (id == "splineeq") {
-            // Spline EQ gets a wider-than-default display slot (400px
-            // vs the typical 200px) — the freq-response curve and
-            // dual spectrum overlay need horizontal real estate to
-            // be readable. The slot height matches whatever the
-            // device strip allocates.
+            // Use setCustomBody (not setCustomPanel) so the panel
+            // REPLACES the per-param knob layout as the device's
+            // body. setCustomPanel inherited the device width from
+            // the knob count — with 40 EQ params that ballooned the
+            // strip past 1200 px regardless of any minW we passed.
+            // As a CustomDeviceBody the panel controls its own
+            // preferredBodyWidth() (270 px), so the strip sizes
+            // sanely. The 40 params remain settable via automation
+            // / preset / MIDI Learn — just not shown in the strip,
+            // because the panel IS the editor.
             auto* disp = new SplineEQDisplayPanel();
             disp->setEQ(static_cast<effects::SplineEQ*>(fx));
             disp->setSampleRate(static_cast<double>(m_clipSampleRate));
-            // Param-change callback: route panel-side edits (drag a
-            // node, scroll-wheel Q, click-to-add) through the
-            // standard DeviceRef::setParam path so automation /
-            // MIDI Learn / preset save all see the change the same
-            // way they would if the user moved a knob in the
-            // regular per-param knob list.
             disp->setOnParamChange([ref](int idx, float v) {
                 DeviceRef r = ref; r.setParam(idx, v);
             });
-            // setCustomPanel(panel, h, minW): panel HEIGHT first,
-            // then MIN WIDTH. The EQ wants 200 px tall × at least
-            // ~270 px wide (2/3 of the 400 px first-pass width —
-            // user feedback: original was too wide for the device-
-            // strip layout). The strip will stretch wider where
-            // layout has room, but never narrower than 270 — the
-            // freq response and dual spectrum still need horizontal
-            // space to be readable.
-            dw->setCustomPanel(disp, 200.0f, 270.0f);
+            dw->setCustomBody(disp);
             configureDeviceWidget(dw, ref);
             return true;
         }
