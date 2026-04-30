@@ -1,7 +1,9 @@
 #pragma once
 
 #include "core/ParameterInfo.h"
+#include <nlohmann/json.hpp>
 #include <cstdint>
+#include <filesystem>
 
 namespace yawn {
 namespace effects {
@@ -68,6 +70,24 @@ public:
     // role for synths; this is the audio-side counterpart).
     virtual bool  hasModulationOutput() const { return false; }
     virtual float modulationValue() const { return 0.0f; }
+
+    // ── Preset extra state ─────────────────────────────────────────
+    // Mirrors Instrument's hooks for effects that hold state outside
+    // the parameter list (e.g. NeuralAmp's loaded model file path,
+    // ConvolutionReverb's loaded IR). Default: no extra state — pure
+    // parametric effects (Distortion, EQ, Reverb, …) ignore the
+    // hooks. Implementations may write supporting binary files
+    // (typically WAVs or model files) into `assetDir` and store
+    // paths-relative-to-assetDir inside the returned JSON.
+    virtual nlohmann::json saveExtraState(
+            const std::filesystem::path& assetDir) const {
+        (void)assetDir;
+        return {};
+    }
+    virtual void loadExtraState(const nlohmann::json& state,
+                                 const std::filesystem::path& assetDir) {
+        (void)state; (void)assetDir;
+    }
 
 protected:
     double m_sampleRate = kDefaultSampleRate;

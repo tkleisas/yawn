@@ -38,6 +38,7 @@
 #include "effects/PingPongDelay.h"
 #include "effects/EnvelopeFollower.h"
 #include "effects/SplineEQ.h"
+#include "effects/NeuralAmp.h"
 
 #include "midi/MidiEffect.h"
 #include "midi/Arpeggiator.h"
@@ -102,6 +103,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"pingpongdelay",[] { return std::make_unique<effects::PingPongDelay>(); }},
         {"envfollower", [] { return std::make_unique<effects::EnvelopeFollower>(); }},
         {"splineeq",    [] { return std::make_unique<effects::SplineEQ>(); }},
+        {"neuralamp",   [] { return std::make_unique<effects::NeuralAmp>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -183,6 +185,7 @@ inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const
     if (n == "Ping-Pong Delay")   return std::make_unique<yawn::effects::PingPongDelay>();
     if (n == "Envelope Follower") return std::make_unique<yawn::effects::EnvelopeFollower>();
     if (n == "Spline EQ")         return std::make_unique<yawn::effects::SplineEQ>();
+    if (n == "Neural Amp")        return std::make_unique<yawn::effects::NeuralAmp>();
     return nullptr;
 }
 

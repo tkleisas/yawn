@@ -42,6 +42,17 @@ json serializeEffectChain(const effects::EffectChain& chain) {
         }
 #endif
 
+        // Generic extra-state hook (mirrors Instrument's pattern).
+        // Effects that hold non-parametric state (e.g. NeuralAmp's
+        // .nam model file path, future ConvolutionReverb's loaded
+        // IR) override saveExtraState; everything else returns null
+        // and we omit the key. assetDir is unused for the simple
+        // string-storing case but available for effects that want
+        // to write supporting binaries alongside the project.
+        nlohmann::json extra = fx->saveExtraState(std::filesystem::path{});
+        if (!extra.is_null() && !extra.empty())
+            j["extraState"] = std::move(extra);
+
         arr.push_back(j);
     }
     return arr;
@@ -90,6 +101,11 @@ void deserializeEffectChain(effects::EffectChain& chain, const json& arr,
 #endif
         if (j.contains("params"))
             deserializeParams(*fx, j["params"]);
+
+        // Restore generic extra state. See saveExtraState above for
+        // the rationale — pure parametric effects ignore this.
+        if (j.contains("extraState"))
+            fx->loadExtraState(j["extraState"], std::filesystem::path{});
 
         chain.append(std::move(fx));
     }
