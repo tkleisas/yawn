@@ -96,6 +96,30 @@ void DetailPanelWidget::render(UIContext& ctx) {
         float bodyH = m_animatedHeight - kHandleHeight;
         renderer.drawRect(x, bodyY, w, bodyH, Color{28, 28, 32, 255});
 
+        // Per-track latency readout (top-right of body). Always
+        // shown in the device-chain view — even at 0 samples, so
+        // the user can see at a glance "this track has no latency"
+        // vs "the readout disappeared". Tinted brighter when > 0
+        // so it's noticeable when a Limiter / NoiseGate lookahead
+        // adds delay; muted otherwise.
+        if (m_viewMode != ViewMode::AudioClip && !m_deviceWidgets.empty()) {
+            const double sr = m_trackLatencySampleRate > 0.0
+                ? m_trackLatencySampleRate : 48000.0;
+            const double ms = (m_trackLatencySamples * 1000.0) / sr;
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "Latency: %d samples (%.1f ms)",
+                          m_trackLatencySamples, ms);
+            const float fs = kPt9Px;
+            const float tw = ctx.textMetrics
+                ? ctx.textMetrics->textWidth(buf, fs)
+                : static_cast<float>(std::strlen(buf)) * fs * 0.55f;
+            const float pad = 6.0f;
+            const Color col = (m_trackLatencySamples > 0)
+                ? Color{255, 200, 80, 220}    // amber when accumulating delay
+                : ::yawn::ui::Theme::textDim; // muted when zero
+            tm.drawText(renderer, buf, x + w - tw - pad, bodyY + 4, fs, col);
+        }
+
         if (m_viewMode == ViewMode::AudioClip && m_clipPtr) {
             paintAudioClipView(renderer, tm, x, bodyY, w, bodyH, ctx);
         } else if (m_deviceWidgets.empty()) {

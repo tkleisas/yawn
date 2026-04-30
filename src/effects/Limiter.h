@@ -31,6 +31,14 @@ public:
     void reset() override;
     void process(float* buffer, int numFrames, int numChannels) override;
 
+    // Lookahead samples — same parameter the runtime delay buffer
+    // reads. Reported for plugin-delay-compensation (Latency P2).
+    int latencySamples() const override {
+        const int s = static_cast<int>(
+            m_params[kLookahead] * 0.001f * static_cast<float>(m_sampleRate));
+        return std::clamp(s, 0, kMaxLookaheadSamples - 1);
+    }
+
     int parameterCount() const override { return kParamCount; }
 
     const ParameterInfo& parameterInfo(int index) const override {

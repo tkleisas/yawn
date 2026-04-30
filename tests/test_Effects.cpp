@@ -12,6 +12,9 @@
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
 #include "effects/AmpSimulator.h"
+#include "effects/NoiseGate.h"
+#include "effects/Convolution.h"
+#include "effects/ConvolutionReverb.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include <cmath>
@@ -954,4 +957,149 @@ TEST(AmpSimulator, Parameters) {
     amp2.init(kSampleRate, kBlockSize);
     EXPECT_FLOAT_EQ(amp2.getParameter(AmpSimulator::kGain),
                     amp2.parameterInfo(AmpSimulator::kGain).defaultValue);
+}
+
+// ========================= Latency reporting =========================
+//
+// Phase 1 of the latency roadmap — every AudioEffect now exposes
+// latencySamples() defaulting to 0, with overrides on the lookahead-
+// based effects (NoiseGate, Limiter). EffectChain::latencySamples()
+// sums non-bypassed entries. Phase 2 (Latency P2) will use these to
+// auto-compensate parallel signal paths so faster routes are padded
+// to align with the slowest at the master output.
+
+TEST(Latency, ZeroLatencyEffectsReportZero) {
+    // Every "no-latency" effect we have keeps the dry signal sample-
+    // accurate. Pin this so a refactor can't silently start delaying
+    // the path on, say, the EQ.
+    Reverb       r;        r.init(kSampleRate, kBlockSize);
+    Delay        d;        d.init(kSampleRate, kBlockSize);
+    EQ           eq;       eq.init(kSampleRate, kBlockSize);
+    Compressor   c;        c.init(kSampleRate, kBlockSize);
+    Filter       f;        f.init(kSampleRate, kBlockSize);
+    Chorus       ch;       ch.init(kSampleRate, kBlockSize);
+    Distortion   dist;     dist.init(kSampleRate, kBlockSize);
+    TapeEmulation t;       t.init(kSampleRate, kBlockSize);
+    AmpSimulator amp;      amp.init(kSampleRate, kBlockSize);
+    Oscilloscope osc;      osc.init(kSampleRate, kBlockSize);
+    SpectrumAnalyzer spec; spec.init(kSampleRate, kBlockSize);
+
+    EXPECT_EQ(r.latencySamples(),    0);
+    EXPECT_EQ(d.latencySamples(),    0);
+    EXPECT_EQ(eq.latencySamples(),   0);
+    EXPECT_EQ(c.latencySamples(),    0);
+    EXPECT_EQ(f.latencySamples(),    0);
+    EXPECT_EQ(ch.latencySamples(),   0);
+    EXPECT_EQ(dist.latencySamples(), 0);
+    EXPECT_EQ(t.latencySamples(),    0);
+    EXPECT_EQ(amp.latencySamples(),  0);
+    EXPECT_EQ(osc.latencySamples(),  0);
+    EXPECT_EQ(spec.latencySamples(), 0);
+}
+
+TEST(Latency, NoiseGateReportsLookaheadSamples) {
+    NoiseGate g;
+    g.init(kSampleRate, kBlockSize);
+    // Default lookahead — whatever NoiseGate ships with — should
+    // round-trip to a matching sample count.
+    const float lookMs = g.getParameter(NoiseGate::kLookahead);
+    const int   expected = static_cast<int>(lookMs * 0.001f * kSampleRate);
+    EXPECT_EQ(g.latencySamples(), expected);
+
+    // Bump to 5 ms — at 44.1 kHz that's 220 samples.
+    g.setParameter(NoiseGate::kLookahead, 5.0f);
+    EXPECT_EQ(g.latencySamples(), static_cast<int>(5.0f * 0.001f * kSampleRate));
+
+    // Zero ms → zero samples.
+    g.setParameter(NoiseGate::kLookahead, 0.0f);
+    EXPECT_EQ(g.latencySamples(), 0);
+
+    // Cap at the pre-allocated delay-line size — even if the param
+    // got pushed out of band, latency reporting must stay sane.
+    g.setParameter(NoiseGate::kLookahead, 9999.0f);
+    EXPECT_GE(g.latencySamples(), 0);
+    EXPECT_LE(g.latencySamples(), 1920 + 16);
+}
+
+TEST(Latency, LimiterReportsLookaheadSamples) {
+    Limiter lim;
+    lim.init(kSampleRate, kBlockSize);
+    lim.setParameter(Limiter::kLookahead, 5.0f);
+    EXPECT_EQ(lim.latencySamples(),
+              static_cast<int>(5.0f * 0.001f * kSampleRate));
+    lim.setParameter(Limiter::kLookahead, 0.0f);
+    EXPECT_EQ(lim.latencySamples(), 0);
+    // Out-of-range upward gets clamped.
+    lim.setParameter(Limiter::kLookahead, 9999.0f);
+    EXPECT_GT(lim.latencySamples(), 0);
+    EXPECT_LT(lim.latencySamples(), Limiter::kMaxLookaheadSamples);
+}
+
+TEST(Latency, EffectChainSumsNonBypassed) {
+    EffectChain chain;
+    chain.init(kSampleRate, kBlockSize);
+
+    auto gate = std::make_unique<NoiseGate>();
+    gate->setParameter(NoiseGate::kLookahead, 4.0f);  // 176 samples
+    NoiseGate* gateRaw = static_cast<NoiseGate*>(
+        chain.append(std::move(gate)));
+
+    auto lim = std::make_unique<Limiter>();
+    lim->setParameter(Limiter::kLookahead, 6.0f);     // 264 samples
+    Limiter* limRaw = static_cast<Limiter*>(
+        chain.append(std::move(lim)));
+
+    // A zero-latency effect doesn't shift the total.
+    chain.append(std::make_unique<EQ>());
+
+    const int expectedGate = static_cast<int>(4.0f * 0.001f * kSampleRate);
+    const int expectedLim  = static_cast<int>(6.0f * 0.001f * kSampleRate);
+    EXPECT_EQ(chain.latencySamples(), expectedGate + expectedLim);
+
+    // Bypassing the limiter drops its contribution.
+    limRaw->setBypassed(true);
+    EXPECT_EQ(chain.latencySamples(), expectedGate);
+
+    // Bypassing the gate too leaves only the EQ (zero-latency).
+    gateRaw->setBypassed(true);
+    EXPECT_EQ(chain.latencySamples(), 0);
+}
+
+TEST(Latency, EmptyChainIsZero) {
+    EffectChain chain;
+    chain.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(chain.latencySamples(), 0);
+}
+
+TEST(Latency, ConvolutionEngineReportsBlockSizeWhenIRLoaded) {
+    ConvolutionEngine eng;
+    eng.init(/*blockSize=*/kBlockSize, kSampleRate);
+    // No IR yet → no buffering applied → zero latency.
+    EXPECT_EQ(eng.latencySamples(), 0);
+
+    // Tiny synthetic IR (1024 samples) → engine kicks into the
+    // sub-block buffered path → reports one partition (kBlockSize).
+    std::vector<float> ir(1024, 0.0f);
+    ir[0] = 1.0f;  // unit impulse — the simplest non-degenerate IR
+    eng.setIR(ir.data(), static_cast<int>(ir.size()));
+    EXPECT_EQ(eng.latencySamples(), kBlockSize);
+
+    // After clear, latency drops back to zero.
+    eng.clear();
+    EXPECT_EQ(eng.latencySamples(), 0);
+}
+
+TEST(Latency, ConvolutionReverbReportsThroughTheEngine) {
+    ConvolutionReverb rev;
+    rev.init(kSampleRate, kBlockSize);
+    // Fresh device — no IR loaded → zero.
+    EXPECT_EQ(rev.latencySamples(), 0);
+
+    std::vector<float> ir(2048, 0.0f);
+    ir[0] = 1.0f;
+    rev.loadIRMono(ir.data(), static_cast<int>(ir.size()), kSampleRate);
+    EXPECT_EQ(rev.latencySamples(), kBlockSize);
+
+    rev.clearIR();
+    EXPECT_EQ(rev.latencySamples(), 0);
 }

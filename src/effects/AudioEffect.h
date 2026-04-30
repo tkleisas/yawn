@@ -47,6 +47,26 @@ public:
     virtual bool hasNewData() const { return false; }
     virtual void clearNewData() {}
 
+    // ── Latency ────────────────────────────────────────────────────
+    // Number of samples this effect delays the dry signal by.
+    // Default 0 — the vast majority of YAWN's effects are
+    // sample-accurate-causal: filters, EQs, distortions, modulation
+    // delays (their wet output may be delayed but the dry passes
+    // through), reverbs (algorithmic + uniformly-partitioned conv —
+    // see Convolution.h's "Latency: zero" note), tape, amp, etc.
+    //
+    // Effects that DO delay the signal — currently NoiseGate
+    // (lookahead) and Limiter (lookahead) — override to return their
+    // current lookahead in samples. Bypassed effects always count as
+    // zero (the audio passes through untouched, so no delay).
+    //
+    // Reported by EffectChain::latencySamples() and surfaced
+    // per-track / per-bus / master via Mixer's accessors. Phase 2
+    // (Latency P2 on the roadmap) uses these values to insert
+    // delay lines on faster signal paths so all routes line up at
+    // the master out — this phase is just the reporting plumbing.
+    virtual int latencySamples() const { return 0; }
+
     // ── Sidechain input ────────────────────────────────────────────
     // Mirrors Instrument's sidechain plumbing — set by AudioEngine
     // each buffer cycle to point at the source track's interleaved

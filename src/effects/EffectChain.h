@@ -74,6 +74,21 @@ public:
         return m_slots[slot].get();
     }
 
+    // Sum of latency samples reported by every non-bypassed effect
+    // in this chain. Bypassed effects don't add latency because
+    // process() is a no-op for them — the audio passes through with
+    // zero delay. Used by Mixer to expose per-track / per-bus /
+    // master latency totals for the UI and (Latency P2) for auto-
+    // delay-compensation.
+    int latencySamples() const {
+        int total = 0;
+        for (auto& slot : m_slots) {
+            if (slot && !slot->bypassed())
+                total += slot->latencySamples();
+        }
+        return total;
+    }
+
 private:
     void recountSlots() {
         m_count = 0;

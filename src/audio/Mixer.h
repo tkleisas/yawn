@@ -190,6 +190,27 @@ public:
     }
     effects::EffectChain& masterEffects() { return m_masterFx; }
 
+    // ── Latency reporting ──
+    // Per-track / per-bus / master values are just the sum of the
+    // associated EffectChain's latencies. The UI reads these to show
+    // the user where latency is accumulating; Latency P2 (auto delay
+    // compensation) will use them to align signal paths so faster
+    // routes are padded out to match the slowest one.
+    //
+    // Note: per-track latency does NOT include the master chain's
+    // latency — that's added on top of every track equally and is
+    // the baseline the UI already accounts for. Per-bus latency is
+    // similarly local to that bus.
+    int trackLatencySamples(int track) const {
+        return m_trackFx[std::max(0, std::min(track, kMaxTracks - 1))]
+            .latencySamples();
+    }
+    int returnLatencySamples(int bus) const {
+        return m_returnFx[std::max(0, std::min(bus, kMaxReturnBuses - 1))]
+            .latencySamples();
+    }
+    int masterLatencySamples() const { return m_masterFx.latencySamples(); }
+
     // --- Core processing ---
     //
     // trackBuffers: array of pointers to per-track interleaved stereo buffers

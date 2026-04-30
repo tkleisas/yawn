@@ -55,6 +55,20 @@ public:
     const char* name() const override { return "Convolution Reverb"; }
     const char* id()   const override { return "convreverb"; }
 
+    // One block of latency from the convolution engine's sub-block
+    // buffering — same value on both sides (mirrored stereo IRs);
+    // pulled from whichever engine is currently active. Zero when
+    // no IR is loaded (the device falls through to silence in that
+    // case, no buffering applied). The pre-delay parameter is part
+    // of the wet path inside the algorithm and is NOT counted here
+    // — it's user-controlled and always live in the wet output, not
+    // a latency the host needs to compensate for.
+    int latencySamples() const override {
+        if (auto* eng = m_engineL.load(std::memory_order_acquire))
+            return eng->latencySamples();
+        return 0;
+    }
+
     ~ConvolutionReverb() override {
         // Engine is no longer referenced by audio thread at device
         // destruction (the chain has stopped). Free both engines

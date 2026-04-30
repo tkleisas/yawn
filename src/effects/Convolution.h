@@ -9,8 +9,15 @@
 // domain. Cost per block ≈ K * N complex mults + 1 forward FFT +
 // 1 inverse FFT — way better than direct convolution for long IRs.
 //
-// Latency: zero (processes block-aligned). The FDL keeps everything
-// causal — output of sample n depends only on input samples ≤ n.
+// Latency: ONE PARTITION BLOCK (= m_blockSize, locked to the host
+// audio block at init() — typically 256 samples ≈ 5 ms @ 48 kHz).
+// The single-buffered sub-block path in process() (see comments
+// there) accumulates input until the partition fills, fires the
+// FFT, then drains the result on the NEXT call. The FDL itself is
+// causal, but the buffered I/O contract delays the output stream
+// by exactly one partition. Reported via latencySamples() so
+// EffectChain / Mixer can include it in plugin-delay-compensation
+// totals; inaudible for reverb where pre-delay is already standard.
 //
 // Design constraints chosen here:
 //   * Mono engine. ConvolutionReverb instantiates two for stereo,
@@ -102,6 +109,14 @@ public:
 
     bool hasIR() const { return m_numParts > 0; }
     int  irLengthSamples() const { return m_irLengthSamples; }
+
+    // One partition block of latency from the sub-block buffering
+    // (see file header). Zero when no IR is loaded — at that point
+    // process() returns silence with no buffering, so there's no
+    // delay to compensate for.
+    int  latencySamples() const {
+        return (m_numParts > 0) ? m_blockSize : 0;
+    }
 
     // Process numFrames samples. Output is wet only (no dry mix —
     // caller does dry/wet). When no IR is loaded, output is silence

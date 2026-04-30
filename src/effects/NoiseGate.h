@@ -56,6 +56,19 @@ public:
     const char* id()   const override { return "noisegate"; }
     bool supportsSidechain() const override { return true; }
 
+    // Lookahead is parameter-driven (kLookahead, in ms). The audio
+    // path is delayed by exactly this many samples so detection can
+    // see the future; reported here for the host's plugin-delay-
+    // compensation calculation (Latency P2).
+    int latencySamples() const override {
+        const int s = static_cast<int>(
+            m_params[kLookahead] * 0.001f * static_cast<float>(m_sampleRate));
+        // Match the runtime clamp inside process() so reported
+        // latency never exceeds what the engine actually delays by.
+        const int maxLook = static_cast<int>(m_delayL.size()) - 1;
+        return std::clamp(s, 0, maxLook < 0 ? 0 : maxLook);
+    }
+
     void init(double sampleRate, int maxBlockSize) override {
         m_sampleRate = sampleRate;
         m_maxBlockSize = maxBlockSize;

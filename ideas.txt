@@ -49,4 +49,5 @@ Can we add also Bitcrusher, Envelope follower, Noise Gate, ping - pong delay, co
 Organ
 String synth
 Latency estimation
+Phaser
 

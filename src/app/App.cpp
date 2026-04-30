@@ -885,6 +885,19 @@ void App::computeLayout() {
     m_visualParamsPanel->setVisible(showVisual);
     m_pianoRoll->setVisible(m_pianoRoll->isOpen());
 
+    // Per-track latency readout. The Mixer-side accessor is cheap
+    // (8 effects × bypass-check + virtual call); pushing it every
+    // frame keeps the readout responsive when the user drags the
+    // Lookahead knob on a NoiseGate / Limiter mid-playback.
+    if (showDetail && m_selectedTrack >= 0 &&
+        m_selectedTrack < m_project.numTracks()) {
+        const int latency = m_audioEngine.mixer().trackLatencySamples(m_selectedTrack);
+        m_detailPanel->setTrackLatencySamples(
+            latency, m_audioEngine.sampleRate());
+    } else {
+        m_detailPanel->setTrackLatencySamples(0, 48000.0);
+    }
+
     // ContentGrid manages session + mixer + browser + returns visibility.
     m_mixerPanel->setVisible(m_showMixer);
     m_returnMasterPanel->setVisible(m_showMixer);

@@ -37,6 +37,21 @@ public:
     float getParameter(int index) const override;
     void  setParameter(int index, float value) override;
 
+    // Plugin-reported latency. VST3's IAudioProcessor::getLatencySamples()
+    // is documented as safe-to-call from any thread; most plugins
+    // recompute this on parameter changes (e.g. lookahead-comp
+    // toggling) and a host re-poll-per-frame is fine. Returns 0 if
+    // the plugin or processor is missing — same fail-safe as the
+    // process() path.
+    int latencySamples() const override {
+        if (m_instance) {
+            if (auto* p = m_instance->processor()) {
+                return static_cast<int>(p->getLatencySamples());
+            }
+        }
+        return 0;
+    }
+
     // Access to the underlying VST3 instance
     VST3PluginInstance* instance() const { return m_instance.get(); }
 

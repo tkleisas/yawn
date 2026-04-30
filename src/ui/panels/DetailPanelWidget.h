@@ -245,6 +245,21 @@ public:
 
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
 
+    // Per-track latency from the effect chain (samples + sample rate
+    // → millisecond display). Pushed by App.cpp each frame from
+    // Mixer::trackLatencySamples(); panel renders a small "Latency"
+    // readout in the body header when > 0. Phase 1 of the latency
+    // roadmap — Phase 2 (auto-compensation) will use the same data
+    // to align signal paths at the master out.
+    void setTrackLatencySamples(int samples, double sampleRate) {
+        if (samples != m_trackLatencySamples ||
+            sampleRate != m_trackLatencySampleRate) {
+            m_trackLatencySamples = samples;
+            m_trackLatencySampleRate = sampleRate;
+            invalidate();
+        }
+    }
+
     void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
 
     ViewMode viewMode() const { return m_viewMode; }
@@ -1827,6 +1842,12 @@ private:
 
     bool m_open         = false;
     bool m_panelFocused = false;
+
+    // Per-track effect-chain latency (samples) + the engine sample
+    // rate at which it was measured — used to derive the millisecond
+    // display. Set via setTrackLatencySamples().
+    int    m_trackLatencySamples    = 0;
+    double m_trackLatencySampleRate = 48000.0;
 
     // Resizable panel height (user-adjustable via handle drag)
     float m_userPanelHeight = kDefaultPanelHeight;
