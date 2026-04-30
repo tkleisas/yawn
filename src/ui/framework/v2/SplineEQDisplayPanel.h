@@ -265,13 +265,17 @@ public:
     }
 
 private:
-#ifndef YAWN_TEST_BUILD
-
     // ── Coordinate helpers ──
     // X axis: log frequency 20 Hz – 20 kHz over the full grid width.
     // Y axis: linear dB gain ±kMaxGainDb (default 18) — match the EQ
     // engine's per-node clamp so a node maxed-out exactly hits the
     // top/bottom of the panel.
+    //
+    // These live OUTSIDE the YAWN_TEST_BUILD render-only guard
+    // because hitTestNode (mouse-handling, always compiled) needs
+    // them too. Pulling them out is what unblocks the test build —
+    // CI caught this; local YAWN-only builds didn't because they
+    // never define YAWN_TEST_BUILD.
     static constexpr float kFreqLow  = 20.0f;
     static constexpr float kFreqHigh = 20000.0f;
     static constexpr float kMaxGainDb = 18.0f;
@@ -285,6 +289,8 @@ private:
         const float t = (db + kMaxGainDb) / (2.0f * kMaxGainDb);
         return gy + (1.0f - std::clamp(t, 0.0f, 1.0f)) * gh;
     }
+
+#ifndef YAWN_TEST_BUILD
 
     void renderGridlines(::yawn::ui::Renderer2D& r, UIContext& ctx,
                           float gx, float gy, float gw, float gh) {
