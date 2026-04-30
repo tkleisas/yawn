@@ -32,7 +32,9 @@
 #include "effects/Biquad.h"
 #include "effects/Convolution.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -53,14 +55,34 @@ public:
     const char* name() const override { return "Convolution Reverb"; }
     const char* id()   const override { return "convreverb"; }
 
+    ~ConvolutionReverb() override {
+        // Engine is no longer referenced by audio thread at device
+        // destruction (the chain has stopped). Free both engines
+        // explicitly; m_retiredEngines self-destructs.
+        delete m_engineL.exchange(nullptr);
+        delete m_engineR.exchange(nullptr);
+    }
+
     void init(double sampleRate, int maxBlockSize) override {
-        m_sampleRate   = sampleRate;
-        m_maxBlockSize = maxBlockSize;
+        m_sampleRate     = sampleRate;
+        m_maxBlockSize   = maxBlockSize;
+        m_engineBlockSize = maxBlockSize;
+        // First-time init runs before audio starts, so there's no
+        // race here — we can allocate engines and just publish
+        // the pointers atomically. Re-init (sample-rate change /
+        // restart) goes through loadIRMono below to inherit the
+        // RCU-lite swap protection.
+        if (!m_engineL.load() && !m_engineR.load()) {
+            auto eL = std::make_unique<ConvolutionEngine>();
+            auto eR = std::make_unique<ConvolutionEngine>();
+            eL->init(maxBlockSize, sampleRate);
+            eR->init(maxBlockSize, sampleRate);
+            m_engineL.store(eL.release(), std::memory_order_release);
+            m_engineR.store(eR.release(), std::memory_order_release);
+        }
         // Partition size = host block size. See Convolution.h for
         // why this trade-off (zero added latency vs more FFT cost
         // per partition vs a smaller-block scheme).
-        m_engineL.init(maxBlockSize, sampleRate);
-        m_engineR.init(maxBlockSize, sampleRate);
         m_preDelayBuf.assign(static_cast<size_t>(0.200 * sampleRate) * 2, 0.0f);
         m_preDelayWrite = 0;
         m_wetScratchL.assign(maxBlockSize, 0.0f);
@@ -76,27 +98,32 @@ public:
     }
 
     void reset() override {
-        m_engineL.clear();
-        m_engineR.clear();
+        // reset() is called from the audio thread (transport reset
+        // / sample-rate change); it can't race with process() on
+        // the same thread. Acquire-load the current engines and
+        // mutate them in place — no swap needed. UI-thread
+        // loadIRMono concurrent with reset() is rare; if it does
+        // race the worst that happens is reset() does its work on
+        // an engine that's about to be retired. Wasteful, not
+        // unsafe.
+        ConvolutionEngine* eL = m_engineL.load(std::memory_order_acquire);
+        ConvolutionEngine* eR = m_engineR.load(std::memory_order_acquire);
+        if (eL) eL->clear();
+        if (eR) eR->clear();
         std::fill(m_preDelayBuf.begin(), m_preDelayBuf.end(), 0.0f);
         m_preDelayWrite = 0;
         m_loCutL.reset(); m_loCutR.reset();
         m_hiCutL.reset(); m_hiCutR.reset();
-        // Re-prime the engines with the existing IR. We call setIR
-        // DIRECTLY rather than going through loadIRMono — going via
-        // loadIRMono would self-assign m_irData (m_irData.assign(
-        // m_irData.data(), …)), which is UB; the vector's assign
-        // is allowed to clear() before copying, destroying the
-        // source range, which left m_irData empty / dangling and
-        // produced a 0x0 read access violation in setIR's per-
-        // sample copy a moment later. Now we hand the engines our
-        // own buffer directly — they make their own copies, no
-        // self-assign anywhere.
+        // Re-prime the engines with the existing IR. setIR is
+        // called directly on the active engine pointers — same
+        // self-assign-safety reasoning as before (we hand the
+        // engines our own m_irData buffer; they copy into their
+        // internal storage).
         if (!m_irData.empty()) {
-            m_engineL.setIR(m_irData.data(),
-                            static_cast<int>(m_irData.size()));
-            m_engineR.setIR(m_irData.data(),
-                            static_cast<int>(m_irData.size()));
+            if (eL) eL->setIR(m_irData.data(),
+                              static_cast<int>(m_irData.size()));
+            if (eR) eR->setIR(m_irData.data(),
+                              static_cast<int>(m_irData.size()));
         }
     }
 
@@ -111,9 +138,14 @@ public:
             0,
             static_cast<int>(m_preDelayBuf.size() / 2) - 1);
 
-        // No IR loaded → device is a no-op (mix-aware: still applies
-        // m_mix * 0 wet, which is a passthrough). Skip the work.
-        if (!m_engineL.hasIR() || numFrames <= 0) return;
+        // Acquire-load the engines once per process() call. The
+        // pointers stay valid for the call's duration — see the
+        // RCU-lite comment on m_engineL/R below for the lifetime
+        // argument. If either pointer is null OR the engine has no
+        // IR, fall through to the no-op early-out.
+        ConvolutionEngine* eL = m_engineL.load(std::memory_order_acquire);
+        ConvolutionEngine* eR = m_engineR.load(std::memory_order_acquire);
+        if (!eL || !eR || !eL->hasIR() || numFrames <= 0) return;
 
         // ── 1. Pre-delay buffer (interleaved L/R) ──
         // Fill the delay line with the gained dry signal, then read
@@ -136,8 +168,8 @@ public:
         m_preDelayWrite = (m_preDelayWrite + numFrames) % bufFrames;
 
         // ── 2. Convolution (per channel, same mono IR for both) ──
-        m_engineL.process(delayedL.data(), m_wetScratchL.data(), numFrames);
-        m_engineR.process(delayedR.data(), m_wetScratchR.data(), numFrames);
+        eL->process(delayedL.data(), m_wetScratchL.data(), numFrames);
+        eR->process(delayedR.data(), m_wetScratchR.data(), numFrames);
 
         // ── 3. Wet path filtering (low cut + high cut on the tail) ──
         for (int i = 0; i < numFrames; ++i) {
@@ -194,38 +226,74 @@ public:
     void loadIRMono(const float* ir, int length, double irSampleRate) {
         if (!ir || length <= 0) return;
         m_irSampleRate = irSampleRate;
-        // Self-assign guard: if the caller is handing us our own
-        // buffer's data() (which happens with a poorly-written
-        // reset() — fixed in this commit, but defended here too
-        // for any future caller who makes the same mistake),
-        // skip the assign. The engines' setIR() copies into their
-        // own internal storage, so we don't need m_irData updated
-        // when the data is the same.
+        // Self-assign guard: skip if caller hands us our own data().
+        // (Used to be necessary for the buggy reset() path that's
+        // since been refactored, but kept as defence in depth.)
         const bool isSelfAssign =
             (!m_irData.empty() && ir == m_irData.data()
              && static_cast<size_t>(length) == m_irData.size());
         if (!isSelfAssign) {
             m_irData.assign(ir, ir + length);
         }
-        if (m_sampleRate > 0.0) {
-            m_engineL.setIR(ir, length);
-            m_engineR.setIR(ir, length);
-        } else {
+        if (m_sampleRate <= 0.0) {
             // init() hasn't run yet (preset restore happens before
             // engine wiring on cold-load); stash for re-application
             // when init() finally fires.
             m_pendingIR.assign(ir, ir + length);
             m_pendingIRSampleRate = irSampleRate;
+            return;
         }
+
+        // ── RCU-lite atomic engine swap ──
+        // Same pattern NeuralAmp uses: build NEW engines fully
+        // configured with the IR off the audio thread, then atomic-
+        // exchange them in. Old engines get parked in
+        // m_retiredEngines and destroyed on the NEXT load — by which
+        // time the audio thread has rotated through the new pointers
+        // many times, so the old ones are provably idle. Bug it
+        // fixes: use-after-free on rapid IR loads (audio thread
+        // calling process() on an engine the UI thread is about to
+        // destroy).
+        m_retiredEngines.clear();   // destroy engines from PREVIOUS load
+
+        auto newL = std::make_unique<ConvolutionEngine>();
+        auto newR = std::make_unique<ConvolutionEngine>();
+        newL->init(m_engineBlockSize, m_sampleRate);
+        newR->init(m_engineBlockSize, m_sampleRate);
+        newL->setIR(ir, length);
+        newR->setIR(ir, length);
+
+        // Atomic publish. Audio thread will pick up the new pointers
+        // on its next process() call.
+        ConvolutionEngine* oldL = m_engineL.exchange(
+            newL.release(), std::memory_order_acq_rel);
+        ConvolutionEngine* oldR = m_engineR.exchange(
+            newR.release(), std::memory_order_acq_rel);
+        if (oldL) m_retiredEngines.emplace_back(oldL);
+        if (oldR) m_retiredEngines.emplace_back(oldR);
     }
     void clearIR() {
         m_irData.clear();
         m_irPath.clear();
-        m_engineL.clear();
-        m_engineR.clear();
+        // Same RCU-lite swap-then-park as a load — clearing while
+        // audio is mid-process must not destroy the engines under
+        // the audio thread's feet.
+        m_retiredEngines.clear();
+        ConvolutionEngine* oldL = m_engineL.exchange(nullptr,
+                std::memory_order_acq_rel);
+        ConvolutionEngine* oldR = m_engineR.exchange(nullptr,
+                std::memory_order_acq_rel);
+        if (oldL) m_retiredEngines.emplace_back(oldL);
+        if (oldR) m_retiredEngines.emplace_back(oldR);
     }
-    bool hasIR() const { return m_engineL.hasIR(); }
-    int  irLengthSamples() const { return m_engineL.irLengthSamples(); }
+    bool hasIR() const {
+        ConvolutionEngine* eL = m_engineL.load(std::memory_order_acquire);
+        return eL && eL->hasIR();
+    }
+    int  irLengthSamples() const {
+        ConvolutionEngine* eL = m_engineL.load(std::memory_order_acquire);
+        return eL ? eL->irLengthSamples() : 0;
+    }
     void setIRPath(const std::string& p) { m_irPath = p; }
     const std::string& irPath() const   { return m_irPath; }
     const float* irData() const         { return m_irData.data(); }
@@ -262,7 +330,24 @@ private:
         0.0f, 80.0f, 12000.0f, 0.0f, 0.30f
     };
 
-    ConvolutionEngine m_engineL, m_engineR;
+    // RCU-lite atomic engine pointers + retired list. Audio thread
+    // reads via acquire-load, gets a stable raw pointer for the
+    // duration of process(). UI thread (loadIRMono) builds NEW
+    // engines fully off the audio thread, atomic-exchanges them
+    // in, parks the previous engines in m_retiredEngines. Old
+    // engines are destroyed at the START of the NEXT loadIRMono
+    // (or device destruction) — by which time the audio thread
+    // has long since switched to the new pointers.
+    //
+    // Cost: each surviving load leaks the previous engines for one
+    // load cycle. For 10 s IRs the partition + FDL state can be
+    // 10–20 MB per engine; 2 engines × one cycle = 20–40 MB
+    // potentially leaked between loads. Acceptable given how rare
+    // IR loads are.
+    std::atomic<ConvolutionEngine*> m_engineL{nullptr};
+    std::atomic<ConvolutionEngine*> m_engineR{nullptr};
+    std::vector<std::unique_ptr<ConvolutionEngine>> m_retiredEngines;
+    int m_engineBlockSize = 0;
 
     // IR storage (lives on the device so a reset() can re-prime the
     // engines without needing the host to re-load the file).
