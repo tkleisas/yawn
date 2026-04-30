@@ -1614,20 +1614,18 @@ private:
             // device strip allocates.
             auto* disp = new SplineEQDisplayPanel();
             disp->setEQ(static_cast<effects::SplineEQ*>(fx));
-            // Sample rate for the analytic biquad-magnitude
-            // computation in the curve renderer. We pull from the
-            // already-tracked m_clipSampleRate (sourced from
-            // AudioEngine config); for an EQ panel the magnitude
-            // formulas only use sr to map omega = 2π·f/sr, so a
-            // small mismatch with the actual host rate just shifts
-            // the visual curve a hair — no audio effect.
             disp->setSampleRate(static_cast<double>(m_clipSampleRate));
+            // Param-change callback: route panel-side edits (drag a
+            // node, scroll-wheel Q, click-to-add) through the
+            // standard DeviceRef::setParam path so automation /
+            // MIDI Learn / preset save all see the change the same
+            // way they would if the user moved a knob in the
+            // regular per-param knob list.
+            disp->setOnParamChange([ref](int idx, float v) {
+                DeviceRef r = ref; r.setParam(idx, v);
+            });
             dw->setCustomPanel(disp, 400.0f, 200.0f);
             configureDeviceWidget(dw, ref);
-            // No per-frame update needed for the EQ panel — it reads
-            // the live SplineEQ pointer's accessors at render time
-            // and the spectrum analysers update themselves on the
-            // audio thread. UI just renders.
             return true;
         }
 

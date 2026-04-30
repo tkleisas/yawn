@@ -56,6 +56,16 @@ public:
     void setEQ(effects::SplineEQ* eq) { m_eq = eq; }
     void setSampleRate(double sr)     { m_sampleRate = sr; }
 
+    // ── Param-change callback ──
+    // Wired by DetailPanelWidget to a DeviceRef::setParam call so
+    // automation / MIDI Learn / preset save all work the same way
+    // they would if the user moved a knob. The panel never mutates
+    // the SplineEQ directly — it only reads.
+    using ParamChangeCallback = std::function<void(int paramIndex, float value)>;
+    void setOnParamChange(ParamChangeCallback cb) {
+        m_onParamChange = std::move(cb);
+    }
+
     Size onMeasure(Constraints c, UIContext&) override {
         // Caller passes the slot height; we honour it directly so the
         // panel fills whatever the device-strip layout gives us.
@@ -93,6 +103,127 @@ public:
         r.popClip();
     }
 #endif
+
+    // ── Mouse interaction ───────────────────────────────────────────
+    bool onMouseDown(MouseEvent& e) override {
+        if (!m_eq) return false;
+        const Rect r = gridRect();
+        if (e.x < r.x || e.x >= r.x + r.w ||
+            e.y < r.y || e.y >= r.y + r.h) return false;
+
+        const int hit = hitTestNode(e.x, e.y, r);
+
+        if (e.button == MouseButton::Right) {
+            // Right-click = cycle node type forward (or backward
+            // with Shift). Quick context-menu replacement; full
+            // popup menu is a future improvement.
+            if (hit >= 0) {
+                int t = static_cast<int>(m_eq->nodeType(hit));
+                const int dir = (e.modifiers & ModifierKey::Shift) ? -1 : 1;
+                t = (t + dir + effects::SplineEQ::ntCount)
+                    % effects::SplineEQ::ntCount;
+                emitParam(hit, effects::SplineEQ::pfType,
+                          static_cast<float>(t));
+            }
+            return true;
+        }
+
+        if (hit >= 0) {
+            m_dragNodeIdx = hit;
+            m_dragShift = (e.modifiers & ModifierKey::Shift) != 0;
+            m_dragStartFreq = m_eq->nodeFreqHz(hit);
+            m_dragStartGain = m_eq->nodeGainDb(hit);
+            m_dragStartQ    = m_eq->nodeQ(hit);
+            m_dragStartX    = e.x;
+            m_dragStartY    = e.y;
+            captureMouse();
+            return true;
+        }
+
+        // Empty-grid click: enable the first disabled node and place
+        // it at the clicked frequency / gain. Provides the "click to
+        // add" affordance without needing a separate "+ Add Node"
+        // button. Type defaults to Peak — user can right-click to
+        // change.
+        for (int n = 0; n < effects::SplineEQ::kMaxNodes; ++n) {
+            if (m_eq->nodeEnabled(n)) continue;
+            const float fHz = xToFreq(e.x, r);
+            const float gDb = yToGainDb(e.y, r);
+            emitParam(n, effects::SplineEQ::pfFreq,
+                      effects::SplineEQ::hzToTune(fHz));
+            emitParam(n, effects::SplineEQ::pfGain, gDb);
+            emitParam(n, effects::SplineEQ::pfType,
+                      static_cast<float>(effects::SplineEQ::ntPeak));
+            emitParam(n, effects::SplineEQ::pfEnabled, 1.0f);
+            // Auto-grab the new node so the user's mouse-down → drag
+            // gesture starts moving it immediately.
+            m_dragNodeIdx = n;
+            m_dragShift = false;
+            m_dragStartFreq = fHz;
+            m_dragStartGain = gDb;
+            m_dragStartQ    = m_eq->nodeQ(n);
+            m_dragStartX    = e.x;
+            m_dragStartY    = e.y;
+            captureMouse();
+            return true;
+        }
+        return true;   // consume the click so it doesn't fall through
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        if (m_dragNodeIdx < 0 || !m_eq) return false;
+        const Rect r = gridRect();
+        if (m_dragShift) {
+            // Shift-drag: vertical motion = Q. Pixel scaling is
+            // chosen so dragging the full grid height takes the Q
+            // through its useful range (0.1..10).
+            const float dy = e.y - m_dragStartY;
+            const float qSpan = 9.9f;   // 10 - 0.1
+            const float perPx = qSpan / std::max(20.0f, r.h);
+            const float newQ = std::clamp(
+                m_dragStartQ - dy * perPx, 0.10f, 10.0f);
+            emitParam(m_dragNodeIdx, effects::SplineEQ::pfQ, newQ);
+        } else {
+            // Normal drag: X = freq, Y = gain. Reads from the live
+            // mouse position, not delta-from-start, so the cursor
+            // stays glued to the node throughout the drag.
+            const float fHz = xToFreq(e.x, r);
+            const float gDb = yToGainDb(e.y, r);
+            emitParam(m_dragNodeIdx, effects::SplineEQ::pfFreq,
+                      effects::SplineEQ::hzToTune(fHz));
+            emitParam(m_dragNodeIdx, effects::SplineEQ::pfGain, gDb);
+        }
+        return true;
+    }
+
+    bool onMouseUp(MouseEvent&) override {
+        if (m_dragNodeIdx >= 0) {
+            m_dragNodeIdx = -1;
+            releaseMouse();
+            return true;
+        }
+        return false;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        if (!m_eq) return false;
+        const Rect r = gridRect();
+        if (e.x < r.x || e.x >= r.x + r.w ||
+            e.y < r.y || e.y >= r.y + r.h) return false;
+
+        const int hit = hitTestNode(e.x, e.y, r);
+        if (hit < 0) return false;
+        // Wheel up → larger Q (narrower bell), wheel down → smaller
+        // Q (wider). 10% per notch feels right; precise scroll wheels
+        // get smaller increments via dy magnitude.
+        const float curQ = m_eq->nodeQ(hit);
+        const float step = std::max(0.05f, std::abs(e.dy)) * 0.1f;
+        const float newQ = std::clamp(
+            curQ * (e.dy > 0 ? (1.0f + step) : 1.0f / (1.0f + step)),
+            0.10f, 10.0f);
+        emitParam(hit, effects::SplineEQ::pfQ, newQ);
+        return true;
+    }
 
 private:
 #ifndef YAWN_TEST_BUILD
@@ -366,8 +497,60 @@ private:
     }
 #endif
 
+    // ── Helpers shared across mouse + render ────────────────────────
+    Rect gridRect() const {
+        const float pad = 4.0f;
+        return Rect{ m_bounds.x + pad, m_bounds.y + pad,
+                    m_bounds.w - pad * 2.0f, m_bounds.h - pad * 2.0f };
+    }
+
+    int hitTestNode(float x, float y, const Rect& r) const {
+        if (!m_eq) return -1;
+        // Generous 9 px hit radius — slightly bigger than the visual
+        // 6 px node disc so the user doesn't have to be pixel-precise.
+        constexpr float kHitR = 9.0f;
+        for (int n = 0; n < effects::SplineEQ::kMaxNodes; ++n) {
+            if (!m_eq->nodeEnabled(n)) continue;
+            const float nx = freqToX(m_eq->nodeFreqHz(n), r.x, r.w);
+            const float ny = dbToY(m_eq->nodeGainDb(n),   r.y, r.h);
+            const float dx = x - nx;
+            const float dy = y - ny;
+            if (dx * dx + dy * dy <= kHitR * kHitR) return n;
+        }
+        return -1;
+    }
+
+    static float xToFreq(float x, const Rect& r) {
+        const float t = std::clamp((x - r.x) / r.w, 0.0f, 1.0f);
+        return 20.0f * std::pow(1000.0f, t);
+    }
+    static float yToGainDb(float y, const Rect& r) {
+        const float t = std::clamp(1.0f - (y - r.y) / r.h, 0.0f, 1.0f);
+        return (t * 2.0f - 1.0f) * 18.0f;
+    }
+
+    void emitParam(int node, effects::SplineEQ::ParamField field,
+                    float value) {
+        if (!m_onParamChange) return;
+        m_onParamChange(effects::SplineEQ::nodeParam(node, field), value);
+    }
+
     effects::SplineEQ* m_eq = nullptr;
     double m_sampleRate = 48000.0;
+
+    ParamChangeCallback m_onParamChange;
+
+    // Drag state. -1 when not dragging. m_dragShift selects between
+    // freq/gain drag (false) and Q drag (true). The "start" snapshots
+    // are kept so future relative-drag modes (cumulative offset
+    // rather than absolute position) are easy to add.
+    int   m_dragNodeIdx = -1;
+    bool  m_dragShift = false;
+    float m_dragStartFreq = 0.0f;
+    float m_dragStartGain = 0.0f;
+    float m_dragStartQ    = 0.707f;
+    float m_dragStartX    = 0.0f;
+    float m_dragStartY    = 0.0f;
 };
 
 } // namespace fw2
