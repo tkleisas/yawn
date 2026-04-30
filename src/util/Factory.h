@@ -28,6 +28,7 @@
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Phaser.h"
+#include "effects/Wah.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
 #include "effects/AmpSimulator.h"
@@ -95,6 +96,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"filter",      [] { return std::make_unique<effects::Filter>(); }},
         {"chorus",      [] { return std::make_unique<effects::Chorus>(); }},
         {"phaser",      [] { return std::make_unique<effects::Phaser>(); }},
+        {"wah",         [] { return std::make_unique<effects::Wah>(); }},
         {"distortion",  [] { return std::make_unique<effects::Distortion>(); }},
         {"tape",        [] { return std::make_unique<effects::TapeEmulation>(); }},
         {"amp",         [] { return std::make_unique<effects::AmpSimulator>(); }},
@@ -179,6 +181,7 @@ inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const
     if (n == "Filter")            return std::make_unique<yawn::effects::Filter>();
     if (n == "Chorus")            return std::make_unique<yawn::effects::Chorus>();
     if (n == "Phaser")            return std::make_unique<yawn::effects::Phaser>();
+    if (n == "Wah")               return std::make_unique<yawn::effects::Wah>();
     if (n == "Distortion")        return std::make_unique<yawn::effects::Distortion>();
     if (n == "Tape Emulation")    return std::make_unique<yawn::effects::TapeEmulation>();
     if (n == "Amp Simulator")     return std::make_unique<yawn::effects::AmpSimulator>();

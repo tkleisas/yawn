@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(YAWN
-    VERSION 0.53.1
+    VERSION 0.53.2
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -484,6 +484,15 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sr
 
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+    # Emit PDBs even in Release so the in-process crash handler
+    # (src/util/CrashHandler.cpp — uses dbghelp's SymFromAddr) can
+    # symbolicate stack frames. Without /Zi every frame in the
+    # crash log resolves to the nearest exported symbol, which is
+    # almost always RtMidiIn::getPortName regardless of where the
+    # fault was — useless for triage. The cost is build dir size
+    # (~80 MB more in build/bin/Release); no perf impact.
+    target_compile_options(${PROJECT_NAME} PRIVATE /Zi)
+    target_link_options(${PROJECT_NAME} PRIVATE /DEBUG)
 endif()
 
 # NAM force-link is handled above via $<LINK_LIBRARY:WHOLE_ARCHIVE,nam>

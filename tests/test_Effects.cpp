@@ -14,6 +14,7 @@
 #include "effects/AmpSimulator.h"
 #include "effects/NoiseGate.h"
 #include "effects/Phaser.h"
+#include "effects/Wah.h"
 #include "effects/Convolution.h"
 #include "effects/ConvolutionReverb.h"
 #include "effects/Oscilloscope.h"
@@ -980,6 +981,7 @@ TEST(Latency, ZeroLatencyEffectsReportZero) {
     Filter       f;        f.init(kSampleRate, kBlockSize);
     Chorus       ch;       ch.init(kSampleRate, kBlockSize);
     Phaser       ph;       ph.init(kSampleRate, kBlockSize);
+    Wah          wah;      wah.init(kSampleRate, kBlockSize);
     Distortion   dist;     dist.init(kSampleRate, kBlockSize);
     TapeEmulation t;       t.init(kSampleRate, kBlockSize);
     AmpSimulator amp;      amp.init(kSampleRate, kBlockSize);
@@ -993,6 +995,7 @@ TEST(Latency, ZeroLatencyEffectsReportZero) {
     EXPECT_EQ(f.latencySamples(),    0);
     EXPECT_EQ(ch.latencySamples(),   0);
     EXPECT_EQ(ph.latencySamples(),   0);
+    EXPECT_EQ(wah.latencySamples(),  0);
     EXPECT_EQ(dist.latencySamples(), 0);
     EXPECT_EQ(t.latencySamples(),    0);
     EXPECT_EQ(amp.latencySamples(),  0);
@@ -1237,6 +1240,168 @@ TEST(Phaser, FeedbackStaysStable) {
         for (int i = 0; i < kBlockSize * 2; ++i) {
             EXPECT_LT(std::abs(buf[i]), 10.0f)
                 << "phaser feedback exploded at block " << block;
+        }
+    }
+}
+
+// ========================= Wah =========================
+//
+// Resonant bandpass with two driver modes (Pedal / Auto). Tests
+// pin: defaults in-range, mix=0 = dry, output non-zero, bypass
+// is exact dry, parameter access, pedal sweep changes the
+// spectrum, auto-mode envelope responds to input level, high-Q
+// stability.
+
+TEST(Wah, Init) {
+    Wah w;
+    w.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(w.parameterCount(), Wah::kParamCount);
+    for (int i = 0; i < w.parameterCount(); ++i) {
+        const auto& info = w.parameterInfo(i);
+        EXPECT_GE(w.getParameter(i), info.minValue);
+        EXPECT_LE(w.getParameter(i), info.maxValue);
+    }
+    EXPECT_EQ(w.latencySamples(), 0);
+}
+
+TEST(Wah, MixZeroIsDry) {
+    Wah w;
+    w.init(kSampleRate, kBlockSize);
+    w.setParameter(Wah::kMix, 0.0f);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + kBlockSize * 2);
+    w.process(buf, kBlockSize, 2);
+    for (int i = 0; i < kBlockSize * 2; ++i) {
+        EXPECT_NEAR(buf[i], input[i], 1e-6f);
+    }
+}
+
+TEST(Wah, BypassIsExactlyDry) {
+    Wah w;
+    w.init(kSampleRate, kBlockSize);
+    w.setBypassed(true);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + kBlockSize * 2);
+    w.process(buf, kBlockSize, 2);
+    for (int i = 0; i < kBlockSize * 2; ++i) {
+        EXPECT_FLOAT_EQ(buf[i], input[i]);
+    }
+}
+
+TEST(Wah, PedalProducesOutput) {
+    Wah w;
+    w.init(kSampleRate, kBlockSize);
+    w.setParameter(Wah::kMode,  static_cast<float>(Wah::ModePedal));
+    w.setParameter(Wah::kPedal, 0.5f);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 800.0f, 0.5f, kSampleRate);
+    w.process(buf, kBlockSize, 2);
+    EXPECT_TRUE(hasSignal(buf, kBlockSize, 2));
+}
+
+TEST(Wah, PedalSweepChangesOutput) {
+    // Sweeping pedal across the range should produce different
+    // output — the BPF cuts different frequencies.
+    Wah w1, w2;
+    w1.init(kSampleRate, kBlockSize);
+    w2.init(kSampleRate, kBlockSize);
+    w1.setParameter(Wah::kPedal, 0.0f);  // bottom of sweep
+    w2.setParameter(Wah::kPedal, 1.0f);  // top of sweep
+
+    float buf1[kBlockSize * 2];
+    float buf2[kBlockSize * 2];
+    fillSine(buf1, kBlockSize, 2, 800.0f, 0.5f, kSampleRate);
+    fillSine(buf2, kBlockSize, 2, 800.0f, 0.5f, kSampleRate);
+    w1.process(buf1, kBlockSize, 2);
+    w2.process(buf2, kBlockSize, 2);
+
+    float diff = 0.0f;
+    for (int i = 0; i < kBlockSize * 2; ++i) {
+        const float d = buf1[i] - buf2[i];
+        diff += d * d;
+    }
+    diff = std::sqrt(diff / (kBlockSize * 2));
+    EXPECT_GT(diff, 0.001f) << "pedal didn't change output";
+}
+
+TEST(Wah, AutoRespondsToInputLevel) {
+    // In Auto mode, a louder signal should produce a louder
+    // envelope → drive the filter higher → different output
+    // than a quieter signal of the same frequency.
+    Wah quiet, loud;
+    quiet.init(kSampleRate, kBlockSize);
+    loud.init(kSampleRate, kBlockSize);
+    quiet.setParameter(Wah::kMode, static_cast<float>(Wah::ModeAuto));
+    loud.setParameter(Wah::kMode,  static_cast<float>(Wah::ModeAuto));
+    quiet.setParameter(Wah::kSensitivity, 0.7f);
+    loud.setParameter(Wah::kSensitivity,  0.7f);
+    quiet.setParameter(Wah::kPedal, 0.0f);
+    loud.setParameter(Wah::kPedal,  0.0f);
+
+    // Run a few warm-up blocks so the envelope settles.
+    float bufQ[kBlockSize * 2];
+    float bufL[kBlockSize * 2];
+    for (int blk = 0; blk < 10; ++blk) {
+        fillSine(bufQ, kBlockSize, 2, 440.0f, 0.05f, kSampleRate);
+        fillSine(bufL, kBlockSize, 2, 440.0f, 0.50f, kSampleRate);
+        quiet.process(bufQ, kBlockSize, 2);
+        loud.process(bufL, kBlockSize, 2);
+    }
+    // Final block — compare normalised RMS so we're checking the
+    // filter response shape, not just the amplitude difference.
+    fillSine(bufQ, kBlockSize, 2, 440.0f, 0.05f, kSampleRate);
+    fillSine(bufL, kBlockSize, 2, 440.0f, 0.50f, kSampleRate);
+    quiet.process(bufQ, kBlockSize, 2);
+    loud.process(bufL, kBlockSize, 2);
+
+    // Normalise to input amplitude — what we want to verify is
+    // that the wah filter MOVED, not that loud-in produces louder
+    // out (it would anyway). We compare per-channel relative RMS.
+    const float rmsQ = computeRMS(bufQ, kBlockSize, 2) / 0.05f;
+    const float rmsL = computeRMS(bufL, kBlockSize, 2) / 0.50f;
+    // The two normalised RMS values should differ — same input
+    // shape, different filter cutoff → different attenuation of
+    // the 440 Hz tone.
+    EXPECT_GT(std::abs(rmsQ - rmsL), 0.01f)
+        << "auto-mode didn't react to input level";
+}
+
+TEST(Wah, ParameterAccess) {
+    Wah w;
+    w.init(kSampleRate, kBlockSize);
+    w.setParameter(Wah::kQ, 12.0f);
+    EXPECT_FLOAT_EQ(w.getParameter(Wah::kQ), 12.0f);
+    w.setParameter(Wah::kBottomHz, 500.0f);
+    EXPECT_FLOAT_EQ(w.getParameter(Wah::kBottomHz), 500.0f);
+    w.setParameter(Wah::kTopHz, 3500.0f);
+    EXPECT_FLOAT_EQ(w.getParameter(Wah::kTopHz), 3500.0f);
+    // Out-of-range index = no-op.
+    w.setParameter(-1, 0.5f);
+    w.setParameter(Wah::kParamCount + 1, 0.5f);
+    EXPECT_EQ(w.getParameter(-1), 0.0f);
+    EXPECT_EQ(w.getParameter(Wah::kParamCount + 1), 0.0f);
+}
+
+TEST(Wah, HighQStaysStable) {
+    // Q=16 + steady tone shouldn't make the filter explode.
+    // Process many blocks and check output stays bounded.
+    Wah w;
+    w.init(kSampleRate, kBlockSize);
+    w.setParameter(Wah::kQ, 16.0f);
+    w.setParameter(Wah::kPedal, 0.5f);
+
+    float buf[kBlockSize * 2];
+    for (int block = 0; block < 50; ++block) {
+        fillSine(buf, kBlockSize, 2, 800.0f, 0.5f, kSampleRate);
+        w.process(buf, kBlockSize, 2);
+        for (int i = 0; i < kBlockSize * 2; ++i) {
+            EXPECT_LT(std::abs(buf[i]), 20.0f)
+                << "wah blew up at block " << block;
         }
     }
 }

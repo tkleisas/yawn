@@ -27,6 +27,7 @@
 #include "effects/Filter.h"
 #include "effects/Chorus.h"
 #include "effects/Phaser.h"
+#include "effects/Wah.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
 #include "effects/AmpSimulator.h"
@@ -1117,6 +1118,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Filter",      [](){ return std::make_unique<effects::Filter>(); });
     addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
     addFxItem("Phaser",      [](){ return std::make_unique<effects::Phaser>(); });
+    addFxItem("Wah",         [](){ return std::make_unique<effects::Wah>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
     addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
     addFxItem("Noise Gate",  [](){ return std::make_unique<effects::NoiseGate>(); });
@@ -3926,6 +3928,7 @@ bool App::init() {
         addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
         addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
         addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
+        addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
         addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
         addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
