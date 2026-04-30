@@ -558,6 +558,23 @@ public:
             return true;
         };
 
+        // Custom panel — interactive panels (SplineEQ display, future
+        // graphic-EQ-style devices) need mouse events forwarded.
+        // Check before the knob/body dispatches so a click inside
+        // the panel rect goes to the panel even when knobs are also
+        // visible alongside (the panel is a separate slot from
+        // m_customBody / knob grid; coexists rather than replaces).
+        if (m_customPanel) {
+            const auto& cb = m_customPanel->bounds();
+            if (e.x >= cb.x && e.x < cb.x + cb.w &&
+                e.y >= cb.y && e.y < cb.y + cb.h) {
+                if (m_customPanel->dispatchMouseDown(e)) {
+                    m_v2Dragging = m_customPanel;
+                    return true;
+                }
+            }
+        }
+
         if (m_isVisualizer && m_vizKnobGrid) {
             if (rectContains(m_vizKnobGrid->bounds(), e.x, e.y)) {
                 for (auto& s : m_vizKnobs) if (hitSlot(s)) return dispatchSlot(s);
@@ -572,6 +589,22 @@ public:
         } else {
             if (rectContains(m_knobGrid.bounds(), e.x, e.y)) {
                 for (auto& s : m_knobs) if (hitSlot(s)) return dispatchSlot(s);
+            }
+        }
+        return false;
+    }
+
+    bool onScroll(ScrollEvent& e) override {
+        // Forward scroll-wheel events to the custom panel when the
+        // cursor is over it. Used by the SplineEQ display panel for
+        // wheel-adjust-Q on hovered nodes; harmless for read-only
+        // panels (FilterDisplayWidget etc.) since they don't
+        // override onScroll and the dispatch returns false.
+        if (m_customPanel) {
+            const auto& cb = m_customPanel->bounds();
+            if (e.x >= cb.x && e.x < cb.x + cb.w &&
+                e.y >= cb.y && e.y < cb.y + cb.h) {
+                if (m_customPanel->dispatchScroll(e)) return true;
             }
         }
         return false;

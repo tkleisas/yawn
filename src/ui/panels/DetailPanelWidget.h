@@ -1626,11 +1626,13 @@ private:
             });
             // setCustomPanel(panel, h, minW): panel HEIGHT first,
             // then MIN WIDTH. The EQ wants 200 px tall × at least
-            // 400 px wide (the device strip will stretch wider
-            // wherever the layout has room). Earlier I had this
-            // reversed — 400 as h pushed the panel off-screen and
-            // the body looked empty.
-            dw->setCustomPanel(disp, 200.0f, 400.0f);
+            // ~270 px wide (2/3 of the 400 px first-pass width —
+            // user feedback: original was too wide for the device-
+            // strip layout). The strip will stretch wider where
+            // layout has room, but never narrower than 270 — the
+            // freq response and dual spectrum still need horizontal
+            // space to be readable.
+            dw->setCustomPanel(disp, 200.0f, 270.0f);
             configureDeviceWidget(dw, ref);
             return true;
         }
