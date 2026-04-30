@@ -356,6 +356,17 @@ protected:
     bool m_focusable = false;
     bool m_clickOnly = false;
     bool m_autoCaptureOnPress = true;
+    // Re-entry guards — third layer of defence against the
+    // "panel forwards to capturedWidget which is itself" stack-
+    // overflow trap (see fw2_widget_capture_gotcha doc).
+    // dispatchMouseMove / dispatchMouseUp set the corresponding
+    // flag while running; a re-entrant call returns false instead
+    // of recursing. Layers 1 (setAutoCaptureOnUnhandledPress(false))
+    // and 2 (cap != this guard at forwarding sites) are still the
+    // primary fixes — this catches regressions in either of them
+    // before the process dies silently.
+    bool m_inDispatchMove = false;
+    bool m_inDispatchUp   = false;
 
     SizePolicy m_sizePolicy;
     Insets     m_padding;

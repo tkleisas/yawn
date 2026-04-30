@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <set>
 #include <typeinfo>
 
 namespace yawn {
@@ -404,6 +405,28 @@ bool Widget::dispatchMouseDown(MouseEvent& e) {
 bool Widget::dispatchMouseUp(MouseEvent& e) {
     if (!m_visible) return false;
 
+    // ── Re-entry guard ──
+    // Catches the "panel forwards to capturedWidget which is itself"
+    // recursion trap that has bitten us before
+    // (VisualParamsPanel, others — see fw2_widget_capture_gotcha
+    // memory). Layers 1 + 2 (setAutoCaptureOnUnhandledPress(false)
+    // + `cap != this` guard at every forwarding site) are still the
+    // primary fixes; this is the fallback that ensures a regression
+    // in either of them surfaces as a logged warning instead of a
+    // silent stack overflow.
+    if (m_inDispatchUp) {
+        // One LOG_WARN per widget per process — these traps are rare
+        // but when they trip you want one obvious entry, not a flood.
+        static thread_local std::set<const Widget*> warned;
+        if (warned.insert(this).second) {
+            LOG_WARN("fw2", "dispatchMouseUp re-entered for %s — capture-self-dispatch trap triggered, returning false. Check setAutoCaptureOnUnhandledPress(false) + `cap != this` guard.",
+                m_name.empty() ? typeid(*this).name() : m_name.c_str());
+        }
+        return false;
+    }
+    m_inDispatchUp = true;
+    struct Guard { bool& flag; ~Guard(){ flag = false; } } g{m_inDispatchUp};
+
     // If there's no pending press, just forward the raw event.
     if (!m_gesture.pressed) return onMouseUp(e) || e.consumed;
 
@@ -437,6 +460,18 @@ bool Widget::dispatchMouseUp(MouseEvent& e) {
 
 bool Widget::dispatchMouseMove(MouseMoveEvent& e) {
     if (!m_visible) return false;
+
+    // ── Re-entry guard ── (see comment in dispatchMouseUp above).
+    if (m_inDispatchMove) {
+        static thread_local std::set<const Widget*> warned;
+        if (warned.insert(this).second) {
+            LOG_WARN("fw2", "dispatchMouseMove re-entered for %s — capture-self-dispatch trap triggered, returning false. Check setAutoCaptureOnUnhandledPress(false) + `cap != this` guard.",
+                m_name.empty() ? typeid(*this).name() : m_name.c_str());
+        }
+        return false;
+    }
+    m_inDispatchMove = true;
+    struct Guard { bool& flag; ~Guard(){ flag = false; } } g{m_inDispatchMove};
 
     // Raw callback first.
     if (onMouseMove(e) || e.consumed) return true;

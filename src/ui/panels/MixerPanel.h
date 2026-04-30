@@ -140,7 +140,11 @@ protected:
     bool onMouseDown(MouseEvent& e) override;
 
     bool onMouseMove(MouseMoveEvent& e) override {
-        if (Widget* cap = Widget::capturedWidget()) {
+        // `cap != this` guards the "panel self-captured → forwards to
+        // itself → silent stack overflow" trap. Layer 1 is the
+        // setAutoCaptureOnUnhandledPress(false) in the ctor; this is
+        // the second-line defence if that flag ever gets reverted.
+        if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
             const auto& b = cap->bounds();
             MouseMoveEvent ev = e;
             ev.lx = e.x - b.x;
@@ -152,7 +156,7 @@ protected:
     }
 
     bool onMouseUp(MouseEvent& e) override {
-        if (Widget* cap = Widget::capturedWidget()) {
+        if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
             const auto& b = cap->bounds();
             MouseEvent ev = e;
             ev.lx = e.x - b.x;

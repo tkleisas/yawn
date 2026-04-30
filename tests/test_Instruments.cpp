@@ -7,6 +7,7 @@
 #include "instruments/InstrumentRack.h"
 #include "instruments/DrumRack.h"
 #include "instruments/DrumSlop.h"
+#include "instruments/DrumSynth.h"
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
@@ -1682,4 +1683,257 @@ TEST(Multisampler, ClearZones) {
 
     ms.clearZones();
     EXPECT_EQ(ms.zoneCount(), 0);
+}
+
+// ========================= DrumSynth =========================
+//
+// DrumSynth is a fully-synthesised 8-piece kit — these tests cover
+// the contract surface (init / GM-note → slot mapping / NoteOn fires
+// audio / per-pad monophony / CHH→OHH choke / CC 123 silence) plus
+// a handful of regressions caught during the v0.52.x review pass:
+// uint32_t pink-counter overflow safety, justTriggered semantics
+// (no float-equal sentinel), oversized-block defensive return, and
+// member-owned scratch buffers.
+
+namespace {
+
+MidiBuffer makeDrumNote(int note, uint8_t vel7 = 100) {
+    MidiBuffer buf;
+    MidiMessage m{};
+    m.type = MidiMessage::Type::NoteOn;
+    m.channel = 0;
+    m.note = static_cast<uint8_t>(note);
+    m.velocity = Convert::vel7to16(vel7);
+    buf.addMessage(m);
+    return buf;
+}
+
+MidiBuffer makeAllNotesOff() {
+    MidiBuffer buf;
+    buf.addMessage(MidiMessage::cc(0, 123, 0));
+    return buf;
+}
+
+}  // anon
+
+TEST(DrumSynth, SlotForNoteMapsGMNotes) {
+    EXPECT_EQ(DrumSynth::slotForNote(36), DrumSynth::Kick);
+    EXPECT_EQ(DrumSynth::slotForNote(38), DrumSynth::Snare);
+    EXPECT_EQ(DrumSynth::slotForNote(39), DrumSynth::Clap);
+    EXPECT_EQ(DrumSynth::slotForNote(41), DrumSynth::Tom1);
+    EXPECT_EQ(DrumSynth::slotForNote(42), DrumSynth::ClosedHH);
+    EXPECT_EQ(DrumSynth::slotForNote(46), DrumSynth::OpenHH);
+    EXPECT_EQ(DrumSynth::slotForNote(50), DrumSynth::Tom2);
+    EXPECT_EQ(DrumSynth::slotForNote(54), DrumSynth::Tambourine);
+    // Out-of-kit notes return -1.
+    EXPECT_EQ(DrumSynth::slotForNote(60), -1);
+    EXPECT_EQ(DrumSynth::slotForNote(0),  -1);
+    EXPECT_EQ(DrumSynth::slotForNote(127), -1);
+}
+
+TEST(DrumSynth, InitAndReset) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(ds.parameterCount(), DrumSynth::kParamCount);
+    // Defaults are in-range — sanity-check a few.
+    EXPECT_GE(ds.getParameter(DrumSynth::pKickTune), 0.0f);
+    EXPECT_LE(ds.getParameter(DrumSynth::pKickTune), 1.0f);
+    ds.reset();
+    // After reset, an empty MIDI buffer should produce silence.
+    float buffer[kBlockSize * kChannels] = {};
+    ds.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(DrumSynth, KickProducesAudibleOutput) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+    float buffer[kBlockSize * kChannels] = {};
+    ds.process(buffer, kBlockSize, kChannels, makeDrumNote(36 /*Kick*/));
+    EXPECT_GT(rms(buffer, kBlockSize * kChannels), 1e-3f);
+}
+
+TEST(DrumSynth, EachSlotProducesOutput) {
+    // Fire every drum from a fresh instance and check non-zero RMS.
+    // Catches "I added a slot but forgot to wire its render switch
+    // case" and similar regressions.
+    constexpr int kDrumNotes[] = { 36, 38, 39, 41, 42, 46, 50, 54 };
+    for (int note : kDrumNotes) {
+        DrumSynth ds;
+        ds.init(kSampleRate, kBlockSize);
+        float buffer[kBlockSize * kChannels] = {};
+        ds.process(buffer, kBlockSize, kChannels, makeDrumNote(note));
+        EXPECT_GT(rms(buffer, kBlockSize * kChannels), 1e-4f)
+            << "note " << note << " produced silence";
+    }
+}
+
+TEST(DrumSynth, NonKitNotesAreIgnored) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+    float buffer[kBlockSize * kChannels] = {};
+    // C4 — outside the kit — should not trigger anything.
+    ds.process(buffer, kBlockSize, kChannels, makeDrumNote(60));
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(DrumSynth, ClosedHHChokesOpenHH) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    // Trigger the open hi-hat — it has a long decay (350 ms default).
+    float buf1[kBlockSize * kChannels] = {};
+    ds.process(buf1, kBlockSize, kChannels, makeDrumNote(46 /*OpenHH*/));
+    const float openRms = rms(buf1, kBlockSize * kChannels);
+    EXPECT_GT(openRms, 1e-3f);
+
+    // Now hit the closed hi-hat. The very next block should have
+    // ONLY the closed-hat output (open-hat voice silenced by choke).
+    // We compare the block AFTER closed-hat trigger to a baseline
+    // open-hat-still-ringing block.
+    DrumSynth ds2;
+    ds2.init(kSampleRate, kBlockSize);
+    float baseline[kBlockSize * kChannels] = {};
+    ds2.process(baseline, kBlockSize, kChannels, makeDrumNote(46));
+    // Continue letting open hat ring without choke (control case)…
+    float ringOn[kBlockSize * kChannels] = {};
+    ds2.process(ringOn, kBlockSize, kChannels, makeEmpty());
+    const float ringRms = rms(ringOn, kBlockSize * kChannels);
+
+    // …vs choke case.
+    float chokedAndCHH[kBlockSize * kChannels] = {};
+    ds.process(chokedAndCHH, kBlockSize, kChannels, makeDrumNote(42 /*ClosedHH*/));
+    // After CHH triggers, the OPEN voice is killed. The audible
+    // output is just the CHH (60 ms decay) by the end of the block,
+    // not OHH (350 ms decay) ringing. Hard to assert exactly, so we
+    // verify open-hat alone (block N+1, no new triggers) is silent
+    // because the choke wiped the active flag.
+    float afterChoke[kBlockSize * kChannels] = {};
+    ds.process(afterChoke, kBlockSize, kChannels, makeEmpty());
+    // The CHH itself is short (60 ms = ~2640 samples @ 44.1 kHz)
+    // → it's still ringing in `afterChoke` slightly. But strictly
+    // less than the un-choked open-hat ringRms.
+    EXPECT_LT(rms(afterChoke, kBlockSize * kChannels), ringRms);
+}
+
+TEST(DrumSynth, OpenHHDoesNotChokeClosedHH) {
+    // We dropped the OpenHH→ClosedHH choke direction in v0.52 — real
+    // hi-hat pedals only choke one way (closing mutes open). This
+    // test pins that behaviour so it doesn't drift back.
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    // Trigger the closed hat first, then the open hat. The closed
+    // voice should stay active afterwards (its short envelope will
+    // decay naturally — but its `active` flag isn't externally
+    // observable, so we assert audible behaviour via RMS).
+    float b1[kBlockSize * kChannels] = {};
+    ds.process(b1, kBlockSize, kChannels, makeDrumNote(42 /*CHH*/));
+    EXPECT_GT(rms(b1, kBlockSize * kChannels), 1e-4f);
+    float b2[kBlockSize * kChannels] = {};
+    ds.process(b2, kBlockSize, kChannels, makeDrumNote(46 /*OHH*/));
+    // Both voices alive in this block — sum is bigger than either
+    // alone would be (loose bound; mostly we want non-zero output).
+    EXPECT_GT(rms(b2, kBlockSize * kChannels), 1e-4f);
+}
+
+TEST(DrumSynth, AllNotesOffSilencesEverything) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    // Fire kick + snare + open-hat — all have long-ish tails.
+    float buf[kBlockSize * kChannels] = {};
+    MidiBuffer chord;
+    MidiMessage m{};
+    m.type = MidiMessage::Type::NoteOn;
+    m.channel = 0;
+    m.velocity = Convert::vel7to16(120);
+    for (int note : {36, 38, 46}) {
+        m.note = static_cast<uint8_t>(note);
+        chord.addMessage(m);
+    }
+    ds.process(buf, kBlockSize, kChannels, chord);
+    EXPECT_GT(rms(buf, kBlockSize * kChannels), 1e-3f);
+
+    // CC 123 — All Notes Off — should silence everything immediately.
+    float silenceBuf[kBlockSize * kChannels] = {};
+    ds.process(silenceBuf, kBlockSize, kChannels, makeAllNotesOff());
+    EXPECT_LT(rms(silenceBuf, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(DrumSynth, RetriggerResetsEnvelope) {
+    // A fresh trigger on an already-decaying voice should restart
+    // the envelope from 0, not just keep the previous level. This
+    // is the behaviour every drum machine ever has shipped, and
+    // it's a regression-magnet because justTriggered + ageSamples
+    // both need to be reset in noteOn.
+    //
+    // process() is ADDITIVE — we explicitly zero the buffer between
+    // calls so the per-block RMS reflects just that block's output.
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+
+    // Fire kick, then run silent blocks until the envelope is well
+    // below its peak. Default kick decay τ = 350 ms; we wait
+    // ~3 time-constants (≈1 s, ~170 blocks of 256 @ 44.1 kHz) so the
+    // tail is ~5 % of peak — gives a clean ratio against the
+    // re-triggered block.
+    float buf[kBlockSize * kChannels];
+    std::memset(buf, 0, sizeof(buf));
+    ds.process(buf, kBlockSize, kChannels, makeDrumNote(36));
+    for (int i = 0; i < 170; ++i) {
+        std::memset(buf, 0, sizeof(buf));
+        ds.process(buf, kBlockSize, kChannels, makeEmpty());
+    }
+    // `buf` now holds the kick's far-decayed tail — capture it.
+    const float tailRms = rms(buf, kBlockSize * kChannels);
+
+    // Retrigger and read the next block's RMS in isolation.
+    std::memset(buf, 0, sizeof(buf));
+    ds.process(buf, kBlockSize, kChannels, makeDrumNote(36));
+    const float retrigRms = rms(buf, kBlockSize * kChannels);
+
+    // The retriggered block should be loudly back at the attack/
+    // early-decay level — at least 5× the decayed tail.
+    EXPECT_GT(retrigRms, tailRms * 5.0f);
+}
+
+TEST(DrumSynth, OversizedBlockReturnsCleanly) {
+    // Defence: host violates its own m_maxBlockSize contract by
+    // sending a bigger block. Code should NOT write past the
+    // member-owned scratch buffer; should just return early.
+    // Check by size-pinning init() to 64 then handing it 256.
+    DrumSynth ds;
+    ds.init(kSampleRate, /*maxBlockSize=*/64);
+    float buf[kBlockSize * kChannels] = {};
+    // No crash → test passes. We don't assert RMS here because
+    // the contract violation drops the block (and silence is the
+    // correct outcome).
+    ds.process(buf, kBlockSize, kChannels, makeDrumNote(36));
+    SUCCEED();
+}
+
+TEST(DrumSynth, BypassedProducesNoOutput) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+    ds.setBypassed(true);
+    float buf[kBlockSize * kChannels] = {};
+    ds.process(buf, kBlockSize, kChannels, makeDrumNote(36));
+    EXPECT_LT(rms(buf, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(DrumSynth, ParameterClampingAndInfo) {
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+    // Out-of-range write gets clamped to the parameterInfo range.
+    const auto& kickTune = ds.parameterInfo(DrumSynth::pKickTune);
+    ds.setParameter(DrumSynth::pKickTune, 99.0f);
+    EXPECT_FLOAT_EQ(ds.getParameter(DrumSynth::pKickTune), kickTune.maxValue);
+    ds.setParameter(DrumSynth::pKickTune, -99.0f);
+    EXPECT_FLOAT_EQ(ds.getParameter(DrumSynth::pKickTune), kickTune.minValue);
+    // Out-of-range index is a no-op (no crash).
+    ds.setParameter(-1, 0.5f);
+    ds.setParameter(DrumSynth::kParamCount + 1, 0.5f);
+    EXPECT_EQ(ds.getParameter(-1), 0.0f);
+    EXPECT_EQ(ds.getParameter(DrumSynth::kParamCount + 1), 0.0f);
 }

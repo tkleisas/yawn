@@ -665,6 +665,30 @@ private:
         return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
     }
 
+    // Scrollbar geometry — kept OUT of the YAWN_TEST_BUILD guard
+    // because onMouseDown's hit-test also calls them, and onMouseDown
+    // is compiled in test mode. The render() side just reads what
+    // they compute.
+    Rect scrollbarTrackRect() const {
+        return { m_listRect.x + m_listRect.w - kScrollbarW - 1,
+                 m_listRect.y + kListHeaderH,
+                 kScrollbarW,
+                 m_listRect.h - kListHeaderH };
+    }
+
+    Rect scrollbarThumbRect() const {
+        const Rect t = scrollbarTrackRect();
+        const int rowsVisible = visibleListRows();
+        const int total = static_cast<int>(m_zones.size());
+        const int maxScroll = std::max(1, total - rowsVisible);
+        const float thumbH = std::max(20.0f,
+            t.h * static_cast<float>(rowsVisible) / std::max(1, total));
+        const float travel = t.h - thumbH;
+        const float thumbY = t.y + travel *
+            static_cast<float>(m_listScroll) / maxScroll;
+        return { t.x, thumbY, t.w, thumbH };
+    }
+
 #ifndef YAWN_TEST_BUILD
     void renderZoneList(UIContext& ctx) {
         auto& r = *ctx.renderer;
@@ -724,26 +748,6 @@ private:
         } else {
             m_scrollbarRect = {};
         }
-    }
-
-    Rect scrollbarTrackRect() const {
-        return { m_listRect.x + m_listRect.w - kScrollbarW - 1,
-                 m_listRect.y + kListHeaderH,
-                 kScrollbarW,
-                 m_listRect.h - kListHeaderH };
-    }
-
-    Rect scrollbarThumbRect() const {
-        const Rect t = scrollbarTrackRect();
-        const int rowsVisible = visibleListRows();
-        const int total = static_cast<int>(m_zones.size());
-        const int maxScroll = std::max(1, total - rowsVisible);
-        const float thumbH = std::max(20.0f,
-            t.h * static_cast<float>(rowsVisible) / std::max(1, total));
-        const float travel = t.h - thumbH;
-        const float thumbY = t.y + travel *
-            static_cast<float>(m_listScroll) / maxScroll;
-        return { t.x, thumbY, t.w, thumbH };
     }
 
     void renderEditor(UIContext& ctx) {

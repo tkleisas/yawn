@@ -1,4 +1,5 @@
 #include "DrumSynth.h"
+#include "util/Logger.h"
 #include <cmath>
 #include <cstring>
 
@@ -42,7 +43,15 @@ void DrumSynth::init(double sampleRate, int maxBlockSize) {
     m_maxBlockSize = maxBlockSize;
     for (int i = 0; i < kParamCount; ++i)
         m_params[i] = parameterInfo(i).defaultValue;
+    // Pre-size scratch buffers against the host contract. Audio
+    // thread does no allocation thereafter — it only writes to the
+    // fixed-capacity vectors.
+    m_scratchL.assign(static_cast<size_t>(maxBlockSize), 0.0f);
+    m_scratchR.assign(static_cast<size_t>(maxBlockSize), 0.0f);
+    m_oversizedBlockWarned = false;
     reset();
+    LOG_INFO("DrumSynth", "init sr=%.0f maxBlockSize=%d",
+             sampleRate, maxBlockSize);
 }
 
 void DrumSynth::reset() {
@@ -72,20 +81,27 @@ void DrumSynth::noteOn(int slot, float velocity) {
     if (slot < 0 || slot >= kNumDrums) return;
     auto& v = m_voices[slot];
     v.active = true;
+    v.justTriggered = true;
     v.velocity = std::clamp(velocity, 0.0f, 1.0f);
     v.ampLevel = 0.0f;
     v.stage = 0;            // Attack
-    v.ageSamples = 0.0f;
+    v.ageSamples = 0;
     v.phase0 = 0.0;
     for (auto& p : v.phases) p = 0.0;
     v.bpZ1 = v.bpZ2 = 0.0f;
 
-    // Auto-choke: triggering ClosedHH cuts OpenHH (and vice-versa,
-    // which matches how a hi-hat pedal mutes a previously-open ride).
-    // Other choke groups are uncommon enough to skip — kits with
-    // multiple cymbals can wire it through MIDI effects.
+    LOG_DEBUG("DrumSynth", "noteOn slot=%d note=%d vel=%.2f",
+              slot, kDrumNotes[slot], v.velocity);
+
+    // Auto-choke: triggering ClosedHH cuts OpenHH — matches how a
+    // hi-hat foot pedal mutes a previously-open ride. The reverse
+    // (open hat triggers don't choke a closed-hat ring) is the
+    // natural physical behaviour, and a 60-ms-decay closed hat is
+    // already inaudible by the time you'd notice a missing choke,
+    // so we don't bother. Other choke groups are uncommon enough to
+    // skip — kits with multiple cymbals can wire it through MIDI
+    // effects.
     if (slot == ClosedHH) m_voices[OpenHH].active = false;
-    else if (slot == OpenHH) m_voices[ClosedHH].active = false;
 }
 
 void DrumSynth::noteOff(int /*slot*/) {
@@ -141,20 +157,23 @@ void DrumSynth::renderKick(DrumVoice& v, float* outL, float* outR, int n) {
         }
         // Pitch sweep — pitchEnv is reused via phase0's own role; we
         // store the sweep multiplier in v.phases[0] so we don't need
-        // an extra DrumVoice field.
-        v.phases[0] = (v.ageSamples == 0.0f) ? 1.0f
-                                              : v.phases[0] * pitchCoef;
-        const float pitchMul = 1.0f + 2.0f * v.phases[0];   // 1..3 sweep
+        // an extra DrumVoice field. White-noise click decays much
+        // faster than the body — the first ~5 ms gives the kick its
+        // initial transient (phases[1]).
+        if (v.justTriggered) {
+            v.phases[0] = 1.0f;
+            v.phases[1] = 1.0f;
+            v.justTriggered = false;
+        } else {
+            v.phases[0] *= pitchCoef;
+            v.phases[1] *= 0.9985f;
+        }
+        const float pitchMul = 1.0f + 2.0f * static_cast<float>(v.phases[0]);
         const double freq = baseHz * pitchMul;
         v.phase0 += freq / m_sampleRate;
         if (v.phase0 >= 1.0) v.phase0 -= 1.0;
 
         const float sine = std::sin(static_cast<float>(v.phase0) * 6.2831853f);
-        // White-noise click decays much faster than the body — the
-        // first ~5 ms gives the kick its initial transient. Reuse
-        // phases[1] as a separate tiny envelope.
-        v.phases[1] = (v.ageSamples == 0.0f) ? 1.0f
-                                              : v.phases[1] * 0.9985f;
         const float white = (randFloat() - 0.5f) * 2.0f
                            * static_cast<float>(v.phases[1]);
         const float pink  = pinkNoise() * 2.0f;
@@ -167,7 +186,7 @@ void DrumSynth::renderKick(DrumVoice& v, float* outL, float* outR, int n) {
 
         outL[i] += out * pL;
         outR[i] += out * pR;
-        v.ageSamples += 1.0f;
+        ++v.ageSamples;
     }
 }
 
@@ -207,8 +226,12 @@ void DrumSynth::renderSnare(DrumVoice& v, float* outL, float* outR, int n) {
             if (v.ampLevel < 0.0001f) { v.active = false; return; }
         }
         // Body: triangle at baseHz with fast pitch decay (~25 ms)
-        v.phases[0] = (v.ageSamples == 0.0f) ? 1.0f
-                                              : v.phases[0] * 0.9982f;
+        if (v.justTriggered) {
+            v.phases[0] = 1.0f;
+            v.justTriggered = false;
+        } else {
+            v.phases[0] *= 0.9982f;
+        }
         const double freq = baseHz * (1.0f + static_cast<float>(v.phases[0]) * 0.5f);
         v.phase0 += freq / m_sampleRate;
         if (v.phase0 >= 1.0) v.phase0 -= 1.0;
@@ -230,7 +253,7 @@ void DrumSynth::renderSnare(DrumVoice& v, float* outL, float* outR, int n) {
 
         outL[i] += out * pL;
         outR[i] += out * pR;
-        v.ageSamples += 1.0f;
+        ++v.ageSamples;
     }
 }
 
@@ -268,10 +291,18 @@ void DrumSynth::renderClap(DrumVoice& v, float* outL, float* outR, int n) {
             v.ampLevel *= decCoef;
             if (v.ampLevel < 0.0001f) { v.active = false; return; }
         }
-        // Burst envelope — phases[0] is the burst level.
-        const int age = static_cast<int>(v.ageSamples);
+        // Burst envelope — phases[0] is the burst level. The clap's
+        // signature "kha-kha-kha-shhh" texture comes from re-arming
+        // this envelope to 1.0 at three preset sample offsets after
+        // trigger, then letting it decay between bursts. After the
+        // last burst, the noise-tail floor of 0.55 keeps the body
+        // audible until the amp envelope fades out.
+        if (v.justTriggered) {
+            v.phases[0] = 1.0f;     // first burst is at age=0
+            v.justTriggered = false;
+        }
         for (int b = 0; b < 3; ++b)
-            if (age == burstSamples[b]) v.phases[0] = 1.0f;
+            if (v.ageSamples == burstSamples[b]) v.phases[0] = 1.0f;
         v.phases[0] *= burstCoef;
         const float burstAmp = std::max(static_cast<float>(v.phases[0]), 0.55f);
 
@@ -291,7 +322,7 @@ void DrumSynth::renderClap(DrumVoice& v, float* outL, float* outR, int n) {
         out = drive(out, drv);
         outL[i] += out * pL;
         outR[i] += out * pR;
-        v.ageSamples += 1.0f;
+        ++v.ageSamples;
     }
 }
 
@@ -322,8 +353,12 @@ void DrumSynth::renderTom(DrumVoice& v, float* outL, float* outR, int n,
             v.ampLevel *= decCoef;
             if (v.ampLevel < 0.0001f) { v.active = false; return; }
         }
-        v.phases[0] = (v.ageSamples == 0.0f) ? 1.0f
-                                              : v.phases[0] * pitchCoef;
+        if (v.justTriggered) {
+            v.phases[0] = 1.0f;
+            v.justTriggered = false;
+        } else {
+            v.phases[0] *= pitchCoef;
+        }
         const double freq = baseHz * (1.0f + static_cast<float>(v.phases[0]) * 0.4f);
         v.phase0 += freq / m_sampleRate;
         if (v.phase0 >= 1.0) v.phase0 -= 1.0;
@@ -335,7 +370,7 @@ void DrumSynth::renderTom(DrumVoice& v, float* outL, float* outR, int n,
         out = drive(out, drv);
         outL[i] += out * pL;
         outR[i] += out * pR;
-        v.ageSamples += 1.0f;
+        ++v.ageSamples;
     }
 }
 
@@ -360,6 +395,12 @@ void DrumSynth::renderHiHat(DrumVoice& v, float* outL, float* outR, int n,
     double inc[6];
     for (int p = 0; p < 6; ++p)
         inc[p] = baseHz * kHiHatRatios[p] / m_sampleRate;
+
+    // Hi-hat doesn't use phases[0] as an envelope (oscillator phases
+    // start at 0 and don't need first-sample initialisation), but we
+    // still clear justTriggered for consistency — tests assert it's
+    // false once any render has run.
+    v.justTriggered = false;
 
     for (int i = 0; i < n; ++i) {
         if (v.stage == 0) {
@@ -390,7 +431,7 @@ void DrumSynth::renderHiHat(DrumVoice& v, float* outL, float* outR, int n,
         out = drive(out, drv);
         outL[i] += out * pL;
         outR[i] += out * pR;
-        v.ageSamples += 1.0f;
+        ++v.ageSamples;
     }
 }
 
@@ -410,6 +451,11 @@ void DrumSynth::renderTambourine(DrumVoice& v, float* outL, float* outR, int n) 
     double inc[4];
     for (int p = 0; p < 4; ++p)
         inc[p] = baseHz * kTambRatios[p] / m_sampleRate;
+
+    // Tambourine, like the hi-hat, only uses phases[] as oscillator
+    // phases starting at 0 — clear the justTriggered flag for
+    // consistency with the rest of the renderers.
+    v.justTriggered = false;
 
     for (int i = 0; i < n; ++i) {
         if (v.stage == 0) {
@@ -434,7 +480,7 @@ void DrumSynth::renderTambourine(DrumVoice& v, float* outL, float* outR, int n) 
         out = drive(out, drv);
         outL[i] += out * pL;
         outR[i] += out * pR;
-        v.ageSamples += 1.0f;
+        ++v.ageSamples;
     }
 }
 
@@ -457,28 +503,40 @@ void DrumSynth::process(float* buffer, int numFrames, int numChannels,
         } else if (msg.isNoteOff()) {
             // intentional no-op — drums are one-shot
         } else if (msg.isCC() && msg.ccNumber == 123) {
-            // All Notes Off: silence everything immediately.
-            for (auto& vv : m_voices) vv.active = false;
+            // All Notes Off: silence everything immediately. Count
+            // active voices first so the log line is informative
+            // (and skip the log entirely if nothing was playing).
+            int silenced = 0;
+            for (auto& vv : m_voices) if (vv.active) { vv.active = false; ++silenced; }
+            if (silenced > 0)
+                LOG_INFO("DrumSynth", "All Notes Off (CC 123) — silenced %d voice%s",
+                         silenced, silenced == 1 ? "" : "s");
         }
     }
 
     // ── Render each active drum into the output buffer ──
     //
-    // We render directly into the caller's interleaved buffer using a
-    // small stack scratch (deinterleaved L/R) per drum, then add
-    // back. This avoids an alloc and keeps the renderer signatures
-    // simple. numFrames is bounded by m_maxBlockSize set at init.
-    constexpr int kScratchMax = 4096;
-    float scratchL[kScratchMax];
-    float scratchR[kScratchMax];
-    if (numFrames > kScratchMax) return;   // defensive — should never happen
-
-    // Demux input buffer's existing L/R into scratch (we ADD to it,
-    // matching the Instrument convention that process() is additive).
-    for (int i = 0; i < numFrames; ++i) {
-        scratchL[i] = 0.0f;
-        scratchR[i] = 0.0f;
+    // Member-owned scratch buffers were sized at init() against the
+    // host's m_maxBlockSize contract; if the host violates that
+    // contract (sends a bigger block than it promised) we log once
+    // and bail rather than write past the end of the vector.
+    if (numFrames > static_cast<int>(m_scratchL.size())) {
+        if (!m_oversizedBlockWarned) {
+            LOG_WARN("DrumSynth",
+                "process called with numFrames=%d but scratch sized for %zu — "
+                "host is exceeding the m_maxBlockSize contract. Block dropped.",
+                numFrames, m_scratchL.size());
+            m_oversizedBlockWarned = true;
+        }
+        return;
     }
+
+    // Zero the scratch (we ADD to it, matching the Instrument
+    // convention that process() is additive into `buffer`).
+    std::memset(m_scratchL.data(), 0, static_cast<size_t>(numFrames) * sizeof(float));
+    std::memset(m_scratchR.data(), 0, static_cast<size_t>(numFrames) * sizeof(float));
+    float* scratchL = m_scratchL.data();
+    float* scratchR = m_scratchR.data();
 
     for (int slot = 0; slot < kNumDrums; ++slot) {
         auto& v = m_voices[slot];

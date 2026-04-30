@@ -288,7 +288,13 @@ protected:
         }
         // fw2 drag in progress — forward translated events to the
         // captured widget via its local coordinates.
-        if (Widget* cap = Widget::capturedWidget()) {
+        // `cap != this` guards against the "panel self-captured →
+        // forwards to itself → infinite recursion → silent process
+        // exit" trap. Layer 1 (setAutoCaptureOnUnhandledPress(false)
+        // in the constructor) prevents the panel from ever being
+        // captured in the first place; this guard is the second
+        // line of defence in case that flag ever gets reverted.
+        if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
             const auto& b = cap->bounds();
             MouseMoveEvent ev = e;
             ev.lx = e.x - b.x;
@@ -310,8 +316,9 @@ protected:
             return m_presetsTab.dispatchMouseUp(e);
         }
         // fw2 drag release — dispatch to captured widget; its own
-        // gesture SM releases capture internally.
-        if (Widget* cap = Widget::capturedWidget()) {
+        // gesture SM releases capture internally. Same `cap != this`
+        // guard as the move handler above.
+        if (Widget* cap = Widget::capturedWidget(); cap && cap != this) {
             const auto& b = cap->bounds();
             MouseEvent ev = e;
             ev.lx = e.x - b.x;

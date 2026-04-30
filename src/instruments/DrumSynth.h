@@ -24,6 +24,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace yawn {
 namespace instruments {
@@ -163,12 +165,20 @@ private:
     // machines respond and avoids per-pad voice stealing.
     struct DrumVoice {
         bool   active = false;
+        // First-sample-since-trigger flag. Replaces the older
+        // `ageSamples == 0.0f` exact-float-compare check that lit up
+        // the per-sample initialisation branch in render*. The bool
+        // is unambiguous and survives any future refactor that
+        // would let ageSamples drift from a literal 0.
+        bool   justTriggered = false;
         float  velocity = 0.0f;     // 0..1, becomes amp scale
         float  ampLevel = 0.0f;     // current envelope level
         int    stage = 0;           // 0=Attack, 1=Decay, 2=Idle
-        float  ageSamples = 0.0f;   // time since trigger — clap multi-burst, kick pitch sweep
+        int    ageSamples = 0;      // time since trigger — clap multi-burst, etc.
         // Oscillator phases. phase0 is the primary; phases[] indexes
-        // 0..5 used for hihat / tambourine multi-square synthesis.
+        // 0..5 used for hihat / tambourine multi-square synthesis,
+        // and as small per-sample envelopes for kick / snare / tom /
+        // clap (overloaded role — see each render fn for details).
         double phase0 = 0.0;
         double phases[6] = {};
         // Per-voice biquad state for noise-bandpass / metallic-HP
@@ -193,11 +203,23 @@ private:
         return static_cast<float>(m_rngState & 0x7FFFFF) / 8388607.0f;
     }
     // Pink-ish noise via Voss-McCartney approximation. Cheap; not
-    // perfect 1/f but close enough for kick-tail thump.
-    float m_pinkRows[5] = {};
-    float m_pinkSum = 0.0f;
-    int   m_pinkCounter = 0;
+    // perfect 1/f but close enough for kick-tail thump. Counter is
+    // unsigned to make the increment + bit-twiddling well-defined
+    // after the first ~12 hours of continuous playback at 48 kHz —
+    // signed-int overflow there is UB.
+    float    m_pinkRows[5] = {};
+    float    m_pinkSum = 0.0f;
+    uint32_t m_pinkCounter = 0;
     float pinkNoise();
+
+    // ── Per-render scratch buffers ──
+    // Sized at init() against the host's m_maxBlockSize contract;
+    // process() uses these instead of a fixed-size stack array so
+    // (a) we don't drop blocks larger than 4096 frames silently,
+    // (b) we don't stack-allocate 32 KB on every audio callback.
+    std::vector<float> m_scratchL;
+    std::vector<float> m_scratchR;
+    bool               m_oversizedBlockWarned = false;
 
     // ── MIDI handling ──
     void noteOn(int slot, float velocity);
