@@ -58,7 +58,10 @@ public:
     }
 
     // ── CustomDeviceBody contract ───────────────────────────────────
-    float preferredBodyWidth() const override { return 270.0f; }
+    // 360 px (= 270 * 4/3) — the previous 270 px was a touch tight
+    // for the freq response curve to read clearly across the full
+    // 20 Hz – 20 kHz log span. User-tuned by eye.
+    float preferredBodyWidth() const override { return 360.0f; }
     void  updateParamValue(int /*index*/, float /*value*/) override {
         // No-op — the panel reads from the live SplineEQ pointer
         // every frame, so external param changes show up
