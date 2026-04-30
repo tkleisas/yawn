@@ -4669,6 +4669,16 @@ bool App::init() {
         if (!na) return;
         m_pendingNamEffect = na;
         static SDL_DialogFileFilter filter{"Neural Amp Models", "nam"};
+        // Open the dialog pre-pointed at the bundled NAM folder
+        // so first-time users see the starter amp captures
+        // immediately (no navigation required). Falls back to
+        // null (system default) if the bundled folder doesn't
+        // exist — release builds always include it; dev builds
+        // before the assets-copy step might not.
+        const std::filesystem::path bundled =
+            std::filesystem::current_path() / "assets" / "nam";
+        const std::string defaultLoc = std::filesystem::exists(bundled)
+            ? bundled.string() : std::string{};
         SDL_ShowOpenFileDialog(
             [](void* ud, const char* const* filelist, int) {
                 auto* self = static_cast<App*>(ud);
@@ -4679,7 +4689,7 @@ bool App::init() {
             },
             this, m_mainWindow.getHandle(),
             &filter, 1,
-            /*default_location*/ nullptr,
+            defaultLoc.empty() ? nullptr : defaultLoc.c_str(),
             /*allow_many*/ false);
     });
 

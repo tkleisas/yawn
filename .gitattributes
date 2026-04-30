@@ -1,0 +1,6 @@
+# Treat NAM model files as binary so git doesn't normalize line
+# endings on the JSON payload. The upstream pelennor2170/NAM_models
+# repo distributes them with LF; preserving byte-identical content
+# keeps GPL-redistribution fidelity and lets users hash-verify
+# against upstream.
+*.nam binary

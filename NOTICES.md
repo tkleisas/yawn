@@ -33,20 +33,51 @@ These show up in YAWN's Convolution Reverb device under the
 
 ## Neural Amp Modeler (.nam) Models
 
-### Bundled NAM models — `assets/nam/`
+### Community NAM Captures — `assets/nam/`
 
-YAWN does not currently ship bundled NAM models (each is 1–15 MB
-and most community profiles require attribution to the specific
-capturer). Users can browse and download free models from:
+A small starter set of four NAM captures, sourced from the
+community-curated [pelennor2170/NAM_models](https://github.com/pelennor2170/NAM_models)
+collection. The whole collection is published under **GNU GPL v3**
+(full license text in `assets/nam/COPYING`); upstream README
+preserved at `assets/nam/upstream-README.md`.
 
-- [tonehunt.org](https://tonehunt.org/)
-- [tone3000.com](https://tone3000.com/)
+- **Source:** https://github.com/pelennor2170/NAM_models
+- **License:** GNU GPL v3 (`assets/nam/COPYING`). Per the
+  upstream README: *"These files are licenced under the GNU
+  GPL v3, please see the file COPYING for more details."*
+- **Provenance:** Captures contributed by members of the
+  Neural Amp Modeler Facebook community
+  (https://www.facebook.com/groups/5669559883092788) and
+  aggregated by the repository maintainer.
+- **Format:** NAM 0.5.0 WaveNet `.nam` files, loadable by
+  [Steve Atkinson's Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
+  and any compatible host (including YAWN).
+- **Files copied unmodified** from upstream so original
+  filenames preserve full per-capturer attribution.
 
-Drop the `.nam` file via the **Load .nam…** button on the
-Neural Amp device.
+#### Bundled captures (one per category)
 
-If/when bundled models land, each will be attributed here with
-its capturer name + source URL + license confirmation.
+| Category    | Capturer  | Amp / Source                            | File |
+|-------------|-----------|-----------------------------------------|------|
+| Clean       | Tim R     | Fender Twin Reverb (Norm channel, Bright switch) | `Tim R/Tim R Fender TwinVerb Norm Bright.nam` |
+| Crunch      | Sascha S  | Friedman Dirty Shirley Mini (crunch, gain 6)     | `Sascha S/Sascha S DirtyShirleyMini_crunch_G6.nam` |
+| High-gain   | Helga B   | Peavey 6505+ Red channel (no boost)              | `Helga B/Helga B 6505+ Red Ch - NoBoost rock.nam` |
+| Bass        | Jason Z   | Tech21 dUg DP3X bass preamp pedal (all dimed)    | `Jason Z/Jason Z Tech21 dUg DP3X bass preamp pedal all dimed no shift.nam` |
+
+**Acknowledgments:** captures by Tim R, Sascha S, Helga B, and
+Jason Z (handles as published in the upstream collection).
+Filename prefixes are preserved so each capture remains
+attributable to its author. Steve Atkinson is the original
+author of NAM itself.
+
+These show up in YAWN's Neural Amp device's **Load .nam…**
+file dialog, which opens directly at the bundled folder so
+first-time users can pick a starter amp without any setup.
+Users can also load any other `.nam` file from anywhere on
+their machine — community libraries are at
+[tone3000.com](https://www.tone3000.com/) and
+[tonehunt.org](https://tonehunt.org/) (per-model licensing
+varies; verify before redistributing).
 
 ---
 
