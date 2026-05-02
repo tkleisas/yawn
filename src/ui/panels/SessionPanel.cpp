@@ -667,6 +667,15 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
     const audio::Clip* aClip = slot ? slot->audioClip.get() : nullptr;
     const midi::MidiClip* mClip = slot ? slot->midiClip.get() : nullptr;
     const visual::VisualClip* vClip = slot ? slot->visualClip.get() : nullptr;
+
+    // Reserved bottom band where the per-slot record-setting pills
+    // (length + loop) sit. ALL clip-content rendering (audio
+    // waveform, MIDI note preview, live recording waveform) leaves
+    // this band clear so the pills stay readable in every clip
+    // state — the pills themselves describe how the slot will
+    // behave on its next recording, which is meaningful regardless
+    // of whether a clip currently occupies the slot.
+    constexpr float kPillRowReserve = 18.0f;
     bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
     bool trackArmed = m_project->track(ti).armed;
     bool recReady = !hasClip && trackArmed;
@@ -790,7 +799,7 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
 
         // Audio waveform
         if (aClip && aClip->buffer && aClip->buffer->numFrames() > 0) {
-            float wfY = iy + 18, wfH = ih - 22;
+            float wfY = iy + 18, wfH = ih - 22 - kPillRowReserve;
             ::yawn::ui::Color wfCol = trkCol.withAlpha(160);
             int nch = aClip->buffer->numChannels();
             if (nch >= 2) {
@@ -814,7 +823,7 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
 
         // MIDI notes
         if (mClip && mClip->noteCount() > 0) {
-            float nY = iy + 18, nH = ih - 22;
+            float nY = iy + 18, nH = ih - 22 - kPillRowReserve;
             ::yawn::ui::Color noteCol = trkCol.withAlpha(180);
             int minP = 127, maxP = 0;
             for (int i = 0; i < mClip->noteCount(); ++i) {
@@ -824,15 +833,29 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
             }
             int pRange = std::max(1, maxP - minP + 1);
             double len = mClip->lengthBeats();
+            // Visual note-bar height is capped — single-pitch clips
+            // (drum patterns on one pad, basslines on a single root,
+            // glitch loops with one MIDI note) used to render as
+            // full-cell-height bars, which combined with narrow widths
+            // turned the preview into vertical lines. Cap at kMaxNoteH
+            // so the preview always reads as horizontal blocks; centre
+            // each note inside its pitch band so multi-pitch clips
+            // still distribute vertically.
+            constexpr float kMaxNoteH = 8.0f;
+            const float bandH = nH / static_cast<float>(pRange);
+            const float drawH = std::max(1.0f, std::min(bandH, kMaxNoteH));
             for (int i = 0; i < mClip->noteCount(); ++i) {
                 const auto& n = mClip->note(i);
                 float nx = contentX + 4 + static_cast<float>(n.startBeat / len) * (contentW - 8);
                 float nw = std::max(1.0f,
                     static_cast<float>(n.duration / len) * (contentW - 8));
-                float ny = nY + nH -
+                // bandTop = top edge of this pitch's slot inside the
+                // preview area. Higher pitches sit higher; same Y math
+                // as before, just before the height cap.
+                float bandTop = nY + nH -
                     (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
-                float nh = std::max(1.0f, nH / pRange);
-                r.drawRect(nx, ny, nw, nh, noteCol);
+                float ny = bandTop + (bandH - drawH) * 0.5f;
+                r.drawRect(nx, ny, nw, drawH, noteCol);
             }
 
             // MIDI playhead
@@ -854,6 +877,51 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
 
     // Recording border pulse (outside hasClip block for armed empty slots too)
     if (isRecording) {
+        // ── Live waveform of the in-progress recording ──
+        // Only draws on audio tracks (MIDI clips don't have a
+        // sample buffer to visualise). The engine accessor is racy-
+        // by-design but safe — see liveAudioRecording() docs.
+        // Audio thread keeps the buffer allocated for the duration
+        // of recording (no clear/shrink_to_fit on the audio thread),
+        // so the data() pointer stays valid as long as `active==true`.
+        if (m_engine && m_project &&
+            m_project->track(ti).type == Track::Type::Audio) {
+            auto live = m_engine->liveAudioRecording(ti);
+            if (live.active && live.data && live.frames > 0 &&
+                live.sceneIndex == si && live.maxFrames > 0) {
+                // Reserve the bottom band for the record-setting
+                // pills (length + loop) — same kPillRowReserve used
+                // by the loaded-clip waveform / MIDI preview paths
+                // above so the pill row is always clear regardless
+                // of clip state.
+                float wfY = iy + 18.0f;
+                float wfH = ih - 22.0f - kPillRowReserve;
+                if (wfH > 4.0f) {
+                    // Show the entire recording so far across the
+                    // full cell width — gives a "tape filling up"
+                    // visual as samples arrive. drawWaveform takes a
+                    // sample count so we just hand it the live frame
+                    // count; the renderer downsamples to fit the
+                    // pixel width.
+                    const ::yawn::ui::Color recWaveCol{220, 60, 60, 200};
+                    if (live.channels >= 2) {
+                        r.drawWaveformStereo(
+                            live.data,                                // ch0
+                            live.data + live.maxFrames,               // ch1
+                            static_cast<int>(live.frames),
+                            contentX + 4, wfY,
+                            contentW - 8, wfH, recWaveCol);
+                    } else {
+                        r.drawWaveform(
+                            live.data,
+                            static_cast<int>(live.frames),
+                            contentX + 4, wfY,
+                            contentW - 8, wfH, recWaveCol);
+                    }
+                }
+            }
+        }
+
         float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
         ::yawn::ui::Color recCol = ::yawn::ui::Color{220, 40, 40}.withAlpha(
             static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
@@ -896,10 +964,15 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
         r.drawFilledCircle(pipCX, pipCY, 4.0f, pipCol, 16);
     }
 
-    // Record-setting pills (only on empty slots — they configure
-    // future recordings into this slot). Bottom-right has the bar
-    // count; immediately to its left is a "L" loop indicator.
-    if (!hasClip && slot) {
+    // Record-setting pills (always shown when a slot exists —
+    // describe how the slot will behave on its next recording, so
+    // they're meaningful for empty AND populated slots). Bottom-
+    // right has the bar count (∞ / 1 / 2 / 4 / 8 / 16); immediately
+    // to its left is the "L" loop toggle. The clip-content
+    // rendering above reserves kPillRowReserve px at the bottom of
+    // the cell for these pills, so the waveform / MIDI preview /
+    // live recording waveform never shred them.
+    if (slot) {
         const float pillH = 12.0f;
         const float lenPillW = 24.0f;
         const float loopPillW = 16.0f;

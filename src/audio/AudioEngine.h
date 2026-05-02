@@ -322,6 +322,37 @@ public:
     };
     RecordedAudioData& recordedAudioData(int track) { return m_recordedAudio[track]; }
 
+    // ── Live recording snapshot (UI thread, polling) ──
+    // Read-only view of the in-progress audio record buffer for the
+    // session-grid live waveform. Returned pointer is the same
+    // deinterleaved layout as the finalized buffer:
+    //     ch0_frames... | ch1_frames... | ...  (each block of length maxFrames)
+    // `frames` is the number of frames so far written; the UI should
+    // only render the first `frames` of each channel. `data` and
+    // `maxFrames` stay stable for the duration of `active==true` —
+    // the audio thread allocates the buffer BEFORE setting recording
+    // true and never deallocates it (clear/shrink_to_fit on the audio
+    // thread is gone). When `active==false`, treat the snapshot as
+    // empty regardless of the other fields.
+    struct LiveAudioRecording {
+        bool         active        = false;
+        const float* data          = nullptr;
+        int64_t      frames        = 0;
+        int64_t      maxFrames     = 0;
+        int          channels      = 0;
+        int          sceneIndex    = -1;
+    };
+    LiveAudioRecording liveAudioRecording(int track) const {
+        if (track < 0 || track >= kMaxTracks) return {};
+        const auto& ars = m_audioRecordStates[track];
+        // Racy reads of the bool/int fields are fine — torn reads
+        // produce stale-by-one-block values, not crashes. The buffer
+        // pointer stays valid as long as `active` is true.
+        if (!ars.recording) return {};
+        return {true, ars.buffer.data(), ars.recordedFrames,
+                ars.maxFrames, ars.channels, ars.targetScene};
+    }
+
 private:
     static int paCallback(
         const void* inputBuffer,

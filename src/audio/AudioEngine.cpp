@@ -1365,6 +1365,21 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, StartMidiRecordMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks
                     && m_trackType[msg.trackIndex] == 1) { // Midi only
+                    // ── Stop anything currently playing on this track ──
+                    // Only one clip per track can play OR record at a
+                    // time. Immediate (QuantizeMode::None) — the
+                    // recording starts now, the previous clip should
+                    // end now too. Stopping both clip engines is a
+                    // no-op for whichever isn't active. Flush any
+                    // held MIDI notes from the previous clip so they
+                    // don't sustain into the recording.
+                    m_clipEngine.scheduleStop(msg.trackIndex, QuantizeMode::None);
+                    m_midiClipEngine.scheduleStop(msg.trackIndex, QuantizeMode::None);
+                    for (uint8_t n = 0; n < 128; ++n) {
+                        m_trackMidiBuffers[msg.trackIndex].addMessage(
+                            midi::MidiMessage::noteOff(0, n, 0, 0));
+                    }
+
                     auto& rs = m_trackRecordStates[msg.trackIndex];
                     rs.reset();
                     rs.recording = true;
@@ -1411,18 +1426,35 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, StartAudioRecordMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks
                     && m_trackType[msg.trackIndex] == 0) { // Audio only
+                    // ── Stop anything currently playing on this track ──
+                    // Same one-clip-per-track invariant as the MIDI
+                    // path above. Without this, an armed audio track
+                    // with a clip playing would mix the live input
+                    // (recording) with the playing clip — both
+                    // visually wrong (two simultaneous "active"
+                    // states on one track) and audibly muddy if the
+                    // user monitors. Immediate stop, no quantize.
+                    m_clipEngine.scheduleStop(msg.trackIndex, QuantizeMode::None);
+                    m_midiClipEngine.scheduleStop(msg.trackIndex, QuantizeMode::None);
+
                     auto& ars = m_audioRecordStates[msg.trackIndex];
                     ars.reset();
-                    ars.recording = true;
                     ars.targetScene = msg.sceneIndex;
                     ars.overdub = msg.overdub;
                     ars.targetLengthBars = msg.recordLengthBars;
                     ars.channels = m_config.inputChannels;
-                    // Pre-allocate for 5 minutes of recording
+                    // Pre-allocate for 5 minutes of recording. Buffer is
+                    // allocated BEFORE recording=true so the UI thread,
+                    // which polls liveAudioRecording() each frame for
+                    // the live-waveform preview on the session cell,
+                    // never sees `recording==true` while ars.buffer is
+                    // mid-resize. Reorder is the only safety guarantee
+                    // — there's no lock here.
                     static constexpr int64_t kMaxRecordSec = 300;
                     ars.maxFrames = static_cast<int64_t>(m_config.sampleRate * kMaxRecordSec);
                     ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
                     ars.recordedFrames = 0;
+                    ars.recording = true;   // publish — UI may now read
 
                     // Session recording always sets recordStartBeat explicitly,
                     // so mark usedCountIn to skip the legacy trim in finalize.
@@ -1794,8 +1826,16 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
         evt.frameCount = 0;
         m_eventQueue.push(evt);
 
-        ars.buffer.clear();
-        ars.buffer.shrink_to_fit();
+        // Set recording=false BEFORE clearing — actually we now SKIP
+        // the clear/shrink_to_fit entirely. Two reasons:
+        //   1. clear() + shrink_to_fit() is allocator work on the
+        //      audio thread — violates the no-RT-allocation rule.
+        //   2. UI thread reads ars.buffer.data() each frame for the
+        //      live-waveform preview while ars.recording is true.
+        //      Even with the recording=false flip, a clear() racing
+        //      with the UI's data() read could segfault.
+        // The buffer stays allocated and is reused on the next
+        // StartAudioRecord (resize to same size = no-op).
         ars.recording = false;
         ars.pendingStopQuantize = QuantizeMode::None;
         maybeStopTransportRecording();
@@ -1846,8 +1886,8 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     evt.overdub = ars.overdub;
     m_eventQueue.push(evt);
 
-    ars.buffer.clear();
-    ars.buffer.shrink_to_fit();
+    // Buffer is left allocated (see comment in the early-return
+    // branch above). Next StartAudioRecord reuses it via resize().
     ars.recording = false;
     ars.pendingStopQuantize = QuantizeMode::None;
     maybeStopTransportRecording();
