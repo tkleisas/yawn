@@ -1,5 +1,7 @@
 #include "audio/TimeStretcher.h"
 
+#include <queue>
+
 namespace yawn {
 namespace audio {
 
@@ -7,10 +9,15 @@ void TimeStretcher::init(double sampleRate, int maxBlockSize, Algorithm algo) {
     m_sampleRate = sampleRate;
     m_algorithm = algo;
 
-    if (algo == Algorithm::WSOLA) {
-        initWSOLA(maxBlockSize);
-    } else {
-        initPhaseVocoder(maxBlockSize);
+    switch (algo) {
+        case Algorithm::WSOLA:           initWSOLA(maxBlockSize); break;
+        case Algorithm::PhaseVocoder:    initPhaseVocoder(maxBlockSize); break;
+        case Algorithm::PhaseVocoderPGHI:
+            // Shares the FFT buffers / window / output accumulator
+            // with the classic PV; layered init.
+            initPhaseVocoder(maxBlockSize);
+            initPhaseVocoderPGHI(maxBlockSize);
+            break;
     }
 }
 
@@ -22,16 +29,25 @@ void TimeStretcher::reset() {
     if (!m_phaseAccum.empty())
         std::fill(m_phaseAccum.begin(), m_phaseAccum.end(), 0.0f);
     m_pvInputPos = 0.0;
+    // PGHI per-frame history — clearing forces the next first frame
+    // to skip propagation (no previous frame to integrate from).
+    m_pghiHasPrev = false;
+    if (!m_pghiPrevSynPhase.empty())
+        std::fill(m_pghiPrevSynPhase.begin(), m_pghiPrevSynPhase.end(), 0.0f);
 }
 
 int TimeStretcher::process(const float* input, int inputAvailable,
             float* output, int maxOutputFrames,
             int& inputConsumed) {
-    if (m_algorithm == Algorithm::WSOLA) {
-        return processWSOLA(input, inputAvailable, output, maxOutputFrames, inputConsumed);
-    } else {
-        return processPhaseVocoder(input, inputAvailable, output, maxOutputFrames, inputConsumed);
+    switch (m_algorithm) {
+        case Algorithm::WSOLA:
+            return processWSOLA(input, inputAvailable, output, maxOutputFrames, inputConsumed);
+        case Algorithm::PhaseVocoder:
+            return processPhaseVocoder(input, inputAvailable, output, maxOutputFrames, inputConsumed);
+        case Algorithm::PhaseVocoderPGHI:
+            return processPhaseVocoderPGHI(input, inputAvailable, output, maxOutputFrames, inputConsumed);
     }
+    return 0;
 }
 
 // ==================== FFT ====================
@@ -276,6 +292,305 @@ int TimeStretcher::processPhaseVocoder(const float* input, int inputAvailable,
 
         outputWritten += hopOut;
         m_pvInputPos += kPVHopSize;
+    }
+
+    inputConsumed = static_cast<int>(m_pvInputPos);
+    return std::min(outputWritten, maxOutputFrames);
+}
+
+// ==================== PGHI ====================
+//
+// Phase Gradient Heap Integration. See the long comment block at
+// processPhaseVocoderPGHI() declaration in TimeStretcher.h for the
+// motivation / paper references.
+//
+// State buffers are sized at half-spectrum length (kPVFFTSize/2 + 1).
+// We piggyback on the classic PV's m_pvWindow / m_fftReal / m_fftImag /
+// m_pvOutputAccum, set up by initPhaseVocoder().
+
+void TimeStretcher::initPhaseVocoderPGHI(int /*maxBlockSize*/) {
+    const int half = kPVFFTSize / 2 + 1;
+    m_pghiPrevMag      .assign(half, 0.0f);
+    m_pghiPrevAnaPhase .assign(half, 0.0f);
+    m_pghiPrevSynPhase .assign(half, 0.0f);
+    m_pghiPrevPhaseT   .assign(half, 0.0f);
+    m_pghiCurMag       .assign(half, 0.0f);
+    m_pghiCurAnaPhase  .assign(half, 0.0f);
+    m_pghiCurPhaseT    .assign(half, 0.0f);
+    m_pghiCurPhaseW    .assign(half, 0.0f);
+    m_pghiCurSynPhase  .assign(half, 0.0f);
+    m_pghiVisited      .assign(half, 0);
+    m_pghiHasPrev = false;
+}
+
+namespace {
+// Wrap to [-π, π] — same trick as the classic PV uses for its
+// phase-difference unwrapping.
+inline float wrapPi(float x) {
+    return x - 2.0f * static_cast<float>(M_PI) *
+        std::round(x / (2.0f * static_cast<float>(M_PI)));
+}
+
+// Heap entry: a current-frame bin awaiting phase assignment,
+// ordered by its own magnitude (max-heap).
+struct PghiHeapEntry {
+    float mag;
+    int   bin;
+};
+struct PghiHeapCmp {
+    bool operator()(const PghiHeapEntry& a, const PghiHeapEntry& b) const {
+        return a.mag < b.mag;   // priority_queue is max-heap by default
+    }
+};
+
+enum class PghiSource { None, TimeFromPrev, FreqFromLeft, FreqFromRight };
+} // anon
+
+int TimeStretcher::processPhaseVocoderPGHI(const float* input, int inputAvailable,
+                        float* output, int maxOutputFrames,
+                        int& inputConsumed) {
+    int outputWritten = 0;
+    int hopOut = static_cast<int>(kPVHopSize / m_speedRatio);
+    if (hopOut < 1) hopOut = 1;
+    inputConsumed = 0;
+
+    const int N    = kPVFFTSize;
+    const int Ha   = kPVHopSize;
+    const int half = N / 2 + 1;
+    const float twoPi = 2.0f * static_cast<float>(M_PI);
+
+    // (The Hann γ window-shape constant from the PGHI paper is no
+    // longer used — we measure the freq gradient directly from
+    // analysis phases now. See the long comment in the freq-grad
+    // computation block below for why the structure-tensor formula
+    // doesn't work for our use case.)
+
+    while (outputWritten + hopOut <= maxOutputFrames) {
+        int inputStart = static_cast<int>(m_pvInputPos);
+        if (inputStart + N > inputAvailable) break;
+
+        // ── 1. Window + FFT ──
+        for (int i = 0; i < N; ++i) {
+            m_fftReal[i] = input[inputStart + i] * m_pvWindow[i];
+            m_fftImag[i] = 0.0f;
+        }
+        fft(m_fftReal.data(), m_fftImag.data(), N, false);
+
+        // ── 2. Magnitude / phase / time-derivative / freq-derivative ──
+        for (int k = 0; k < half; ++k) {
+            float re = m_fftReal[k];
+            float im = m_fftImag[k];
+            m_pghiCurMag[k]      = std::sqrt(re * re + im * im);
+            m_pghiCurAnaPhase[k] = std::atan2(im, re);
+        }
+
+        // Time derivative (instantaneous frequency in rad/sample).
+        // Same unwrap-by-expected-advance trick as the classic PV.
+        for (int k = 0; k < half; ++k) {
+            const float omega_k = twoPi * k / N;            // bin-centre freq
+            float dphi = m_pghiCurAnaPhase[k] - m_pghiPrevAnaPhase[k];
+            dphi -= omega_k * Ha;
+            dphi = wrapPi(dphi);
+            m_pghiCurPhaseT[k] = omega_k + dphi / Ha;
+        }
+
+        // Frequency derivative of phase — measured as FORWARD diff
+        // between bin k and k+1 of the analysis phase, unwrapped.
+        // m_pghiCurPhaseW[k] = unwrap(φ[k+1] - φ[k]).
+        //
+        // Centered diff `(φ[k+1] - φ[k-1])/2` was the obvious choice
+        // but fails on stationary signals: the Hann window's FFT
+        // skirt makes adjacent analysis-phase bins of a steady tone
+        // alternate by ≈±π, so centered diff = 2π → wraps to 0,
+        // telling PGHI's freq-prop "adjacent bins have the same
+        // phase". They don't, and forcing that destroys the
+        // reconstruction (PGHI RMS dropped to ~40% of classic PV
+        // with centered diff). Forward diff captures the actual
+        // bin-to-bin relationship.
+        //
+        // Last bin uses backward diff (no k+1 to look at).
+        for (int k = 0; k < half - 1; ++k) {
+            float dphi = m_pghiCurAnaPhase[k + 1] - m_pghiCurAnaPhase[k];
+            m_pghiCurPhaseW[k] = wrapPi(dphi);
+        }
+        m_pghiCurPhaseW[half - 1] = m_pghiCurPhaseW[half - 2];   // copy last
+
+        // ── 3. Phase propagation via heap ──
+        //
+        // PGHI must reconstruct phase in a single consistent
+        // cross-bin reference frame each step — earlier drafts
+        // tried to overlay PGHI on top of classic PV's per-bin
+        // accumulator, but that breaks because classic PV's per-bin
+        // independent accumulators drift apart by ω_k·Hs per frame,
+        // making any freq-propagated bin's phase incompatible with
+        // its accumulated time-evolved neighbours.
+        //
+        // First frame: no previous to integrate from → seed every
+        // bin with its analysis phase (consistent reference frame
+        // since they all came from the same FFT). PGHI quality
+        // kicks in from frame 2.
+        if (!m_pghiHasPrev) {
+            for (int k = 0; k < half; ++k)
+                m_pghiCurSynPhase[k] = m_pghiCurAnaPhase[k];
+        } else {
+            std::fill(m_pghiVisited.begin(), m_pghiVisited.end(), 0);
+
+            // Magnitude tolerance below the loudest bin (current
+            // frame — that's what's being propagated TO).
+            float maxMag = 0.0f;
+            for (int k = 0; k < half; ++k) {
+                if (m_pghiCurMag[k] > maxMag) maxMag = m_pghiCurMag[k];
+            }
+            const float tolLin = maxMag * std::pow(10.0f, kPghiMagToleranceDb / 20.0f);
+
+            // Seed the heap with all CURRENT-frame bins above tol,
+            // sorted by THEIR OWN magnitude. Each pop = "next bin to
+            // assign phase to". The previous frame's bins are
+            // implicitly always-processed (their synth phases are
+            // m_pghiPrevSynPhase from the last call).
+            //
+            // This is the structural fix vs the v0.54 code, which
+            // seeded with prev-frame magnitudes and drove time
+            // propagation first for every cur bin — leaving
+            // frequency propagation as a no-op because every cur
+            // bin was already visited by the time freq prop tried
+            // to fire. Now each cur bin chooses ITS best processed
+            // neighbour (time vs freq) based on neighbour magnitude.
+            std::priority_queue<PghiHeapEntry,
+                                std::vector<PghiHeapEntry>,
+                                PghiHeapCmp> heap;
+            for (int k = 0; k < half; ++k) {
+                if (m_pghiCurMag[k] >= tolLin) {
+                    heap.push({m_pghiCurMag[k], k});
+                }
+            }
+
+            // Synthesis hop in samples — used by trapezoidal time
+            // integration of the instantaneous frequency.
+            const float Hs = static_cast<float>(Ha) /
+                             static_cast<float>(m_speedRatio);
+
+            while (!heap.empty()) {
+                PghiHeapEntry e = heap.top();
+                heap.pop();
+                if (m_pghiVisited[e.bin]) continue;
+
+                // Find the highest-magnitude already-PROCESSED
+                // neighbour. Three candidates:
+                //   1. prev[bin]            — time source (always processed if hasPrev)
+                //   2. cur[bin-1] visited   — freq source from left
+                //   3. cur[bin+1] visited   — freq source from right
+                // Whichever has the highest magnitude wins — that's
+                // the bin whose phase is most reliably known and
+                // most strongly correlated with the bin we're
+                // assigning.
+                PghiSource src = PghiSource::None;
+                float      srcMag = 0.0f;
+
+                // Time source — always available with prev frame.
+                // (No-op on the syn_phase: the baseline accumulator
+                // step in 3a already wrote classic-PV's time-integrated
+                // phase. We just record this as the "winner" so the
+                // bin is marked visited and won't be revisited via
+                // freq propagation.)
+                if (m_pghiPrevMag[e.bin] > srcMag) {
+                    src    = PghiSource::TimeFromPrev;
+                    srcMag = m_pghiPrevMag[e.bin];
+                }
+                // Freq from left.
+                if (e.bin > 0 && m_pghiVisited[e.bin - 1] &&
+                    m_pghiCurMag[e.bin - 1] > srcMag) {
+                    src    = PghiSource::FreqFromLeft;
+                    srcMag = m_pghiCurMag[e.bin - 1];
+                }
+                // Freq from right.
+                if (e.bin + 1 < half && m_pghiVisited[e.bin + 1] &&
+                    m_pghiCurMag[e.bin + 1] > srcMag) {
+                    src    = PghiSource::FreqFromRight;
+                    srcMag = m_pghiCurMag[e.bin + 1];
+                }
+
+                switch (src) {
+                    case PghiSource::TimeFromPrev: {
+                        // Rectangular integration of inst freq.
+                        // Trapezoidal would use prev_phase_t too,
+                        // but at frame 2 prev_phase_t is garbage
+                        // (frame 1's "phase diff vs frame 0=zero"
+                        // isn't a meaningful inst freq), and that
+                        // garbage propagates as a constant offset
+                        // forever. Rectangular avoids it.
+                        m_pghiCurSynPhase[e.bin] =
+                            m_pghiPrevSynPhase[e.bin] + Hs *
+                            m_pghiCurPhaseT[e.bin];
+                        break;
+                    }
+                    case PghiSource::FreqFromLeft: {
+                        // Propagate from bin-1 to bin using forward
+                        // diff stored at bin-1 (= unwrap(φ[bin] - φ[bin-1])).
+                        //   syn[k] = syn[k-1] + fgrad[k-1]
+                        m_pghiCurSynPhase[e.bin] =
+                            m_pghiCurSynPhase[e.bin - 1] +
+                            m_pghiCurPhaseW[e.bin - 1];
+                        break;
+                    }
+                    case PghiSource::FreqFromRight: {
+                        // Propagate from bin+1 to bin going backward.
+                        // The forward diff stored at bin tells us
+                        // φ[bin+1] - φ[bin], so to go from bin+1 to
+                        // bin we subtract.
+                        m_pghiCurSynPhase[e.bin] =
+                            m_pghiCurSynPhase[e.bin + 1] -
+                            m_pghiCurPhaseW[e.bin];
+                        break;
+                    }
+                    case PghiSource::None:
+                        // No processed neighbour at all — fall back
+                        // to analysis phase (rarely hits in practice).
+                        m_pghiCurSynPhase[e.bin] = m_pghiCurAnaPhase[e.bin];
+                        break;
+                }
+                m_pghiVisited[e.bin] = 1;
+            }
+
+            // Bins below tolerance got no propagation — keep
+            // analysis phase. Random would also work but adds
+            // jitter; analysis-as-is is least surprising.
+            for (int k = 0; k < half; ++k) {
+                if (!m_pghiVisited[k])
+                    m_pghiCurSynPhase[k] = m_pghiCurAnaPhase[k];
+            }
+        }
+
+        // ── 4. Reconstruct complex spectrum ──
+        for (int k = 0; k < half; ++k) {
+            m_fftReal[k] = m_pghiCurMag[k] * std::cos(m_pghiCurSynPhase[k]);
+            m_fftImag[k] = m_pghiCurMag[k] * std::sin(m_pghiCurSynPhase[k]);
+        }
+        // Mirror for inverse FFT.
+        for (int k = half; k < N; ++k) {
+            m_fftReal[k] =  m_fftReal[N - k];
+            m_fftImag[k] = -m_fftImag[N - k];
+        }
+
+        // ── 5. Inverse FFT + window + overlap-add ──
+        fft(m_fftReal.data(), m_fftImag.data(), N, true);
+        for (int i = 0; i < N; ++i) {
+            int outIdx = outputWritten + i;
+            if (outIdx < maxOutputFrames) {
+                output[outIdx] += m_fftReal[i] * m_pvWindow[i] *
+                                   (2.0f / kPVOversampling);
+            }
+        }
+
+        // ── 6. Roll current frame into "previous" for next call ──
+        std::copy(m_pghiCurMag.begin(),       m_pghiCurMag.end(),       m_pghiPrevMag.begin());
+        std::copy(m_pghiCurAnaPhase.begin(),  m_pghiCurAnaPhase.end(),  m_pghiPrevAnaPhase.begin());
+        std::copy(m_pghiCurSynPhase.begin(),  m_pghiCurSynPhase.end(),  m_pghiPrevSynPhase.begin());
+        std::copy(m_pghiCurPhaseT.begin(),    m_pghiCurPhaseT.end(),    m_pghiPrevPhaseT.begin());
+        m_pghiHasPrev = true;
+
+        outputWritten += hopOut;
+        m_pvInputPos  += Ha;
     }
 
     inputConsumed = static_cast<int>(m_pvInputPos);

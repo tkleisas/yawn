@@ -17,7 +17,12 @@ namespace audio {
 // All buffers pre-allocated. No allocations in process().
 class TimeStretcher {
 public:
-    enum class Algorithm { WSOLA, PhaseVocoder };
+    enum class Algorithm {
+        WSOLA,             // Waveform Similarity Overlap-Add (rhythmic)
+        PhaseVocoder,      // Classic Flanagan–Golden / Laroche–Dolson PV
+        PhaseVocoderPGHI,  // Phase Gradient Heap Integration
+                           //   (Prusa & Holighaus 2017, real-time variant)
+    };
 
     void init(double sampleRate, int maxBlockSize, Algorithm algo = Algorithm::WSOLA);
 
@@ -48,7 +53,7 @@ public:
     int minOutputFrames() const {
         if (m_algorithm == Algorithm::WSOLA)
             return m_wsolaWindowSize;
-        return kPVFFTSize;
+        return kPVFFTSize;   // both PV variants use the same FFT size
     }
 
     Algorithm algorithm() const { return m_algorithm; }
@@ -99,6 +104,69 @@ private:
     int processPhaseVocoder(const float* input, int inputAvailable,
                             float* output, int maxOutputFrames,
                             int& inputConsumed);
+
+    // ==================== Phase Vocoder — PGHI variant ====================
+    // Phase Gradient Heap Integration (Prusa & Holighaus 2017,
+    // "A Non-iterative Method for (Re)Construction of Phases";
+    // real-time follow-up "Phase Vocoder Done Right" 2022).
+    //
+    // The classic PV (above) propagates each frequency bin's phase
+    // independently along the time axis. That preserves horizontal
+    // phase coherence per bin but loses VERTICAL coherence between
+    // bins, producing the characteristic phasiness / smeared
+    // transients on tonal material.
+    //
+    // PGHI computes BOTH partial derivatives of the phase
+    // (∂φ/∂t = instantaneous frequency, ∂φ/∂ω = group delay) and
+    // propagates phase outward from the loudest bins via integration
+    // of the gradients. Bins are visited in descending magnitude
+    // order via a max-heap; each pop propagates phase to its
+    // unvisited time-neighbour (next frame, same bin) or
+    // frequency-neighbours (current frame, ±1 bin) using
+    // trapezoidal integration of the appropriate gradient.
+    //
+    // This implementation is the **1-step look-back** real-time
+    // variant: phase propagation only crosses ONE frame boundary
+    // (previous → current), which keeps streaming latency identical
+    // to the classic PV (one FFT window). Quality is somewhere
+    // between classic PV and offline PGHI — most of the
+    // anti-phasiness benefit, none of the look-ahead latency.
+    //
+    // Tuning constants (kPghiMagToleranceDb, kPghiHannGamma) are
+    // documented at their declarations below.
+
+    // Hann-window-specific γ for the magnitude→group-delay relation
+    // ∂φ/∂ω ≈ -γ/H_a · ∂(log|S|)/∂t. For a length-N Hann window the
+    // standard value (LTFAT, Prusa 2017) is N²·0.25645... — we use
+    // the closed form below.
+    static constexpr float kPghiHannGammaCoef = 0.25645f;
+    // Bins with magnitude below max·10^(kPghiMagToleranceDb/20) are
+    // skipped during heap propagation — their phase doesn't matter
+    // (they're inaudible) and including them in the heap costs CPU
+    // without changing the output. -60 dB below peak is the canonical
+    // PGHI default; tighter tolerances give marginally better quality
+    // at higher CPU cost.
+    static constexpr float kPghiMagToleranceDb = -60.0f;
+
+    // Per-frame state propagated across calls.
+    std::vector<float> m_pghiPrevMag;         // |S[m-1]|
+    std::vector<float> m_pghiPrevAnaPhase;    // arg(S[m-1]) (analysis phase)
+    std::vector<float> m_pghiPrevSynPhase;    // synthesised output phase from prev frame
+    std::vector<float> m_pghiPrevPhaseT;      // ∂φ/∂t at prev frame (rad/sample)
+    bool               m_pghiHasPrev = false;
+
+    // Per-call scratch (kept as members so process() doesn't allocate).
+    std::vector<float> m_pghiCurMag;
+    std::vector<float> m_pghiCurAnaPhase;
+    std::vector<float> m_pghiCurPhaseT;       // ∂φ/∂t at current frame
+    std::vector<float> m_pghiCurPhaseW;       // ∂φ/∂ω at current frame
+    std::vector<float> m_pghiCurSynPhase;     // output phases for current frame
+    std::vector<unsigned char> m_pghiVisited; // bool per bin — has phase been assigned?
+
+    void initPhaseVocoderPGHI(int maxBlockSize);
+    int  processPhaseVocoderPGHI(const float* input, int inputAvailable,
+                                  float* output, int maxOutputFrames,
+                                  int& inputConsumed);
 
     // ==================== Common ====================
     double m_sampleRate = kDefaultSampleRate;

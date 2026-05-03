@@ -339,8 +339,12 @@ public:
         m_waveformWidget.setSampleRate(sampleRate);
 
         // Setup warp mode dropdown.
+        // List ORDER must match WarpMode enum order (we map dropdown
+        // index → WarpMode by static_cast). When you add a value to
+        // WarpMode, add the matching label here at the same position.
         m_warpModeDropdown.setItems(std::vector<std::string>{
-            "Off", "Auto", "Beats", "Tones", "Texture", "Repitch"});
+            "Off", "Auto", "Beats", "Tones", "Texture",
+            "Tones (PGHI)", "Repitch"});
         m_warpModeDropdown.setSelectedIndex(static_cast<int>(clip->warpMode));
         m_warpModeDropdown.setOnChange([this](int idx, const std::string&) {
             if (m_clipPtr) {

@@ -50,9 +50,18 @@ struct TrackStretcher {
     double resamplePos[kMaxChannels]{};
 
     void init(double sampleRate, int blockSize, WarpMode mode, int channels) {
-        auto algo = (mode == WarpMode::Tones || mode == WarpMode::Texture)
-                    ? TimeStretcher::Algorithm::PhaseVocoder
-                    : TimeStretcher::Algorithm::WSOLA;
+        // PGHI variant maps to its own algorithm; classic PV
+        // covers Tones / Texture; everything else falls back to
+        // WSOLA. Existing projects with Tones / Texture stay on
+        // the classic PV — PGHI is opt-in per clip.
+        TimeStretcher::Algorithm algo;
+        if (mode == WarpMode::TonesPGHI) {
+            algo = TimeStretcher::Algorithm::PhaseVocoderPGHI;
+        } else if (mode == WarpMode::Tones || mode == WarpMode::Texture) {
+            algo = TimeStretcher::Algorithm::PhaseVocoder;
+        } else {
+            algo = TimeStretcher::Algorithm::WSOLA;
+        }
         numChannels = std::min(channels, kMaxChannels);
         for (int ch = 0; ch < numChannels; ++ch) {
             stretchers[ch].init(sampleRate, blockSize, algo);

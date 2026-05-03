@@ -1,9 +1,25 @@
 #include "audio/ClipEngine.h"
+#include "util/Logger.h"
 #include <cmath>
 #include <algorithm>
 
 namespace yawn {
 namespace audio {
+
+namespace {
+const char* warpModeName(WarpMode m) {
+    switch (m) {
+        case WarpMode::Off:        return "Off";
+        case WarpMode::Auto:       return "Auto";
+        case WarpMode::Beats:      return "Beats";
+        case WarpMode::Tones:      return "Tones (classic PV)";
+        case WarpMode::Texture:    return "Texture (classic PV)";
+        case WarpMode::TonesPGHI:  return "Tones (PGHI)";
+        case WarpMode::Repitch:    return "Repitch";
+    }
+    return "?";
+}
+} // anon
 
 void ClipEngine::scheduleClip(int trackIndex, int sceneIndex, const Clip* clip, QuantizeMode quantize,
                               const std::vector<automation::AutomationLane>* clipAutomation,
@@ -242,6 +258,7 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
     bool pitchPreservingMode = (clip.warpMode == WarpMode::Beats ||
                                 clip.warpMode == WarpMode::Tones ||
                                 clip.warpMode == WarpMode::Texture ||
+                                clip.warpMode == WarpMode::TonesPGHI ||
                                 clip.warpMode == WarpMode::Auto);
 
     if (!pitchPreservingMode && (clip.transposeSemitones != 0 || clip.detuneCents != 0)) {
@@ -259,14 +276,46 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
 
     if (usePitchPreserving) {
         auto& stretcher = m_stretchers[trackIndex];
-        // Initialize stretcher if warp mode changed during playback (e.g., Off→Tones)
-        // but not if it was just de-initialized by the "too short" fallback
-        if (!stretcher.initialized && stretcher.activeMode != clip.warpMode) {
+        // (Re-)initialize the stretcher whenever the mode the clip
+        // wants differs from what's currently loaded. Old check
+        // (`!stretcher.initialized && stretcher.activeMode != clip.warpMode`)
+        // had a bug: once a stretcher was initialized at clip launch,
+        // changing the warp mode mid-playback (e.g. Tones → TonesPGHI
+        // via the dropdown) did NOTHING because the !initialized
+        // guard short-circuited. Result: switching algorithms in the
+        // UI sounded identical because the engine kept running the
+        // first-loaded algo forever.
+        //
+        // The "too short fallback" at processTrackStretched also sets
+        // initialized=false, but it doesn't change activeMode — so
+        // this condition stays false and we don't re-init in that
+        // case (the safeguard the old comment was trying to preserve).
+        if (stretcher.activeMode != clip.warpMode) {
+            LOG_INFO("Stretch", "Track %d: warp mode → %s (speedRatio=%.3f, originalBPM=%.1f, projectBPM=%.1f, transpose=%d)",
+                     trackIndex, warpModeName(clip.warpMode),
+                     speedRatio, clip.originalBPM, projectBPM,
+                     clip.transposeSemitones);
             stretcher.init(m_sampleRate, 4096, clip.warpMode, bufChannels);
         }
         if (stretcher.initialized) {
             processTrackStretched(trackIndex, output, numFrames, numChannels);
             return;
+        }
+    } else if (pitchPreservingMode) {
+        // Diagnostic — fires once when the stretcher would be useful
+        // but isn't engaged because warping/transpose are both
+        // trivial. Log once per (track, mode) so the line doesn't
+        // spam every audio block.
+        auto& stretcher = m_stretchers[trackIndex];
+        if (stretcher.activeMode != clip.warpMode) {
+            stretcher.activeMode = clip.warpMode;  // mark as "noted"
+            LOG_INFO("Stretch",
+                "Track %d: %s requested but stretcher BYPASSED — "
+                "speedRatio=1.0 and no transpose, so the simple "
+                "resampler runs instead. Set the clip's originalBPM "
+                "to a value different from the project BPM, or apply "
+                "transpose/detune, to engage the algorithm.",
+                trackIndex, warpModeName(clip.warpMode));
         }
     }
 

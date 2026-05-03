@@ -14,12 +14,18 @@ struct WarpMarker {
 
 // Warp mode for audio clips
 enum class WarpMode : uint8_t {
-    Off,        // No warping — play at original speed
-    Auto,       // Auto-select algorithm based on content
-    Beats,      // WSOLA optimized for rhythmic content
-    Tones,      // Phase vocoder for tonal content
-    Texture,    // Phase vocoder with reduced transient preservation
-    Repitch     // Simple resampling (changes pitch with tempo)
+    Off,         // No warping — play at original speed
+    Auto,        // Auto-select algorithm based on content
+    Beats,       // WSOLA optimized for rhythmic content
+    Tones,       // Phase vocoder for tonal content
+    Texture,     // Phase vocoder with reduced transient preservation
+    TonesPGHI,   // Phase Vocoder Done Right (PGHI / Prusa-Holighaus 2017)
+                 //   — preserves vertical phase coherence, less
+                 //   "phasiness" on tonal material than the classic
+                 //   PV. Slightly higher CPU cost; same latency as
+                 //   classic PV. Per-clip choice — leave existing
+                 //   projects on Tones / Texture untouched.
+    Repitch      // Simple resampling (changes pitch with tempo)
 };
 
 } // namespace audio
