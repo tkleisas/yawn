@@ -2608,7 +2608,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             m_clipboard.type = ClipboardData::Type::Audio;
             m_clipboard.audioClip = s->audioClip->clone();
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
-            s->audioClip.reset();
+            m_project.graveyardSlotClips(*s);
             markDirty();
             m_undoManager.push({"Cut Audio Clip",
                 [this, trackIndex, sceneIndex, b = std::shared_ptr<audio::Clip>(std::move(backup))]{
@@ -2618,7 +2618,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 [this, trackIndex, sceneIndex]{
                     auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
                     if (s2) { m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
-                              s2->audioClip.reset(); markDirty(); }
+                              m_project.graveyardSlotClips(*s2); markDirty(); }
                 }, ""});
         } else if (s && s->midiClip) {
             auto backup = s->midiClip->clone();
@@ -2626,7 +2626,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             m_clipboard.type = ClipboardData::Type::Midi;
             m_clipboard.midiClip = s->midiClip->clone();
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
-            s->midiClip.reset();
+            m_project.graveyardSlotClips(*s);
             markDirty();
             m_undoManager.push({"Cut MIDI Clip",
                 [this, trackIndex, sceneIndex, b = std::shared_ptr<midi::MidiClip>(std::move(backup))]{
@@ -2636,7 +2636,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 [this, trackIndex, sceneIndex]{
                     auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
                     if (s2) { m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
-                              s2->midiClip.reset(); markDirty(); }
+                              m_project.graveyardSlotClips(*s2); markDirty(); }
                 }, ""});
         }
     }, false, hasClip});
@@ -2651,7 +2651,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         if (m_clipboard.type == ClipboardData::Type::Audio && m_clipboard.audioClip) {
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
-            s->clear();
+            m_project.graveyardSlotClips(*s);
             s->audioClip = m_clipboard.audioClip->clone();
             markDirty();
             auto pc = m_clipboard.audioClip->clone();
@@ -2678,7 +2678,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         } else if (m_clipboard.type == ClipboardData::Type::Midi && m_clipboard.midiClip) {
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
-            s->clear();
+            m_project.graveyardSlotClips(*s);
             s->midiClip = m_clipboard.midiClip->clone();
             markDirty();
             auto pc = m_clipboard.midiClip->clone();
@@ -2771,7 +2771,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             if (s->visualClip) oldVisual.reset(s->visualClip->clone().release());
             m_audioEngine.sendCommand(audio::StopClipMsg{trackIndex});
             m_audioEngine.sendCommand(audio::StopMidiClipMsg{trackIndex});
-            s->clear();
+            m_project.graveyardSlotClips(*s);
             markDirty();
             m_undoManager.push({"Delete Clip",
                 [this, trackIndex, sceneIndex, oldAudio, oldMidi, oldVisual]{
@@ -5255,6 +5255,90 @@ bool App::loadModulatorToVocoder(const std::string& path, int trackIndex) {
     return true;
 }
 
+// ── Buffer-based load helpers ──────────────────────────────────────
+// Used by in-app drag-and-drop. Path-based loaders above own the
+// "load file → resample → install" chain; these skip straight to
+// install since the buffer is already at engine rate.
+
+namespace {
+void interleaveBuffer(const audio::AudioBuffer& src,
+                      std::vector<float>& outIl,
+                      int& outFrames, int& outChannels) {
+    outFrames   = src.numFrames();
+    outChannels = src.numChannels();
+    outIl.resize(static_cast<size_t>(outFrames) * outChannels);
+    for (int ch = 0; ch < outChannels; ++ch) {
+        const float* csrc = src.channelData(ch);
+        for (int i = 0; i < outFrames; ++i)
+            outIl[static_cast<size_t>(i) * outChannels + ch] = csrc[i];
+    }
+}
+} // anon
+
+bool App::loadBufferToSampler(std::shared_ptr<audio::AudioBuffer> buf,
+                               const std::string& name, int trackIndex) {
+    if (!buf) return false;
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* s    = dynamic_cast<instruments::Sampler*>(inst);
+    if (!s) return false;
+    std::vector<float> il; int frames, chans;
+    interleaveBuffer(*buf, il, frames, chans);
+    s->loadSample(il.data(), frames, chans);
+    LOG_INFO("Drop", "Dropped buffer '%s' into Sampler on Track %d",
+             name.c_str(), trackIndex + 1);
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
+bool App::loadBufferToDrumSlop(std::shared_ptr<audio::AudioBuffer> buf,
+                                const std::string& name, int trackIndex) {
+    if (!buf) return false;
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* d    = dynamic_cast<instruments::DrumSlop*>(inst);
+    if (!d) return false;
+    std::vector<float> il; int frames, chans;
+    interleaveBuffer(*buf, il, frames, chans);
+    d->loadLoop(il.data(), frames, chans);
+    LOG_INFO("Drop", "Dropped buffer '%s' into DrumSlop on Track %d",
+             name.c_str(), trackIndex + 1);
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
+bool App::loadBufferToGranular(std::shared_ptr<audio::AudioBuffer> buf,
+                                const std::string& name, int trackIndex) {
+    if (!buf) return false;
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* g    = dynamic_cast<instruments::GranularSynth*>(inst);
+    if (!g) return false;
+    std::vector<float> il; int frames, chans;
+    interleaveBuffer(*buf, il, frames, chans);
+    g->loadSample(il.data(), frames, chans);
+    LOG_INFO("Drop", "Dropped buffer '%s' into Granular on Track %d",
+             name.c_str(), trackIndex + 1);
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
+bool App::loadBufferToVocoder(std::shared_ptr<audio::AudioBuffer> buf,
+                               const std::string& name, int trackIndex) {
+    if (!buf) return false;
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* v    = dynamic_cast<instruments::Vocoder*>(inst);
+    if (!v) return false;
+    std::vector<float> il; int frames, chans;
+    interleaveBuffer(*buf, il, frames, chans);
+    v->loadModulatorSample(il.data(), frames, chans);
+    LOG_INFO("Drop", "Dropped buffer '%s' into Vocoder on Track %d",
+             name.c_str(), trackIndex + 1);
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
 void App::handleKeyEvent(const SDL_Event& event) {
     if (event.key.repeat) return;
     bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
@@ -5374,7 +5458,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                     m_clipboard.type = ClipboardData::Type::Audio;
                     m_clipboard.audioClip = slot->audioClip->clone();
                     m_audioEngine.sendCommand(audio::StopClipMsg{ct});
-                    slot->audioClip.reset();
+                    m_project.graveyardSlotClips(*slot);
                     markDirty();
                     m_undoManager.push({"Cut Audio Clip",
                         [this, ct, cs, b = std::shared_ptr<audio::Clip>(std::move(backup))]{
@@ -5384,7 +5468,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                         [this, ct, cs]{
                             auto* s = m_project.getSlot(ct, cs);
                             if (s) { m_audioEngine.sendCommand(audio::StopClipMsg{ct});
-                                      s->audioClip.reset(); markDirty(); }
+                                      m_project.graveyardSlotClips(*s); markDirty(); }
                         }, ""});
                 } else if (slot && slot->midiClip) {
                     auto backup = slot->midiClip->clone();
@@ -5392,7 +5476,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                     m_clipboard.type = ClipboardData::Type::Midi;
                     m_clipboard.midiClip = slot->midiClip->clone();
                     m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
-                    slot->midiClip.reset();
+                    m_project.graveyardSlotClips(*slot);
                     markDirty();
                     m_undoManager.push({"Cut MIDI Clip",
                         [this, ct, cs, b = std::shared_ptr<midi::MidiClip>(std::move(backup))]{
@@ -5402,7 +5486,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                         [this, ct, cs]{
                             auto* s = m_project.getSlot(ct, cs);
                             if (s) { m_audioEngine.sendCommand(audio::StopMidiClipMsg{ct});
-                                      s->midiClip.reset(); markDirty(); }
+                                      m_project.graveyardSlotClips(*s); markDirty(); }
                         }, ""});
                 }
                 break;
@@ -5456,7 +5540,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                         if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
                         m_audioEngine.sendCommand(audio::StopClipMsg{pt});
                         m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                        slot->clear();
+                        m_project.graveyardSlotClips(*slot);
                         slot->audioClip = m_clipboard.audioClip->clone();
                         markDirty();
                         auto pastedClone = m_clipboard.audioClip->clone();
@@ -5466,7 +5550,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                                 if (!s) return;
                                 m_audioEngine.sendCommand(audio::StopClipMsg{pt});
                                 m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                s->clear();
+                                m_project.graveyardSlotClips(*s);
                                 if (oldAudio) s->audioClip = oldAudio->clone();
                                 if (oldMidi) s->midiClip = oldMidi->clone();
                                 markDirty();
@@ -5476,7 +5560,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                                 if (!s) return;
                                 m_audioEngine.sendCommand(audio::StopClipMsg{pt});
                                 m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                s->clear();
+                                m_project.graveyardSlotClips(*s);
                                 s->audioClip = pc->clone();
                                 markDirty();
                             }, ""});
@@ -5490,7 +5574,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                         if (slot->midiClip) oldMidi.reset(slot->midiClip->clone().release());
                         m_audioEngine.sendCommand(audio::StopClipMsg{pt});
                         m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                        slot->clear();
+                        m_project.graveyardSlotClips(*slot);
                         slot->midiClip = m_clipboard.midiClip->clone();
                         markDirty();
                         auto pastedClone = m_clipboard.midiClip->clone();
@@ -5500,7 +5584,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                                 if (!s) return;
                                 m_audioEngine.sendCommand(audio::StopClipMsg{pt});
                                 m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                s->clear();
+                                m_project.graveyardSlotClips(*s);
                                 if (oldAudio) s->audioClip = oldAudio->clone();
                                 if (oldMidi) s->midiClip = oldMidi->clone();
                                 markDirty();
@@ -5510,7 +5594,7 @@ void App::handleKeyEvent(const SDL_Event& event) {
                                 if (!s) return;
                                 m_audioEngine.sendCommand(audio::StopClipMsg{pt});
                                 m_audioEngine.sendCommand(audio::StopMidiClipMsg{pt});
-                                s->clear();
+                                m_project.graveyardSlotClips(*s);
                                 s->midiClip = pc->clone();
                                 markDirty();
                             }, ""});
@@ -5747,9 +5831,17 @@ void App::handleKeyEvent(const SDL_Event& event) {
             } else {
                 auto* slot = m_project.getSlot(m_selectedTrack, m_selectedScene);
                 if (slot && !slot->empty()) {
-                    m_audioEngine.sendCommand(audio::StopClipMsg{m_selectedTrack});
+                    // Immediate (unquantized) stop — the audio
+                    // thread sets state.clip = nullptr right away,
+                    // so by the time the graveyard TTL expires the
+                    // pointer is no longer in use. With the default
+                    // NextBar quantize, a slow tempo could keep
+                    // state.clip live longer than the graveyard
+                    // keepalive window → UAF.
+                    m_audioEngine.sendCommand(audio::StopClipMsg{
+                        m_selectedTrack, audio::QuantizeMode::None});
                     m_audioEngine.sendCommand(audio::StopMidiClipMsg{m_selectedTrack});
-                    slot->clear();
+                    m_project.clearSlot(m_selectedTrack, m_selectedScene);
                     markDirty();
                 }
             }
@@ -5939,6 +6031,16 @@ void App::processEvents() {
                 // else. Cheap (hash lookup + rect tests).
                 ui::fw2::TooltipManager::instance().onPointerMoved(mx, my);
 
+                // Drag ghost follows the cursor regardless of which
+                // panel ends up consuming the motion event. Ctrl
+                // state is also pushed in so the ghost can render a
+                // "+" badge for clone semantics.
+                {
+                    auto& dm = ui::fw2::DragManager::instance();
+                    dm.updatePos(mx, my);
+                    dm.setCtrlHeld((SDL_GetModState() & SDL_KMOD_CTRL) != 0);
+                }
+
                 // fw2 LayerStack — overlays track hover before v1 sees it.
                 {
                     ui::fw2::MouseMoveEvent me{};
@@ -6108,7 +6210,7 @@ void App::processEvents() {
                             m_undoManager.push({"Create MIDI Clip",
                                 [this, ct, cs]{
                                     auto* s = m_project.getSlot(ct, cs);
-                                    if (s) { s->midiClip.reset(); markDirty(); }
+                                    if (s) { m_project.graveyardSlotClips(*s); markDirty(); }
                                 },
                                 [this, ct, cs]{
                                     auto nc = std::make_unique<midi::MidiClip>(
@@ -6290,6 +6392,29 @@ void App::processEvents() {
                     sync(detailEditingBefore,  m_showDetailPanel && m_detailPanel->hasEditingKnob());
                     sync(visualEditingBefore,  m_visualParamsPanel->isVisible() && m_visualParamsPanel->hasEditingKnob());
                 }
+                // Mirror the mouse-DOWN selection-sync block here.
+                // SessionPanel now defers clip-cell selection to
+                // mouse-up (so a click that turns into a drag
+                // doesn't yank the detail panel off its target);
+                // App still has to apply that deferred state, and
+                // the mouse-down read at the top is too early. Read
+                // again here so Delete / clip context reflect the
+                // freshly-selected cell.
+                {
+                    int selTrackUp = m_sessionPanel->lastClickTrack();
+                    if (selTrackUp >= 0) {
+                        m_selectedTrack = selTrackUp;
+                        m_detailTarget = DetailTarget::Track;
+                        m_virtualKeyboard.setTargetTrack(selTrackUp);
+                        m_mixerPanel->setSelectedTrack(selTrackUp);
+                    }
+                    int selSceneUp = m_sessionPanel->lastClickScene();
+                    if (selSceneUp >= 0) m_selectedScene = selSceneUp;
+                    if (selTrackUp >= 0 || selSceneUp >= 0) {
+                        updateDetailForSelectedTrack();
+                    }
+                }
+
                 // Handle completed clip drag-and-drop
                 if (m_sessionPanel->clipDragCompleted()) {
                     int srcT = m_sessionPanel->dragSourceTrack();
@@ -6303,6 +6428,50 @@ void App::processEvents() {
                     m_selectedScene = dstS;
                     m_detailTarget = DetailTarget::Track;
                     updateDetailForSelectedTrack();
+                }
+                // Cross-panel "global" drag drop dispatch + fallback.
+                // If an audio-clip drag is active and the cursor
+                // released inside the detail panel, first give the
+                // panel a chance to route to a precise sub-target
+                // (DrumRack pad under cursor, etc.). If the panel
+                // doesn't consume, fall through to the bulk
+                // sample-receiver loaders for the selected track.
+                {
+                    auto& dm = ui::fw2::DragManager::instance();
+                    if (dm.isDraggingAudioClip() && m_showDetailPanel) {
+                        const auto db = m_detailPanel->bounds();
+                        const bool inside =
+                            (mx >= db.x && mx < db.x + db.w &&
+                             my >= db.y && my < db.y + db.h);
+                        if (inside) {
+                            const auto& pl = dm.payload();
+                            // 1) Sub-target dispatch (per-pad / per-zone).
+                            bool consumed = false;
+                            if (pl.audioBuffer) {
+                                consumed = m_detailPanel->tryConsumeAudioDropAt(
+                                    mx, my, *pl.audioBuffer, pl.label);
+                            }
+                            // 2) Bulk loaders for the selected
+                            // track's instrument (Sampler / Granular
+                            // / DrumSlop / Vocoder). First one that
+                            // matches wins.
+                            if (!consumed) {
+                                const int t = m_selectedTrack;
+                                consumed =
+                                    loadBufferToSampler(pl.audioBuffer, pl.label, t)
+                                    || loadBufferToDrumSlop(pl.audioBuffer, pl.label, t)
+                                    || loadBufferToGranular(pl.audioBuffer, pl.label, t)
+                                    || loadBufferToVocoder (pl.audioBuffer, pl.label, t);
+                            }
+                            if (consumed) dm.finish();
+                        }
+                    }
+                    // Tear down any unconsumed drag — covers releases
+                    // over empty space, over a non-receiving panel, or
+                    // over a receiving panel where every load* returned
+                    // false (e.g. wrong instrument on the selected
+                    // track).
+                    if (dm.active()) dm.cancel();
                 }
                 break;
             }
@@ -6528,6 +6697,12 @@ void App::update() {
     float dt = (m_lastFrameTicks > 0) ? (now - m_lastFrameTicks) / 1000.0f : 0.0f;
     m_lastFrameTicks = now;
     m_sessionPanel->updateAnimTimer(dt);
+
+    // Drop any clips that have been waiting in the project's
+    // graveyard long enough that the audio thread can't possibly
+    // still be using them. See Project::graveyardSlotClips() for
+    // the rationale.
+    m_project.purgeClipGraveyard();
 
     // Detail panel open/close height animation. Lives outside fw2's
     // measure cache so a re-layout in the same frame doesn't read a
@@ -6852,6 +7027,11 @@ void App::update() {
                             clip->looping = shouldLoop;
                             clip->gain = 1.0f;
                             clip->originalBPM = m_audioEngine.transport().bpm();
+                            // Project::setClip auto-graveyards any
+                            // existing clip in the slot, so the audio
+                            // thread's cached state.clip stays valid
+                            // until it processes the LaunchClipMsg
+                            // below.
                             m_project.setClip(ti, si, std::move(clip));
                             LOG_INFO("Audio", "Audio recorded: Track %d, Scene %d, %" PRId64 " frames",
                                         ti + 1, si + 1, data.frameCount);

@@ -1219,7 +1219,7 @@ void AudioEngine::processCommands() {
                     m_transport.play();
             }
             else if constexpr (std::is_same_v<T, StopClipMsg>) {
-                m_clipEngine.scheduleStop(msg.trackIndex, QuantizeMode::NextBar);
+                m_clipEngine.scheduleStop(msg.trackIndex, msg.quantize);
             }
             else if constexpr (std::is_same_v<T, SetQuantizeMsg>) {
                 m_clipEngine.setQuantizeMode(msg.mode);

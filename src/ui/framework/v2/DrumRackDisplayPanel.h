@@ -7,6 +7,7 @@
 #include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Theme.h"
+#include "ui/framework/v2/DragManager.h"
 #include "ui/Theme.h"
 
 #ifndef YAWN_TEST_BUILD
@@ -45,15 +46,38 @@ public:
     void setOnPadClick(std::function<void(int)> cb) { m_onPadClick = std::move(cb); }
     void setOnPageChange(std::function<void(int)> cb) { m_onPageChange = std::move(cb); }
 
+    // Hit-test helper for cross-panel drag-drop. Returns the MIDI
+    // note of the pad under (sx, sy), or -1 if the point is not
+    // over any pad in the current page's grid. Used by the App-side
+    // global drag drop dispatcher to route audio-buffer drops to a
+    // specific pad rather than the whole rack.
+    int padNoteAt(float sx, float sy) const {
+        if (sx < m_gridRect.x || sx >= m_gridRect.x + m_gridRect.w ||
+            sy < m_gridRect.y || sy >= m_gridRect.y + m_gridRect.h)
+            return -1;
+        constexpr int cols = 4, rows = 4;
+        const float cellW = m_gridRect.w / cols;
+        const float cellH = m_gridRect.h / rows;
+        const int col = static_cast<int>((sx - m_gridRect.x) / cellW);
+        const int row = static_cast<int>((sy - m_gridRect.y) / cellH);
+        const int padIdx = row * cols + col;
+        const int note = m_page * 16 + padIdx;
+        return (note >= 0 && note < 128) ? note : -1;
+    }
+    const Rect& gridRect() const { return m_gridRect; }
+
     Size onMeasure(Constraints c, UIContext&) override {
-        return c.constrain({c.maxW, 160.0f});
+        // Bumped from 160 → 220 so the pad-grid cells are large
+        // enough to show readable note labels at the user's font
+        // scale. Wave + page-bar grow proportionally.
+        return c.constrain({c.maxW, 220.0f});
     }
 
     void onLayout(Rect bounds, UIContext& ctx) override {
         Widget::onLayout(bounds, ctx);
-        const float gap = 2.0f;
-        m_waveH = std::min(36.0f, bounds.h * 0.25f);
-        m_pageBarH = 16.0f;
+        const float gap = 4.0f;
+        m_waveH    = std::min(48.0f, bounds.h * 0.22f);
+        m_pageBarH = 26.0f;   // was 16 — fits theme.fontSizeSmall comfortably
         m_waveRect    = {bounds.x, bounds.y, bounds.w, m_waveH};
         m_pageBarRect = {bounds.x, bounds.y + m_waveH + gap, bounds.w, m_pageBarH};
         m_gridRect    = {bounds.x, bounds.y + m_waveH + m_pageBarH + gap * 2,
@@ -66,7 +90,7 @@ public:
 
         if (mx >= m_pageBarRect.x && mx < m_pageBarRect.x + m_pageBarRect.w &&
             my >= m_pageBarRect.y && my < m_pageBarRect.y + m_pageBarRect.h) {
-            const float btnW = 14.0f;
+            const float btnW = 22.0f;   // matches paint-side width
             if (mx < m_pageBarRect.x + btnW) {
                 const int newPage = std::max(0, m_page - 1);
                 if (newPage != m_page) {
@@ -105,6 +129,27 @@ public:
             const int note = m_page * 16 + padIdx;
             if (note >= 0 && note < 128 && m_onPadClick)
                 m_onPadClick(note);
+            return true;
+        }
+        return false;
+    }
+
+    // Mouse-wheel scroll over the panel pages through the 8 banks
+    // of 16 pads. Wheel up → previous page; wheel down → next page.
+    // Matches the natural "show me more pads" gesture that DAWs
+    // like FL/Bitwig give you on a paged drum grid.
+    bool onScroll(ScrollEvent& e) override {
+        if (e.x < bounds().x || e.x >= bounds().x + bounds().w ||
+            e.y < bounds().y || e.y >= bounds().y + bounds().h)
+            return false;
+        if (e.dy > 0.0f && m_page > 0) {
+            --m_page;
+            if (m_onPageChange) m_onPageChange(m_page);
+            return true;
+        }
+        if (e.dy < 0.0f && m_page < 7) {
+            ++m_page;
+            if (m_onPageChange) m_onPageChange(m_page);
             return true;
         }
         return false;
@@ -154,27 +199,39 @@ public:
                 r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 80});
             }
         } else if (tm) {
-            const float lblFs = 7.0f * (48.0f / 26.0f);
+            // Use the theme's "small" font so the placeholder
+            // label stays in step with the user's font-scale
+            // preference (Preferences → Theme).
+            const float lblFs = theme().metrics.fontSizeSmall;
+            const float lh = tm->lineHeight(lblFs);
             const char* msg = "Drop Sample";
             const float tw = tm->textWidth(msg, lblFs);
             const float tx = m_waveRect.x + (m_waveRect.w - tw) * 0.5f;
-            const float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
-            tm->drawText(r, msg, tx, ty, lblFs, Color{80, 80, 100, 180});
+            const float ty = m_waveRect.y + (m_waveRect.h - lh) * 0.5f;
+            tm->drawText(r, msg, tx, ty, lblFs, Color{120, 120, 140, 200});
         }
 
         // ─── Page bar ───
         r.drawRect(m_pageBarRect.x, m_pageBarRect.y, m_pageBarRect.w,
                    m_pageBarRect.h, Color{25, 25, 32, 255});
 
-        const float btnW = 14.0f;
-        const float barFs = 6.0f * (48.0f / 26.0f);
+        const float btnW  = 22.0f;                              // arrow buttons
+        const float barFs = theme().metrics.fontSizeSmall;
+        const float barLh = tm ? tm->lineHeight(barFs) : barFs;
+        const float barTextY = m_pageBarRect.y +
+                                (m_pageBarRect.h - barLh) * 0.5f;
 
         if (tm) {
-            tm->drawText(r, "<", m_pageBarRect.x + 3, m_pageBarRect.y + 2,
-                          barFs, Color{160, 160, 180, 200});
-            tm->drawText(r, ">", m_pageBarRect.x + m_pageBarRect.w - 10,
-                          m_pageBarRect.y + 2, barFs,
-                          Color{160, 160, 180, 200});
+            // Centred "<" / ">" arrows. Centring keeps the visual
+            // weight balanced when the user bumps the font scale.
+            const float lw = tm->textWidth("<", barFs);
+            const float rw = tm->textWidth(">", barFs);
+            tm->drawText(r, "<",
+                          m_pageBarRect.x + (btnW - lw) * 0.5f,
+                          barTextY, barFs, Color{200, 200, 220, 230});
+            tm->drawText(r, ">",
+                          m_pageBarRect.x + m_pageBarRect.w - btnW + (btnW - rw) * 0.5f,
+                          barTextY, barFs, Color{200, 200, 220, 230});
         }
 
         const float innerW = m_pageBarRect.w - btnW * 2;
@@ -185,7 +242,7 @@ public:
         for (int i = 0; i < 8; ++i) {
             const float pbx = m_pageBarRect.x + btnW + i * pageW;
             const bool active = (i == m_page);
-            const Color bg = active ? Color{60, 60, 80, 255}
+            const Color bg = active ? Color{70, 70, 95, 255}
                                      : Color{30, 30, 38, 255};
             r.drawRect(pbx + 1, m_pageBarRect.y + 1, pageW - 2,
                        m_pageBarH - 2, bg);
@@ -193,9 +250,8 @@ public:
                 const float tw = tm->textWidth(pageLabels[i], barFs);
                 const float tx = pbx + (pageW - tw) * 0.5f;
                 const Color tc = active ? Color{255, 200, 50, 255}
-                                         : Color{120, 120, 140, 180};
-                tm->drawText(r, pageLabels[i], tx, m_pageBarRect.y + 2,
-                              barFs, tc);
+                                         : Color{160, 160, 180, 200};
+                tm->drawText(r, pageLabels[i], tx, barTextY, barFs, tc);
             }
         }
 
@@ -203,7 +259,10 @@ public:
         constexpr int cols = 4, rows = 4;
         const float cellW = m_gridRect.w / cols;
         const float cellH = m_gridRect.h / rows;
-        const float padFs = 6.5f * (48.0f / 26.0f);
+        // Use the regular theme font for pad labels — large enough
+        // to read on a typical 1080p/1440p screen at default scale
+        // and scales up cleanly when the user bumps font size.
+        const float padFs = theme().metrics.fontSize;
 
         static const char* noteNames[] = {
             "C","C#","D","D#","E","F","F#","G","G#","A","A#","B"
@@ -241,17 +300,45 @@ public:
                           noteNames[noteIdx], octave);
             if (tm) {
                 const float tw = tm->textWidth(label, padFs);
+                const float lh = tm->lineHeight(padFs);
                 const float tx = cx + (cellW - tw) * 0.5f;
-                const float ty = cy + cellH * 0.5f - 3.5f;
+                const float ty = cy + (cellH - lh) * 0.5f;
                 const Color textCol = selected   ? Color{255, 220, 100, 255} :
-                                      hasSample  ? Color{180, 180, 200, 255} :
-                                                   Color{100, 100, 120, 180};
+                                      hasSample  ? Color{200, 200, 220, 255} :
+                                                   Color{120, 120, 140, 200};
                 tm->drawText(r, label, tx, ty, padFs, textCol);
             }
 
             if (hasSample) {
-                r.drawRect(cx + cellW - 6, cy + 3, 3, 3,
-                           Color{0, 180, 230, 180});
+                // Bigger has-sample dot — was 3×3, now scales with
+                // the font so it stays proportional to the label.
+                const float dotSz = std::max(4.0f, padFs * 0.35f);
+                r.drawRect(cx + cellW - dotSz - 3, cy + 3, dotSz, dotSz,
+                           Color{0, 180, 230, 200});
+            }
+        }
+
+        // Drop-target highlight: when an audio-clip drag is in
+        // progress and the cursor is over a pad in this grid,
+        // overlay a bright accent ring on that pad so the user
+        // knows exactly where the drop will land. Skips entirely
+        // when no drag is active — zero cost for the common case.
+        {
+            auto& dm = DragManager::instance();
+            if (dm.isDraggingAudioClip()) {
+                const int hoverPad = padNoteAt(dm.currentX(), dm.currentY());
+                if (hoverPad >= 0 && hoverPad / 16 == m_page) {
+                    const int idx = hoverPad - m_page * 16;
+                    const int col = idx % cols;
+                    const int row = idx / cols;
+                    const float cx = m_gridRect.x + col * cellW;
+                    const float cy = m_gridRect.y + row * cellH;
+                    // Two-layer ring: outer faint glow, inner bright.
+                    r.drawRectOutline(cx,     cy,     cellW,     cellH,
+                                       Color{0, 200, 240, 70}, 4.0f);
+                    r.drawRectOutline(cx + 1, cy + 1, cellW - 2, cellH - 2,
+                                       Color{0, 220, 255, 230}, 2.0f);
+                }
             }
         }
     }

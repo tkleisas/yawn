@@ -10,6 +10,7 @@
 
 #include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/UIContext.h"
+#include "ui/framework/v2/DragManager.h"
 #ifndef YAWN_TEST_BUILD
 #include "ui/Renderer.h"
 #include "ui/Font.h"
@@ -373,11 +374,48 @@ public:
             return true;
         }
 
-        // Clip drag: check threshold then track target
-        if (m_clipDragPending && !m_clipDragging) {
-            float dx = mx - m_dragStartX;
-            float dy = my - m_dragStartY;
-            if (dx * dx + dy * dy > kDragThreshold * kDragThreshold) {
+        // First-exceed path commit. When the user crosses the drag
+        // threshold for the first time, we pick exactly one path
+        // and stick with it for the rest of the gesture:
+        //   * Alt held at down-time     → global cross-panel drag
+        //   * Held still for >400ms     → global cross-panel drag
+        //   * Otherwise                 → cell-to-cell drag
+        // Crucially we do NOT re-check long-press once cell-to-cell
+        // is committed — otherwise a slow normal drag (>400ms total
+        // motion) gets hijacked into a global drag mid-stroke,
+        // cancelling the cell move the user actually wanted.
+        if (m_clipDragPending && !m_clipDragging && !m_globalDragActive) {
+            const float dx = mx - m_dragStartX;
+            const float dy = my - m_dragStartY;
+            const bool exceeded = (dx * dx + dy * dy >
+                                    kDragThreshold * kDragThreshold);
+            if (exceeded) {
+                const bool wasLongPress =
+                    (e.timestampMs > m_dragStartTimeMs &&
+                     (e.timestampMs - m_dragStartTimeMs) > kLongPressMs);
+                if ((m_dragStartAltHeld || wasLongPress) && m_project) {
+                    auto* slot = m_project->getSlot(m_dragSourceTrack,
+                                                     m_dragSourceScene);
+                    if (slot && slot->audioClip && slot->audioClip->buffer) {
+                        ::yawn::ui::fw2::DragPayload pl;
+                        pl.kind = ::yawn::ui::fw2::DragPayload::Kind::AudioClip;
+                        pl.audioBuffer = slot->audioClip->buffer;
+                        pl.label = slot->audioClip->name.empty()
+                                    ? std::string("clip")
+                                    : slot->audioClip->name;
+                        pl.sourceTrack = m_dragSourceTrack;
+                        pl.sourceScene = m_dragSourceScene;
+                        pl.sourceFromArrangement = false;
+                        ::yawn::ui::fw2::DragManager::instance().start(
+                            std::move(pl), mx, my);
+                        m_globalDragActive = true;
+                        m_clipDragPending  = false;
+                        releaseMouse();
+                        return true;
+                    }
+                }
+                // Default path — cell-to-cell drag. Commit now so a
+                // later 400ms-long slow drag doesn't get re-routed.
                 m_clipDragging = true;
             }
         }
@@ -443,12 +481,20 @@ public:
             return true;
         }
         if (m_clipDragging) {
-            // Finalize drag — compute final target
+            // Finalize cell-to-cell drag — compute final target.
             m_clipDragIsCopy = (e.modifiers & ::yawn::ui::fw2::ModifierKey::Ctrl) != 0;
             if (m_dragTargetTrack >= 0 && m_dragTargetScene >= 0 &&
                 !(m_dragTargetTrack == m_dragSourceTrack &&
                   m_dragTargetScene == m_dragSourceScene)) {
                 m_clipDragCompleted = true;
+            } else if (!m_dragStartAltHeld) {
+                // Drag landed on the source — treat like a click,
+                // i.e. apply the deferred selection. Skip when Alt
+                // was held (Alt-click never selects).
+                m_selectedTrack  = m_dragSourceTrack;
+                m_selectedScene  = m_dragSourceScene;
+                m_lastClickTrack = m_dragSourceTrack;
+                m_lastClickScene = m_dragSourceScene;
             }
             m_clipDragging = false;
             m_clipDragPending = false;
@@ -456,7 +502,14 @@ public:
             return true;
         }
         if (m_clipDragPending) {
-            // Didn't exceed drag threshold — treat as a select (not launch)
+            // No drag — apply the deferred selection now (treat as
+            // a click, not a launch). Alt-clicks never select.
+            if (!m_dragStartAltHeld) {
+                m_selectedTrack  = m_dragSourceTrack;
+                m_selectedScene  = m_dragSourceScene;
+                m_lastClickTrack = m_dragSourceTrack;
+                m_lastClickScene = m_dragSourceScene;
+            }
             m_clipDragPending = false;
             releaseMouse();
             return true;
@@ -567,6 +620,26 @@ private:
     bool  m_clipDragCompleted = false;
     bool  m_clipDragIsCopy    = false;
     static constexpr float kDragThreshold = 5.0f;
+
+    // Cross-panel "global" drag (audio clip → instrument). Engages
+    // either via Alt+drag or after a long-press hold then drag.
+    // When active, the cell-to-cell drag flow is bypassed and the
+    // audio buffer is published to DragManager so any drop target
+    // (Sampler/Granular/DrumRack/etc.) can consume it.
+    //
+    // A drag must NOT change the selected track / scene (otherwise
+    // the detail panel flips off the intended drop target while
+    // the user is still mid-drag). The Saved* fields snapshot the
+    // selection at click time so we can revert it the moment we
+    // know we're in global-drag mode.
+    bool      m_dragStartAltHeld         = false;
+    uint64_t  m_dragStartTimeMs          = 0;
+    bool      m_globalDragActive         = false;
+    int       m_dragSavedSelectedTrack   = -1;
+    int       m_dragSavedSelectedScene   = -1;
+    int       m_dragSavedLastClickTrack  = -1;
+    int       m_dragSavedLastClickScene  = -1;
+    static constexpr uint64_t kLongPressMs = 400;
 
     std::function<void(float)> m_onScrollChanged;
     RenameCallback m_onTrackRenamed;

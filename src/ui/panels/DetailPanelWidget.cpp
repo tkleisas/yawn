@@ -256,6 +256,21 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
                 return true;
             }
         }
+        // Crop / Reverse loop region buttons
+        {
+            const auto& b = m_cropLoopBtn.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                m_cropLoopBtn.dispatchMouseDown(e);
+                return true;
+            }
+        }
+        {
+            const auto& b = m_reverseLoopBtn.bounds();
+            if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) {
+                m_reverseLoopBtn.dispatchMouseDown(e);
+                return true;
+            }
+        }
     }
 
     if (m_deviceWidgets.empty()) return false;
@@ -485,7 +500,16 @@ void DetailPanelWidget::paintAudioClipView(Renderer2D& renderer, TextMetrics& tm
     tm.drawText(renderer, "Loop", cx, stripY, kPt10Px, ::yawn::ui::Theme::textDim);
     m_loopToggleBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
     m_loopToggleBtn.render(ctx);
-    cx += 50.0f + sectionGap;
+    cx += 50.0f + 6.0f;
+
+    // Crop / Reverse — destructive ops on the loop region. Sit
+    // tight against the Loop toggle so they read as related.
+    m_cropLoopBtn.layout(Rect{cx, inputCenterY, 50.0f, inputH}, ctx);
+    m_cropLoopBtn.render(ctx);
+    cx += 50.0f + 4.0f;
+    m_reverseLoopBtn.layout(Rect{cx, inputCenterY, 64.0f, inputH}, ctx);
+    m_reverseLoopBtn.render(ctx);
+    cx += 64.0f + sectionGap;
 
     // Automation target dropdown
     float autoDropW = 160.0f;

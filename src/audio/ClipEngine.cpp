@@ -62,7 +62,19 @@ void ClipEngine::scheduleStop(int trackIndex, QuantizeMode quantize) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
 
     if (quantize == QuantizeMode::None) {
+        // Immediate stop — fade-out begins this block. ALSO null out
+        // the cached clip pointer so processTrack can't dereference
+        // it after the UI thread's graveyard TTL expires (which
+        // could be seconds away). The fade-out path doesn't dereference
+        // state.clip — it just multiplies the buffer by fadeGain
+        // before bailing once active==false.
         m_tracks[trackIndex].stopping = true;
+        m_tracks[trackIndex].active   = false;
+        m_tracks[trackIndex].clip     = nullptr;
+        m_tracks[trackIndex].clipAutomation = nullptr;
+        // Also drop any pending launch — we don't want a previously
+        // queued clip to fire after the user explicitly stopped.
+        m_pending[trackIndex] = {};
     } else {
         m_pending[trackIndex].trackIndex = trackIndex;
         m_pending[trackIndex].clip = nullptr;

@@ -142,8 +142,14 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
         int si = static_cast<int>((cmy - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
         if (ti >= 0 && ti < m_project->numTracks() &&
             si >= 0 && si < m_project->numScenes()) {
-            m_lastClickScene = si;
-            m_selectedScene = si;
+            // Scene selection USED to be set unconditionally here on
+            // mouse-down. That meant every click on a clip cell
+            // — even one that turned into a global drag — flipped
+            // the detail panel to the clip view (because App treats
+            // a scene change as "refresh detail panel"). Defer to
+            // mouseUp instead, so a drag never causes a flip. The
+            // empty-cell + non-clip branches below set the scene
+            // selection explicitly when they fire.
             auto* slot = m_project->getSlot(ti, si);
             bool hasClip = slot && !slot->empty();
             bool isPlaying = m_trackStates[ti].playing && m_trackStates[ti].playingScene == si;
@@ -221,12 +227,22 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     m_engine->sendCommand(audio::StopMidiRecordMsg{ti, recQ});
                 else if (trackType == Track::Type::Audio)
                     m_engine->sendCommand(audio::StopAudioRecordMsg{ti, recQ});
+                // No selection change for recording-stop interactions.
             } else if (rightClick) {
                 m_lastRightClickTrack = ti;
                 m_lastRightClickScene = si;
                 m_selectedTrack  = ti;
                 m_lastClickTrack = ti;
+                m_selectedScene  = si;
+                m_lastClickScene = si;
             } else if (slotLocalX < kIconZoneW + ::yawn::ui::Theme::kSlotPadding) {
+                // Play-icon click — explicit launch/stop. Apply
+                // selection immediately because there's no drag
+                // gesture from this zone.
+                m_selectedTrack  = ti;
+                m_lastClickTrack = ti;
+                m_selectedScene  = si;
+                m_lastClickScene = si;
                 if (isPlaying) {
                     LOG_INFO("User", "click play-icon → stop clip (track=%d scene=%d)", ti, si);
                     if (slot->audioClip)
@@ -260,10 +276,21 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     // Visual tracks can't record.
                 }
             } else {
-                m_selectedTrack  = ti;
-                m_lastClickTrack = ti;
+                // SELECTION IS DEFERRED TO MOUSE-UP for clip cells.
+                // Reason: clicking instantly selects → App immediately
+                // switches the detail panel to show the clicked
+                // track. If the click later turns out to be the
+                // start of an Alt+drag (or long-press drag) into a
+                // sample-receiving instrument on a DIFFERENT track,
+                // the drop target disappears before the user
+                // finishes the gesture. By deferring, the detail
+                // panel only switches when we know it was a plain
+                // click (mouse-up with no drag).
+                const bool altHeld = (e.modifiers &
+                    ::yawn::ui::fw2::ModifierKey::Alt) != 0;
                 if (slot && !slot->empty()) {
-                    // Start potential clip drag (launch deferred to mouseUp)
+                    // Start potential clip drag (launch + selection
+                    // both deferred to mouseUp).
                     m_clipDragPending = true;
                     m_clipDragging    = false;
                     m_dragSourceTrack = ti;
@@ -273,16 +300,27 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                     m_dragTargetTrack = -1;
                     m_dragTargetScene = -1;
                     m_clipDragCompleted = false;
+                    m_dragStartAltHeld  = altHeld;
+                    m_dragStartTimeMs   = e.timestampMs;
+                    m_globalDragActive  = false;
                     captureMouse();  // ensure we receive mouse move events
-                } else if (trackArmed) {
-                    int rlb = slot ? slot->recordLengthBars : 0;
-                    LOG_INFO("User", "click body of empty armed slot → start record (track=%d scene=%d type=%s overdub=%d rlb=%d)",
-                             ti, si, trackType == Track::Type::Midi ? "midi" : "audio",
-                             !shift ? 1 : 0, rlb);
-                    if (trackType == Track::Type::Midi)
-                        m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !shift, rlb});
-                    else if (trackType == Track::Type::Audio)
-                        m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !shift, rlb});
+                } else {
+                    // Empty cell — no drag possible, so selection
+                    // applies immediately like before.
+                    m_selectedTrack  = ti;
+                    m_lastClickTrack = ti;
+                    m_selectedScene  = si;
+                    m_lastClickScene = si;
+                    if (trackArmed) {
+                        int rlb = slot ? slot->recordLengthBars : 0;
+                        LOG_INFO("User", "click body of empty armed slot → start record (track=%d scene=%d type=%s overdub=%d rlb=%d)",
+                                 ti, si, trackType == Track::Type::Midi ? "midi" : "audio",
+                                 !shift ? 1 : 0, rlb);
+                        if (trackType == Track::Type::Midi)
+                            m_engine->sendCommand(audio::StartMidiRecordMsg{ti, si, !shift, rlb});
+                        else if (trackType == Track::Type::Audio)
+                            m_engine->sendCommand(audio::StartAudioRecordMsg{ti, si, !shift, rlb});
+                    }
                 }
             }
             return true;

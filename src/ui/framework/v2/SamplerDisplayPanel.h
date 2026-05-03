@@ -9,6 +9,7 @@
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Theme.h"
 #include "ui/framework/v2/ADSRDisplayWidget.h"
+#include "ui/framework/v2/DragManager.h"
 #include "ui/Theme.h"
 
 #ifndef YAWN_TEST_BUILD
@@ -144,6 +145,10 @@ public:
         }
 
         m_adsr.render(ctx);
+
+        // "You can drop a sample here" highlight when an audio-clip
+        // drag is active and the cursor is over this panel.
+        DragManager::renderDropHighlight(m_bounds, ctx);
     }
 #endif
 

@@ -46,6 +46,12 @@ struct LaunchClipMsg {
 
 struct StopClipMsg {
     int trackIndex;
+    // Quantization for the stop. NextBar/NextBeat = standard
+    // musical stop (fades at the next boundary). None = immediate
+    // fade-out within ~5ms — used by Delete and other destructive
+    // paths so the audio thread releases the clip pointer fast,
+    // before the UI thread's clip-graveyard TTL expires.
+    QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
 struct SetQuantizeMsg {

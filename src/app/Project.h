@@ -13,6 +13,8 @@
 #include <memory>
 #include <string>
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 
 namespace yawn {
 
@@ -195,8 +197,11 @@ public:
     audio::Clip* setClip(int trackIndex, int sceneIndex, std::unique_ptr<audio::Clip> clip) {
         auto* slot = getSlot(trackIndex, sceneIndex);
         if (!slot) return nullptr;
-        slot->midiClip.reset();   // Clear any existing MIDI clip
-        slot->visualClip.reset(); // Clear any existing visual clip
+        // Hop existing clips into the graveyard so the audio
+        // thread's cached state.clip pointer doesn't dangle while
+        // the next LaunchClipMsg is in flight. See
+        // graveyardSlotClips() docs.
+        graveyardSlotClips(*slot);
         slot->audioClip = std::move(clip);
         return slot->audioClip.get();
     }
@@ -205,8 +210,7 @@ public:
     midi::MidiClip* setMidiClip(int trackIndex, int sceneIndex, std::unique_ptr<midi::MidiClip> clip) {
         auto* slot = getSlot(trackIndex, sceneIndex);
         if (!slot) return nullptr;
-        slot->audioClip.reset();   // Clear any existing audio clip
-        slot->visualClip.reset();  // Clear any existing visual clip
+        graveyardSlotClips(*slot);
         slot->midiClip = std::move(clip);
         return slot->midiClip.get();
     }
@@ -216,8 +220,7 @@ public:
                                        std::unique_ptr<visual::VisualClip> clip) {
         auto* slot = getSlot(trackIndex, sceneIndex);
         if (!slot) return nullptr;
-        slot->audioClip.reset();
-        slot->midiClip.reset();
+        graveyardSlotClips(*slot);
         slot->visualClip = std::move(clip);
         return slot->visualClip.get();
     }
@@ -227,6 +230,9 @@ public:
         auto* src = getSlot(srcTrack, srcScene);
         auto* dst = getSlot(dstTrack, dstScene);
         if (!src || !dst || src == dst) return;
+        // dst's existing clips are about to be overwritten — graveyard
+        // them so the audio thread doesn't UAF on its cached pointer.
+        graveyardSlotClips(*dst);
         dst->audioClip      = std::move(src->audioClip);
         dst->midiClip       = std::move(src->midiClip);
         dst->visualClip     = std::move(src->visualClip);
@@ -243,12 +249,68 @@ public:
         auto* src = getSlot(srcTrack, srcScene);
         auto* dst = getSlot(dstTrack, dstScene);
         if (!src || !dst || src == dst) return;
-        if (src->audioClip)   dst->audioClip  = src->audioClip->clone();  else dst->audioClip.reset();
-        if (src->midiClip)    dst->midiClip   = src->midiClip->clone();   else dst->midiClip.reset();
-        if (src->visualClip)  dst->visualClip = src->visualClip->clone(); else dst->visualClip.reset();
+        graveyardSlotClips(*dst);
+        if (src->audioClip)   dst->audioClip  = src->audioClip->clone();
+        if (src->midiClip)    dst->midiClip   = src->midiClip->clone();
+        if (src->visualClip)  dst->visualClip = src->visualClip->clone();
         dst->followAction   = src->followAction;
         dst->clipAutomation = src->clipAutomation;
         dst->launchQuantize = src->launchQuantize;
+    }
+
+    // Clear a slot via the graveyard. Use this in place of
+    // slot->clear() when the slot might be currently referenced
+    // by the audio thread.
+    void clearSlot(int trackIndex, int sceneIndex) {
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        if (!slot) return;
+        graveyardSlotClips(*slot);
+        slot->clipAutomation.clear();
+    }
+
+    // ── Clip-pointer graveyard ─────────────────────────────────────
+    //
+    // The audio thread (ClipEngine) caches a raw `const audio::Clip*`
+    // per track in ClipPlayState::clip. When the UI thread frees a
+    // slot's clip via unique_ptr destruction, the audio thread's
+    // pointer dangles until the next LaunchClipMsg lands — a callback
+    // firing in that window does `state.clip->buffer` and crashes.
+    //
+    // Anything that mutates a slot's clip pointers calls
+    // graveyardSlotClips() FIRST, transferring the unique_ptrs into a
+    // graveyard with a timestamp. purgeClipGraveyard() (called once
+    // per UI frame) drops entries older than ~1 s — long enough for
+    // the audio thread to definitely have processed any follow-up
+    // command and re-pointed its cached state.clip.
+    void graveyardSlotClips(ClipSlot& slot) {
+        if (!slot.audioClip && !slot.midiClip && !slot.visualClip) return;
+        GraveyardEntry e;
+        e.timeMs     = nowMs();
+        e.audioClip  = std::move(slot.audioClip);
+        e.midiClip   = std::move(slot.midiClip);
+        e.visualClip = std::move(slot.visualClip);
+        m_clipGraveyard.push_back(std::move(e));
+    }
+
+    void purgeClipGraveyard() {
+        if (m_clipGraveyard.empty()) return;
+        const uint64_t now = nowMs();
+        // 5 seconds — generous enough to outlast a quantized stop
+        // even at slow tempos (60 BPM = 4 sec/bar). Callers that
+        // need a hard guarantee should send an unquantized
+        // StopClipMsg (QuantizeMode::None) which clears state.clip
+        // on the audio thread synchronously.
+        const uint64_t keepMs = 5000;
+        m_clipGraveyard.erase(
+            std::remove_if(m_clipGraveyard.begin(), m_clipGraveyard.end(),
+                [now, keepMs](const GraveyardEntry& e) {
+                    return (now - e.timeMs) > keepMs;
+                }),
+            m_clipGraveyard.end());
+    }
+
+    int graveyardSize() const {
+        return static_cast<int>(m_clipGraveyard.size());
     }
 
     void addTrack() {
@@ -435,12 +497,34 @@ private:
             m_scenes[i].name = std::to_string(i + 1);
     }
 
+    // Monotonic time source used by the clip graveyard. Lives in
+    // Project so the graveyard mechanism is self-contained — no
+    // need to thread `now` through every setClip / moveSlot call.
+    static uint64_t nowMs() {
+        using namespace std::chrono;
+        return static_cast<uint64_t>(
+            duration_cast<milliseconds>(
+                steady_clock::now().time_since_epoch()).count());
+    }
+
+    struct GraveyardEntry {
+        uint64_t                            timeMs = 0;
+        std::unique_ptr<audio::Clip>        audioClip;
+        std::unique_ptr<midi::MidiClip>     midiClip;
+        std::unique_ptr<visual::VisualClip> visualClip;
+    };
+
     std::vector<Track> m_tracks;
     std::vector<Scene> m_scenes;
     // m_clipSlots[trackIndex][sceneIndex]
     std::vector<std::vector<ClipSlot>> m_clipSlots;
     ViewMode m_viewMode = ViewMode::Session;
     double m_arrangementLength = 64.0; // default 16 bars
+
+    // Recently-evicted clips kept alive briefly so the audio thread
+    // doesn't UAF its cached state.clip pointer. Drained by
+    // purgeClipGraveyard() called once per UI frame from App.
+    std::vector<GraveyardEntry> m_clipGraveyard;
 };
 
 } // namespace yawn

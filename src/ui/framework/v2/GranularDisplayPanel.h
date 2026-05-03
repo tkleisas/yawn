@@ -7,6 +7,7 @@
 #include "ui/framework/v2/Widget.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Theme.h"
+#include "ui/framework/v2/DragManager.h"
 #include "ui/Theme.h"
 
 #ifndef YAWN_TEST_BUILD
@@ -115,6 +116,8 @@ public:
             const float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
             tm->drawText(r, msg, tx, ty, lblFs, Color{80, 80, 100, 180});
         }
+        // Drop-target highlight (audio-clip drag).
+        DragManager::renderDropHighlight(m_bounds, ctx);
     }
 #endif
 

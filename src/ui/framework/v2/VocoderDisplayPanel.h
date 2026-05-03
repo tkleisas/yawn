@@ -33,6 +33,7 @@
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Theme.h"
 #include "ui/framework/v2/DropDown.h"
+#include "ui/framework/v2/DragManager.h"
 #include "ui/Theme.h"
 
 #ifndef YAWN_TEST_BUILD
@@ -304,6 +305,8 @@ public:
                 }
             }
         }
+        // Drop-target highlight (audio-clip drag → modulator).
+        DragManager::renderDropHighlight(m_bounds, ctx);
     }
 #endif
 

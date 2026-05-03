@@ -143,6 +143,24 @@ public:
     bool isFocused() const { return m_panelFocused; }
     void setFocused(bool f) { m_panelFocused = f; }
 
+    // Cross-panel drag-drop hook. Called by App's mouse-up
+    // handler when a global audio-clip drag is released over the
+    // detail panel — gives the panel a chance to route the buffer
+    // to a sub-target that needs precise placement, currently:
+    //
+    //   * DrumRack: drop onto a specific pad (uses the cursor
+    //     position to pick which pad). Other rack pads are left
+    //     untouched.
+    //
+    // Returns true on consumption. App falls back to its bulk
+    // sample-receiver loaders (Sampler / Granular / DrumSlop /
+    // Vocoder on the displayed track) when this returns false.
+    bool tryConsumeAudioDropAt(float sx, float sy,
+                                const audio::AudioBuffer& buf,
+                                const std::string& name) {
+        return tryConsumeAudioDropAt_inline(sx, sy, buf, name);
+    }
+
     void setOnRemoveDevice(std::function<void(DeviceType, int)> cb) {
         m_onRemoveDevice = std::move(cb);
     }
@@ -362,6 +380,73 @@ public:
             if (mutableClip->originalBPM <= 0.0 && !mutableClip->transients.empty())
                 mutableClip->originalBPM = audio::TransientDetector::estimateBPM(
                     mutableClip->transients, static_cast<double>(m_clipSampleRate));
+        });
+
+        // Crop to loop — truncates the buffer to the [loopStart,
+        // loopEnd) region. Resets loop bounds to the new buffer's
+        // full extent and clears warp markers + transients (they'd
+        // point past the new end). Buffer swap uses shared_ptr
+        // assignment so the audio thread keeps reading the old
+        // buffer through its existing strong ref until next block.
+        m_cropLoopBtn.setLabel("Crop");
+        m_cropLoopBtn.setOnClick([this]() {
+            if (!m_clipPtr || !m_clipPtr->buffer) return;
+            auto* clip = const_cast<audio::Clip*>(m_clipPtr);
+            const int64_t s = clip->loopStart;
+            const int64_t e = clip->effectiveLoopEnd();
+            if (e <= s) return;
+            const int chans  = clip->buffer->numChannels();
+            const int64_t n  = e - s;
+            auto newBuf = std::make_shared<audio::AudioBuffer>(
+                chans, static_cast<int>(n));
+            for (int ch = 0; ch < chans; ++ch) {
+                const float* src = clip->buffer->channelData(ch) + s;
+                float*       dst = newBuf->channelData(ch);
+                std::copy(src, src + n, dst);
+            }
+            clip->buffer    = std::move(newBuf);
+            clip->loopStart = 0;
+            clip->loopEnd   = -1;          // means "end of buffer"
+            clip->warpMarkers.clear();
+            clip->transients.clear();
+            // Re-fit waveform view to the new (smaller) buffer so
+            // the user immediately sees the cropped result without
+            // having to F-zoom themselves.
+            m_waveformWidget.fitToWidth();
+        });
+
+        // Reverse loop — produces a fresh buffer with samples
+        // [loopStart, loopEnd) reversed and the head/tail copied
+        // verbatim, then swaps the shared_ptr. Same atomic pattern
+        // as Crop above: the audio thread keeps reading the old
+        // buffer through its existing strong ref until the next
+        // callback grabs the new pointer. No in-place mutation, no
+        // glitch even on a currently-playing clip. Loop bounds stay
+        // put so the user can layer forward+reversed plays.
+        m_reverseLoopBtn.setLabel("Reverse");
+        m_reverseLoopBtn.setOnClick([this]() {
+            if (!m_clipPtr || !m_clipPtr->buffer) return;
+            auto* clip = const_cast<audio::Clip*>(m_clipPtr);
+            const int64_t s = clip->loopStart;
+            const int64_t e = clip->effectiveLoopEnd();
+            if (e <= s) return;
+            const int     chans  = clip->buffer->numChannels();
+            const int64_t frames = clip->buffer->numFrames();
+            auto newBuf = std::make_shared<audio::AudioBuffer>(
+                chans, static_cast<int>(frames));
+            for (int ch = 0; ch < chans; ++ch) {
+                const float* src = clip->buffer->channelData(ch);
+                float*       dst = newBuf->channelData(ch);
+                // Pre-loop tail copied as-is.
+                std::copy(src, src + s, dst);
+                // Loop region reversed into place.
+                std::reverse_copy(src + s, src + e, dst + s);
+                // Post-loop tail copied as-is.
+                std::copy(src + e, src + frames, dst + e);
+            }
+            clip->buffer = std::move(newBuf);
+            clip->warpMarkers.clear();
+            clip->transients.clear();
         });
 
         // Gain knob: 0 to ~+6dB, stored as linear gain in clip.
@@ -594,6 +679,10 @@ public:
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
         m_displayUpdaters.clear();
+        m_drumRackDisplay = nullptr;
+        m_drumRackInst    = nullptr;
+        m_msDisplay       = nullptr;
+        m_msInst          = nullptr;
 
         std::vector<float> snapPoints;
         float xPos = 0;
@@ -712,6 +801,10 @@ public:
         m_deviceRefs.clear();
         m_expandStates.clear();
         m_displayUpdaters.clear();
+        m_drumRackDisplay = nullptr;
+        m_drumRackInst    = nullptr;
+        m_msDisplay       = nullptr;
+        m_msInst          = nullptr;
         m_lastMidiChain = nullptr;
         m_lastInst      = nullptr;
         m_lastFxChain   = nullptr;
@@ -933,6 +1026,64 @@ public:
             if (e.x >= wb.x && e.x < wb.x + wb.w &&
                 e.y >= wb.y && e.y < wb.y + wb.h) {
                 return m_waveformWidget.dispatchScroll(e);
+            }
+        }
+        return false;
+    }
+
+    // Drag-drop dispatcher implementation. Lives here (inline) so
+    // the DrumRack-specific knowledge stays inside the panel that
+    // already owns the display reference.
+    bool tryConsumeAudioDropAt_inline(float sx, float sy,
+                                       const audio::AudioBuffer& buf,
+                                       const std::string& name) {
+        const int frames   = buf.numFrames();
+        const int channels = buf.numChannels();
+        if (frames <= 0 || channels <= 0) return false;
+
+        // Convert AudioBuffer (per-channel contiguous) → interleaved
+        // once for either target — both samplers expect interleaved.
+        auto interleave = [&]() {
+            std::vector<float> il(static_cast<size_t>(frames) * channels);
+            for (int ch = 0; ch < channels; ++ch) {
+                const float* src = buf.channelData(ch);
+                for (int i = 0; i < frames; ++i)
+                    il[static_cast<size_t>(i) * channels + ch] = src[i];
+            }
+            return il;
+        };
+
+        // ── DrumRack: precise per-pad routing.
+        if (m_drumRackDisplay && m_drumRackInst) {
+            const int pad = m_drumRackDisplay->padNoteAt(sx, sy);
+            if (pad >= 0) {
+                const auto il = interleave();
+                m_drumRackInst->loadPad(pad, il.data(), frames, channels);
+                m_drumRackInst->setSelectedPad(pad);
+                (void)name;
+                return true;
+            }
+        }
+
+        // ── Multisampler: drop anywhere on the panel adds a new
+        // zone (rootNote C4, full key range). The user adjusts the
+        // range / root afterward via the zone-map and editor. v1
+        // intentionally doesn't try to derive key range from cursor
+        // position over the 2D map — keeping it predictable trumps
+        // a slightly fancier UX.
+        if (m_msDisplay && m_msInst) {
+            const auto& mb = m_msDisplay->bounds();
+            if (sx >= mb.x && sx < mb.x + mb.w &&
+                sy >= mb.y && sy < mb.y + mb.h) {
+                const auto il = interleave();
+                const int newIdx = m_msInst->addZone(
+                    il.data(), frames, channels,
+                    /*rootNote=*/60, /*lowKey=*/0, /*highKey=*/127);
+                if (newIdx >= 0) {
+                    m_msDisplay->setSelectedZone(newIdx);
+                    (void)name;
+                    return true;
+                }
             }
         }
         return false;
@@ -1445,20 +1596,34 @@ private:
                 {"Pad",    {1, 2, 3}},
             };
 
+            // Stash for the cross-panel drag-drop hook so audio
+            // clips dropped on a pad can be routed there.
+            m_drumRackDisplay = drPanel;
+            m_drumRackInst    = dynamic_cast<instruments::DrumRack*>(inst);
+
             drPanel->setOnPadClick([inst](int note) {
                 auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
                 if (dr) dr->setSelectedPad(note);
             });
 
-            m_displayUpdaters.push_back([drPanel, inst]() {
+            m_displayUpdaters.push_back([drPanel, inst, lastSel = -1]() mutable {
                 auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
                 if (!dr) return;
 
                 int sel = dr->selectedPad();
                 drPanel->setSelectedPad(sel);
 
-                // Update which page the selected pad is on
-                drPanel->setPage(sel / 16);
+                // Only auto-jump the page when the selection ACTUALLY
+                // changed (e.g. external setSelectedPad from drop or
+                // MIDI click). Without this guard, the updater fired
+                // every frame would force the page to track sel/16
+                // and any user-driven page navigation (arrow buttons
+                // / page labels / scroll wheel) would be reverted on
+                // the next render tick.
+                if (sel != lastSel) {
+                    drPanel->setPage(sel / 16);
+                    lastSel = sel;
+                }
 
                 // Update sample/playing state for all 128 pads
                 for (int n = 0; n < instruments::DrumRack::kNumPads; ++n) {
@@ -1529,6 +1694,10 @@ private:
         } else if (nm == "Multisampler") {
             auto* msPanel = new MultisamplerDisplayPanel();
             config.display = msPanel;
+            // Stash for the cross-panel drag-drop hook so audio
+            // clips dropped on the panel can be added as zones.
+            m_msDisplay = msPanel;
+            m_msInst    = dynamic_cast<instruments::Multisampler*>(inst);
             // Wider than other display panels because it hosts both
             // a zone list and a per-zone editor side-by-side.
             config.displayWidth = 360.0f;
@@ -1837,6 +2006,17 @@ private:
     std::vector<ExpandState>   m_expandStates;
     std::vector<std::function<void()>> m_displayUpdaters;  // instrument display updaters
 
+    // Drag-drop targets. Set when a Drum Rack / Multisampler
+    // display is created so the App-side global drag handler can
+    // route audio-clip drops:
+    //   * DrumRack:    to the pad under the cursor.
+    //   * Multisampler: as a new zone (full key range, default root).
+    // Reset on every device-tree rebuild via setupDevicesForTrack.
+    fw2::DrumRackDisplayPanel*       m_drumRackDisplay   = nullptr;
+    instruments::DrumRack*           m_drumRackInst      = nullptr;
+    fw2::MultisamplerDisplayPanel*   m_msDisplay         = nullptr;
+    instruments::Multisampler*       m_msInst            = nullptr;
+
     // Two-stage wiring shim — the Multisampler panel's
     // preferred-width callback needs the GroupedKnobBody*, which
     // doesn't exist when we set up the panel itself. Stash the panel
@@ -1906,6 +2086,12 @@ private:
     WaveformWidget m_waveformWidget;
     FwDropDown m_warpModeDropdown;
     FwButton m_detectBtn;
+    // Audio-clip view destructive ops on the loop region. Crop
+    // truncates the buffer to [loopStart, loopEnd); reverse flips
+    // samples in place inside that range. Both clear warp markers
+    // and transients (they'd be stale).
+    FwButton m_cropLoopBtn;
+    FwButton m_reverseLoopBtn;
     FwKnob m_gainKnob;
     FwKnob m_transposeKnob;
     FwKnob m_detuneKnob;

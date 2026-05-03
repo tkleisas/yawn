@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(YAWN
-    VERSION 0.57.0
+    VERSION 0.58.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -281,6 +281,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Tooltip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/ContextMenu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Dialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/DragManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Toggle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Checkbox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/framework/v2/Knob.cpp

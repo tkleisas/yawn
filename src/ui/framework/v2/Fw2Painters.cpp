@@ -19,6 +19,7 @@
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Dialog.h"
+#include "ui/framework/v2/DragManager.h"
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/Checkbox.h"
 #include "ui/framework/v2/Crossfader.h"
@@ -589,6 +590,87 @@ static void paintDialog(const DialogManager::State& s, UIContext& ctx) {
     }
 
     ctx.renderer->popClip();
+}
+
+// ─── Drag ghost ─────────────────────────────────────────────────────
+
+static void paintDragGhost(const DragPayload& payload,
+                            float cursorX, float cursorY,
+                            UIContext& ctx) {
+    if (!ctx.renderer || !ctx.textMetrics) return;
+    if (payload.kind == DragPayload::Kind::None) return;
+
+    const ThemePalette& p = theme().palette;
+    const ThemeMetrics& m = theme().metrics;
+
+    // Build the label string (kind prefix + payload label).
+    const char* prefix = "";
+    switch (payload.kind) {
+        case DragPayload::Kind::AudioClip: prefix = "Audio: "; break;
+        case DragPayload::Kind::None:      prefix = "";        break;
+    }
+    std::string text = std::string(prefix) +
+        (payload.label.empty() ? "(unnamed)" : payload.label);
+
+    // Geometry: small pill, anchored slightly down-right of the
+    // cursor so it doesn't sit on top of whatever the user is
+    // pointing at.
+    const float fs   = m.fontSize;
+    const float tw   = ctx.textMetrics->textWidth(text, fs);
+    const float lh   = ctx.textMetrics->lineHeight(fs);
+    const float padX = 8.0f;
+    const float padY = 4.0f;
+    const float w    = tw + padX * 2.0f;
+    const float h    = lh + padY * 2.0f;
+    const float x    = cursorX + 14.0f;
+    const float y    = cursorY + 14.0f;
+
+    // Drop shadow + body.
+    ctx.renderer->drawRoundedRect(x + 1.5f, y + 2.5f, w, h,
+                                   m.cornerRadius, p.dropShadow);
+    ctx.renderer->drawRoundedRect(x, y, w, h,
+                                   m.cornerRadius, p.accent);
+    ctx.renderer->drawRectOutline(x, y, w, h, p.border, m.borderWidth);
+
+    ctx.textMetrics->drawText(*ctx.renderer, text,
+                               x + padX, y + padY - lh * 0.15f,
+                               fs, p.textOnAccent);
+
+    // Clone badge: small "+" pill stuck to the top-right of the
+    // ghost when Ctrl is held. Tells the user "release will copy
+    // (clone), not move". Pulled live from DragManager so it
+    // updates as soon as the user grabs / releases the modifier.
+    if (DragManager::instance().ctrlHeld()) {
+        const float badge = 16.0f;
+        const float bx = x + w - badge * 0.5f;
+        const float by = y - badge * 0.5f;
+        ctx.renderer->drawRoundedRect(bx + 1.0f, by + 1.5f, badge, badge,
+                                       badge * 0.5f, p.dropShadow);
+        ctx.renderer->drawRoundedRect(bx, by, badge, badge,
+                                       badge * 0.5f, Color{60, 180, 90, 255});
+        const float plusFs = m.fontSizeSmall;
+        const float pw = ctx.textMetrics->textWidth("+", plusFs);
+        const float plh = ctx.textMetrics->lineHeight(plusFs);
+        ctx.textMetrics->drawText(*ctx.renderer, "+",
+                                   bx + (badge - pw) * 0.5f,
+                                   by + (badge - plh) * 0.5f - plh * 0.15f,
+                                   plusFs, Color{255, 255, 255, 255});
+    }
+}
+
+// DragManager static helper — defined here (not in DragManager.cpp)
+// because yawn_core can't pull in glad/gl.h via Renderer.h. Painters
+// already live in the main exe target with full Renderer access.
+void DragManager::renderDropHighlight(const Rect& b, UIContext& ctx) {
+    auto& dm = instance();
+    if (!dm.isDraggingAudioClip() || !ctx.renderer) return;
+    const float cx = dm.currentX();
+    const float cy = dm.currentY();
+    if (cx < b.x || cx >= b.x + b.w ||
+        cy < b.y || cy >= b.y + b.h) return;
+    ctx.renderer->drawRect(b.x, b.y, b.w, b.h, Color{0, 200, 240, 25});
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h,
+                                   Color{0, 220, 255, 220}, 2.0f);
 }
 
 // ─── Toggle ─────────────────────────────────────────────────────────
@@ -1714,6 +1796,9 @@ void registerAllFw2Painters() {
     // DialogManager: paints the modal body (scrim is already drawn by
     // App via paintModalScrim when hasModalActive()).
     DialogManager::setPainter(&paintDialog);
+    // DragManager: paints the cursor-following ghost while a drag
+    // is active (audio clip → instrument, etc.).
+    DragManager::setPainter(&paintDragGhost);
     // FlexBox has no paint — it's a pure layout container; its
     // children paint themselves via Widget::render recursion.
 }

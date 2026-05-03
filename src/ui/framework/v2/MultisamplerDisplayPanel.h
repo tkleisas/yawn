@@ -31,6 +31,7 @@
 #include "ui/framework/v2/NumberInput.h"
 #include "ui/framework/v2/MultisamplerZoneRow.h"
 #include "ui/framework/v2/MultisamplerZoneMapWidget.h"
+#include "ui/framework/v2/DragManager.h"
 #include "ui/Theme.h"
 #include "util/NoteNames.h"
 
@@ -349,6 +350,9 @@ public:
 
         // ── 2D zone map (only when expanded via toolbar toggle) ──
         if (m_mapExpanded) m_zoneMap.render(ctx);
+
+        // "You can drop a sample here" highlight — common helper.
+        DragManager::renderDropHighlight(b, ctx);
     }
 #endif
 

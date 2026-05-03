@@ -86,6 +86,11 @@ private:
     void computeLayout();
     void buildWidgetTree();
 
+    // Clip-pointer graveyard now lives in Project so all slot
+    // mutations (setClip / moveSlot / copySlot / clearSlot) flush
+    // the OLD clip into it automatically. App just drains it once
+    // per frame from update().
+
     bool loadClipToSlot(const std::string& path, int trackIndex, int sceneIndex);
     bool loadClipToArrangement(const std::string& path, int trackIndex, double beatPos);
     bool loadSampleToSampler(const std::string& path, int trackIndex);
@@ -93,6 +98,19 @@ private:
     bool loadSampleToDrumRack(const std::string& path, int trackIndex);
     bool loadSampleToGranular(const std::string& path, int trackIndex);
     bool loadModulatorToVocoder(const std::string& path, int trackIndex);
+
+    // Buffer-based companions (used by in-app drag-drop where the
+    // audio is already loaded into memory as part of a clip — we
+    // skip the file-read + resample). Buffer is assumed to already
+    // match the engine sample rate (clips always do post-load).
+    bool loadBufferToSampler(std::shared_ptr<audio::AudioBuffer> buf,
+                              const std::string& name, int trackIndex);
+    bool loadBufferToDrumSlop(std::shared_ptr<audio::AudioBuffer> buf,
+                               const std::string& name, int trackIndex);
+    bool loadBufferToGranular(std::shared_ptr<audio::AudioBuffer> buf,
+                               const std::string& name, int trackIndex);
+    bool loadBufferToVocoder(std::shared_ptr<audio::AudioBuffer> buf,
+                              const std::string& name, int trackIndex);
     bool loadFont();
     void setupMenuBar();
     void showTrackContextMenu(int trackIndex, float mx, float my);

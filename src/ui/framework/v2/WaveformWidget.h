@@ -144,6 +144,14 @@ public:
     bool onScroll(ScrollEvent& e) override {
         if (!m_clip || !m_clip->buffer) return false;
 
+        // Self-derive local coords. The DetailPanelWidget forwards
+        // raw events without re-computing e.lx/e.ly, so the values
+        // arriving here are still in screen space. Re-deriving from
+        // the (always-correct) global e.x/e.y + bounds keeps every
+        // hit-test in this widget independent of caller behaviour.
+        e.lx = e.x - m_bounds.x;
+        e.ly = e.y - m_bounds.y;
+
         const float  w      = m_bounds.w;
         const double mouseX = static_cast<double>(e.lx);
 
@@ -168,6 +176,15 @@ public:
     bool onMouseDown(MouseEvent& e) override {
         if (!m_clip || !m_clip->buffer) return false;
         if (e.button != MouseButton::Left) return false;
+
+        // See onScroll: self-derive local coords so loop / warp
+        // marker hit-tests work even when the dispatcher (currently
+        // DetailPanelWidget) hasn't translated e.lx into widget
+        // space. This was the root cause of the start-loop marker
+        // being un-grabbable — its local pixel was ~0 and the
+        // global e.lx was always far from it.
+        e.lx = e.x - m_bounds.x;
+        e.ly = e.y - m_bounds.y;
 
         const float ovBottom = m_bounds.y + kOverviewH;
         if (e.y < ovBottom) {
@@ -265,6 +282,10 @@ public:
     }
 
     bool onMouseMove(MouseMoveEvent& e) override {
+        // Same self-derive trick — the drag math uses e.lx and the
+        // dispatcher doesn't translate, so we need a stable local x.
+        e.lx = e.x - m_bounds.x;
+        e.ly = e.y - m_bounds.y;
         if (m_draggingOverview) {
             const int64_t totalSamples = m_clip->buffer->numFrames();
             const double  frac = static_cast<double>(e.lx) / m_bounds.w;

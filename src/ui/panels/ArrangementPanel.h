@@ -331,6 +331,22 @@ private:
     double   m_dragOrigOffset = 0.0;
     int      m_dragOrigTrack  = -1;
 
+    // Cross-panel "global" drag (Alt+drag or long-press hold then
+    // drag) — same convention as SessionPanel. When triggered for
+    // an audio clip, publishes the buffer to DragManager so any
+    // sample-receiving instrument can consume the drop.
+    bool      m_dragStartAltHeld   = false;
+    uint64_t  m_dragStartTimeMs    = 0;
+    float     m_dragStartScreenX   = 0.0f;
+    float     m_dragStartScreenY   = 0.0f;
+    bool      m_globalDragActive   = false;
+    // Saved selected track at click time. Revert to this value
+    // when global drag fires so the detail panel doesn't end up
+    // pointing at the source instead of the intended drop target.
+    int       m_dragSavedSelectedTrack_arr = -1;
+    static constexpr uint64_t kGlobalDragLongPressMs = 400;
+    static constexpr float    kGlobalDragThreshold   = 5.0f;
+
     // Track resize drag
     int   m_resizeTrack = -1;
     float m_resizeOrigH = 0.0f;

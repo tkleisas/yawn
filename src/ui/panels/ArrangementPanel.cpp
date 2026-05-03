@@ -10,6 +10,7 @@
 #include "ArrangementPanel.h"
 #include "../Renderer.h"
 #include "ui/framework/v2/Theme.h"
+#include "ui/framework/v2/DragManager.h"
 
 #include <SDL3/SDL_keycode.h>
 
@@ -382,8 +383,19 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         double beat = static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat);
 
         if (trackIdx < 0 || trackIdx >= m_project->numTracks()) return true;
-        m_selectedTrack = trackIdx;
-        if (m_onTrackClick) m_onTrackClick(trackIdx);
+        // If Alt is held this is intent-to-drag (will become a
+        // global audio-clip drag in onMouseMove). DO NOT change the
+        // selection or fire the track-click callback — otherwise
+        // the detail panel flips off the user's drop target while
+        // they're still mid-gesture. Snapshot the prior selection
+        // so the long-press path can revert it once the drag fires.
+        const bool altHeldOnArrDown = (e.modifiers &
+            ::yawn::ui::fw2::ModifierKey::Alt) != 0;
+        m_dragSavedSelectedTrack_arr = m_selectedTrack;
+        if (!altHeldOnArrDown) {
+            m_selectedTrack = trackIdx;
+            if (m_onTrackClick) m_onTrackClick(trackIdx);
+        }
 
         float trackTop = trackYOffset(trackIdx);
         float relInTrack = relY - trackTop;
@@ -513,6 +525,13 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             m_dragOrigLength = clip.lengthBeats;
             m_dragOrigOffset = clip.offsetBeats;
             m_dragOrigTrack = trackIdx;
+            // Snapshot for the cross-panel drag detection in
+            // onMouseMove (Alt-held OR long-press → global drag).
+            m_dragStartAltHeld = (e.modifiers & ::yawn::ui::fw2::ModifierKey::Alt) != 0;
+            m_dragStartTimeMs  = e.timestampMs;
+            m_dragStartScreenX = e.x;
+            m_dragStartScreenY = e.y;
+            m_globalDragActive = false;
             captureMouse();
         } else {
             clearClipSelection();
@@ -845,6 +864,52 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
     double delta = curBeat - m_dragStartBeat;
 
     if (m_dragMode == DragMode::MoveClip) {
+        // Cross-panel drag check first — Alt-held OR long-press
+        // converts a clip-move into an audio-buffer drag publish so
+        // sample-receivers (Sampler/Granular/DrumSlop/Vocoder) can
+        // consume the drop. Only audio clips qualify.
+        if (!m_globalDragActive &&
+            m_selClipTrack >= 0 && m_selClipIdx >= 0 && m_project) {
+            const float dx = e.x - m_dragStartScreenX;
+            const float dy = e.y - m_dragStartScreenY;
+            const bool moved = (dx * dx + dy * dy >
+                                kGlobalDragThreshold * kGlobalDragThreshold);
+            const bool longPress =
+                (e.timestampMs > m_dragStartTimeMs &&
+                 (e.timestampMs - m_dragStartTimeMs) > kGlobalDragLongPressMs);
+            if (moved && (m_dragStartAltHeld || longPress)) {
+                auto& clips = m_project->track(m_selClipTrack).arrangementClips;
+                if (m_selClipIdx < static_cast<int>(clips.size())) {
+                    const auto& clip = clips[m_selClipIdx];
+                    if (clip.type == ArrangementClip::Type::Audio &&
+                        clip.audioBuffer) {
+                        ::yawn::ui::fw2::DragPayload pl;
+                        pl.kind = ::yawn::ui::fw2::DragPayload::Kind::AudioClip;
+                        pl.audioBuffer = clip.audioBuffer;
+                        pl.label = clip.name.empty() ? std::string("clip") : clip.name;
+                        pl.sourceTrack = m_selClipTrack;
+                        pl.sourceFromArrangement = true;
+                        ::yawn::ui::fw2::DragManager::instance().start(
+                            std::move(pl), e.x, e.y);
+                        // Revert any selection change that happened
+                        // at click time (long-press path) so the
+                        // detail panel keeps showing the user's
+                        // intended drop target.
+                        if (m_dragSavedSelectedTrack_arr >= 0 &&
+                            m_dragSavedSelectedTrack_arr != m_selectedTrack) {
+                            m_selectedTrack = m_dragSavedSelectedTrack_arr;
+                            if (m_onTrackClick)
+                                m_onTrackClick(m_dragSavedSelectedTrack_arr);
+                        }
+                        m_globalDragActive = true;
+                        m_dragMode = DragMode::None;
+                        releaseMouse();
+                        return true;
+                    }
+                }
+            }
+        }
+
         double newStart = snapBeat(m_dragOrigStart + delta);
         newStart = std::max(0.0, newStart);
 
