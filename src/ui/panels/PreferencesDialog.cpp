@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 namespace yawn {
@@ -55,6 +56,7 @@ FwPreferencesDialog::FwPreferencesDialog() {
     m_tabStrip.addTab("midi",      "MIDI",      nullptr);
     m_tabStrip.addTab("defaults",  "Defaults",  nullptr);
     m_tabStrip.addTab("metronome", "Metronome", nullptr);
+    m_tabStrip.addTab("link",      "Link",      nullptr);
     m_tabStrip.addTab("theme",     "Theme",     nullptr);
     m_tabStrip.setOnActivated([this](const std::string& id) {
         // Keep the dialog's m_tab index in sync + close any open
@@ -93,6 +95,13 @@ void FwPreferencesDialog::configureStaticDropdowns() {
 
     m_pdcCheckbox.setOnChange([this](CheckState s) {
         m_state.latencyCompensation = (s == CheckState::On);
+    });
+
+    m_linkCheckbox.setOnChange([this](CheckState s) {
+        m_state.linkEnabled = (s == CheckState::On);
+    });
+    m_linkStartStopCheckbox.setOnChange([this](CheckState s) {
+        m_state.linkStartStopSync = (s == CheckState::On);
     });
 
     // Defaults — launch / record quantize
@@ -278,6 +287,12 @@ void FwPreferencesDialog::syncDropdownsToState() {
     m_pdcCheckbox.setChecked(m_state.latencyCompensation,
                               ValueChangeSource::Programmatic);
 
+    // Ableton Link toggles
+    m_linkCheckbox.setChecked(m_state.linkEnabled,
+                               ValueChangeSource::Programmatic);
+    m_linkStartStopCheckbox.setChecked(m_state.linkStartStopSync,
+                                        ValueChangeSource::Programmatic);
+
     // Quantize modes
     {
         int l = static_cast<int>(m_state.defaultLaunchQuantize);
@@ -434,6 +449,7 @@ void FwPreferencesDialog::paintBody(UIContext& ctx) {
         case 1: layoutAndRenderMidiTab(ctx, content); break;
         case 2: layoutAndRenderDefaultsTab(ctx, content); break;
         case 3: layoutAndRenderMetronomeTab(ctx, content); break;
+        case 4: layoutAndRenderLinkTab(ctx, content); break;
         default: layoutAndRenderThemeTab(ctx, content); break;
     }
 
@@ -602,6 +618,54 @@ void FwPreferencesDialog::layoutAndRenderMetronomeTab(UIContext& ctx, Rect conte
     placeAndRender(m_vizStyleDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
 }
 
+void FwPreferencesDialog::layoutAndRenderLinkTab(UIContext& ctx, Rect content) {
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
+    const ThemeMetrics& m = theme().metrics;
+    const float ctrlH     = m.controlHeight;
+    const float rowH      = std::max(kRowH, ctrlH + 4.0f);
+    const float textScale = m.fontSizeSmall;
+    const float textH     = tm.lineHeight(textScale);
+
+    float y = content.y;
+
+    // Master enable — checkboxes carry their own labels.
+    placeAndRender(m_linkCheckbox, ctx, Rect{content.x, y, content.w, rowH});
+    y += rowH + kRowGap;
+
+    // Transport sync — second toggle, indented slightly so it
+    // visually reads as "child" of the master enable.
+    placeAndRender(m_linkStartStopCheckbox,
+                    ctx, Rect{content.x + 16.0f, y, content.w - 16.0f, rowH});
+    y += rowH + kRowGap;
+
+    // Live status — peer count read straight from the engine, like
+    // the transport panel's Link button.
+    int peers = (m_engine != nullptr) ? m_engine->linkManager().numPeers() : 0;
+    char peerLine[64];
+    std::snprintf(peerLine, sizeof(peerLine),
+                  "Peers on LAN: %d", peers);
+    tm.drawText(r, peerLine, content.x,
+                y + (rowH - textH) * 0.5f,
+                textScale, ::yawn::ui::Theme::textPrimary);
+    y += rowH + kRowGap;
+
+    // Help text — explains what Link does so users who never heard
+    // of Ableton Link aren't confused by a lone checkbox.
+    const char* lines[] = {
+        "Ableton Link synchronises tempo and beat phase across",
+        "apps on the same LAN. \"Sync Transport\" additionally",
+        "broadcasts play/stop so a peer pressing play also starts",
+        "this app. Tempo edits in the transport bar are still",
+        "pushed to peers when Link is active.",
+    };
+    for (const char* line : lines) {
+        tm.drawText(r, line, content.x, y,
+                    textScale, ::yawn::ui::Theme::textSecondary);
+        y += textH + 2.0f;
+    }
+}
+
 void FwPreferencesDialog::layoutAndRenderThemeTab(UIContext& ctx, Rect content) {
     const float ctrlH = theme().metrics.controlHeight;
     const float rowH  = std::max(kRowH, ctrlH + 4.0f);
@@ -641,6 +705,10 @@ std::vector<Widget*> FwPreferencesDialog::visibleWidgets() {
             out.push_back(&m_countInDD);
             out.push_back(&m_metroVolumeDD);
             out.push_back(&m_vizStyleDD);
+            break;
+        case 4:
+            out.push_back(&m_linkCheckbox);
+            out.push_back(&m_linkStartStopCheckbox);
             break;
         default:
             out.push_back(&m_fontScaleDD);

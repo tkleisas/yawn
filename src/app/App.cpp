@@ -208,6 +208,8 @@ void App::setupMenuBar() {
             state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
             state.fontScale = m_settings.fontScale;
             state.latencyCompensation = m_audioEngine.mixer().pdcEnabled();
+            state.linkEnabled = m_audioEngine.linkManager().enabled();
+            state.linkStartStopSync = m_audioEngine.linkManager().startStopSyncEnabled();
             m_preferencesDialog.open(state, &m_audioEngine, &m_midiEngine);
         }),
     });
@@ -403,7 +405,7 @@ void App::setupMenuBar() {
 
     // Help menu
     m_menuBar.addMenu("Help", {
-        M::item("About Y.A.W.N", []() {
+        M::item("About Y.A.W.N", [this]() {
             ui::fw2::DialogSpec spec;
             spec.title = "Y.A.W.N";
             spec.message =
@@ -415,6 +417,12 @@ void App::setupMenuBar() {
                 "PM: Tasos Kleisas\n"
                 "Chief Engineer: Claude (Anthropic)\n"
                 "Where \"it compiles\" is the new \"it works\"";
+            // Show the YAWN logo above the title (loaded at startup,
+            // see m_iconTexture init).
+            if (m_iconTexture) {
+                spec.iconTextureId = static_cast<unsigned int>(m_iconTexture);
+                spec.iconSize      = 128.0f;
+            }
             ui::fw2::DialogButton ok;
             ok.label   = "OK";
             ok.primary = true;
@@ -422,7 +430,64 @@ void App::setupMenuBar() {
             spec.buttons.push_back(std::move(ok));
             ui::fw2::Dialog::show(std::move(spec));
         }),
-        M::item("Keyboard Shortcuts", nullptr),
+        M::item("Keyboard Shortcuts", []() {
+            ui::fw2::DialogSpec spec;
+            spec.title = "Keyboard Shortcuts";
+            // Two columns separated by spaces. Using a proportional
+            // font means alignment is approximate, but key combos
+            // are short and consistent so it reads cleanly enough.
+            // Group with blank lines + section headers.
+            spec.message =
+                "FILE\n"
+                "  Ctrl+N           New Project\n"
+                "  Ctrl+O           Open Project\n"
+                "  Ctrl+S           Save Project\n"
+                "  Ctrl+Shift+S     Save As...\n"
+                "  Ctrl+Q           Quit\n"
+                "\n"
+                "EDIT\n"
+                "  Ctrl+Z           Undo\n"
+                "  Ctrl+Y           Redo\n"
+                "\n"
+                "VIEW\n"
+                "  Tab              Switch Session / Arrangement\n"
+                "  M                Toggle Mixer\n"
+                "  D                Toggle Detail Panel\n"
+                "  F11              Toggle Visual Output Fullscreen\n"
+                "\n"
+                "TRANSPORT\n"
+                "  Space            Play / Stop (launches default clips)\n"
+                "  Home             Return to Zero\n"
+                "  + / =            Tempo +1 BPM\n"
+                "  - / _            Tempo -1 BPM\n"
+                "\n"
+                "SESSION VIEW\n"
+                "  Arrows           Move clip selection\n"
+                "  Shift+Arrows     Move controller grid region\n"
+                "  Enter            Launch / Stop selected clip\n"
+                "  Delete / Bksp    Clear selected clip\n"
+                "  Ctrl+C / X / V   Copy / Cut / Paste clip\n"
+                "  Ctrl+D           Duplicate clip to next empty slot\n"
+                "  G                Toggle controller grid overlay\n"
+                "  Ins              Insert Scene below selection\n"
+                "\n"
+                "ARRANGEMENT VIEW\n"
+                "  L                Toggle Loop\n"
+                "  F                Toggle Follow Playhead\n"
+                "  [                Set Loop Start at playhead\n"
+                "  ]                Set Loop End at playhead\n"
+                "  Ctrl+D           Duplicate selection\n"
+                "  Delete / Bksp    Delete selection\n"
+                "\n"
+                "OTHER\n"
+                "  Esc              Close menu / exit fullscreen / quit";
+            ui::fw2::DialogButton ok;
+            ok.label   = "OK";
+            ok.primary = true;
+            ok.cancel  = true;
+            spec.buttons.push_back(std::move(ok));
+            ui::fw2::Dialog::show(std::move(spec));
+        }),
     });
 }
 
@@ -517,6 +582,22 @@ void App::buildWidgetTree() {
             m_settings.latencyCompensation = s.latencyCompensation;
             m_audioEngine.mixer().setPdcEnabled(s.latencyCompensation);
 
+            // Ableton Link toggle. Apply to the live engine and
+            // persist for next launch.
+            if (s.linkEnabled != m_settings.linkEnabled) {
+                LOG_INFO("User", "preferences: ableton link → %s",
+                         s.linkEnabled ? "enabled" : "disabled");
+            }
+            m_settings.linkEnabled = s.linkEnabled;
+            m_audioEngine.linkManager().enable(s.linkEnabled);
+
+            if (s.linkStartStopSync != m_settings.linkStartStopSync) {
+                LOG_INFO("User", "preferences: link start/stop sync → %s",
+                         s.linkStartStopSync ? "enabled" : "disabled");
+            }
+            m_settings.linkStartStopSync = s.linkStartStopSync;
+            m_audioEngine.linkManager().enableStartStopSync(s.linkStartStopSync);
+
             // Apply the UI font scale if it changed. setTheme() bumps
             // the fw2 UIContext epoch which invalidates every widget's
             // measure cache, so the new sizes propagate on the next
@@ -537,6 +618,7 @@ void App::buildWidgetTree() {
             m_audioEngine.sendCommand(audio::TransportSetCountInMsg{s.countInBars});
             m_transportPanel->setCountInBars(s.countInBars);
             m_transportPanel->setMetronomeVisualStyle(s.metronomeVisualStyle);
+            m_transportPanel->setLinkAllowed(s.linkEnabled);
 
             util::AppSettings::save(m_settings);
         }
@@ -4223,11 +4305,18 @@ bool App::init() {
     m_audioEngine.sendCommand(audio::TransportSetCountInMsg{m_settings.countInBars});
     m_transportPanel->setCountInBars(m_settings.countInBars);
     m_transportPanel->setMetronomeVisualStyle(m_settings.metronomeVisualStyle);
+    m_transportPanel->setLinkAllowed(m_settings.linkEnabled);
 
     // Apply Plugin Delay Compensation toggle from saved preferences.
     // setPdcEnabled is a plain bool flag read by the audio thread —
     // safe to set without going through the message queue.
     m_audioEngine.mixer().setPdcEnabled(m_settings.latencyCompensation);
+
+    // Apply Ableton Link toggle from saved preferences. The transport
+    // panel's Link button reads this same flag, so the saved state
+    // shows up correctly after restart.
+    m_audioEngine.linkManager().enable(m_settings.linkEnabled);
+    m_audioEngine.linkManager().enableStartStopSync(m_settings.linkStartStopSync);
 
     // Sync project track properties to the audio engine
     syncTracksToEngine();

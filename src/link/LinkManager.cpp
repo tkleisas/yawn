@@ -13,6 +13,11 @@ void LinkManager::enable(bool on) {
     m_link.enable(on);
 }
 
+void LinkManager::enableStartStopSync(bool on) {
+    m_startStopSync.store(on, std::memory_order_release);
+    m_link.enableStartStopSync(on);
+}
+
 int LinkManager::numPeers() const {
     return static_cast<int>(m_link.numPeers());
 }
@@ -48,6 +53,7 @@ void LinkManager::onAudioCallback(double& ioBpm, double& ioBeatPosition,
 LinkManager::LinkManager() = default;
 LinkManager::~LinkManager() = default;
 void LinkManager::enable(bool) {}
+void LinkManager::enableStartStopSync(bool) {}
 int LinkManager::numPeers() const { return 0; }
 void LinkManager::onAudioCallback(double&, double&, bool, bool) {}
 

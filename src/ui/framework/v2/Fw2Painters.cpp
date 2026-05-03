@@ -522,6 +522,18 @@ static void paintDialog(const DialogManager::State& s, UIContext& ctx) {
 
     float y = b.y + padY;
 
+    // Icon — centered horizontally above the title row.
+    if (s.spec.iconTextureId != 0 && s.spec.iconSize > 0.0f) {
+        const float ic = s.spec.iconSize;
+        const float ix = b.x + (b.w - ic) * 0.5f;
+        ctx.renderer->drawTexturedQuad(
+            ix, y, ic, ic,
+            0.0f, 0.0f, 1.0f, 1.0f,
+            Color{255, 255, 255, 255},
+            static_cast<GLuint>(s.spec.iconTextureId));
+        y += ic + rowGap;
+    }
+
     // Title bar.
     if (!s.spec.title.empty() && ctx.textMetrics) {
         const float lh = ctx.textMetrics->lineHeight(titleSz);

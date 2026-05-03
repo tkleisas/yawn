@@ -368,20 +368,33 @@ void TransportPanel::render(UIContext& ctx) {
         m_linkEnabled = m_engine->linkManager().enabled();
         m_linkPeers = m_engine->linkManager().numPeers();
 
-        const bool hovered = (m_hoveredBtn == 5);
-        const bool active = m_linkEnabled && m_linkPeers > 0;
-        const Color bg = active
-            ? (hovered ? Color{50, 130, 170, 255} : Color{40, 110, 150, 255})
-            : m_linkEnabled
-                ? (hovered ? Color{70, 70, 80, 255} : Color{55, 55, 65, 255})
-                : (hovered ? Color{55, 55, 65, 255} : Color{40, 40, 50, 255});
+        // When Link is disabled in Preferences the button is
+        // non-interactive — render flat-grey so the user can tell
+        // it's a no-op without trial-clicking it.
+        const bool hovered = m_linkAllowed && (m_hoveredBtn == 5);
+        const bool active = m_linkAllowed && m_linkEnabled && m_linkPeers > 0;
+        Color bg;
+        if (!m_linkAllowed) {
+            bg = Color{32, 32, 38, 255};   // disabled — darker than off
+        } else {
+            bg = active
+                ? (hovered ? Color{50, 130, 170, 255} : Color{40, 110, 150, 255})
+                : m_linkEnabled
+                    ? (hovered ? Color{70, 70, 80, 255} : Color{55, 55, 65, 255})
+                    : (hovered ? Color{55, 55, 65, 255} : Color{40, 40, 50, 255});
+        }
         r.drawRoundedRect(m_linkBtnX, m_linkBtnY, m_linkBtnW, m_linkBtnH,
                            4.0f, bg);
 
         const float fs = tmet.fontSizeSmall;
-        const Color textCol = active ? Color{180, 220, 255, 255}
-                             : m_linkEnabled ? Color{140, 150, 160, 255}
-                             : Color{100, 105, 110, 255};
+        Color textCol;
+        if (!m_linkAllowed) {
+            textCol = Color{70, 70, 78, 255};
+        } else {
+            textCol = active ? Color{180, 220, 255, 255}
+                              : m_linkEnabled ? Color{140, 150, 160, 255}
+                                              : Color{100, 105, 110, 255};
+        }
         const char* lbl = m_linkEnabled
             ? (m_linkPeers > 0 ? "LINK" : "LINK")
             : "LINK";
@@ -573,8 +586,12 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         return true;
     }
 
-    // Link toggle.
+    // Link toggle. Only clickable when the user has opted in via
+    // Preferences → Link. Click is swallowed (return true) so it
+    // doesn't fall through to other handlers, but no state changes
+    // when disallowed.
     if (hitBtn(m_linkBtnX, m_linkBtnY, m_linkBtnW, m_linkBtnH, mx, my)) {
+        if (!m_linkAllowed) return true;
         m_linkEnabled = !m_linkEnabled;
         m_engine->linkManager().enable(m_linkEnabled);
         return true;

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(YAWN
-    VERSION 0.55.0
+    VERSION 0.56.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -579,6 +579,11 @@ if(YAWN_VST3 AND (WIN32 OR (UNIX AND NOT APPLE)))
     endif()
     if(MSVC)
         target_compile_options(yawn_vst3_host PRIVATE /bigobj)
+        # Match the main exe — emit PDBs even in Release so plugin
+        # crashes inside the host process produce symbolicated stack
+        # traces in the crash log instead of bare addresses.
+        target_compile_options(yawn_vst3_host PRIVATE /Zi)
+        target_link_options(yawn_vst3_host PRIVATE /DEBUG)
     endif()
 endif()
 

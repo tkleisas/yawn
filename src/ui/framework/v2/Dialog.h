@@ -56,6 +56,12 @@ struct DialogSpec {
     std::string title;     // optional — empty = no title row
     std::string message;   // multi-line allowed; '\n' splits lines
 
+    // Optional icon — drawn centered above the title. 0 = no icon.
+    // Width/height in logical pixels (the painter clips/stretches
+    // the texture into a square of `iconSize × iconSize`).
+    unsigned int iconTextureId = 0;
+    float        iconSize      = 96.0f;
+
     std::vector<DialogButton> buttons;
 
     // Size. 0 = auto — computed from title/message width and button row.

@@ -64,6 +64,15 @@ public:
         // by leaving it off; flip on once you wire up a Conv Reverb
         // or a lookahead Limiter in a serious mix).
         bool latencyCompensation    = false;
+
+        // Link — Ableton Link network beat/tempo sync. Off by
+        // default; turning on advertises this app on the LAN and
+        // adopts session tempo when peers join.
+        bool linkEnabled            = false;
+        // Start/stop transport sync — propagate play/stop alongside
+        // tempo so a peer pressing play also starts this app. Off
+        // by default per Link convention.
+        bool linkStartStopSync      = false;
     };
 
     using ResultCallback = std::function<void(PreferencesResult)>;
@@ -113,6 +122,7 @@ private:
     void layoutAndRenderMidiTab(UIContext& ctx, Rect content);
     void layoutAndRenderDefaultsTab(UIContext& ctx, Rect content);
     void layoutAndRenderMetronomeTab(UIContext& ctx, Rect content);
+    void layoutAndRenderLinkTab(UIContext& ctx, Rect content);
     void layoutAndRenderThemeTab(UIContext& ctx, Rect content);
     void drawLabeledRow(UIContext& ctx, const char* label,
                         Rect labelArea, float textScale);
@@ -175,6 +185,12 @@ private:
 
     // Audio tab — Plugin Delay Compensation toggle (off by default).
     FwCheckbox m_pdcCheckbox{"Latency Compensation"};
+
+    // Link tab — Ableton Link enable toggle. The peer count is
+    // rendered as plain text alongside (read straight from the
+    // engine each paint, like the transport panel does).
+    FwCheckbox m_linkCheckbox{"Enable Ableton Link"};
+    FwCheckbox m_linkStartStopCheckbox{"Sync Transport (Start/Stop)"};
 
     PreferencesResult m_result  = PreferencesResult::Cancel;
     ResultCallback    m_onResult;

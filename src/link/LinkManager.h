@@ -24,6 +24,15 @@ public:
     bool enabled() const { return m_enabled.load(std::memory_order_acquire); }
     int numPeers() const;
 
+    // Start/stop synchronisation — opt-in per Link convention.
+    // When on, peers exchange transport play/stop state alongside
+    // tempo. Off by default; users that just want tempo sync (a
+    // common case for jam-along DJs) leave this off.
+    void enableStartStopSync(bool on);
+    bool startStopSyncEnabled() const {
+        return m_startStopSync.load(std::memory_order_acquire);
+    }
+
     // Called from the audio thread on each callback.
     //
     // When `localTempoChanged` is true (the user just typed/turned the
@@ -46,6 +55,7 @@ private:
     ableton::Link m_link{120.0};
 #endif
     std::atomic<bool> m_enabled{false};
+    std::atomic<bool> m_startStopSync{false};
 };
 
 } // namespace yawn

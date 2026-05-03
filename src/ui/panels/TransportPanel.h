@@ -173,6 +173,11 @@ public:
     void setSelectedScene(int scene) { m_selectedScene = scene; }
     void setCountInBars(int bars) { m_countInBars = bars; }
     void setMetronomeVisualStyle(int style) { m_metroVisualStyle = style; }
+    // When false, the LINK button is rendered disabled and clicks are
+    // ignored — the user has to enable Ableton Link in Preferences →
+    // Link first. Defaults to false (matches Link being off until
+    // user opts in).
+    void setLinkAllowed(bool allowed) { m_linkAllowed = allowed; }
     void setLearnManager(midi::MidiLearnManager* lm) { m_learnManager = lm; }
 
     bool isEditing() const {
@@ -336,6 +341,7 @@ private:
     // Ableton Link state (updated per-frame from engine)
     bool m_linkEnabled = false;
     int  m_linkPeers = 0;
+    bool m_linkAllowed = false;   // gated by Preferences → Link.
 
     // "Last seen" engine values — see setTransportState's comment for
     // the rubber-banding rationale.

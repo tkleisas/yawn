@@ -153,8 +153,15 @@ void DialogManager::layoutBody(UIContext& ctx) {
     // Sensible minimum so ConfirmDialog doesn't feel pinched.
     w = std::max(w, 360.0f);
 
-    // Height: accumulate header + message + button row + padding.
+    // Height: accumulate icon + header + message + button row + padding.
     float contentH = padY;
+    if (m_state.spec.iconTextureId != 0 && m_state.spec.iconSize > 0.0f) {
+        contentH += m_state.spec.iconSize;
+        contentH += rowGap;
+        // Also widen the dialog so the icon isn't squeezed.
+        const float wantW = m_state.spec.iconSize + padX * 2.0f;
+        if (m_state.spec.width <= 0.0f && wantW > w) w = wantW;
+    }
     if (!m_state.spec.title.empty()) {
         contentH += measureLineH(ctx, titleSize);
         contentH += rowGap;

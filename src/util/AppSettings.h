@@ -45,6 +45,17 @@ struct AppSettings {
     // effects; users with serious mixes flip it on once).
     bool latencyCompensation = false;
 
+    // Ableton Link — network beat/tempo sync. Edit → Preferences →
+    // Link. Off by default; opt-in once you actually have peers on
+    // the LAN. The transport panel's Link button toggles the same
+    // engine flag, but we persist whatever the user last set so
+    // restarts don't silently leave Link enabled.
+    bool linkEnabled = false;
+    // Start/stop transport sync — separate per Link convention.
+    // Lets peers' play/stop state propagate alongside tempo. Off by
+    // default; users that only want tempo sync leave this off.
+    bool linkStartStopSync = false;
+
     static std::filesystem::path settingsPath() {
 #ifdef _WIN32
         char appData[MAX_PATH];
@@ -86,6 +97,8 @@ struct AppSettings {
             s.metronomeVisualStyle = j.value("metronomeVisualStyle", 0);
             s.fontScale = j.value("fontScale", 1.25f);
             s.latencyCompensation = j.value("latencyCompensation", false);
+            s.linkEnabled = j.value("linkEnabled", false);
+            s.linkStartStopSync = j.value("linkStartStopSync", false);
         } catch (...) {
             LOG_WARN("App", "Failed to parse settings file");
         }
@@ -110,6 +123,8 @@ struct AppSettings {
             j["metronomeVisualStyle"] = s.metronomeVisualStyle;
             j["fontScale"] = s.fontScale;
             j["latencyCompensation"] = s.latencyCompensation;
+            j["linkEnabled"] = s.linkEnabled;
+            j["linkStartStopSync"] = s.linkStartStopSync;
             std::ofstream out(path);
             if (out.is_open()) {
                 out << j.dump(2);
