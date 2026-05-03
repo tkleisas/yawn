@@ -55,6 +55,15 @@ public:
 
         // Theme
         float fontScale             = 1.0f;
+
+        // Audio — Plugin Delay Compensation. When on, the mixer
+        // pads each track's post-effect signal so the slowest
+        // track's chain latency aligns every track at the master
+        // mix point. Off by default (most users have no
+        // latency-introducing effects in their chain and pay nothing
+        // by leaving it off; flip on once you wire up a Conv Reverb
+        // or a lookahead Limiter in a serious mix).
+        bool latencyCompensation    = false;
     };
 
     using ResultCallback = std::function<void(PreferencesResult)>;
@@ -163,6 +172,9 @@ private:
     // across vector reallocations.
     std::vector<std::unique_ptr<FwCheckbox>> m_midiInputChecks;
     std::vector<std::unique_ptr<FwCheckbox>> m_midiOutputChecks;
+
+    // Audio tab — Plugin Delay Compensation toggle (off by default).
+    FwCheckbox m_pdcCheckbox{"Latency Compensation"};
 
     PreferencesResult m_result  = PreferencesResult::Cancel;
     ResultCallback    m_onResult;

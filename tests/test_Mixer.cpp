@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 #include "audio/Mixer.h"
+#include "effects/NoiseGate.h"
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 using namespace yawn;
 using namespace yawn::audio;
@@ -339,4 +341,113 @@ TEST_F(MixerTest, DecayPeaks) {
     for (int i = 0; i < 100; ++i) m_mixer.decayPeaks();
 
     EXPECT_LT(m_mixer.trackChannel(0).peakL, peakBefore * 0.01f);
+}
+
+// ── Plugin Delay Compensation (Latency P2) ──────────────────────────
+//
+// PDC pads each track's post-effect signal up to the slowest track's
+// chain latency, so all tracks emerge from their effect chains
+// time-aligned at the master mix point. Tests pin:
+//   - Off by default (Mixer ctor / reset state)
+//   - Enabling/disabling round-trips via setPdcEnabled
+//   - With PDC off: a fast track and a slow track misalign at master
+//     (the high-latency-effect track is N samples late)
+//   - With PDC on: the SAME setup produces aligned output
+//   - maxTrackLatencySamples reports the slowest chain's latency
+
+TEST_F(MixerTest, PdcDefaultDisabled) {
+    EXPECT_FALSE(m_mixer.pdcEnabled());
+}
+
+TEST_F(MixerTest, PdcRoundtrips) {
+    m_mixer.setPdcEnabled(true);
+    EXPECT_TRUE(m_mixer.pdcEnabled());
+    m_mixer.setPdcEnabled(false);
+    EXPECT_FALSE(m_mixer.pdcEnabled());
+}
+
+TEST_F(MixerTest, PdcMaxLatencyReportsSlowestChain) {
+    m_mixer.initEffectChains(48000.0, 4096);
+    // Track 0: NoiseGate with 4 ms lookahead → 192 samples @ 48 kHz
+    auto gate = std::make_unique<effects::NoiseGate>();
+    gate->init(48000.0, 4096);
+    gate->setParameter(effects::NoiseGate::kLookahead, 4.0f);
+    m_mixer.trackEffects(0).append(std::move(gate));
+    // Track 1: empty chain → 0 latency.
+    m_mixer.setPdcEnabled(true);
+
+    // Drive a process() so the mixer recomputes maxTrackLatency.
+    constexpr int nf = 64, nc = 2;
+    float buf0[nf * nc] = {}, buf1[nf * nc] = {};
+    float* ptrs[kMaxTracks] = {};
+    ptrs[0] = buf0;
+    ptrs[1] = buf1;
+    float out[nf * nc] = {};
+    m_mixer.process(ptrs, 2, out, nf, nc);
+    EXPECT_EQ(m_mixer.maxTrackLatencySamples(), 192);
+}
+
+TEST_F(MixerTest, PdcAlignsSlowAndFastTracks) {
+    // Set up two tracks: track 0 has a NoiseGate with 4 ms lookahead
+    // (192 samples @ 48 kHz), track 1 has an empty chain. Drive both
+    // with a delta-impulse (1.0 at sample 0, 0 elsewhere). Run for
+    // 1024 samples (well past the 192-sample latency).
+    m_mixer.initEffectChains(48000.0, 4096);
+    auto gate = std::make_unique<effects::NoiseGate>();
+    gate->init(48000.0, 4096);
+    gate->setParameter(effects::NoiseGate::kLookahead, 4.0f);
+    // Configure gate so it lets full input through (we're testing
+    // the delay alignment, not the gating math).
+    gate->setParameter(effects::NoiseGate::kThreshold, -90.0f);
+    gate->setParameter(effects::NoiseGate::kRange, 0.0f);
+    m_mixer.trackEffects(0).append(std::move(gate));
+
+    // Drive both tracks with the same pulse.
+    constexpr int nf = 1024, nc = 2;
+    std::vector<float> buf0(nf * nc, 0.0f);
+    std::vector<float> buf1(nf * nc, 0.0f);
+
+    auto findPeakSample = [](const float* buf, int frames, int channels) {
+        int peakAt = -1;
+        float peakVal = 0.0f;
+        for (int i = 0; i < frames; ++i) {
+            const float v = std::abs(buf[i * channels]);
+            if (v > peakVal) { peakVal = v; peakAt = i; }
+        }
+        return std::pair<int, float>{peakAt, peakVal};
+    };
+
+    // ── PDC OFF: peak in fast track arrives before peak in slow track. ──
+    m_mixer.setPdcEnabled(false);
+    std::fill(buf0.begin(), buf0.end(), 0.0f);
+    std::fill(buf1.begin(), buf1.end(), 0.0f);
+    buf0[0] = 1.0f; buf0[1] = 1.0f;          // pulse on track 0 (slow)
+    buf1[0] = 1.0f; buf1[1] = 1.0f;          // pulse on track 1 (fast)
+    float* ptrs[kMaxTracks] = {};
+    ptrs[0] = buf0.data();
+    ptrs[1] = buf1.data();
+    float out[nf * nc] = {};
+    m_mixer.process(ptrs, 2, out, nf, nc);
+
+    auto [slowPeakOff, _slowValOff] = findPeakSample(buf0.data(), nf, nc);
+    auto [fastPeakOff, _fastValOff] = findPeakSample(buf1.data(), nf, nc);
+    // Slow track's peak should land ~192 samples in (gate's lookahead);
+    // fast track's peak at sample 0.
+    EXPECT_NEAR(slowPeakOff, 192, 4);
+    EXPECT_EQ  (fastPeakOff, 0);
+
+    // ── PDC ON: same input → both peaks land at 192 (= slowest). ──
+    m_mixer.setPdcEnabled(true);
+    std::fill(buf0.begin(), buf0.end(), 0.0f);
+    std::fill(buf1.begin(), buf1.end(), 0.0f);
+    buf0[0] = 1.0f; buf0[1] = 1.0f;
+    buf1[0] = 1.0f; buf1[1] = 1.0f;
+    std::fill(std::begin(out), std::end(out), 0.0f);
+    m_mixer.process(ptrs, 2, out, nf, nc);
+
+    auto [slowPeakOn, _slowValOn] = findPeakSample(buf0.data(), nf, nc);
+    auto [fastPeakOn, _fastValOn] = findPeakSample(buf1.data(), nf, nc);
+    EXPECT_NEAR(slowPeakOn, 192, 4);
+    EXPECT_NEAR(fastPeakOn, 192, 4)
+        << "PDC didn't pad the fast track to align with the slow track";
 }

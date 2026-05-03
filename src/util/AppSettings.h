@@ -40,6 +40,11 @@ struct AppSettings {
     // Preferences → Theme tab.
     float fontScale = 1.25f;   // default bumped per user feedback
 
+    // Plugin Delay Compensation — Edit → Preferences → Audio.
+    // Off by default (most chains have no latency-introducing
+    // effects; users with serious mixes flip it on once).
+    bool latencyCompensation = false;
+
     static std::filesystem::path settingsPath() {
 #ifdef _WIN32
         char appData[MAX_PATH];
@@ -80,6 +85,7 @@ struct AppSettings {
             s.countInBars = j.value("countInBars", 0);
             s.metronomeVisualStyle = j.value("metronomeVisualStyle", 0);
             s.fontScale = j.value("fontScale", 1.25f);
+            s.latencyCompensation = j.value("latencyCompensation", false);
         } catch (...) {
             LOG_WARN("App", "Failed to parse settings file");
         }
@@ -103,6 +109,7 @@ struct AppSettings {
             j["countInBars"] = s.countInBars;
             j["metronomeVisualStyle"] = s.metronomeVisualStyle;
             j["fontScale"] = s.fontScale;
+            j["latencyCompensation"] = s.latencyCompensation;
             std::ofstream out(path);
             if (out.is_open()) {
                 out << j.dump(2);

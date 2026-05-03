@@ -91,6 +91,10 @@ void FwPreferencesDialog::configureStaticDropdowns() {
         if (idx >= 0 && idx < 6) m_state.bufferSize = vals[idx];
     });
 
+    m_pdcCheckbox.setOnChange([this](CheckState s) {
+        m_state.latencyCompensation = (s == CheckState::On);
+    });
+
     // Defaults — launch / record quantize
     const Labels qmodes = {"None", "Beat", "Bar"};
     m_launchQDD.setItems(qmodes);
@@ -269,6 +273,10 @@ void FwPreferencesDialog::syncDropdownsToState() {
             if (m_state.bufferSize == vals[i]) sel = i;
         m_bufferSizeDD.setSelectedIndex(sel, ValueChangeSource::Programmatic);
     }
+
+    // Plugin Delay Compensation toggle
+    m_pdcCheckbox.setChecked(m_state.latencyCompensation,
+                              ValueChangeSource::Programmatic);
 
     // Quantize modes
     {
@@ -517,6 +525,12 @@ void FwPreferencesDialog::layoutAndRenderAudioTab(UIContext& ctx, Rect content) 
 
     drawLabeledRow(ctx, "Buffer Size", Rect{content.x, y, dropX - content.x, rowH}, textScale);
     placeAndRender(m_bufferSizeDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
+    y += rowH + kRowGap;
+
+    // Plugin Delay Compensation toggle. The checkbox carries its
+    // own label ("Latency Compensation") so we don't drawLabeledRow
+    // a second copy of it; just render it taking the full row.
+    placeAndRender(m_pdcCheckbox, ctx, Rect{content.x, y, content.w, rowH});
 }
 
 void FwPreferencesDialog::layoutAndRenderMidiTab(UIContext& ctx, Rect content) {
@@ -612,6 +626,7 @@ std::vector<Widget*> FwPreferencesDialog::visibleWidgets() {
             out.push_back(&m_inputDD);
             out.push_back(&m_sampleRateDD);
             out.push_back(&m_bufferSizeDD);
+            out.push_back(&m_pdcCheckbox);
             break;
         case 1:
             for (auto& cb : m_midiInputChecks)  out.push_back(cb.get());

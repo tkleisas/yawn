@@ -137,6 +137,19 @@ void Mixer::initEffectChains(double sampleRate, int maxBlockSize) {
     for (auto& ch : m_tracks)  ch.bands.initCoeffs(sampleRate);
     for (auto& rb : m_returns) rb.bands.initCoeffs(sampleRate);
     m_master.bands.initCoeffs(sampleRate);
+
+    // Per-track PDC delay lines. Sized to (max compensation +
+    // one block) × max channels (2 = stereo) so a full block of
+    // input can be written and the longest delay tap can still
+    // be read without wrapping mid-block. Pre-allocated here so
+    // process() does no audio-thread allocation.
+    const int capFrames = kMaxPdcSamples + maxBlockSize;
+    for (int t = 0; t < kMaxTracks; ++t) {
+        m_pdcLines[t].buf.assign(static_cast<size_t>(capFrames) * 2, 0.0f);
+        m_pdcLines[t].writePos = 0;
+        m_pdcLines[t].channels = 2;
+        m_pdcLines[t].capFrames = capFrames;
+    }
 }
 
 void Mixer::reset() {
@@ -170,6 +183,23 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
         std::memset(m_returnBufPtrs[r], 0, bufSize * sizeof(float));
     }
 
+    // Plugin Delay Compensation — first pass: find the slowest
+    // track's effect-chain latency. Faster tracks will be padded by
+    // (max - their-own-latency) samples after their effect chain
+    // runs, so every track emerges from its chain time-aligned at
+    // the master mix point. Cap at kMaxPdcSamples so a malicious /
+    // exotic effect with 1+ second latency can't blow our buffer.
+    m_maxTrackLatency = 0;
+    if (m_pdcEnabled) {
+        for (int t = 0; t < numTracks && t < kMaxTracks; ++t) {
+            if (!trackBuffers[t]) continue;
+            const int lat = m_trackFx[t].latencySamples();
+            if (lat > m_maxTrackLatency) m_maxTrackLatency = lat;
+        }
+        if (m_maxTrackLatency > kMaxPdcSamples)
+            m_maxTrackLatency = kMaxPdcSamples;
+    }
+
     // Process each track
     for (int t = 0; t < numTracks && t < kMaxTracks; ++t) {
         if (!trackBuffers[t]) continue;
@@ -177,6 +207,21 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
         // --- Track insert effects (pre-fader) ---
         if (!m_trackFx[t].empty())
             m_trackFx[t].process(trackBuffers[t], numFrames, numChannels);
+
+        // --- PDC: pad this track's post-effect signal up to the
+        //         slowest track's latency. Skipped (no work) when
+        //         this track IS the slowest. The delay is applied
+        //         BEFORE sends + fader so both the main path and
+        //         post-fader sends consume the aligned signal.
+        if (m_pdcEnabled && m_maxTrackLatency > 0) {
+            const int trackLat = m_trackFx[t].latencySamples();
+            const int delaySamples = std::min(
+                m_maxTrackLatency - trackLat, kMaxPdcSamples);
+            if (delaySamples > 0) {
+                applyPdcDelay(t, trackBuffers[t], numFrames,
+                              numChannels, delaySamples);
+            }
+        }
 
         auto& ch = m_tracks[t];
         bool audible = isAudible(ch);
@@ -356,6 +401,45 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
         }
         m_visWritePos.store(wp, std::memory_order_release);
     }
+}
+
+// ── PDC: per-track ring-buffer delay applied in-place ──
+//
+// For each input sample i in [0, numFrames):
+//   1. read the delayed sample at position (writePos + i - delay)
+//   2. write the input sample at position (writePos + i)
+//   3. overwrite buffer[i] with the delayed sample
+//
+// Read-then-write per sample handles the case where delay <
+// numFrames (the second half of this block reads samples we wrote
+// earlier in the same block — which is exactly what we want, since
+// input[0] should appear at output[delay]).
+//
+// Buffer is sized at (kMaxPdcSamples + maxBlockSize) frames so the
+// access span [writePos - delay, writePos + numFrames) never
+// double-wraps within a single block.
+void Mixer::applyPdcDelay(int track, float* buffer, int numFrames,
+                          int numChannels, int delaySamples) {
+    auto& line = m_pdcLines[track];
+    if (line.capFrames <= 0 || delaySamples <= 0) return;
+
+    const int cap = line.capFrames;
+    const int chCount = std::min(numChannels, line.channels);
+
+    for (int i = 0; i < numFrames; ++i) {
+        const int writeFrame = (line.writePos + i) % cap;
+        const int readFrame  = ((line.writePos + i - delaySamples)
+                                  % cap + cap) % cap;
+        for (int ch = 0; ch < chCount; ++ch) {
+            const int writeIdx = writeFrame * line.channels + ch;
+            const int readIdx  = readFrame  * line.channels + ch;
+            const float input  = buffer[i * numChannels + ch];
+            const float delayed = line.buf[readIdx];
+            line.buf[writeIdx] = input;
+            buffer[i * numChannels + ch] = delayed;
+        }
+    }
+    line.writePos = (line.writePos + numFrames) % cap;
 }
 
 void Mixer::decayPeaks() {

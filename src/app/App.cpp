@@ -207,6 +207,7 @@ void App::setupMenuBar() {
             state.countInBars = m_settings.countInBars;
             state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
             state.fontScale = m_settings.fontScale;
+            state.latencyCompensation = m_audioEngine.mixer().pdcEnabled();
             m_preferencesDialog.open(state, &m_audioEngine, &m_midiEngine);
         }),
     });
@@ -506,6 +507,15 @@ void App::buildWidgetTree() {
             m_settings.metronomeMode = s.metronomeMode;
             m_settings.countInBars = s.countInBars;
             m_settings.metronomeVisualStyle = s.metronomeVisualStyle;
+
+            // Plugin Delay Compensation toggle. Persisted in
+            // settings JSON; applied to the live mixer immediately.
+            if (s.latencyCompensation != m_settings.latencyCompensation) {
+                LOG_INFO("User", "preferences: latency compensation → %s",
+                         s.latencyCompensation ? "enabled" : "disabled");
+            }
+            m_settings.latencyCompensation = s.latencyCompensation;
+            m_audioEngine.mixer().setPdcEnabled(s.latencyCompensation);
 
             // Apply the UI font scale if it changed. setTheme() bumps
             // the fw2 UIContext epoch which invalidates every widget's
@@ -4213,6 +4223,11 @@ bool App::init() {
     m_audioEngine.sendCommand(audio::TransportSetCountInMsg{m_settings.countInBars});
     m_transportPanel->setCountInBars(m_settings.countInBars);
     m_transportPanel->setMetronomeVisualStyle(m_settings.metronomeVisualStyle);
+
+    // Apply Plugin Delay Compensation toggle from saved preferences.
+    // setPdcEnabled is a plain bool flag read by the audio thread —
+    // safe to set without going through the message queue.
+    m_audioEngine.mixer().setPdcEnabled(m_settings.latencyCompensation);
 
     // Sync project track properties to the audio engine
     syncTracksToEngine();

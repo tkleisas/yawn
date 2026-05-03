@@ -211,6 +211,37 @@ public:
     }
     int masterLatencySamples() const { return m_masterFx.latencySamples(); }
 
+    // ── Plugin Delay Compensation (Latency P2) ──
+    //
+    // Per-block, the mixer computes the maximum latency across all
+    // tracks' effect chains and pads the faster tracks' post-effect
+    // signals via per-track ring-buffer delays so every track
+    // emerges from its chain time-aligned at the master mix point.
+    // Without this, a track running e.g. a Convolution Reverb (one-
+    // block latency) would be one block late vs a sibling track
+    // with no latency, smearing the timing of any rhythmic
+    // alignment between them.
+    //
+    // PDC is enabled by default. Disabling it falls back to the
+    // raw per-track latency behaviour (each track emerges whenever
+    // its chain finishes, no pre-mix alignment). Useful for A/B
+    // testing or troubleshooting timing issues.
+    //
+    // Compensation cap: kMaxPdcSamples (~170 ms @ 48 kHz). Effects
+    // with longer latency than the cap won't be fully compensated;
+    // we'd rather give up alignment than balloon the buffer to
+    // 100+ MB across 64 tracks.
+    static constexpr int kMaxPdcSamples = 8192;
+
+    bool pdcEnabled() const           { return m_pdcEnabled; }
+    void setPdcEnabled(bool enabled)  { m_pdcEnabled = enabled; }
+
+    // Reads "max track latency this block" — what the UI should
+    // show as the engine's effective output latency. Updated each
+    // block by process(); read by the UI thread (racy float-style
+    // reads are fine, the value moves at most a few samples/frame).
+    int maxTrackLatencySamples() const { return m_maxTrackLatency; }
+
     // --- Core processing ---
     //
     // trackBuffers: array of pointers to per-track interleaved stereo buffers
@@ -261,6 +292,33 @@ private:
     static constexpr int kMaxBufferSize = 4096 * 2; // max frames * max channels
     std::vector<float> m_returnBufferHeap;  // kMaxReturnBuses * kMaxBufferSize
     float* m_returnBufPtrs[kMaxReturnBuses] = {};
+
+    // ── Per-track delay lines for plugin-delay-compensation ──
+    // Sized to (kMaxPdcSamples + max-block-size) × max-channels per
+    // track. One ring buffer per track; allocated once at init().
+    // ~12 KB per track × 64 tracks = ~770 KB total — small.
+    struct PdcDelayLine {
+        std::vector<float> buf;       // interleaved stereo
+        int                writePos = 0;
+        int                channels = 0;
+        int                capFrames = 0;   // size of buf in frames (per channel)
+    };
+    std::array<PdcDelayLine, kMaxTracks> m_pdcLines;
+    int  m_maxTrackLatency = 0;
+    // Default OFF — opt-in via Edit → Preferences → Audio.
+    // Reasoning: PDC adds an extra read/write pass per sample on
+    // every track that's faster than the slowest, and many users
+    // don't have any latency-introducing effects in their chains.
+    // Off by default avoids paying for compensation nobody needs;
+    // users with serious mixes (Conv Reverb + lookahead limiter
+    // on different tracks) flip it on once and forget.
+    bool m_pdcEnabled      = false;
+
+    // Apply `delaySamples` of compensation to `buffer` in-place via
+    // the per-track ring buffer. Reads-then-writes per sample so
+    // small delays (delay < numFrames) work without scratching.
+    void applyPdcDelay(int track, float* buffer, int numFrames,
+                       int numChannels, int delaySamples);
 
 public:
     // ── Visual-engine sample tap ───────────────────────────────────────
