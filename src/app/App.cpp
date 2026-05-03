@@ -5795,6 +5795,7 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.dx = event.motion.xrel; me.dy = event.motion.yrel;
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    me.timestampMs = SDL_GetTicks();
                     if (m_fw2LayerStack.dispatchMouseMove(me)) break;
                 }
 
@@ -5821,6 +5822,7 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.dx = event.motion.xrel; me.dy = event.motion.yrel;
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    me.timestampMs = SDL_GetTicks();
                     m_rootLayout->dispatchMouseMove(me);
                 }
 
@@ -5853,6 +5855,7 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.button = sdlBtnToFw2(btn);
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    me.timestampMs = SDL_GetTicks();
                     if (m_fw2LayerStack.dispatchMouseDown(me)) break;
                 }
 
@@ -6006,6 +6009,7 @@ void App::processEvents() {
                     me.button = sdlBtnToFw2(btn);
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
                     me.clickCount = event.button.clicks;
+                    me.timestampMs = SDL_GetTicks();
                     m_rootLayout->dispatchMouseDown(me);
                 }
 
@@ -6089,6 +6093,7 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.button = sdlBtnToFw2(btn);
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    me.timestampMs = SDL_GetTicks();
                     if (m_fw2LayerStack.dispatchMouseUp(me)) break;
                 }
 
@@ -6124,6 +6129,7 @@ void App::processEvents() {
                     me.lx = mx; me.ly = my;
                     me.button = sdlBtnToFw2(btn);
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    me.timestampMs = SDL_GetTicks();
                     m_rootLayout->dispatchMouseUp(me);
 
                     auto sync = [&](bool before, bool after) {
