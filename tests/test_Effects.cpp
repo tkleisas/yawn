@@ -15,6 +15,7 @@
 #include "effects/NoiseGate.h"
 #include "effects/Phaser.h"
 #include "effects/Wah.h"
+#include "effects/Rotary.h"
 #include "effects/Convolution.h"
 #include "effects/ConvolutionReverb.h"
 #include "effects/Oscilloscope.h"
@@ -1403,5 +1404,152 @@ TEST(Wah, HighQStaysStable) {
             EXPECT_LT(std::abs(buf[i]), 20.0f)
                 << "wah blew up at block " << block;
         }
+    }
+}
+
+// =========================== Rotary ============================
+//
+// Leslie speaker simulation — two rotors (horn + drum) with
+// Doppler delay, amplitude modulation, and slow/fast speed
+// crossfade. Tests cover the contract surface (init/parameter
+// clamp/bypass), wet output produces audio, mix=0 leaves dry
+// untouched, switching speed actually changes the modulation
+// pattern, and Stop mode eventually settles to a near-static
+// signal (RPM ramps to 0).
+
+TEST(Rotary, Init) {
+    Rotary r;
+    r.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(r.parameterCount(), Rotary::kParamCount);
+    for (int i = 0; i < r.parameterCount(); ++i) {
+        const auto& info = r.parameterInfo(i);
+        EXPECT_GE(r.getParameter(i), info.minValue);
+        EXPECT_LE(r.getParameter(i), info.maxValue);
+    }
+    EXPECT_EQ(r.latencySamples(), 0);
+}
+
+TEST(Rotary, MixZeroIsDry) {
+    Rotary r;
+    r.init(kSampleRate, kBlockSize);
+    r.setParameter(Rotary::kMix, 0.0f);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + kBlockSize * 2);
+    r.process(buf, kBlockSize, 2);
+
+    for (int i = 0; i < kBlockSize * 2; ++i)
+        EXPECT_NEAR(buf[i], input[i], 1e-6f);
+}
+
+TEST(Rotary, BypassIsExactlyDry) {
+    Rotary r;
+    r.init(kSampleRate, kBlockSize);
+    r.setBypassed(true);
+
+    float buf[kBlockSize * 2];
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + kBlockSize * 2);
+    r.process(buf, kBlockSize, 2);
+
+    for (int i = 0; i < kBlockSize * 2; ++i)
+        EXPECT_FLOAT_EQ(buf[i], input[i]);
+}
+
+TEST(Rotary, ProducesWetOutput) {
+    // mix > 0 → output should differ from input (Doppler + AM).
+    // Run a few warm-up blocks so the rotor angle is well past zero.
+    Rotary r;
+    r.init(kSampleRate, kBlockSize);
+    r.setParameter(Rotary::kMix, 1.0f);
+    r.setParameter(Rotary::kSpeed, static_cast<float>(Rotary::kSpeedFast));
+
+    float buf[kBlockSize * 2];
+    for (int b = 0; b < 5; ++b) {
+        fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        r.process(buf, kBlockSize, 2);
+    }
+
+    // Final block — compare to a freshly-filled dry buffer.
+    fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+    std::vector<float> input(buf, buf + kBlockSize * 2);
+    r.process(buf, kBlockSize, 2);
+
+    float diffSq = 0.0f;
+    for (int i = 0; i < kBlockSize * 2; ++i) {
+        const float d = buf[i] - input[i];
+        diffSq += d * d;
+    }
+    EXPECT_GT(std::sqrt(diffSq / (kBlockSize * 2)), 0.01f);
+}
+
+TEST(Rotary, SpeedSwitchChangesModulation) {
+    // Slow vs Fast modes should produce noticeably different output
+    // for the same input, after both rotors have fully ramped to
+    // their target RPM (~5s of pre-roll at default acceleration).
+    auto runAtSpeed = [](Rotary::SpeedMode mode) {
+        Rotary r;
+        r.init(kSampleRate, kBlockSize);
+        r.setParameter(Rotary::kMix, 1.0f);
+        r.setParameter(Rotary::kSpeed, static_cast<float>(mode));
+        r.setParameter(Rotary::kAccel, 0.1f);  // shorten ramp for test
+
+        float buf[kBlockSize * 2];
+        // Pre-roll ~1s so rotors reach steady state.
+        const int prerollBlocks = static_cast<int>(kSampleRate / kBlockSize);
+        for (int b = 0; b < prerollBlocks; ++b) {
+            fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+            r.process(buf, kBlockSize, 2);
+        }
+        // Capture: run one final block from a fresh sine.
+        fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        r.process(buf, kBlockSize, 2);
+        return std::vector<float>(buf, buf + kBlockSize * 2);
+    };
+
+    auto slow = runAtSpeed(Rotary::kSpeedSlow);
+    auto fast = runAtSpeed(Rotary::kSpeedFast);
+
+    float diffSq = 0.0f;
+    for (int i = 0; i < kBlockSize * 2; ++i) {
+        const float d = slow[i] - fast[i];
+        diffSq += d * d;
+    }
+    // Slow vs fast LFO sweep through the same waveform should
+    // produce non-trivially different output.
+    EXPECT_GT(std::sqrt(diffSq / (kBlockSize * 2)), 0.01f);
+}
+
+TEST(Rotary, ParameterAccess) {
+    Rotary r;
+    r.init(kSampleRate, kBlockSize);
+    r.setParameter(Rotary::kHornFastRPM, 420.0f);
+    EXPECT_FLOAT_EQ(r.getParameter(Rotary::kHornFastRPM), 420.0f);
+    r.setParameter(Rotary::kCrossover, 600.0f);
+    EXPECT_FLOAT_EQ(r.getParameter(Rotary::kCrossover), 600.0f);
+    // Out-of-range index = no-op + 0 read.
+    r.setParameter(-1, 0.5f);
+    r.setParameter(Rotary::kParamCount + 1, 0.5f);
+    EXPECT_EQ(r.getParameter(-1), 0.0f);
+    EXPECT_EQ(r.getParameter(Rotary::kParamCount + 1), 0.0f);
+}
+
+TEST(Rotary, StableUnderLongRender) {
+    // 5 seconds of audio at fast speed shouldn't blow up the
+    // delay lines, the AM, or the IIR-style rotor smoothing.
+    Rotary r;
+    r.init(kSampleRate, kBlockSize);
+    r.setParameter(Rotary::kSpeed, static_cast<float>(Rotary::kSpeedFast));
+    r.setParameter(Rotary::kMix,   1.0f);
+
+    float buf[kBlockSize * 2];
+    const int totalBlocks = static_cast<int>(kSampleRate * 5.0 / kBlockSize);
+    for (int b = 0; b < totalBlocks; ++b) {
+        fillSine(buf, kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        r.process(buf, kBlockSize, 2);
+        for (int i = 0; i < kBlockSize * 2; ++i)
+            ASSERT_LT(std::abs(buf[i]), 10.0f)
+                << "rotary blew up at block " << b;
     }
 }

@@ -18,6 +18,8 @@
 #include "instruments/Multisampler.h"
 #include "instruments/InstrumentRack.h"
 #include "instruments/DrumSynth.h"
+#include "instruments/StringMachine.h"
+#include "instruments/DrawbarOrgan.h"
 
 #include "effects/AudioEffect.h"
 #include "effects/Reverb.h"
@@ -29,6 +31,7 @@
 #include "effects/Chorus.h"
 #include "effects/Phaser.h"
 #include "effects/Wah.h"
+#include "effects/Rotary.h"
 #include "effects/Distortion.h"
 #include "effects/TapeEmulation.h"
 #include "effects/AmpSimulator.h"
@@ -80,6 +83,8 @@ inline std::unique_ptr<instruments::Instrument> createInstrument(const std::stri
         {"multisampler",[] { return std::make_unique<instruments::Multisampler>(); }},
         {"instrack",   [] { return std::make_unique<instruments::InstrumentRack>(); }},
         {"drumsynth", [] { return std::make_unique<instruments::DrumSynth>(); }},
+        {"stringmachine", [] { return std::make_unique<instruments::StringMachine>(); }},
+        {"drawbarorgan", [] { return std::make_unique<instruments::DrawbarOrgan>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -97,6 +102,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"chorus",      [] { return std::make_unique<effects::Chorus>(); }},
         {"phaser",      [] { return std::make_unique<effects::Phaser>(); }},
         {"wah",         [] { return std::make_unique<effects::Wah>(); }},
+        {"rotary",      [] { return std::make_unique<effects::Rotary>(); }},
         {"distortion",  [] { return std::make_unique<effects::Distortion>(); }},
         {"tape",        [] { return std::make_unique<effects::TapeEmulation>(); }},
         {"amp",         [] { return std::make_unique<effects::AmpSimulator>(); }},
@@ -169,6 +175,8 @@ inline std::unique_ptr<yawn::instruments::Instrument> createInstrumentByName(con
     if (n == "Vocoder")           return std::make_unique<yawn::instruments::Vocoder>();
     if (n == "Multisampler")      return std::make_unique<yawn::instruments::Multisampler>();
     if (n == "Instrument Rack")   return std::make_unique<yawn::instruments::InstrumentRack>();
+    if (n == "String Machine")    return std::make_unique<yawn::instruments::StringMachine>();
+    if (n == "Drawbar Organ")     return std::make_unique<yawn::instruments::DrawbarOrgan>();
     return nullptr;
 }
 
@@ -182,6 +190,7 @@ inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const
     if (n == "Chorus")            return std::make_unique<yawn::effects::Chorus>();
     if (n == "Phaser")            return std::make_unique<yawn::effects::Phaser>();
     if (n == "Wah")               return std::make_unique<yawn::effects::Wah>();
+    if (n == "Rotary")            return std::make_unique<yawn::effects::Rotary>();
     if (n == "Distortion")        return std::make_unique<yawn::effects::Distortion>();
     if (n == "Tape Emulation")    return std::make_unique<yawn::effects::TapeEmulation>();
     if (n == "Amp Simulator")     return std::make_unique<yawn::effects::AmpSimulator>();

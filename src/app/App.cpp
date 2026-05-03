@@ -1160,6 +1160,50 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addInstrItem("Vocoder", [](){ return std::make_unique<instruments::Vocoder>(); });
     addInstrItem("Multisampler", [](){ return std::make_unique<instruments::Multisampler>(); });
     addInstrItem("Instrument Rack", [](){ return std::make_unique<instruments::InstrumentRack>(); });
+    addInstrItem("String Machine", [](){ return std::make_unique<instruments::StringMachine>(); });
+
+    // Drawbar Organ: same as addInstrItem, but also auto-inserts a
+    // Rotary effect into the track's chain (unless one is already
+    // present — re-picking the organ shouldn't stack Rotaries). The
+    // rotary is the de-facto Hammond pairing, but kept as a
+    // separate effect so it can be applied to anything else too.
+    instrItems.push_back({"Drawbar Organ", [this, trackIndex]() {
+        auto oldType = m_project.track(trackIndex).type;
+        std::string oldInstr;
+        if (auto* inst = m_audioEngine.instrument(trackIndex))
+            oldInstr = inst->name();
+        const uint8_t oldTypeVal = (oldType == Track::Type::Audio) ? 0
+                                  : (oldType == Track::Type::Midi)  ? 1 : 2;
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+        m_audioEngine.setInstrument(trackIndex,
+            std::make_unique<instruments::DrawbarOrgan>());
+
+        // Auto-insert Rotary if no rotary is already in the chain.
+        auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
+        bool hasRotary = false;
+        for (int i = 0; i < chain.count(); ++i) {
+            auto* e = chain.effectAt(i);
+            if (e && std::string(e->id()) == "rotary") { hasRotary = true; break; }
+        }
+        if (!hasRotary) chain.append(std::make_unique<effects::Rotary>());
+
+        markDirty();
+        m_undoManager.push({"Set Instrument: Drawbar Organ",
+            [this, trackIndex, oldType, oldTypeVal, oldInstr]{
+                m_project.track(trackIndex).type = oldType;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, oldTypeVal});
+                m_audioEngine.setInstrument(trackIndex, createInstrumentByName(oldInstr));
+                markDirty();
+            },
+            [this, trackIndex]{
+                m_project.track(trackIndex).type = Track::Type::Midi;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+                m_audioEngine.setInstrument(trackIndex,
+                    std::make_unique<instruments::DrawbarOrgan>());
+                markDirty();
+            }, ""});
+    }});
 
 #ifdef YAWN_HAS_VST3
     // VST3 instruments — flat list with separator
@@ -1213,6 +1257,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
     addFxItem("Phaser",      [](){ return std::make_unique<effects::Phaser>(); });
     addFxItem("Wah",         [](){ return std::make_unique<effects::Wah>(); });
+    addFxItem("Rotary",      [](){ return std::make_unique<effects::Rotary>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
     addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
     addFxItem("Noise Gate",  [](){ return std::make_unique<effects::NoiseGate>(); });
@@ -4026,6 +4071,7 @@ bool App::init() {
         addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
         addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
         addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
+        addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
         addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
         addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });

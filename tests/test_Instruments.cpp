@@ -8,6 +8,8 @@
 #include "instruments/DrumRack.h"
 #include "instruments/DrumSlop.h"
 #include "instruments/DrumSynth.h"
+#include "instruments/StringMachine.h"
+#include "instruments/DrawbarOrgan.h"
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
@@ -1936,4 +1938,303 @@ TEST(DrumSynth, ParameterClampingAndInfo) {
     ds.setParameter(DrumSynth::kParamCount + 1, 0.5f);
     EXPECT_EQ(ds.getParameter(-1), 0.0f);
     EXPECT_EQ(ds.getParameter(DrumSynth::kParamCount + 1), 0.0f);
+}
+
+// ========================= StringMachine =========================
+//
+// Solina-style ensemble strings — 9 saws per voice (3 staggered ×
+// 3 octaves), shared paraphonic LP filter, 3-tap BBD chorus.
+// Tests cover the contract surface (init/reset/parameter clamp),
+// per-octave routing (turning a register off silences its
+// contribution), the chorus bypass switch (Ensemble Off → mono-y
+// dry), and that AllNotesOff (CC 123) silences hung voices.
+
+TEST(StringMachine, InitAndReset) {
+    StringMachine sm;
+    sm.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(sm.parameterCount(), StringMachine::kNumParams);
+    sm.reset();
+    float buffer[kBlockSize * kChannels] = {};
+    sm.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(StringMachine, NoteOnProducesAudibleStereoOutput) {
+    StringMachine sm;
+    sm.init(kSampleRate, kBlockSize);
+    // String Machine ships with a slow ~300ms attack (its whole
+    // raison d'être) — one 256-sample block is ~5.8ms, well below
+    // perceivable. Render past the envelope's full ramp before
+    // measuring. Chorus is on by default — taps panned L/R should
+    // give distinguishable channels (not mono-summed silence).
+    float buffer[kBlockSize * kChannels] = {};
+    sm.process(buffer, kBlockSize, kChannels, makeNoteOn(60));
+    // ~400ms of follow-on render = past the 300ms attack peak.
+    const int blocks = static_cast<int>((kSampleRate * 0.4) / kBlockSize);
+    for (int b = 0; b < blocks; ++b) {
+        std::memset(buffer, 0, sizeof(buffer));
+        sm.process(buffer, kBlockSize, kChannels, makeEmpty());
+    }
+    float lSum = 0.0f, rSum = 0.0f;
+    for (int i = 0; i < kBlockSize; ++i) {
+        lSum += std::abs(buffer[i * kChannels + 0]);
+        rSum += std::abs(buffer[i * kChannels + 1]);
+    }
+    EXPECT_GT(lSum, 1e-3f);
+    EXPECT_GT(rSum, 1e-3f);
+}
+
+TEST(StringMachine, AllOctavesOffProducesSilence) {
+    // Belt-and-braces: zero out the three octave levels and verify
+    // that even with a pressed note, no audible output emerges.
+    // Catches "I forgot to multiply by octaveLevel for register N".
+    StringMachine sm;
+    sm.init(kSampleRate, kBlockSize);
+    sm.setParameter(StringMachine::kOct16Level, 0.0f);
+    sm.setParameter(StringMachine::kOct8Level,  0.0f);
+    sm.setParameter(StringMachine::kOct4Level,  0.0f);
+    float buffer[kBlockSize * kChannels] = {};
+    sm.process(buffer, kBlockSize, kChannels, makeNoteOn(60));
+    // Render a few extra blocks so the slow attack envelope ramps
+    // up — if any octave is leaking, we'd see audio by now.
+    for (int i = 0; i < 10; ++i)
+        sm.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-4f);
+}
+
+TEST(StringMachine, EnsembleOffStillMakesSound) {
+    // The ensemble (chorus) bypass must not gate the dry signal.
+    // Regression guard: an earlier draft accidentally muted output
+    // when chorus was off.
+    StringMachine sm;
+    sm.init(kSampleRate, kBlockSize);
+    sm.setParameter(StringMachine::kEnsembleOn, 0.0f);
+    // Make the attack snappy so we hear something inside one block.
+    sm.setParameter(StringMachine::kAttack, 0.005f);
+    float buffer[kBlockSize * kChannels] = {};
+    sm.process(buffer, kBlockSize, kChannels, makeNoteOn(60));
+    EXPECT_GT(rms(buffer, kBlockSize * kChannels), 1e-3f);
+}
+
+TEST(StringMachine, AllNotesOffReleasesVoices) {
+    StringMachine sm;
+    sm.init(kSampleRate, kBlockSize);
+    // Trigger a note, then send CC 123 (All Notes Off). Render
+    // long enough for the (snappy) release to complete and verify
+    // the buffer has gone silent.
+    sm.setParameter(StringMachine::kRelease, 0.05f);
+    float buffer[kBlockSize * kChannels] = {};
+    sm.process(buffer, kBlockSize, kChannels, makeNoteOn(60));
+
+    MidiBuffer allOff;
+    allOff.addMessage(MidiMessage::cc(0, 123, 0));
+    sm.process(buffer, kBlockSize, kChannels, allOff);
+
+    // Render ~0.5s of follow-on silence — well past 50ms release.
+    float tail[kBlockSize * kChannels] = {};
+    const int blocks = static_cast<int>((kSampleRate * 0.5) / kBlockSize);
+    for (int b = 0; b < blocks; ++b) {
+        std::memset(tail, 0, sizeof(tail));
+        sm.process(tail, kBlockSize, kChannels, makeEmpty());
+    }
+    EXPECT_LT(rms(tail, kBlockSize * kChannels), 1e-4f);
+}
+
+TEST(StringMachine, ParameterClampingAndDefaults) {
+    StringMachine sm;
+    sm.init(kSampleRate, kBlockSize);
+    // Check that defaults match what parameterInfo says (not just
+    // the zero-init values — applyDefaults() runs in init()).
+    for (int p = 0; p < StringMachine::kNumParams; ++p) {
+        const auto& info = sm.parameterInfo(p);
+        EXPECT_EQ(sm.getParameter(p), info.defaultValue)
+            << "param " << p << " (" << info.name << ") didn't match default";
+    }
+    // Out-of-range writes clamp to range.
+    sm.setParameter(StringMachine::kAttack, 99.0f);
+    EXPECT_LE(sm.getParameter(StringMachine::kAttack), 3.0f);
+    sm.setParameter(StringMachine::kAttack, -99.0f);
+    EXPECT_GE(sm.getParameter(StringMachine::kAttack), 0.005f);
+    // Out-of-range index doesn't crash.
+    sm.setParameter(-1, 0.5f);
+    sm.setParameter(StringMachine::kNumParams + 1, 0.5f);
+    EXPECT_EQ(sm.getParameter(-1), 0.0f);
+}
+
+TEST(StringMachine, BrightnessFilterAffectsSpectralEnergy) {
+    // Crank brightness wide open → more high-frequency energy than
+    // when it's nearly closed. Compare adjacent-sample-difference
+    // magnitude (a cheap high-band proxy) — a sawtooth stack
+    // brightened up has a much spikier waveform than one filtered
+    // down to ~250 Hz. Catches the filter being unwired.
+    auto runWithBrightness = [](float brightness) {
+        StringMachine sm;
+        sm.init(kSampleRate, kBlockSize);
+        sm.setParameter(StringMachine::kBrightness, brightness);
+        sm.setParameter(StringMachine::kAttack, 0.005f);
+        sm.setParameter(StringMachine::kEnsembleOn, 0.0f); // remove chorus jitter
+        // Render past attack, then average several blocks.
+        float buf[kBlockSize * kChannels] = {};
+        for (int b = 0; b < 8; ++b) {
+            std::memset(buf, 0, sizeof(buf));
+            sm.process(buf, kBlockSize, kChannels,
+                       b == 0 ? makeNoteOn(60) : makeEmpty());
+        }
+        float diffSum = 0.0f;
+        for (int i = 1; i < kBlockSize; ++i)
+            diffSum += std::abs(buf[i * kChannels] - buf[(i - 1) * kChannels]);
+        return diffSum;
+    };
+    const float brightDiff = runWithBrightness(0.95f);
+    const float darkDiff   = runWithBrightness(0.10f);
+    EXPECT_GT(brightDiff, darkDiff * 1.5f)
+        << "brightness=0.95 should produce noticeably more high-band"
+           " energy than brightness=0.10 (bright=" << brightDiff
+        << ", dark=" << darkDiff << ")";
+}
+
+// ========================= DrawbarOrgan =========================
+//
+// 9-drawbar additive Hammond — covers the contract surface
+// (init/reset/parameter clamp), per-drawbar routing (silencing
+// every drawbar gives silence), the 8' default produces audio,
+// percussion single-trigger semantics (fires on first key, NOT
+// on a stacked second key), and AllNotesOff silences everything.
+
+TEST(DrawbarOrgan, InitAndReset) {
+    DrawbarOrgan org;
+    org.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(org.parameterCount(), DrawbarOrgan::kNumParams);
+    org.reset();
+    float buffer[kBlockSize * kChannels] = {};
+    org.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(DrawbarOrgan, NoteOnProducesAudio) {
+    DrawbarOrgan org;
+    org.init(kSampleRate, kBlockSize);
+    // Default registration has 8' = 1.0 and 4' = 0.5 — should
+    // produce immediate audio (organ envelope is fast-attack).
+    float buffer[kBlockSize * kChannels] = {};
+    org.process(buffer, kBlockSize, kChannels, makeNoteOn(60));
+    EXPECT_GT(rms(buffer, kBlockSize * kChannels), 1e-3f);
+}
+
+TEST(DrawbarOrgan, AllDrawbarsZeroIsSilentExceptForClick) {
+    // Pull every drawbar to 0, also disable percussion + key click.
+    // Pressing a note then must produce silence — confirms there
+    // is no hidden "always-on" oscillator path.
+    DrawbarOrgan org;
+    org.init(kSampleRate, kBlockSize);
+    for (int p = DrawbarOrgan::kD16; p <= DrawbarOrgan::kD1; ++p)
+        org.setParameter(p, 0.0f);
+    org.setParameter(DrawbarOrgan::kPercOn,   0.0f);
+    org.setParameter(DrawbarOrgan::kKeyClick, 0.0f);
+    float buffer[kBlockSize * kChannels] = {};
+    org.process(buffer, kBlockSize, kChannels, makeNoteOn(60));
+    // Render a few extra blocks to be sure.
+    for (int i = 0; i < 4; ++i)
+        org.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-4f);
+}
+
+TEST(DrawbarOrgan, PercussionSingleTriggerSemantics) {
+    // Percussion fires on a fresh note (no other notes held), but
+    // does NOT re-fire when a second note is added on top while
+    // the first is still held. Test by crank percussion volume and
+    // pull every drawbar to 0 — anything we hear is percussion.
+    DrawbarOrgan org;
+    org.init(kSampleRate, kBlockSize);
+    for (int p = DrawbarOrgan::kD16; p <= DrawbarOrgan::kD1; ++p)
+        org.setParameter(p, 0.0f);
+    org.setParameter(DrawbarOrgan::kKeyClick,    0.0f);
+    org.setParameter(DrawbarOrgan::kPercOn,      1.0f);
+    org.setParameter(DrawbarOrgan::kPercVolNorm, 1.0f);
+    org.setParameter(DrawbarOrgan::kPercDecayLong, 1.0f); // long decay
+
+    float first[kBlockSize * kChannels] = {};
+    org.process(first, kBlockSize, kChannels, makeNoteOn(60));
+    const float firstRms = rms(first, kBlockSize * kChannels);
+    EXPECT_GT(firstRms, 1e-3f) << "percussion should fire on fresh note";
+
+    // Render forward to drain the perc envelope by ~80% but keep
+    // the original note held.
+    float drain[kBlockSize * kChannels] = {};
+    for (int b = 0; b < 10; ++b) {
+        std::memset(drain, 0, sizeof(drain));
+        org.process(drain, kBlockSize, kChannels, makeEmpty());
+    }
+    const float drainRms = rms(drain, kBlockSize * kChannels);
+    // Should have decayed substantially — not strict on amount.
+    EXPECT_LT(drainRms, firstRms);
+
+    // Now press a SECOND key on top. Percussion should NOT fire
+    // again because the first note is still held — single-trigger.
+    float stacked[kBlockSize * kChannels] = {};
+    org.process(stacked, kBlockSize, kChannels, makeNoteOn(64));
+    // The new note adds zero drawbars (we zeroed them), so the
+    // only sound at this moment is the still-decaying perc tail
+    // from the first key. Should be ≤ drainRms (not a fresh hit).
+    const float stackedRms = rms(stacked, kBlockSize * kChannels);
+    EXPECT_LE(stackedRms, drainRms * 1.2f)
+        << "percussion appears to have re-triggered on stacked key "
+           "(first=" << firstRms << " drain=" << drainRms
+        << " stacked=" << stackedRms << ")";
+}
+
+TEST(DrawbarOrgan, AllNotesOffSilencesVoicesAndPercussion) {
+    DrawbarOrgan org;
+    org.init(kSampleRate, kBlockSize);
+    org.setParameter(DrawbarOrgan::kPercOn, 1.0f);
+
+    float buf[kBlockSize * kChannels] = {};
+    org.process(buf, kBlockSize, kChannels, makeNoteOn(60));
+    EXPECT_GT(rms(buf, kBlockSize * kChannels), 1e-3f);
+
+    MidiBuffer allOff;
+    allOff.addMessage(MidiMessage::cc(0, 123, 0));
+    org.process(buf, kBlockSize, kChannels, allOff);
+
+    // ~200ms tail — well past the 40ms release.
+    float tail[kBlockSize * kChannels] = {};
+    const int blocks = static_cast<int>((kSampleRate * 0.2) / kBlockSize);
+    for (int b = 0; b < blocks; ++b) {
+        std::memset(tail, 0, sizeof(tail));
+        org.process(tail, kBlockSize, kChannels, makeEmpty());
+    }
+    EXPECT_LT(rms(tail, kBlockSize * kChannels), 1e-4f);
+}
+
+TEST(DrawbarOrgan, ParameterClampingAndDefaults) {
+    DrawbarOrgan org;
+    org.init(kSampleRate, kBlockSize);
+    for (int p = 0; p < DrawbarOrgan::kNumParams; ++p) {
+        const auto& info = org.parameterInfo(p);
+        EXPECT_FLOAT_EQ(org.getParameter(p), info.defaultValue)
+            << "param " << p << " (" << info.name << ") didn't match default";
+    }
+    org.setParameter(DrawbarOrgan::kD8, 99.0f);
+    EXPECT_LE(org.getParameter(DrawbarOrgan::kD8), 1.0f);
+    org.setParameter(DrawbarOrgan::kD8, -99.0f);
+    EXPECT_GE(org.getParameter(DrawbarOrgan::kD8), 0.0f);
+    // Out-of-range index is no-op + 0 read.
+    org.setParameter(-1, 0.5f);
+    org.setParameter(DrawbarOrgan::kNumParams + 5, 0.5f);
+    EXPECT_EQ(org.getParameter(-1), 0.0f);
+}
+
+TEST(DrawbarOrgan, HarmonicRatiosMatchHammondLayout) {
+    // The exact ratios users reference when reading registration
+    // numbers off the drawbar panel. Pin them so a refactor doesn't
+    // silently transpose the 5⅓' and 8' or similar.
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD16],  0.5f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD513], 1.5f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD8],   1.0f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD4],   2.0f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD223], 3.0f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD2],   4.0f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD135], 5.0f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD113], 6.0f);
+    EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD1],   8.0f);
 }

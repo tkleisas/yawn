@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(YAWN
-    VERSION 0.56.0
+    VERSION 0.57.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -312,6 +312,8 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumRack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/Multisampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumSynth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/StringMachine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrawbarOrgan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
     # Audio effects (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Reverb.cpp

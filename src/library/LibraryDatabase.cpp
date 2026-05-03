@@ -33,7 +33,8 @@ static bool isBuiltInInstrument(const std::string& n) {
            n == "Drum Rack"         || n == "Drum Synth" ||
            n == "DrumSlop"          || n == "Karplus-Strong" ||
            n == "Wavetable Synth"   || n == "Granular Synth" || n == "Vocoder" ||
-           n == "Multisampler"      || n == "Instrument Rack";
+           n == "Multisampler"      || n == "Instrument Rack" ||
+           n == "String Machine"    || n == "Drawbar Organ";
 }
 
 static bool isBuiltInEffect(const std::string& n) {
@@ -46,6 +47,7 @@ static bool isBuiltInEffect(const std::string& n) {
         n == "Convolution Reverb" ||
         n == "Tape Emulation" ||
         n == "Amp Simulator" ||
+        n == "Phaser"       || n == "Wah"          || n == "Rotary" ||
         n == "Oscilloscope" || n == "Spectrum Analyzer" || n == "Spectrum" ||
         n == "Tuner")
         return true;
