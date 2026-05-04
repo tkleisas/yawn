@@ -334,6 +334,12 @@ json serializeInstrument(const instruments::Instrument& inst,
             if (ch.instrument)
                 cj["instrument"] = serializeInstrument(*ch.instrument,
                                                        samplesDir, sampleCounter);
+            // Per-chain fx — only emit when the chain actually has
+            // one allocated; chains without fx omit the key entirely
+            // so the JSON stays compact and old projects without per-
+            // chain fx round-trip cleanly.
+            if (ch.fx)
+                cj["fx"] = serializeEffectChainStandalone(*ch.fx);
             chains.push_back(cj);
         }
         j["chains"] = chains;
@@ -520,9 +526,13 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             ds.setSelectedPad(j["selectedPad"].get<int>());
     }
 
-    // InstrumentRack: load chains with nested instruments
+    // InstrumentRack: load chains with nested instruments.
+    // The constructor auto-creates a default chain (so a fresh rack
+    // makes sound immediately); wipe it first so the saved chains
+    // round-trip 1-to-1 instead of being appended after the default.
     if (id == "instrack" && j.contains("chains")) {
         auto& rack = static_cast<instruments::InstrumentRack&>(*inst);
+        rack.clearChains();
         for (const auto& cj : j["chains"]) {
             std::unique_ptr<instruments::Instrument> chainInst;
             if (cj.contains("instrument"))
@@ -544,6 +554,18 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
                 rack.chain(ci).volume = cj.value("volume", 1.0f);
                 rack.chain(ci).pan = cj.value("pan", 0.0f);
                 rack.chain(ci).enabled = cj.value("enabled", true);
+
+                // Per-chain fx — only present when the chain had at
+                // least one effect at save time. chainFxChain()
+                // lazy-allocates a fresh chain at the right sample
+                // rate; deserializeEffectChainStandalone fills it.
+                if (cj.contains("fx")) {
+                    if (auto* fxChain = rack.chainFxChain(ci)) {
+                        deserializeEffectChainStandalone(
+                            *fxChain, cj["fx"],
+                            sampleRate, maxBlockSize);
+                    }
+                }
             }
         }
     }

@@ -150,6 +150,34 @@ inline std::string groupedShortenLabel(const std::string& name) {
     if (s == "Pad Dec")       return "Dcy";
     if (s == "Pad Sus")       return "Sus";
     if (s == "Pad Rel")       return "Rel";
+    // DrumRack per-selected-pad — the rack itself uses "Pad Volume"
+    // / "Pad Pitch" already shortened above. New entries cover the
+    // v0.59.0 additions (choke / AR env / region trim) so they fit
+    // the 52-px knob cell without bleeding into neighbours.
+    if (s == "Pad Volume")    return "Vol";
+    if (s == "Choke")         return "Chk";
+    if (s == "Start")         return "Start";
+    if (s == "End")           return "End";
+    // InstrumentRack chain params — full names ("Chain Vol" / "Key
+    // Low" / etc.) overflow the 52-px cell and overlap horribly.
+    // Compact forms keep the columns readable in the rack widget.
+    if (s == "Chain Vol")     return "ChVol";
+    if (s == "Chain Pan")     return "ChPan";
+    if (s == "Key Low")       return "K Lo";
+    if (s == "Key High")      return "K Hi";
+    if (s == "Vel Low")       return "V Lo";
+    if (s == "Vel High")      return "V Hi";
+    // String Machine — "16' Level" etc. are wider than the 52-px
+    // cell. Drop the "Level" word; the octave glyph is the unique
+    // identifier (matches Solina front-panel labelling). Brightness
+    // / Ensemble * also need compact forms.
+    if (s == "16' Level")     return "16'";
+    if (s == "8' Level")      return "8'";
+    if (s == "4' Level")      return "4'";
+    if (s == "Brightness")    return "Bright";
+    if (s == "Ens Depth")     return "EnsDpt";
+    if (s == "Ens Rate")      return "EnsRt";
+    if (s == "Ens On")        return "Ens";
     return s;
 }
 

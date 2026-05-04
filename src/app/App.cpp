@@ -4911,13 +4911,25 @@ bool App::init() {
             addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
             addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
             addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
+            addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
             addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
             addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
             addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
             addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
+            addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
             addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
             addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
+            addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
+            addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
+            addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
+            addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
+            addFx("Neural Amp",      [](){ return std::make_unique<effects::NeuralAmp>(); });
+            addFx("Conv Reverb",     [](){ return std::make_unique<effects::ConvolutionReverb>(); });
             addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
+            addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
+            addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
+            addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
+            addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
             items.push_back({"Add Pad FX", nullptr, false, true, std::move(addItems)});
 
             // Remove submenu — only when the pad has a chain with
@@ -4939,6 +4951,141 @@ bool App::init() {
                 items.push_back({"Remove Pad FX", nullptr, false, true, std::move(remItems)});
                 items.push_back({"Clear All Pad FX", [dr, note]() {
                     dr->clearPadFx(note);
+                }});
+            }
+
+            ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                         ui::fw::Point{sx, sy});
+        });
+
+    // Per-chain fx context menu — surfaced from a right-click on an
+    // InstrumentRack chain row. Mirrors the per-pad DrumRack menu
+    // above. Pad / chain submenu structure is identical: Add Chain
+    // FX → list, Remove Chain FX → list, Clear All. The menu mutates
+    // the rack's per-chain fx chain directly; audio thread picks up
+    // changes on the next block via lock-free m_count.
+    m_detailPanel->setOnInstrumentRackChainFxMenu(
+        [this](instruments::InstrumentRack* ir, int chainIdx,
+                  float sx, float sy) {
+            if (!ir || chainIdx < 0 || chainIdx >= ir->chainCount()) return;
+            using Item = ui::ContextMenu::Item;
+            std::vector<Item> items;
+
+            // "Change Instrument →" submenu — swaps the chain's
+            // nested instrument for any of the available types.
+            // InstrumentRack is intentionally absent so users can't
+            // nest a rack inside itself (would confuse the outer-
+            // rack tick-rebuild fingerprint logic).
+            std::vector<Item> swapItems;
+            auto addSwap = [this, ir, chainIdx, &swapItems](
+                    const char* label,
+                    std::function<std::unique_ptr<instruments::Instrument>()> make) {
+                swapItems.push_back({label, [this, ir, chainIdx, make]() {
+                    auto inst = make();
+                    if (!inst) return;
+                    // setInstrument() on the engine inits the
+                    // instrument with the engine's SR + block size;
+                    // for chain instruments we mirror that init path
+                    // manually since they don't go through the
+                    // engine's instrument slot. The rack itself
+                    // already shares m_sampleRate/m_maxBlockSize, so
+                    // we can just re-init via the chain accessor's
+                    // helper — but the simplest thing is to push it
+                    // through the rack's own init() pass on the next
+                    // process block. Calling init here ensures the
+                    // synth is ready immediately for any UI param
+                    // edits the user makes before the next note-on.
+                    inst->init(m_audioEngine.sampleRate(),
+                                ir->maxBlockSize());
+                    // The detail panel caches raw pointers to the
+                    // chain instrument's widget; clear those before
+                    // destroying the old instrument so the next
+                    // render doesn't dereference freed memory.
+                    m_detailPanel->clear();
+                    auto& ch = ir->chain(chainIdx);
+                    ch.instrument = std::move(inst);
+                    LOG_INFO("User", "InstrumentRack chain %d → swap "
+                                      "instrument", chainIdx);
+                    // Repopulate the panel immediately so the user
+                    // sees the new instrument's knobs without having
+                    // to click the track again.
+                    updateDetailForSelectedTrack();
+                }});
+            };
+            addSwap("SubSynth",        [](){ return std::make_unique<instruments::SubtractiveSynth>(); });
+            addSwap("FM Synth",        [](){ return std::make_unique<instruments::FMSynth>(); });
+            addSwap("Sampler",         [](){ return std::make_unique<instruments::Sampler>(); });
+            addSwap("Drum Rack",       [](){ return std::make_unique<instruments::DrumRack>(); });
+            addSwap("Drum Synth",      [](){ return std::make_unique<instruments::DrumSynth>(); });
+            addSwap("DrumSlop",        [](){ return std::make_unique<instruments::DrumSlop>(); });
+            addSwap("Karplus-Strong",  [](){ return std::make_unique<instruments::KarplusStrong>(); });
+            addSwap("Wavetable Synth", [](){ return std::make_unique<instruments::WavetableSynth>(); });
+            addSwap("Granular Synth",  [](){ return std::make_unique<instruments::GranularSynth>(); });
+            addSwap("Vocoder",         [](){ return std::make_unique<instruments::Vocoder>(); });
+            addSwap("Multisampler",    [](){ return std::make_unique<instruments::Multisampler>(); });
+            addSwap("String Machine",  [](){ return std::make_unique<instruments::StringMachine>(); });
+            addSwap("Drawbar Organ",   [](){ return std::make_unique<instruments::DrawbarOrgan>(); });
+            items.push_back({"Change Instrument", nullptr, false, true,
+                              std::move(swapItems)});
+            items.push_back({"", nullptr, true}); // separator
+
+            std::vector<Item> addItems;
+            auto addFx = [this, ir, chainIdx, &addItems](const char* label,
+                            std::function<std::unique_ptr<effects::AudioEffect>()> make) {
+                addItems.push_back({label, [this, ir, chainIdx, make]() {
+                    auto* chain = ir->chainFxChain(chainIdx);
+                    if (chain) chain->append(make());
+                    LOG_INFO("User", "InstrumentRack chain %d → add fx",
+                              chainIdx);
+                }});
+            };
+            addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
+            addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
+            addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
+            addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
+            addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
+            addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
+            addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
+            addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
+            addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
+            addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
+            addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
+            addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
+            addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
+            addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
+            addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
+            addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
+            addFx("Neural Amp",      [](){ return std::make_unique<effects::NeuralAmp>(); });
+            addFx("Conv Reverb",     [](){ return std::make_unique<effects::ConvolutionReverb>(); });
+            addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
+            addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
+            addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
+            addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
+            addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
+            items.push_back({"Add Chain FX", nullptr, false, true,
+                             std::move(addItems)});
+
+            auto* existing = ir->chainFxChainOrNull(chainIdx);
+            if (existing && existing->count() > 0) {
+                std::vector<Item> remItems;
+                for (int i = 0; i < existing->count(); ++i) {
+                    auto* fx = existing->effectAt(i);
+                    if (!fx) continue;
+                    std::string label = fx->name();
+                    int slot = i;
+                    remItems.push_back({label, [this, ir, chainIdx, slot]() {
+                        auto* chain = ir->chainFxChain(chainIdx);
+                        if (chain) chain->remove(slot);
+                        LOG_INFO("User", "InstrumentRack chain %d → "
+                                          "remove fx slot %d",
+                                  chainIdx, slot);
+                    }});
+                }
+                items.push_back({"Remove Chain FX", nullptr, false, true,
+                                  std::move(remItems)});
+                items.push_back({"Clear All Chain FX",
+                                  [ir, chainIdx]() {
+                    ir->clearChainFx(chainIdx);
                 }});
             }
 

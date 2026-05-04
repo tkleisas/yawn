@@ -1,7 +1,18 @@
 #include "instruments/InstrumentRack.h"
+#include "instruments/SubtractiveSynth.h"
 
 namespace yawn {
 namespace instruments {
+
+InstrumentRack::InstrumentRack() {
+    // Auto-populate with a single full-range SubtractiveSynth chain
+    // so the rack makes sound on first add. Without this the user
+    // sees an empty rack panel and has to click "Add Chain" before
+    // the keys do anything — confusing first impression. Project /
+    // preset load wipes this default via clearChains() before
+    // re-populating from JSON.
+    addChain(std::make_unique<SubtractiveSynth>());
+}
 
 void InstrumentRack::init(double sampleRate, int maxBlockSize) {
     m_sampleRate = sampleRate;
@@ -10,15 +21,24 @@ void InstrumentRack::init(double sampleRate, int maxBlockSize) {
     m_chainBufHeap.resize(kMaxChains * stride, 0.0f);
     for (int i = 0; i < kMaxChains; ++i)
         m_chainBufPtrs[i] = m_chainBufHeap.data() + i * stride;
-    for (int i = 0; i < m_numChains; ++i)
+    for (int i = 0; i < m_numChains; ++i) {
         if (m_chains[i].instrument)
             m_chains[i].instrument->init(sampleRate, maxBlockSize);
+        // Per-chain fx — only init if the chain was allocated by a
+        // prior chainFxChain() call (or by the deserializer).
+        // Newly-created chains start without an fx chain at all.
+        if (m_chains[i].fx)
+            m_chains[i].fx->init(sampleRate, maxBlockSize);
+    }
 }
 
 void InstrumentRack::reset() {
-    for (int i = 0; i < m_numChains; ++i)
+    for (int i = 0; i < m_numChains; ++i) {
         if (m_chains[i].instrument)
             m_chains[i].instrument->reset();
+        if (m_chains[i].fx)
+            m_chains[i].fx->reset();
+    }
 }
 
 void InstrumentRack::process(float* buffer, int numFrames, int numChannels,
@@ -49,6 +69,14 @@ void InstrumentRack::process(float* buffer, int numFrames, int numChannels,
                     numFrames * numChannels * sizeof(float));
         chain.instrument->process(
             m_chainBufPtrs[c], numFrames, numChannels, m_chainMidi[c]);
+
+        // Per-chain fx — process the scratch buffer in place after
+        // the instrument fills it but BEFORE we apply chain
+        // volume/pan, so the effects see the instrument's natural
+        // signal level (compressors / saturation feel right). Same
+        // pre-mix routing as DrumRack PadFx.
+        if (chain.fx)
+            chain.fx->process(m_chainBufPtrs[c], numFrames, numChannels);
 
         // Mix into output with volume/pan
         float angle = (chain.pan + 1.0f) * 0.25f * (float)M_PI;

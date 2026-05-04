@@ -576,7 +576,10 @@ TEST(DrumRack, PerPadParameterAPI) {
     DrumRack rack;
     rack.init(kSampleRate, kBlockSize);
 
-    EXPECT_EQ(rack.parameterCount(), 4);
+    // 1 global (Volume) + 8 per-selected-pad (Pad Volume, Pan, Pitch,
+    // Choke, Attack, Decay, Start, End). The expected count grew when
+    // v0.59.0 added choke groups, AR envelope, and region trim.
+    EXPECT_EQ(rack.parameterCount(), 9);
 
     // Global volume
     EXPECT_STREQ(rack.parameterInfo(0).name, "Volume");

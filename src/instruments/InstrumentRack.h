@@ -1,6 +1,7 @@
 #pragma once
 
 #include "instruments/Instrument.h"
+#include "effects/EffectChain.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -29,7 +30,20 @@ public:
         float   volume  = 1.0f;
         float   pan     = 0.0f; // -1 = L, 0 = center, 1 = R
         bool    enabled = true;
+        // Per-chain audio effect chain. Lazy-allocated — nullptr
+        // until the user adds the first effect, so chains without
+        // effects pay zero memory + zero CPU. Process order:
+        // chain.instrument → fx (if any) → mix into rack output
+        // with vol/pan. Mirrors DrumRack's per-pad fx pattern.
+        std::unique_ptr<effects::EffectChain> fx;
     };
+
+    // Auto-populates one default chain (SubtractiveSynth, full key /
+    // velocity range, vol=1, pan=0) so a freshly-added rack makes
+    // sound immediately. Project / preset deserialization calls
+    // clearChains() first so the saved chain list isn't appended to
+    // the default — no duplication on round-trip.
+    InstrumentRack();
 
     void init(double sampleRate, int maxBlockSize) override;
     void reset() override;
@@ -58,12 +72,55 @@ public:
         for (int i = index; i < m_numChains - 1; ++i)
             m_chains[i] = std::move(m_chains[i + 1]);
         m_chains[--m_numChains] = Chain{};
+        if (m_selectedChain >= m_numChains)
+            m_selectedChain = std::max(0, m_numChains - 1);
         return removed;
+    }
+
+    // Drop every chain. Used by the project loader before
+    // re-populating from JSON so the default chain set up by the
+    // constructor isn't appended to the saved list. Cheap — just
+    // resets the per-slot Chain to its default-constructed state
+    // and zeroes the count.
+    void clearChains() {
+        for (int i = 0; i < m_numChains; ++i)
+            m_chains[i] = Chain{};
+        m_numChains = 0;
+        m_selectedChain = 0;
     }
 
     Chain&       chain(int i)       { return m_chains[i]; }
     const Chain& chain(int i) const { return m_chains[i]; }
     int chainCount() const { return m_numChains; }
+
+    // Public accessors for the rack's init parameters — used by App's
+    // "Change Instrument" callback to init a freshly-created chain
+    // instrument at the same SR / block size the rack runs at.
+    double sampleRate()   const { return m_sampleRate; }
+    int    maxBlockSize() const { return m_maxBlockSize; }
+
+    // Per-chain effect chain access. Lazy-allocates on first call so
+    // the user can directly start adding effects to the returned
+    // chain. Returns nullptr only for an out-of-range chain index.
+    effects::EffectChain* chainFxChain(int idx) {
+        if (idx < 0 || idx >= m_numChains) return nullptr;
+        if (!m_chains[idx].fx) {
+            m_chains[idx].fx = std::make_unique<effects::EffectChain>();
+            if (m_sampleRate > 0)
+                m_chains[idx].fx->init(m_sampleRate, m_maxBlockSize);
+        }
+        return m_chains[idx].fx.get();
+    }
+    // Const view — returns nullptr if no chain has been allocated
+    // (no effects added yet). Project / preset save uses this so
+    // chains with no fx don't pollute JSON.
+    const effects::EffectChain* chainFxChainOrNull(int idx) const {
+        if (idx < 0 || idx >= m_numChains) return nullptr;
+        return m_chains[idx].fx.get();
+    }
+    void clearChainFx(int idx) {
+        if (idx >= 0 && idx < m_numChains) m_chains[idx].fx.reset();
+    }
 
     // Selected chain for UI editing
     int  selectedChain() const { return m_selectedChain; }

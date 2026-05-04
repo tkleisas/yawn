@@ -102,7 +102,20 @@ public:
     // rack's selected pad's chain rather than the track's audio
     // chain). DeviceRef::padNote carries which pad the entry belongs
     // to so add / remove / move can find the right chain again.
-    enum class DeviceType { MidiFx, Instrument, AudioFx, PadFx };
+    //
+    // ChainFx — same idea for InstrumentRack: per-chain effects that
+    // appear after the rack widget, swap when the user picks a
+    // different chain. DeviceRef::padNote is reused as the chain
+    // index for ChainFx entries (kept named padNote to avoid a
+    // wider rename — the comment on the field clarifies usage).
+    //
+    // ChainInst — the InstrumentRack chain's nested instrument
+    // exposed as its own widget so the user can edit the synth's
+    // parameters without leaving the rack view. Uses a flat knob
+    // grid (no instrument-specific display panel) to avoid clashing
+    // with the outer rack's m_*Inst stash that drives tick-rebuild.
+    enum class DeviceType { MidiFx, Instrument, AudioFx, PadFx, ChainFx,
+                            ChainInst };
     enum class ViewMode  { Devices, AudioClip };
 
     // Clip view layout constants
@@ -159,6 +172,18 @@ public:
                             float sx, float sy)>;
     void setOnDrumPadFxMenu(DrumPadFxMenuCallback cb) {
         m_onDrumPadFxMenu = std::move(cb);
+    }
+
+    // Right-click on an InstrumentRack chain — same delegation
+    // pattern as setOnDrumPadFxMenu. Args: the rack, the chain
+    // index that was right-clicked, screen-space (sx, sy) for the
+    // menu root.
+    using InstrumentRackChainFxMenuCallback =
+        std::function<void(instruments::InstrumentRack* rack, int chainIdx,
+                            float sx, float sy)>;
+    void setOnInstrumentRackChainFxMenu(
+            InstrumentRackChainFxMenuCallback cb) {
+        m_onInstrackChainFxMenu = std::move(cb);
     }
 
     // Cross-panel drag-drop hook. Called by App's mouse-up
@@ -695,13 +720,28 @@ public:
             const auto* pc = dr->padFxChainOrNull(padNote);
             padFxCount = pc ? pc->count() : 0;
         }
+        // InstrumentRack-only: same idea — selected chain index +
+        // per-chain fx count. Other instruments leave both at -1/0.
+        int chainIdx     = -1;
+        int chainFxCount = 0;
+        if (auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst)) {
+            chainIdx = ir->selectedChain();
+            if (chainIdx >= 0 && chainIdx < ir->chainCount()) {
+                const auto* fc = ir->chainFxChainOrNull(chainIdx);
+                chainFxCount = fc ? fc->count() : 0;
+            } else {
+                chainIdx = -1;
+            }
+        }
 
         if (m_viewMode == ViewMode::Devices &&
             midiChain == m_lastMidiChain && inst == m_lastInst &&
             fxChain == m_lastFxChain &&
             midiCount == m_lastMidiCount && fxCount == m_lastFxCount &&
             padNote == m_lastPadNote &&
-            padFxCount == m_lastPadFxCount)
+            padFxCount == m_lastPadFxCount &&
+            chainIdx == m_lastChainIdx &&
+            chainFxCount == m_lastChainFxCount)
             return;
 
         m_viewMode = ViewMode::Devices;
@@ -718,6 +758,7 @@ public:
         m_drumRackInst    = nullptr;
         m_msDisplay       = nullptr;
         m_msInst          = nullptr;
+        m_instrackInst    = nullptr;
 
         std::vector<float> snapPoints;
         float xPos = 0;
@@ -805,6 +846,94 @@ public:
             }
         }
 
+        // Per-chain INSTRUMENT widget — exposes the nested
+        // instrument's params as a flat knob grid so the user can
+        // tweak SubSynth / Sampler / etc. without leaving the rack
+        // view. Appended before the ChainFx widgets so the strip
+        // reads left-to-right as: ... → Rack → "Chain N: SubSynth"
+        // → "Chain N: Reverb" → ... Uses a flat knob grid
+        // (configureDeviceWidget) instead of setupInstrumentDisplay
+        // — the latter would overwrite m_drumRackInst / m_msInst /
+        // m_instrackInst with the chain's nested pointers and
+        // confuse the outer-rack tick rebuild logic.
+        if (auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+            ir && chainIdx >= 0) {
+            auto& chRef = ir->chain(chainIdx);
+            if (chRef.instrument) {
+                DeviceRef ref;
+                ref.type        = DeviceType::ChainInst;
+                ref.chainIndex  = 0;
+                ref.padNote     = chainIdx;
+                ref.instrument  = chRef.instrument.get();
+
+                auto* dw = new DeviceWidget();
+                char nameBuf[64];
+                std::snprintf(nameBuf, sizeof(nameBuf), "Chain %d: %s",
+                              chainIdx + 1, chRef.instrument->name());
+                dw->setDeviceName(nameBuf);
+                dw->setDeviceType(DeviceHeaderWidget::DeviceType::Instrument);
+                dw->setRemovable(false);
+                dw->setExpanded(findPrevExpanded(
+                    static_cast<void*>(chRef.instrument.get())));
+                dw->setBypassed(chRef.instrument->bypassed());
+
+                configureDeviceWidget(dw, ref);
+
+                snapPoints.push_back(xPos);
+                xPos += dw->preferredWidth() + kDeviceGap;
+                m_scroll.addChild(dw);
+                m_deviceWidgets.push_back(dw);
+                m_deviceRefs.push_back(ref);
+            }
+        }
+
+        // Per-chain effects of the InstrumentRack instrument (if the
+        // track hosts one). Appended after the track audio fx so the
+        // chain reads left-to-right as: MIDI fx → Instrument → Track
+        // audio fx → "Chain N: <fx>" widgets. Same fingerprint /
+        // rebuild model as PadFx — selecting a different chain swaps
+        // in that chain's fx; add / remove triggers a rebuild via
+        // tick().
+        if (auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+            ir && chainIdx >= 0) {
+            auto* fc = ir->chainFxChainOrNull(chainIdx);
+            if (fc) {
+                for (int i = 0; i < fc->count(); ++i) {
+                    auto* fx = fc->effectAt(i);
+                    if (!fx) continue;
+                    DeviceRef ref;
+                    ref.type        = DeviceType::ChainFx;
+                    ref.chainIndex  = i;
+                    // Reuse padNote as the InstrumentRack chain
+                    // index (see comment on DeviceRef::padNote).
+                    ref.padNote     = chainIdx;
+                    ref.audioEffect = fx;
+
+                    auto* dw = new DeviceWidget();
+                    char nameBuf[64];
+                    std::snprintf(nameBuf, sizeof(nameBuf), "Chain %d: %s",
+                                  chainIdx + 1, fx->name());
+                    dw->setDeviceName(nameBuf);
+                    dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
+                    dw->setRemovable(true);
+                    dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
+                    dw->setBypassed(fx->bypassed());
+
+                    if (fx->isVisualizer())
+                        dw->setVisualizer(true, fx->visualizerType());
+
+                    if (!setupAudioEffectDisplay(dw, fx, ref))
+                        configureDeviceWidget(dw, ref);
+
+                    snapPoints.push_back(xPos);
+                    xPos += dw->preferredWidth() + kDeviceGap;
+                    m_scroll.addChild(dw);
+                    m_deviceWidgets.push_back(dw);
+                    m_deviceRefs.push_back(ref);
+                }
+            }
+        }
+
         // Per-pad effects of the DrumRack instrument (if the track
         // hosts one). Appended after the track audio fx so the chain
         // reads left-to-right as: MIDI fx → Instrument → Track audio
@@ -866,6 +995,8 @@ public:
         m_lastFxCount   = fxCount;
         m_lastPadNote   = padNote;
         m_lastPadFxCount = padFxCount;
+        m_lastChainIdx  = chainIdx;
+        m_lastChainFxCount = chainFxCount;
 
         // Auto-open when devices are populated
         if (!m_deviceWidgets.empty()) setOpen(true);
@@ -892,6 +1023,7 @@ public:
         m_drumRackInst    = nullptr;
         m_msDisplay       = nullptr;
         m_msInst          = nullptr;
+        m_instrackInst    = nullptr;
         m_lastMidiChain = nullptr;
         m_lastInst      = nullptr;
         m_lastFxChain   = nullptr;
@@ -899,6 +1031,8 @@ public:
         m_lastFxCount   = 0;
         m_lastPadNote   = -1;
         m_lastPadFxCount = 0;
+        m_lastChainIdx  = -1;
+        m_lastChainFxCount = 0;
         m_viewMode = ViewMode::Devices;
         m_clipPtr  = nullptr;
     }
@@ -994,6 +1128,23 @@ public:
             const auto* pc = m_drumRackInst->padFxChainOrNull(sel);
             int cnt = pc ? pc->count() : 0;
             if (sel != m_lastPadNote || cnt != m_lastPadFxCount) {
+                setDeviceChain(m_lastMidiChain, m_lastInst, m_lastFxChain);
+            }
+        }
+
+        // InstrumentRack: same pattern. Rebuild when the user picks
+        // a different chain (via the rack's chain list) or when the
+        // selected chain's fx count changes (add / remove).
+        if (m_viewMode == ViewMode::Devices && m_instrackInst &&
+            m_instrackInst == m_lastInst) {
+            int sel = m_instrackInst->selectedChain();
+            if (sel >= m_instrackInst->chainCount()) sel = -1;
+            int cnt = 0;
+            if (sel >= 0) {
+                const auto* fc = m_instrackInst->chainFxChainOrNull(sel);
+                cnt = fc ? fc->count() : 0;
+            }
+            if (sel != m_lastChainIdx || cnt != m_lastChainFxCount) {
                 setDeviceChain(m_lastMidiChain, m_lastInst, m_lastFxChain);
             }
         }
@@ -1126,6 +1277,16 @@ public:
                             // rebuilds the widgets in the new order.
                             m_lastPadFxCount = -1;
                         }
+                    } else if (srcType == DeviceType::ChainFx) {
+                        // ChainFx reorder — same inline pattern.
+                        // srcPadNote is repurposed as the rack chain
+                        // index for ChainFx widgets.
+                        if (m_instrackInst) {
+                            if (auto* chain =
+                                    m_instrackInst->chainFxChain(srcPadNote))
+                                chain->moveEffect(fromChain, targetChain);
+                            m_lastChainFxCount = -1;
+                        }
                     } else if (m_onMoveDevice) {
                         m_onMoveDevice(srcType, fromChain, targetChain);
                     }
@@ -1233,9 +1394,11 @@ private:
     struct DeviceRef {
         DeviceType type = DeviceType::AudioFx;
         int chainIndex = -1;
-        // PadFx only: which DrumRack pad's per-pad chain this entry
-        // belongs to. -1 for any other DeviceType. Used by App's
-        // remove / move callbacks to relocate the right pad chain.
+        // PadFx: which DrumRack pad's per-pad chain this entry
+        // belongs to (0..127). ChainFx: which InstrumentRack chain
+        // this entry belongs to (0..7). -1 for any other DeviceType.
+        // Used by the inline remove / move handlers in DetailPanel
+        // to relocate the right sub-chain.
         int padNote = -1;
         midi::MidiEffect*       midiEffect  = nullptr;
         instruments::Instrument* instrument  = nullptr;
@@ -1341,12 +1504,14 @@ private:
         // builds + shows it). The param's display name is resolved
         // here against the live device pointer so App can stay
         // device-type agnostic in showMacroMappingMenu.
-        // PadFx widgets opt out — the macro/automation system has
-        // no schema for "pad N's chain index C param P" yet, so
-        // wiring it would let the user open a menu that mis-targets
-        // a track-level effect. Easier to disallow until a proper
-        // pad-aware target type lands.
-        if (ref.type != DeviceType::PadFx) {
+        // PadFx / ChainFx widgets opt out — the macro/automation
+        // system has no schema for "pad N's chain index C param P"
+        // (or "rack chain N's fx M's param P") yet, so wiring it
+        // would let the user open a menu that mis-targets a track-
+        // level effect. Easier to disallow until a proper sub-chain-
+        // aware target type lands.
+        if (ref.type != DeviceType::PadFx && ref.type != DeviceType::ChainFx &&
+            ref.type != DeviceType::ChainInst) {
             dw->setOnParamRightClick(
                 [this, ref](int paramIdx, float mx, float my) {
                     if (!m_onParamRightClick) return;
@@ -1369,8 +1534,10 @@ private:
         }
 
         // Automation recording: forward knob touch begin/end
-        // (skipped for PadFx for the same reason as the macro menu).
-        if (ref.type != DeviceType::PadFx) {
+        // (skipped for PadFx / ChainFx for the same reason as the
+        // macro menu).
+        if (ref.type != DeviceType::PadFx && ref.type != DeviceType::ChainFx &&
+            ref.type != DeviceType::ChainInst) {
             uint8_t tt = 0;
             if (ref.type == DeviceType::Instrument)
                 tt = static_cast<uint8_t>(automation::TargetType::Instrument);
@@ -1390,11 +1557,12 @@ private:
             r.toggleBypass();
         });
 
-        // PadFx remove is handled inline rather than via the App
-        // callback: removing it requires the DrumRack pointer + the
-        // pad index, both of which we already have here. Going
-        // through m_onRemoveDevice would force a wider callback
-        // signature for the one device type that needs it.
+        // PadFx / ChainFx remove is handled inline rather than via
+        // the App callback: removing requires the parent rack
+        // pointer + the sub-index (pad note or chain index), both
+        // of which we already have here. Going through
+        // m_onRemoveDevice would force a wider callback signature
+        // for the few device types that need it.
         if (ref.type == DeviceType::PadFx) {
             instruments::DrumRack* dr = m_drumRackInst;
             int note = ref.padNote;
@@ -1404,6 +1572,15 @@ private:
                 if (auto* chain = dr->padFxChain(note))
                     chain->remove(chainIdx);
                 // tick() will see the chain count drop and rebuild.
+            });
+        } else if (ref.type == DeviceType::ChainFx) {
+            instruments::InstrumentRack* ir = m_instrackInst;
+            int rackChain = ref.padNote;
+            int chainIdx = ref.chainIndex;
+            dw->setOnRemove([this, ir, rackChain, chainIdx]() {
+                if (!ir) return;
+                if (auto* chain = ir->chainFxChain(rackChain))
+                    chain->remove(chainIdx);
             });
         } else {
             dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
@@ -1431,9 +1608,12 @@ private:
         });
 
         // CC label lookup for MIDI Learn visual feedback
-        // (PadFx skipped — no MIDI Learn target type for per-pad fx,
-        // matching the macro / automation skip above.)
-        if (m_learnManager && ref.type != DeviceType::PadFx) {
+        // (PadFx / ChainFx skipped — no MIDI Learn target type for
+        // per-pad / per-chain fx, matching the macro / automation
+        // skip above.)
+        if (m_learnManager && ref.type != DeviceType::PadFx &&
+            ref.type != DeviceType::ChainFx &&
+            ref.type != DeviceType::ChainInst) {
             automation::TargetType tt;
             if (ref.type == DeviceType::Instrument)
                 tt = automation::TargetType::Instrument;
@@ -1831,15 +2011,35 @@ private:
         } else if (nm == "Instrument Rack") {
             auto* irPanel = new InstrumentRackDisplayPanel();
             config.display = irPanel;
-            config.displayWidth = 160;
+            // Bumped 160 → 240 so the chain rows fit "1: Subtractive
+            // Synth" without truncation at the user's theme font
+            // scale, and so the key/vel range bars have enough width
+            // to read at a glance.
+            config.displayWidth = 240;
             config.sections = {
                 {"Rack",  {0}},
                 {"Chain", {1, 2, 3, 4, 5, 6}},
             };
 
+            // Stash the rack pointer so tick() can detect a chain
+            // selection or per-chain fx count change and trigger a
+            // rebuild — same pattern as m_drumRackInst.
+            m_instrackInst = dynamic_cast<instruments::InstrumentRack*>(inst);
+
             irPanel->setOnChainClick([inst](int idx) {
                 auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
                 if (ir) ir->setSelectedChain(idx);
+            });
+
+            // Right-click on a chain row → forward up to App so it
+            // can open the per-chain fx context menu (Add / Remove
+            // effects). DetailPanel doesn't know about the audio-
+            // effect factory; App owns that knowledge.
+            irPanel->setOnChainRightClick([this, inst](int chainIdx,
+                                                          float sx, float sy) {
+                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
+                if (ir && m_onInstrackChainFxMenu)
+                    m_onInstrackChainFxMenu(ir, chainIdx, sx, sy);
             });
 
             irPanel->setOnAddChain([inst]() {
@@ -2205,10 +2405,18 @@ private:
     instruments::DrumRack*           m_drumRackInst      = nullptr;
     fw2::MultisamplerDisplayPanel*   m_msDisplay         = nullptr;
     instruments::Multisampler*       m_msInst            = nullptr;
+    // Set when an InstrumentRack widget is built so tick() can
+    // detect a change in selectedChain() / per-chain fx count and
+    // trigger a rebuild — same fingerprint pattern as DrumRack.
+    instruments::InstrumentRack*     m_instrackInst      = nullptr;
 
     // App-wired callback for per-pad fx context menu (right-click).
     // See setOnDrumPadFxMenu().
     DrumPadFxMenuCallback m_onDrumPadFxMenu;
+    // Same delegation for InstrumentRack chain right-click. App
+    // builds the menu (Add/Remove effect entries) and shows it via
+    // ContextMenu::show. Mirrors the per-pad pattern.
+    InstrumentRackChainFxMenuCallback m_onInstrackChainFxMenu;
 
     // Two-stage wiring shim — the Multisampler panel's
     // preferred-width callback needs the GroupedKnobBody*, which
@@ -2276,6 +2484,11 @@ private:
     // chain-mutation triggers a rebuild via tickRebuildIfNeeded().
     int m_lastPadNote    = -1;
     int m_lastPadFxCount = 0;
+    // InstrumentRack-only fingerprint. Same idea as PadNote/FxCount
+    // but for the InstrumentRack's selected chain index and that
+    // chain's per-chain fx count.
+    int m_lastChainIdx   = -1;
+    int m_lastChainFxCount = 0;
 
     // Audio clip view state
     ViewMode m_viewMode = ViewMode::Devices;

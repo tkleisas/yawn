@@ -44,17 +44,42 @@ public:
     void setOnAddChain    (std::function<void()>    cb) { m_onAddChain     = std::move(cb); }
     void setOnRemoveChain (std::function<void(int)> cb) { m_onRemoveChain  = std::move(cb); }
     void setOnToggleChain (std::function<void(int)> cb) { m_onToggleChain  = std::move(cb); }
+    // Right-click on a chain row — App uses this to surface the
+    // per-chain fx context menu (add / remove effect entries),
+    // mirroring DrumRack's setOnPadRightClick wiring.
+    void setOnChainRightClick(
+            std::function<void(int chainIdx, float sx, float sy)> cb) {
+        m_onChainRightClick = std::move(cb);
+    }
 
     Size onMeasure(Constraints c, UIContext&) override {
-        return c.constrain({c.maxW, 160.0f});
+        // Bumped from 160 → 220 so the pad-grid cells and chain-list
+        // labels are large enough to read without clipping (matches
+        // the DrumRackDisplayPanel bump in v0.59.0).
+        return c.constrain({c.maxW, 220.0f});
     }
 
     bool onMouseDown(MouseEvent& e) override {
-        if (e.button != MouseButton::Left) return false;
         const float lx = e.x - m_bounds.x;
         const float ly = e.y - m_bounds.y;
 
-        const float addBtnY = m_bounds.h - 20.0f;
+        // Right-click on a chain row → surface the per-chain fx
+        // context menu via the wired callback. Falls through if no
+        // chain was hit (e.g. clicking the "Add Chain" button area).
+        if (e.button == MouseButton::Right) {
+            const float rowH = chainRowHeight();
+            const float headerH = kHeaderH;
+            const int idx = static_cast<int>((ly - headerH) / rowH);
+            if (idx >= 0 && idx < m_chainCount && m_onChainRightClick) {
+                m_onChainRightClick(idx, e.x, e.y);
+                return true;
+            }
+            return false;
+        }
+
+        if (e.button != MouseButton::Left) return false;
+
+        const float addBtnY = m_bounds.h - kAddBtnH;
         if (ly >= addBtnY && m_chainCount < 8) {
             if (m_onAddChain) m_onAddChain();
             return true;
@@ -87,15 +112,18 @@ public:
         auto* tm = ctx.textMetrics;
 
         const float x = m_bounds.x, y = m_bounds.y, w = m_bounds.w, h = m_bounds.h;
-        const float lblFs   = 7.0f * (48.0f / 26.0f);
-        const float smallFs = 6.0f * (48.0f / 26.0f);
+        // Theme-driven font sizes so the chain rows read at the
+        // user's font-scale preference instead of being stuck at the
+        // hard-coded 7×(48/26)px from the v1 port.
+        const float lblFs   = theme().metrics.fontSize;
+        const float smallFs = theme().metrics.fontSizeSmall;
 
         r.drawRect(x, y, w, h, Color{30, 30, 35, 255});
 
         if (tm)
             tm->drawText(r, "Chains", x + 4, y + 2, lblFs,
                           Color{180, 180, 180, 255});
-        const float headerH = 14.0f;
+        const float headerH = kHeaderH;
         const float rowH = chainRowHeight();
 
         for (int i = 0; i < m_chainCount; ++i) {
@@ -112,6 +140,7 @@ public:
             const float dotCY = ry + rowH * 0.5f;
             r.drawRect(x + 4, dotCY - 3, 7, 7, eDot);
 
+            const float lblLh = tm ? tm->lineHeight(lblFs) : lblFs;
             if (tm) {
                 char label[64];
                 std::snprintf(label, sizeof(label), "%d: %s",
@@ -120,9 +149,14 @@ public:
                               Color{220, 220, 220, 255});
             }
 
+            // Range bars sit BELOW the label baseline so the chain
+            // name reads cleanly. The previous fixed `ry + 14` worked
+            // for the v1 7-px font but overlaps the theme-scaled
+            // label (~12-15 px line-height) — push the bars to
+            // ry + lblLh + 2 instead so they always clear the label.
             const float barX = x + 16;
             const float barW = w - 36;
-            float barY = ry + 14;
+            float barY = ry + lblLh + 2.0f;
             const float barH = 4;
             r.drawRect(barX, barY, barW, barH, Color{25, 25, 30, 255});
             const float k0 = ch.keyLow / 127.0f, k1 = ch.keyHigh / 127.0f;
@@ -150,15 +184,18 @@ public:
                           Color{120, 120, 120, 255});
         }
 
-        const float addY = y + h - 20;
+        const float addY = y + h - kAddBtnH;
         const bool canAdd = m_chainCount < 8;
         const Color addCol = canAdd ? Color{80, 180, 80, 255}
                                      : Color{60, 60, 60, 255};
-        r.drawRect(x + 2, addY, w - 4, 18, Color{40, 40, 45, 255});
+        r.drawRect(x + 2, addY, w - 4, kAddBtnH - 2,
+                   Color{40, 40, 45, 255});
         if (tm) {
             const char* addTxt = "+ Add Chain";
             const float addTw = tm->textWidth(addTxt, smallFs);
-            tm->drawText(r, addTxt, x + (w - addTw) * 0.5f, addY + 3,
+            const float addTh = tm->lineHeight(smallFs);
+            tm->drawText(r, addTxt, x + (w - addTw) * 0.5f,
+                          addY + (kAddBtnH - addTh) * 0.5f,
                           smallFs, addCol);
         }
     }
@@ -166,10 +203,18 @@ public:
 
 private:
     float chainRowHeight() const {
-        const float usable = m_bounds.h - 14.0f - 22.0f;
+        // Bumped row min/max to match the theme-scaled fonts — the
+        // 7-px font under v1 fit in 20 px cleanly, the 12-15 px theme
+        // font needs more vertical room or the label + range bars
+        // overlap. Header / "Add Chain" footer heights bumped too.
+        const float usable = m_bounds.h - kHeaderH - kAddBtnH;
         const int maxRows = std::max(m_chainCount, 1);
-        return std::clamp(usable / maxRows, 20.0f, 28.0f);
+        return std::clamp(usable / maxRows, 32.0f, 44.0f);
     }
+    // Bumped 18 → 24 so the "Chains" header label (theme-scaled
+    // font, ~15-18 px tall) renders without clipping at the bottom.
+    static constexpr float kHeaderH = 24.0f;
+    static constexpr float kAddBtnH = 22.0f;
 
     int m_chainCount = 0;
     int m_selected = 0;
@@ -178,6 +223,8 @@ private:
     std::function<void()>    m_onAddChain;
     std::function<void(int)> m_onRemoveChain;
     std::function<void(int)> m_onToggleChain;
+    std::function<void(int /*chainIdx*/, float /*sx*/, float /*sy*/)>
+        m_onChainRightClick;
 };
 
 } // namespace fw2
