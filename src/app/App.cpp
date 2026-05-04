@@ -1205,6 +1205,48 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             }, ""});
     }});
 
+    // Electric Piano — same auto-add-FX pattern as Drawbar Organ. Pairs
+    // a Suitcase-default EP with a Phaser, the iconic Mark V / Steely
+    // Dan rig setup. Phaser is added once; re-picking the EP later
+    // doesn't stack a second one. The user can remove or replace the
+    // phaser freely — it's just a sensible default starting point.
+    instrItems.push_back({"Electric Piano", [this, trackIndex]() {
+        auto oldType = m_project.track(trackIndex).type;
+        std::string oldInstr;
+        if (auto* inst = m_audioEngine.instrument(trackIndex))
+            oldInstr = inst->name();
+        const uint8_t oldTypeVal = (oldType == Track::Type::Audio) ? 0
+                                  : (oldType == Track::Type::Midi)  ? 1 : 2;
+        m_project.track(trackIndex).type = Track::Type::Midi;
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+        m_audioEngine.setInstrument(trackIndex,
+            std::make_unique<instruments::ElectricPiano>());
+
+        auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
+        bool hasPhaser = false;
+        for (int i = 0; i < chain.count(); ++i) {
+            auto* e = chain.effectAt(i);
+            if (e && std::string(e->id()) == "phaser") { hasPhaser = true; break; }
+        }
+        if (!hasPhaser) chain.append(std::make_unique<effects::Phaser>());
+
+        markDirty();
+        m_undoManager.push({"Set Instrument: Electric Piano",
+            [this, trackIndex, oldType, oldTypeVal, oldInstr]{
+                m_project.track(trackIndex).type = oldType;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, oldTypeVal});
+                m_audioEngine.setInstrument(trackIndex, createInstrumentByName(oldInstr));
+                markDirty();
+            },
+            [this, trackIndex]{
+                m_project.track(trackIndex).type = Track::Type::Midi;
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+                m_audioEngine.setInstrument(trackIndex,
+                    std::make_unique<instruments::ElectricPiano>());
+                markDirty();
+            }, ""});
+    }});
+
 #ifdef YAWN_HAS_VST3
     // VST3 instruments — flat list with separator
     if (m_vst3Scanner && !m_vst3Scanner->instruments().empty()) {
@@ -5025,6 +5067,7 @@ bool App::init() {
             addSwap("Multisampler",    [](){ return std::make_unique<instruments::Multisampler>(); });
             addSwap("String Machine",  [](){ return std::make_unique<instruments::StringMachine>(); });
             addSwap("Drawbar Organ",   [](){ return std::make_unique<instruments::DrawbarOrgan>(); });
+            addSwap("Electric Piano",  [](){ return std::make_unique<instruments::ElectricPiano>(); });
             items.push_back({"Change Instrument", nullptr, false, true,
                               std::move(swapItems)});
             items.push_back({"", nullptr, true}); // separator

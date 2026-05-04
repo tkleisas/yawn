@@ -20,6 +20,7 @@
 #include "instruments/DrumSynth.h"
 #include "instruments/StringMachine.h"
 #include "instruments/DrawbarOrgan.h"
+#include "instruments/ElectricPiano.h"
 
 #include "effects/AudioEffect.h"
 #include "effects/Reverb.h"
@@ -85,6 +86,7 @@ inline std::unique_ptr<instruments::Instrument> createInstrument(const std::stri
         {"drumsynth", [] { return std::make_unique<instruments::DrumSynth>(); }},
         {"stringmachine", [] { return std::make_unique<instruments::StringMachine>(); }},
         {"drawbarorgan", [] { return std::make_unique<instruments::DrawbarOrgan>(); }},
+        {"electricpiano", [] { return std::make_unique<instruments::ElectricPiano>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -177,6 +179,7 @@ inline std::unique_ptr<yawn::instruments::Instrument> createInstrumentByName(con
     if (n == "Instrument Rack")   return std::make_unique<yawn::instruments::InstrumentRack>();
     if (n == "String Machine")    return std::make_unique<yawn::instruments::StringMachine>();
     if (n == "Drawbar Organ")     return std::make_unique<yawn::instruments::DrawbarOrgan>();
+    if (n == "Electric Piano")    return std::make_unique<yawn::instruments::ElectricPiano>();
     return nullptr;
 }
 

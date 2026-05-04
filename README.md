@@ -76,7 +76,7 @@
 
 ### Integrated Audio Effects
 
-*19 hand-crafted artisanal effects, each lovingly hallucinated by an AI that has never used a compressor but has read 47 papers about them. We doubled the count in one batch and the AI is now insufferable about it.*
+*23 hand-crafted artisanal effects, each lovingly hallucinated by an AI that has never used a compressor but has read 47 papers about them. We doubled the count in one batch and the AI is now insufferable about it.*
 
 - **Reverb** — Schroeder/Moorer algorithmic reverb (4 comb + 2 allpass filters)
 - **Delay** — Stereo delay with tempo sync, feedback, and ping-pong mode
@@ -84,8 +84,12 @@
 - **EQ** — 3-band parametric EQ (low shelf, mid peak, high shelf)
 - **Spline EQ** — 8-node parametric EQ with a custom drag-edit display panel: dual pre/post spectrum analyser overlay, RBJ-cookbook biquad response curve drawn through the cascaded filters, drag a node to set freq+gain, scroll-wheel or shift-drag for Q, click empty area to drop a new node (auto-grabs into a drag), right-click cycles type, double-click deletes. Per-node hover readout shows freq / gain / Q. The 40 underlying params remain settable via automation / preset / MIDI Learn — the panel just is the editor
 - **Compressor** — Dynamics compressor with threshold, ratio, attack, release, makeup gain
+- **Limiter** — Look-ahead brickwall limiter with attack/release smoothing for the master bus / pre-export safety net
 - **Filter** — Multi-mode SVF filter (lowpass, highpass, bandpass, notch) with 2× oversampled stability
 - **Chorus** — Modulated delay with multiple voices
+- **Phaser** — Multi-stage all-pass cascade (4 / 6 / 8 stages) with LFO-modulated notches, feedback, stereo spread, dry/wet. The "swoosh" sweep effect made famous by every electric piano patch from 1973 onwards
+- **Wah** — Standalone resonant bandpass with frequency / Q / mix knobs. For users who want manual / automated wah without routing through Envelope Follower's auto-wah path
+- **Rotary** — Leslie-style rotary speaker simulation: dual horn + drum rotor with independent speeds (Slow / Fast / Brake), Doppler frequency modulation, AM tremolo from rotor movement, mic-position stereo spread. Auto-inserted into the chain when the user picks Drawbar Organ from the instrument menu
 - **Distortion** — Waveshaper with soft clip, hard clip, and tube saturation modes
 - **Bitcrusher** — Bit-depth quantization (1–16) + zero-order-hold sample-rate decimation (100 Hz – 48 kHz) + optional anti-alias pre-filter + TPDF dither toggle + dry/wet. Mid-tread quantizer so low bit depths don't add DC; aliasing is part of the sound, not a bug
 - **Noise Gate** — Full expander/gate with hysteresis (open ≥ close threshold), attack / hold / release state machine, 0–10 ms lookahead (audio path is delayed; detection reads the un-delayed input so fast attacks don't clip transients), sidechain detection toggle, ducking polarity-invert mode (close when sidechain is hot — classic "kick ducks pad" pump)
@@ -119,6 +123,9 @@
 - **Generic Knob Grid** — Automatic parameter knob UI for plugins without custom editors
 
 ### Integrated Instruments
+
+*15 hand-crafted instruments. The AI built FM synthesis before learning that Op2 → Op1 with feedback is the entire DX7 e-piano. Then it built a 2-op e-piano on purpose. The PM keeps adding "just one more".*
+
 - **Subtractive Synth** — 2-oscillator analog-style synth with SVF filter, 23 parameters, 16-voice polyphony
 - **FM Synth** — 4-operator FM synthesizer with 8 algorithm presets, 19 parameters
 - **Sampler** — Sample playback with pitch tracking, linear interpolation, ADSR envelope
@@ -126,9 +133,12 @@
 - **Wavetable Synth** — 5 algorithmic wavetable types with position morphing, SVF filter, LFO modulation, sub oscillator, unison
 - **Granular Synth** — Sample-based granular synthesis with 4 window shapes, position/spread/spray, scan, pitch jitter, stereo width
 - **Vocoder** — Band-based vocoder with 4 carrier types (Saw/Square/Pulse/Noise), 4–32 bands, envelope followers, formant shift
+- **String Machine** — Solina-style ensemble strings (1974 ARP reference): 9-saw stack per voice (3 detuned saws × 16′/8′/4′ octaves), shared paraphonic LP filter (200–8000 Hz log Brightness), 3-tap BBD chorus with stereo spread (the chorus IS the sound), 16-voice polyphony, slow attack/release envelope. The whole reason "Synthstrings" exists in every preset bank since 1980.
+- **Drawbar Organ** — Hammond B-3 in software: 9 drawbars (16′/5⅓′/8′/4′/2⅔′/2′/1⅗′/1⅓′/1′ at standard registration weights), key click on note-on, percussion (3rd / 2nd, normal/soft), polyphonic with proper tone-wheel additive synthesis, drives a Rotary speaker effect (auto-inserted into the chain) for the Leslie wobble that makes a B-3 a B-3
+- **Electric Piano** — 2-op FM e-piano with three modes: **Rhodes** (14:1 ratio bell shimmer + pan tremolo), **Wurli** (3:1 ratio woody bark + amp tremolo, like the Wurlitzer 200A vibrato), **Suitcase** (Rhodes with slightly more mod depth + auto-inserts Phaser into the chain — the iconic Mark V / Steely Dan rig). Velocity-driven mod index (soft = pure sine, hard = metallic bell), per-strike hammer-noise transient for the percussive "thock", exponential decay envelope (no sustain stage — rolls naturally to silence the way a real EP does)
 - **Multisampler** — Multi-zone sample player with key/velocity mapping, per-zone tuning/volume/pan/loop, velocity crossfade, dual ADSR, zone-list + per-zone editor UI. Build instruments in minutes via the integrated [Auto-Sampler](#auto-sampler) — no VB-CABLE, no Stereo Mix, no third-party tools
-- **Instrument Rack** — Multi-chain container (up to 8 chains) with key/velocity zones, per-chain volume/pan, chain enable/disable toggle, visual zone bars, add/remove chain UI
-- **Drum Rack** — 128 pads with 4×4 grid display, 8-page navigation, per-pad sample loading via drag & drop, per-pad volume/pan/pitch knobs, waveform preview, playing/sample indicators
+- **Instrument Rack** — Multi-chain container (up to 8 chains) with key/velocity zones, per-chain volume/pan, chain enable/disable toggle, visual zone bars, add/remove chain UI. **Per-chain instrument selection + parameter editing** — the selected chain's nested instrument appears as its own widget in the device strip, edit any synth's params without leaving the rack view; right-click any chain row → **Change Instrument →** to swap the synth (full instrument list except nested rack). **Per-chain audio fx chain** (lazy-allocated per chain, processed pre-mix) with right-click "Add Chain FX →" listing all 23 audio effects; ChainFx widgets appear after the chain instrument and swap when the user picks a different chain. Default chain auto-created on construction (full-range SubtractiveSynth) so the rack makes sound immediately
+- **Drum Rack** — 128 pads with 4×4 grid display, 8-page navigation, per-pad sample loading via drag & drop. Per-pad **volume / pan / pitch / choke group (1–4) / AR envelope (attack-release shape) / region trim (start–end, end<start = reverse with REV badge on the waveform) / effect chain** (lazy-allocated per pad — zero memory when unused; right-click a pad → "Add Pad FX →" with all 23 audio effects). Waveform preview with region markers + tinted played region. **Kit presets** save/load every loaded pad's WAV plus per-pad params + per-pad fx chains as a single asset (one file = one kit)
 - **DrumSlop** — Loop slicer drum machine: auto/even/manual slicing, 16 pads with ADSR, SVF filter, per-pad effect chains, configurable MIDI base note
 - **Drum Synth** — Fully-synthesised 8-piece kit (Kick / Snare / Clap / Tom 1 / CHH / OHH / Tom 2 / Tamb), GM-mapped MIDI notes (C1 / D1 / E1 / F1 / F#1 / A#1 / G1 / G#1), per-drum DSP (sine + pitch sweep + click for the kick; metallic-ratio square sums for hats; tuned noise + envelope for snare/clap/toms; etc.), per-drum tune / decay / volume / pan, CHH/OHH choke group, sample-free so it travels anywhere the project does. Companion to Drum Rack for users who want a tweakable kit without managing samples
 
@@ -334,7 +344,7 @@
 > See [docs/visual.md](docs/visual.md) for the full shader-authoring guide, uniform reference, video / live / 3D / Lua / automation details, and file layout.
 
 ### Quality
-- **Test-Driven Development** — 1228 unit & integration tests across 140+ test suites via Google Test. Was 1306 before we deleted ~80 v1-framework tests that were superseded by their fw2 counterparts. The AI counts down too sometimes
+- **Test-Driven Development** — 1327 unit & integration tests across 140+ test suites via Google Test. Was 1306 before we deleted ~80 v1-framework tests that were superseded by their fw2 counterparts. The AI counts down too sometimes — but this run, it counted up
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Compile-time guards** — A handful of "this code is unconditionally broken" warnings (always-recursive function, missing return, uninitialised local, etc.) are promoted to errors so they can't lurk in the build output the way `fileNameFromPath` did before it stack-overflowed during a file drop
@@ -367,10 +377,8 @@ device works on first install. Attribution + license details live in
 - 🖥️ Move OLED display — pending reverse-engineering of Ableton's proprietary USB pairing protocol (or until someone lifts the protocol and we feel ethically OK about it)
 - 🪪 Lua bindings for Undo/Mute/Copy and the remaining Move buttons that currently just no-op
 - 🪟 MIDI clock send/receive (Link covers most cases but some hardware still wants the old protocol)
-- 🌊 Phaser effect (multi-stage all-pass cascade)
-- 🎚️ Wah / Autowah as a dedicated standalone device
-- ⏱️ Per-effect latency estimation summed per-track + automatic delay compensation across the mixer's parallel routes
-- 🗺️ 2D key×velocity zone-map widget for Multisampler (current editor is a list — visual zones would be much faster to balance)
+- 🎬 Retrospective recording (capture what was just played even though Record wasn't armed — the "I should've recorded that" workflow Live has had since 11)
+- 🌍 Localisation (English / Greek / Russian / Chinese baseline)
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 
 ## Screenshots
@@ -670,8 +678,12 @@ yawn/
 │   │   ├── SplineEQ.h          # 8-node parametric EQ — drag-edit display
 │   │   │                       #  panel with dual pre/post FFT overlay
 │   │   ├── Compressor.h        # Dynamics compressor
+│   │   ├── Limiter.h           # Look-ahead brickwall limiter
 │   │   ├── Filter.h            # Multi-mode SVF filter
 │   │   ├── Chorus.h            # Modulated delay chorus
+│   │   ├── Phaser.h            # All-pass cascade with LFO + feedback
+│   │   ├── Wah.h               # Standalone resonant bandpass
+│   │   ├── Rotary.h            # Leslie-style rotary speaker simulation
 │   │   ├── Distortion.h        # Waveshaper distortion
 │   │   ├── Bitcrusher.h        # Bit-depth quantize + sample-rate decimation
 │   │   │                       #  + AA pre-filter + TPDF dither
@@ -706,7 +718,14 @@ yawn/
 │   │   ├── WavetableSynth.h    # 5 wavetable types with morphing
 │   │   ├── GranularSynth.h     # Sample-based granular synthesis
 │   │   ├── KarplusStrong.h     # Physical modelling string synth
-│   │   └── Vocoder.h           # Band-based vocoder
+│   │   ├── Vocoder.h           # Band-based vocoder
+│   │   ├── StringMachine.h/cpp # Solina-style ensemble strings (9-saw stack
+│   │   │                       #  + paraphonic LP + 3-tap BBD chorus)
+│   │   ├── DrawbarOrgan.h/cpp  # Hammond B-3: 9 drawbars + key click +
+│   │   │                       #  percussion (auto-pairs with Rotary fx)
+│   │   └── ElectricPiano.h/cpp # 2-op FM e-piano (Rhodes/Wurli/Suitcase)
+│   │                           #  with hammer noise + pan/amp tremolo;
+│   │                           #  Suitcase mode auto-pairs with Phaser
 │   ├── midi/
 │   │   ├── MidiTypes.h         # MidiMessage, MidiBuffer, converters
 │   │   ├── MidiClip.h          # MIDI clip data model
@@ -806,17 +825,17 @@ yawn/
 │       └── yamaha_reface_dx/   # Yamaha Reface DX — touch strip → instrument
 │           ├── manifest.lua    #  param 0, expression → track vol,
 │           └── init.lua        #  CC 7 → master, notes routed natively
-├── tests/                      # 1228 unit & integration tests (Google Test, fw2-only)
+├── tests/                      # 1327 unit & integration tests (Google Test, fw2-only)
 │   ├── CMakeLists.txt
 │   ├── test_Arrangement.cpp    # Arrangement clips, playback, transport loop
 │   ├── test_AudioBuffer.cpp    # Audio buffer operations
 │   ├── test_Automation.cpp     # Automation engine, envelopes, LFO
 │   ├── test_Clip.cpp / test_ClipEngine.cpp
-│   ├── test_Effects.cpp        # All 19 audio effects
+│   ├── test_Effects.cpp        # All 23 audio effects
 │   ├── test_FileIO.cpp / test_Serialization.cpp
 │   ├── test_FollowAction.cpp
 │   ├── test_FrameworkTypes.cpp # Geometric types only (Point/Size/Rect/etc.)
-│   ├── test_Instruments.cpp    # All 12 instruments
+│   ├── test_Instruments.cpp    # All 15 instruments
 │   ├── test_Integration.cpp    # Cross-component integration (DetailPanel + synth,
 │   │                           #  piano roll + transport, mixer, etc.)
 │   ├── test_LFO.cpp / test_LinkManager.cpp
@@ -859,8 +878,8 @@ yawn/
 | 5. Mixer & Routing | ✅ Done | 64-track mixer, 8 send/return buses, master, metering |
 | 6. MIDI Engine | ✅ Done | MIDI 2.0-res internals, RtMidi I/O, MPE zones, MIDI clips |
 | 7. Metronome | ✅ Done | Synthesized click track, beat-synced, configurable |
-| 8. Audio Effects | ✅ Done | 17 built-in effects (+ 2 visualizers), effect chains, drag-to-reorder, 3-point insert, sidechain + modulation routing on the `AudioEffect` base |
-| 9. Integrated Instruments | ✅ Done | 12 instruments with full UI (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, Multisampler, InstrumentRack, DrumRack, DrumSlop, DrumSynth) |
+| 8. Audio Effects | ✅ Done | 21 built-in effects (+ 2 visualizers), effect chains, drag-to-reorder, 3-point insert, sidechain + modulation routing on the `AudioEffect` base |
+| 9. Integrated Instruments | ✅ Done | 15 instruments with full UI (SubSynth, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, String Machine, Drawbar Organ, Electric Piano, Multisampler, InstrumentRack, DrumRack, DrumSlop, DrumSynth) |
 | 10. MIDI Effects | ✅ Done | 8 MIDI effects (Arp, Chord, Scale, NoteLength, Velocity, Random, Pitch, LFO) |
 | 11. Interactive UI | ✅ Done | Widget system, menu bar, mixer controls, detail panel, virtual keyboard, context menus |
 | 12. UI Framework | ✅ Done | Widget tree, FlexBox layout, primitive widgets, dialog system, panel migration |
@@ -877,6 +896,11 @@ yawn/
 | 23. Ableton Link | ✅ Done | LAN beat/tempo sync (peers from Live, Logic, Bitwig, iOS apps, etc.) with phase alignment. Local UI tempo edits gated through `localTempoChanged` so the audio thread doesn't clobber typed BPM with the previous-frame's stale session tempo (race condition we found, fixed, and wrote a regression test for) |
 | 24. UI Framework Migration | ✅ Done | Three-phase delete-heavy refactor: v1 Widget/FlexBox/EventSystem/UIContext + a 766-line bridge wrapper layer (`PanelWrappers.h`) all retired. Single `fw2::Widget` framework, single `dispatchMouseDown` walking the tree, single global capture slot. Net ~−2960 lines. Capture-stomp guard added to `fw2::Widget::captureMouse`. C4717-and-friends promoted to compile errors |
 | 25. Effects Batch II + DrumSynth + Bundled IRs/Models | ✅ Done | Five new effects (Ping-Pong Delay, Spline EQ, Bitcrusher, Noise Gate, Envelope Follower), a Convolution Reverb with full FFT block-convolver and 38 bundled Voxengo IRs, a Neural Amp Modeler integration with 4 bundled `.nam` captures from `pelennor2170/NAM_models`, a fully-synthesised DrumSynth instrument + Piano-Roll DrumRoll mode, and `AudioEffect`-base sidechain + modulation-source + extra-state-hooks plumbing — including project-load IR rehydration via `App::rehydrateConvolutionIRs`. RCU-lite atomic engine swap on both Conv Reverb and NAM so reloading IRs / models while audio is rolling can't use-after-free (the reproducible third-load crash). NAM linked with `$<LINK_LIBRARY:WHOLE_ARCHIVE,nam>` after MSVC silently DCE'd `nam::get_dsp` and the device shipped showing "idle" with the model path stored. Linux CI extended to cover the NAM build path |
+| 26. Period-piece instruments + standalone Phaser/Wah/Rotary | ✅ Done | String Machine (Solina-style ensemble strings — 9-saw stack + paraphonic LP + 3-tap BBD chorus, 16 voices), Drawbar Organ (Hammond B-3 with 9 drawbars + key click + percussion, auto-pairs with the new Rotary effect), and three standalone effects pulled out of inline-synth scope: Phaser (4/6/8-stage all-pass cascade), Wah (resonant bandpass), Rotary (Leslie speaker simulation with dual horn + drum rotor). Closes a longstanding "we have an Org but no Leslie / a Rhodes-shaped hole" gap |
+| 27. Cross-panel drag-drop + audio-clip ops + clip UAF fix | ✅ Done | Cross-panel drag-drop foundation: drag audio clips from session/arrangement cells onto Sampler / Granular / DrumSlop / Vocoder targets, DrumRack pads (per-pad), Multisampler (as new zone). Audio-clip view gains Crop and Reverse buttons (atomic shared_ptr buffer swap so a playing clip doesn't glitch). Project-owned clip graveyard with 5-second TTL (timestamp + unique_ptr, periodic purge) covers every slot mutation path so the reproducible "delete clip → audio thread reads freed memory" UAF can't recur. StopClipMsg gains a `quantize` field so Delete can stop immediately (`QuantizeMode::None`) instead of waiting for the next bar |
+| 28. DrumRack feature parity (per-pad fx + AR env + region trim + kit presets + choke groups) | ✅ Done | Per-pad audio effect chain (lazy-allocated EffectChain per pad — zero memory when unused, processed pre-mix; right-click any pad → Add Pad FX → with all 23 audio effects). Per-pad AR envelope (1ms–2s attack, 1ms–10s decay) for shaping one-shot tails. Per-pad region trim with **end<start = reverse playback** (REV badge on the waveform display, played region tinted brighter). Choke groups (1–4) so re-triggering a pad in a group silences the others (open/closed-hat workflow). Kit-preset save/load dumps every loaded pad's WAV plus per-pad params + per-pad fx chains as a single asset via the new `serializeEffectChainStandalone` helper (`util/EffectChainJson.h`). Project-load detail-panel clear in `App::resetEngineState` so the next tick after Open Project doesn't `dynamic_cast` a freed instrument pointer |
+| 29. InstrumentRack feature parity (per-chain instrument editing + per-chain fx) | ✅ Done | InstrumentRack matches DrumRack's per-sub-element story: default chain on construction so a fresh rack makes sound immediately, **per-chain instrument widget** (selected chain's nested instrument appears as its own widget in the device strip with a flat knob grid), **"Change Instrument →" right-click submenu** for swapping the synth without leaving the rack view, **per-chain effect chain** (lazy-allocated, processed pre-mix; right-click chain row → Add Chain FX → with all 23 effects). Same fingerprint / tick-rebuild model as PadFx — selecting a different chain swaps in that chain's widgets; add / remove / reorder triggers a rebuild. ChainFx remove and drag-reorder handled inline against the rack so the existing track-level move/remove signatures don't grow a sub-chain field |
+| 30. Electric Piano + final instrument round-out | ✅ Done | 2-op FM Electric Piano with three modes (Rhodes 14:1 + pan tremolo, Wurli 3:1 + amp tremolo, Suitcase 14:1 + Phaser auto-pair). Velocity-driven mod index (soft = pure sine, hard = metallic bell), per-strike hammer-noise transient with heavy LP for the felt-mallet "thock", exponential decay envelope with no sustain stage so notes roll naturally to silence. Mode-specific mod-index caps (~0.9 for ratio-14 modes, ~2.8 for Wurli) keep the FM fundamental dominant so the patch reads as in-tune rather than as bell overtones |
 
 ### Phase 16: Arrangement View (Done)
 
