@@ -315,6 +315,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrumSynth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/StringMachine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/DrawbarOrgan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/instruments/ElectricPiano.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
     # Audio effects (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Reverb.cpp

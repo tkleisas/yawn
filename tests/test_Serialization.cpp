@@ -567,8 +567,12 @@ TEST_F(ProjectSerializerTest, RoundTripInstrumentRackChains) {
 
     audio::AudioEngine engine;
 
-    // Create an InstrumentRack with two chains: a SubSynth and a DrumRack
+    // Create an InstrumentRack with two chains: a SubSynth and a DrumRack.
+    // Constructor auto-adds a default chain so the rack makes sound on
+    // first use; round-trip tests need a clean slate so call clearChains()
+    // before adding the test chains (matches what the deserializer does).
     auto rack = std::make_unique<instruments::InstrumentRack>();
+    rack->clearChains();
     auto synth = createInstrument("subsynth");
     synth->init(44100.0, 256);
     rack->addChain(std::move(synth), 0, 59, 1, 127);

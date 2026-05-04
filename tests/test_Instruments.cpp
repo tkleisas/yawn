@@ -343,6 +343,10 @@ TEST(Sampler, PitchTracking) {
 
 TEST(InstrumentRack, EmptyRackIsSilent) {
     InstrumentRack rack;
+    // The constructor auto-adds a default SubtractiveSynth chain so a
+    // freshly-added rack makes sound immediately in the UI; tests
+    // that need an empty rack call clearChains() to undo that.
+    rack.clearChains();
     rack.init(kSampleRate, kBlockSize);
 
     float buffer[kBlockSize * kChannels] = {};
@@ -365,6 +369,7 @@ TEST(InstrumentRack, SingleChainProducesOutput) {
 
 TEST(InstrumentRack, KeyRangeFiltering) {
     InstrumentRack rack;
+    rack.clearChains();   // drop default chain — see EmptyRackIsSilent comment
     auto synth = std::make_unique<SubtractiveSynth>();
     rack.addChain(std::move(synth), 48, 72); // only C3-C5
     rack.init(kSampleRate, kBlockSize);
@@ -388,6 +393,7 @@ TEST(InstrumentRack, KeyRangeFiltering) {
 
 TEST(InstrumentRack, LayeringTwoChains) {
     InstrumentRack rack;
+    rack.clearChains();   // drop default chain
     rack.addChain(std::make_unique<SubtractiveSynth>());
     rack.addChain(std::make_unique<SubtractiveSynth>());
     rack.init(kSampleRate, kBlockSize);
@@ -403,6 +409,7 @@ TEST(InstrumentRack, LayeringTwoChains) {
 
 TEST(InstrumentRack, RemoveChain) {
     InstrumentRack rack;
+    rack.clearChains();   // drop default chain
     rack.addChain(std::make_unique<SubtractiveSynth>());
     rack.addChain(std::make_unique<FMSynth>());
     EXPECT_EQ(rack.chainCount(), 2);
@@ -413,6 +420,7 @@ TEST(InstrumentRack, RemoveChain) {
 
 TEST(InstrumentRack, MaxChains) {
     InstrumentRack rack;
+    rack.clearChains();   // drop default chain so we can add the full kMaxChains
     for (int i = 0; i < InstrumentRack::kMaxChains; ++i)
         EXPECT_TRUE(rack.addChain(std::make_unique<SubtractiveSynth>()));
     EXPECT_FALSE(rack.addChain(std::make_unique<SubtractiveSynth>()));
@@ -684,6 +692,7 @@ TEST(InstrumentRack, SelectedChainTracking) {
 
 TEST(InstrumentRack, PerChainParameterAPI) {
     InstrumentRack rack;
+    rack.clearChains();   // drop default chain
     rack.init(kSampleRate, kBlockSize);
 
     auto synth1 = std::make_unique<SubtractiveSynth>();
@@ -721,6 +730,7 @@ TEST(InstrumentRack, PerChainParameterAPI) {
 
 TEST(InstrumentRack, ChainEnableDisable) {
     InstrumentRack rack;
+    rack.clearChains();   // drop default chain
     rack.init(kSampleRate, kBlockSize);
 
     auto synth = std::make_unique<SubtractiveSynth>();
