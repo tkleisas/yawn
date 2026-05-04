@@ -10,6 +10,7 @@
 #include "instruments/DrumSynth.h"
 #include "instruments/StringMachine.h"
 #include "instruments/DrawbarOrgan.h"
+#include "instruments/ElectricPiano.h"
 #include "instruments/KarplusStrong.h"
 #include "instruments/WavetableSynth.h"
 #include "instruments/GranularSynth.h"
@@ -2250,4 +2251,191 @@ TEST(DrawbarOrgan, HarmonicRatiosMatchHammondLayout) {
     EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD135], 5.0f);
     EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD113], 6.0f);
     EXPECT_FLOAT_EQ(DrawbarOrgan::kHarmonicRatio[DrawbarOrgan::kD1],   8.0f);
+}
+
+// ========================= ElectricPiano =========================
+
+TEST(ElectricPiano, InitAndReset) {
+    ElectricPiano ep;
+    ep.init(kSampleRate, kBlockSize);
+    EXPECT_EQ(ep.parameterCount(), ElectricPiano::kNumParams);
+    ep.reset();
+    float buffer[kBlockSize * kChannels] = {};
+    ep.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-6f);
+}
+
+TEST(ElectricPiano, NoteOnProducesAudibleOutput) {
+    // EP defaults (Suitcase mode, mod-index ranges tuned so the
+    // fundamental dominates) should yield audible signal on a fresh
+    // note within a single block — fast attack envelope (~3 ms).
+    ElectricPiano ep;
+    ep.init(kSampleRate, kBlockSize);
+    float buffer[kBlockSize * kChannels] = {};
+    ep.process(buffer, kBlockSize, kChannels, makeNoteOn(60, 100));
+    EXPECT_GT(rms(buffer, kBlockSize * kChannels), 1e-3f);
+}
+
+TEST(ElectricPiano, ZeroVolumeIsSilent) {
+    // Belt-and-braces: if Volume = 0 nothing should leak through,
+    // even with the hammer transient enabled. Catches a regression
+    // where a future refactor moves the volume scalar somewhere it
+    // doesn't gate the entire output path.
+    ElectricPiano ep;
+    ep.init(kSampleRate, kBlockSize);
+    ep.setParameter(ElectricPiano::kVolume, 0.0f);
+    float buffer[kBlockSize * kChannels] = {};
+    ep.process(buffer, kBlockSize, kChannels, makeNoteOn(60, 127));
+    for (int i = 0; i < 4; ++i)
+        ep.process(buffer, kBlockSize, kChannels, makeEmpty());
+    EXPECT_LT(rms(buffer, kBlockSize * kChannels), 1e-5f);
+}
+
+TEST(ElectricPiano, ModeSwitchProducesDifferentTimbre) {
+    // Rhodes (14:1) and Wurli (3:1) ratios produce visibly different
+    // spectra at the same note — the modulator is at a totally
+    // different frequency, which should change RMS / peak / something
+    // measurable. Just confirm the two outputs aren't bit-identical.
+    auto render = [](ElectricPiano::Mode mode) {
+        ElectricPiano ep;
+        ep.init(kSampleRate, kBlockSize);
+        ep.setParameter(ElectricPiano::kMode, static_cast<float>(mode));
+        ep.setParameter(ElectricPiano::kTremDepth, 0.0f); // remove tremolo
+        std::vector<float> buf(kBlockSize * kChannels, 0.0f);
+        ep.process(buf.data(), kBlockSize, kChannels, makeNoteOn(60, 100));
+        return buf;
+    };
+    auto rhodes = render(ElectricPiano::Rhodes);
+    auto wurli  = render(ElectricPiano::Wurli);
+
+    bool anyDifferent = false;
+    for (size_t i = 0; i < rhodes.size(); ++i) {
+        if (std::fabs(rhodes[i] - wurli[i]) > 1e-5f) {
+            anyDifferent = true; break;
+        }
+    }
+    EXPECT_TRUE(anyDifferent)
+        << "Rhodes and Wurli modes produced bit-identical output — "
+           "mode switch isn't routing the carrier:modulator ratio";
+}
+
+TEST(ElectricPiano, VelocityAffectsBrightness) {
+    // EP's "Hardness" param drives mod index from velocity². A
+    // velocity-127 hit should produce more high-frequency energy
+    // than a velocity-20 hit at the same note. Compare via a crude
+    // single-pole HP filter discriminator: subtract a moving avg.
+    auto renderHpEnergy = [](uint8_t vel) {
+        ElectricPiano ep;
+        ep.init(kSampleRate, kBlockSize);
+        ep.setParameter(ElectricPiano::kHammer,    0.0f); // remove transient
+        ep.setParameter(ElectricPiano::kTremDepth, 0.0f);
+        ep.setParameter(ElectricPiano::kHardness,  1.0f);
+        ep.setParameter(ElectricPiano::kBellMix,   0.5f);
+        // Render a few blocks so the envelope settles.
+        std::vector<float> buf(kBlockSize * kChannels, 0.0f);
+        ep.process(buf.data(), kBlockSize, kChannels, makeNoteOn(60, vel));
+        for (int i = 0; i < 3; ++i) {
+            std::fill(buf.begin(), buf.end(), 0.0f);
+            ep.process(buf.data(), kBlockSize, kChannels, makeEmpty());
+        }
+        // High-pass discriminator: compare sample-to-sample diff RMS.
+        float hp = 0.0f;
+        for (int i = 1; i < kBlockSize; ++i) {
+            const float d = buf[i * kChannels] - buf[(i - 1) * kChannels];
+            hp += d * d;
+        }
+        return std::sqrt(hp / (kBlockSize - 1));
+    };
+    const float softHp = renderHpEnergy(20);
+    const float hardHp = renderHpEnergy(127);
+    EXPECT_GT(hardHp, softHp * 1.5f)
+        << "soft=" << softHp << " hard=" << hardHp
+        << " — hard hits should produce more HF energy via FM mod index";
+}
+
+TEST(ElectricPiano, AllNotesOffSilencesVoices) {
+    ElectricPiano ep;
+    ep.init(kSampleRate, kBlockSize);
+    ep.setParameter(ElectricPiano::kRelease, 0.05f); // short release for test
+
+    float buf[kBlockSize * kChannels] = {};
+    ep.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+    EXPECT_GT(rms(buf, kBlockSize * kChannels), 1e-3f);
+
+    MidiBuffer allOff;
+    allOff.addMessage(MidiMessage::cc(0, 123, 0));
+    ep.process(buf, kBlockSize, kChannels, allOff);
+
+    // Render ~300ms past noteOff — release is 50ms, voice should be
+    // long-since-idle. EP's natural decay also tapers the carrier
+    // anyway, so this is a soft assertion.
+    float tail[kBlockSize * kChannels] = {};
+    const int blocks = static_cast<int>((kSampleRate * 0.3) / kBlockSize);
+    for (int b = 0; b < blocks; ++b) {
+        std::memset(tail, 0, sizeof(tail));
+        ep.process(tail, kBlockSize, kChannels, makeEmpty());
+    }
+    EXPECT_LT(rms(tail, kBlockSize * kChannels), 1e-3f);
+}
+
+TEST(ElectricPiano, TremoloModulatesOutput) {
+    // With Tremolo Depth > 0 the output amplitude must wobble over
+    // time. Render a long sustain then verify max(|env|) > min(|env|)
+    // per-block by a meaningful margin.
+    ElectricPiano ep;
+    ep.init(kSampleRate, kBlockSize);
+    ep.setParameter(ElectricPiano::kMode,      0.0f); // Rhodes — pan tremolo
+    ep.setParameter(ElectricPiano::kTremDepth, 1.0f);
+    ep.setParameter(ElectricPiano::kTremRate,  8.0f); // ~8 Hz so a few cycles
+                                                       //   fit in 0.5 s of audio
+    ep.setParameter(ElectricPiano::kHammer,    0.0f); // remove transient
+    ep.setParameter(ElectricPiano::kDecay,     10.0f); // long sustain
+
+    // Hit a note, then render ~0.5 s tracking per-block L-channel RMS.
+    float buf[kBlockSize * kChannels] = {};
+    ep.process(buf, kBlockSize, kChannels, makeNoteOn(60, 100));
+    const int blocks = static_cast<int>((kSampleRate * 0.5) / kBlockSize);
+    float minL = 1e6f, maxL = 0.0f;
+    for (int b = 0; b < blocks; ++b) {
+        std::memset(buf, 0, sizeof(buf));
+        ep.process(buf, kBlockSize, kChannels, makeEmpty());
+        float ssq = 0.0f;
+        for (int i = 0; i < kBlockSize; ++i)
+            ssq += buf[i * kChannels] * buf[i * kChannels];
+        const float blockL = std::sqrt(ssq / kBlockSize);
+        minL = std::min(minL, blockL);
+        maxL = std::max(maxL, blockL);
+    }
+    EXPECT_GT(maxL, minL * 1.5f)
+        << "min=" << minL << " max=" << maxL
+        << " — tremolo at depth=1 should produce visible amplitude wobble";
+}
+
+TEST(ElectricPiano, ParameterClampingAndDefaults) {
+    ElectricPiano ep;
+    ep.init(kSampleRate, kBlockSize);
+    for (int p = 0; p < ElectricPiano::kNumParams; ++p) {
+        const auto& info = ep.parameterInfo(p);
+        EXPECT_FLOAT_EQ(ep.getParameter(p), info.defaultValue)
+            << "param " << p << " (" << info.name << ") didn't match default";
+    }
+    // Volume clamps to [0, 1].
+    ep.setParameter(ElectricPiano::kVolume, 99.0f);
+    EXPECT_LE(ep.getParameter(ElectricPiano::kVolume), 1.0f);
+    ep.setParameter(ElectricPiano::kVolume, -99.0f);
+    EXPECT_GE(ep.getParameter(ElectricPiano::kVolume), 0.0f);
+    // Mode clamps to [0, 2] (Rhodes / Wurli / Suitcase).
+    ep.setParameter(ElectricPiano::kMode, 99.0f);
+    EXPECT_LE(ep.getParameter(ElectricPiano::kMode), 2.0f);
+    ep.setParameter(ElectricPiano::kMode, -99.0f);
+    EXPECT_GE(ep.getParameter(ElectricPiano::kMode), 0.0f);
+    // Decay clamps to [0.5, 10] s.
+    ep.setParameter(ElectricPiano::kDecay, 99.0f);
+    EXPECT_LE(ep.getParameter(ElectricPiano::kDecay), 10.0f);
+    ep.setParameter(ElectricPiano::kDecay, -99.0f);
+    EXPECT_GE(ep.getParameter(ElectricPiano::kDecay), 0.5f);
+    // Out-of-range index is no-op (matches pattern in other instruments).
+    ep.setParameter(-1, 0.5f);
+    ep.setParameter(ElectricPiano::kNumParams + 5, 0.5f);
+    EXPECT_EQ(ep.getParameter(-1), 0.0f);
 }
