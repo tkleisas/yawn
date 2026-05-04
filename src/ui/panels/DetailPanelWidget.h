@@ -96,7 +96,13 @@ public:
     static constexpr float kDeviceGap        = 4.0f;
     static constexpr float kVisualizerMinW   = 300.0f;
 
-    enum class DeviceType { MidiFx, Instrument, AudioFx };
+    // PadFx — entries that render the per-pad effects of a DrumRack
+    // alongside the rack's own widget. Same DeviceWidget UI as a
+    // regular AudioFx; differs only in the chain it routes to (the
+    // rack's selected pad's chain rather than the track's audio
+    // chain). DeviceRef::padNote carries which pad the entry belongs
+    // to so add / remove / move can find the right chain again.
+    enum class DeviceType { MidiFx, Instrument, AudioFx, PadFx };
     enum class ViewMode  { Devices, AudioClip };
 
     // Clip view layout constants
@@ -142,6 +148,18 @@ public:
 
     bool isFocused() const { return m_panelFocused; }
     void setFocused(bool f) { m_panelFocused = f; }
+
+    // Right-click on a DrumRack pad — DetailPanel forwards the
+    // event up to App via this callback so App can construct the
+    // appropriate context menu (Add Pad FX, Remove, etc.). The
+    // panel doesn't know about the audio-effect factory, so we
+    // delegate. note in 0..127, (sx, sy) in screen coords.
+    using DrumPadFxMenuCallback =
+        std::function<void(instruments::DrumRack* rack, int note,
+                            float sx, float sy)>;
+    void setOnDrumPadFxMenu(DrumPadFxMenuCallback cb) {
+        m_onDrumPadFxMenu = std::move(cb);
+    }
 
     // Cross-panel drag-drop hook. Called by App's mouse-up
     // handler when a global audio-clip drag is released over the
@@ -663,10 +681,27 @@ public:
         int midiCount = midiChain ? midiChain->count() : 0;
         int fxCount   = fxChain   ? fxChain->count()   : 0;
 
+        // DrumRack-only: also fingerprint the selected pad index +
+        // the count of effects on that pad's chain. The rest of the
+        // device tree could be unchanged, but a pad-selection change
+        // still needs to swap in the new pad's PadFx widgets, and an
+        // add / remove on the pad's own chain still needs a rebuild.
+        // Other instruments leave both fields at -1 / 0 so the
+        // fingerprint is a no-op for them.
+        int padNote     = -1;
+        int padFxCount  = 0;
+        if (auto* dr = dynamic_cast<instruments::DrumRack*>(inst)) {
+            padNote = dr->selectedPad();
+            const auto* pc = dr->padFxChainOrNull(padNote);
+            padFxCount = pc ? pc->count() : 0;
+        }
+
         if (m_viewMode == ViewMode::Devices &&
             midiChain == m_lastMidiChain && inst == m_lastInst &&
             fxChain == m_lastFxChain &&
-            midiCount == m_lastMidiCount && fxCount == m_lastFxCount)
+            midiCount == m_lastMidiCount && fxCount == m_lastFxCount &&
+            padNote == m_lastPadNote &&
+            padFxCount == m_lastPadFxCount)
             return;
 
         m_viewMode = ViewMode::Devices;
@@ -770,6 +805,56 @@ public:
             }
         }
 
+        // Per-pad effects of the DrumRack instrument (if the track
+        // hosts one). Appended after the track audio fx so the chain
+        // reads left-to-right as: MIDI fx → Instrument → Track audio
+        // fx → "Pad N FX" header → per-pad fx. The pad fingerprint
+        // above guarantees we rebuild whenever the user picks a
+        // different pad or adds / removes an effect on the current
+        // pad's chain.
+        if (auto* dr = dynamic_cast<instruments::DrumRack*>(inst)) {
+            const int sel = dr->selectedPad();
+            auto* padChain = dr->padFxChainOrNull(sel);
+            if (padChain) {
+                for (int i = 0; i < padChain->count(); ++i) {
+                    auto* fx = padChain->effectAt(i);
+                    if (!fx) continue;
+                    DeviceRef ref;
+                    ref.type        = DeviceType::PadFx;
+                    ref.chainIndex  = i;
+                    ref.padNote     = sel;
+                    ref.audioEffect = fx;
+
+                    auto* dw = new DeviceWidget();
+                    // Tag the device name with "Pad N:" so the pad
+                    // these effects belong to is unambiguous on
+                    // screen — multiple track-level chains with
+                    // similarly-named effects can otherwise look
+                    // identical to the user.
+                    char nameBuf[64];
+                    std::snprintf(nameBuf, sizeof(nameBuf), "Pad %d: %s",
+                                  sel, fx->name());
+                    dw->setDeviceName(nameBuf);
+                    dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
+                    dw->setRemovable(true);
+                    dw->setExpanded(findPrevExpanded(static_cast<void*>(fx)));
+                    dw->setBypassed(fx->bypassed());
+
+                    if (fx->isVisualizer())
+                        dw->setVisualizer(true, fx->visualizerType());
+
+                    if (!setupAudioEffectDisplay(dw, fx, ref))
+                        configureDeviceWidget(dw, ref);
+
+                    snapPoints.push_back(xPos);
+                    xPos += dw->preferredWidth() + kDeviceGap;
+                    m_scroll.addChild(dw);
+                    m_deviceWidgets.push_back(dw);
+                    m_deviceRefs.push_back(ref);
+                }
+            }
+        }
+
         snapPoints.push_back(xPos);
         m_scroll.setSnapPoints(snapPoints);
         m_scroll.setGap(kDeviceGap);
@@ -779,6 +864,8 @@ public:
         m_lastFxChain   = fxChain;
         m_lastMidiCount = midiCount;
         m_lastFxCount   = fxCount;
+        m_lastPadNote   = padNote;
+        m_lastPadFxCount = padFxCount;
 
         // Auto-open when devices are populated
         if (!m_deviceWidgets.empty()) setOpen(true);
@@ -810,6 +897,8 @@ public:
         m_lastFxChain   = nullptr;
         m_lastMidiCount = 0;
         m_lastFxCount   = 0;
+        m_lastPadNote   = -1;
+        m_lastPadFxCount = 0;
         m_viewMode = ViewMode::Devices;
         m_clipPtr  = nullptr;
     }
@@ -885,6 +974,29 @@ public:
         const float prev = m_animatedHeight;
         updateAnimation();
         if (m_animatedHeight != prev) invalidate();
+
+        // DrumRack: rebuild the device tree whenever the selected
+        // pad changes or the per-pad effect chain count changes
+        // (user added / removed an effect via the right-click menu,
+        // or a kit preset load swapped in a different chain).
+        //
+        // We use the m_drumRackInst member rather than dynamic_cast'ing
+        // m_lastInst — both are nulled together in clear() / on every
+        // device-tree rebuild, but going through the explicit member
+        // sidesteps an `_RTDynamicCast` exception if any caller ever
+        // forgets to clear() before destroying instruments. The
+        // fingerprint inside setDeviceChain is the actual gate; this
+        // tick just kicks the call. Cheap when nothing changed
+        // (early-out via the fingerprint short-circuit).
+        if (m_viewMode == ViewMode::Devices && m_drumRackInst &&
+            m_drumRackInst == m_lastInst) {
+            int sel = m_drumRackInst->selectedPad();
+            const auto* pc = m_drumRackInst->padFxChainOrNull(sel);
+            int cnt = pc ? pc->count() : 0;
+            if (sel != m_lastPadNote || cnt != m_lastPadFxCount) {
+                setDeviceChain(m_lastMidiChain, m_lastInst, m_lastFxChain);
+            }
+        }
     }
 
 #ifdef YAWN_TEST_BUILD
@@ -988,14 +1100,36 @@ public:
             if (src >= 0 && ins >= 0 && src < static_cast<int>(m_deviceRefs.size())) {
                 auto srcType = m_deviceRefs[src].type;
                 int fromChain = m_deviceRefs[src].chainIndex;
+                int srcPadNote = m_deviceRefs[src].padNote;
                 int targetChain = 0;
                 for (int i = 0; i < ins; ++i) {
                     if (i != src && i < static_cast<int>(m_deviceRefs.size()) &&
                         m_deviceRefs[i].type == srcType)
                         ++targetChain;
                 }
-                if (targetChain != fromChain && m_onMoveDevice)
-                    m_onMoveDevice(srcType, fromChain, targetChain);
+                if (targetChain != fromChain) {
+                    if (srcType == DeviceType::PadFx) {
+                        // PadFx reorder happens inline against the
+                        // rack's own pad chain — no App callback
+                        // needed because we already hold the rack
+                        // pointer and the pad note locally.
+                        if (m_drumRackInst) {
+                            if (auto* chain =
+                                    m_drumRackInst->padFxChain(srcPadNote))
+                                chain->moveEffect(fromChain, targetChain);
+                            // Reorder doesn't change the chain count,
+                            // so tick()'s fingerprint check would NOT
+                            // trigger a rebuild on its own. Force one
+                            // by invalidating the count fingerprint;
+                            // tick() will see the mismatch on the next
+                            // frame and re-call setDeviceChain, which
+                            // rebuilds the widgets in the new order.
+                            m_lastPadFxCount = -1;
+                        }
+                    } else if (m_onMoveDevice) {
+                        m_onMoveDevice(srcType, fromChain, targetChain);
+                    }
+                }
             }
             return true;
         }
@@ -1099,6 +1233,10 @@ private:
     struct DeviceRef {
         DeviceType type = DeviceType::AudioFx;
         int chainIndex = -1;
+        // PadFx only: which DrumRack pad's per-pad chain this entry
+        // belongs to. -1 for any other DeviceType. Used by App's
+        // remove / move callbacks to relocate the right pad chain.
+        int padNote = -1;
         midi::MidiEffect*       midiEffect  = nullptr;
         instruments::Instrument* instrument  = nullptr;
         effects::AudioEffect*   audioEffect = nullptr;
@@ -1203,28 +1341,36 @@ private:
         // builds + shows it). The param's display name is resolved
         // here against the live device pointer so App can stay
         // device-type agnostic in showMacroMappingMenu.
-        dw->setOnParamRightClick(
-            [this, ref](int paramIdx, float mx, float my) {
-                if (!m_onParamRightClick) return;
-                if (m_autoTrackIndex < 0) return;
-                std::string paramName;
-                if (ref.midiEffect && paramIdx < ref.midiEffect->parameterCount())
-                    paramName = ref.midiEffect->parameterInfo(paramIdx).name
-                                  ? ref.midiEffect->parameterInfo(paramIdx).name : "";
-                else if (ref.instrument && paramIdx < ref.instrument->parameterCount())
-                    paramName = ref.instrument->parameterInfo(paramIdx).name
-                                  ? ref.instrument->parameterInfo(paramIdx).name : "";
-                else if (ref.audioEffect && paramIdx < ref.audioEffect->parameterCount())
-                    paramName = ref.audioEffect->parameterInfo(paramIdx).name
-                                  ? ref.audioEffect->parameterInfo(paramIdx).name : "";
-                if (paramName.empty()) return;
-                m_onParamRightClick(m_autoTrackIndex, ref.type,
-                                     ref.chainIndex, paramName,
-                                     paramIdx, mx, my);
-            });
+        // PadFx widgets opt out — the macro/automation system has
+        // no schema for "pad N's chain index C param P" yet, so
+        // wiring it would let the user open a menu that mis-targets
+        // a track-level effect. Easier to disallow until a proper
+        // pad-aware target type lands.
+        if (ref.type != DeviceType::PadFx) {
+            dw->setOnParamRightClick(
+                [this, ref](int paramIdx, float mx, float my) {
+                    if (!m_onParamRightClick) return;
+                    if (m_autoTrackIndex < 0) return;
+                    std::string paramName;
+                    if (ref.midiEffect && paramIdx < ref.midiEffect->parameterCount())
+                        paramName = ref.midiEffect->parameterInfo(paramIdx).name
+                                      ? ref.midiEffect->parameterInfo(paramIdx).name : "";
+                    else if (ref.instrument && paramIdx < ref.instrument->parameterCount())
+                        paramName = ref.instrument->parameterInfo(paramIdx).name
+                                      ? ref.instrument->parameterInfo(paramIdx).name : "";
+                    else if (ref.audioEffect && paramIdx < ref.audioEffect->parameterCount())
+                        paramName = ref.audioEffect->parameterInfo(paramIdx).name
+                                      ? ref.audioEffect->parameterInfo(paramIdx).name : "";
+                    if (paramName.empty()) return;
+                    m_onParamRightClick(m_autoTrackIndex, ref.type,
+                                         ref.chainIndex, paramName,
+                                         paramIdx, mx, my);
+                });
+        }
 
         // Automation recording: forward knob touch begin/end
-        {
+        // (skipped for PadFx for the same reason as the macro menu).
+        if (ref.type != DeviceType::PadFx) {
             uint8_t tt = 0;
             if (ref.type == DeviceType::Instrument)
                 tt = static_cast<uint8_t>(automation::TargetType::Instrument);
@@ -1244,9 +1390,26 @@ private:
             r.toggleBypass();
         });
 
-        dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
-            if (m_onRemoveDevice) m_onRemoveDevice(type, chainIdx);
-        });
+        // PadFx remove is handled inline rather than via the App
+        // callback: removing it requires the DrumRack pointer + the
+        // pad index, both of which we already have here. Going
+        // through m_onRemoveDevice would force a wider callback
+        // signature for the one device type that needs it.
+        if (ref.type == DeviceType::PadFx) {
+            instruments::DrumRack* dr = m_drumRackInst;
+            int note = ref.padNote;
+            int chainIdx = ref.chainIndex;
+            dw->setOnRemove([this, dr, note, chainIdx]() {
+                if (!dr) return;
+                if (auto* chain = dr->padFxChain(note))
+                    chain->remove(chainIdx);
+                // tick() will see the chain count drop and rebuild.
+            });
+        } else {
+            dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
+                if (m_onRemoveDevice) m_onRemoveDevice(type, chainIdx);
+            });
+        }
 
         // Wire preset click
         dw->setOnPresetClick([this, type = ref.type, chainIdx = ref.chainIndex](float x, float y) {
@@ -1268,7 +1431,9 @@ private:
         });
 
         // CC label lookup for MIDI Learn visual feedback
-        if (m_learnManager) {
+        // (PadFx skipped — no MIDI Learn target type for per-pad fx,
+        // matching the macro / automation skip above.)
+        if (m_learnManager && ref.type != DeviceType::PadFx) {
             automation::TargetType tt;
             if (ref.type == DeviceType::Instrument)
                 tt = automation::TargetType::Instrument;
@@ -1591,9 +1756,15 @@ private:
             auto* drPanel = new DrumRackDisplayPanel();
             config.display = drPanel;
             config.displayWidth = 160;
+            // 0 = Volume (Global). 1..8 = per-selected-pad:
+            // Pad Volume / Pan / Pitch / Choke / Attack / Decay
+            // / Start / End. Grouped into Pad / AR Env / Region
+            // so each row has breathing space.
             config.sections = {
                 {"Global", {0}},
-                {"Pad",    {1, 2, 3}},
+                {"Pad",    {1, 2, 3, 4}},
+                {"AR Env", {5, 6}},
+                {"Region", {7, 8}},
             };
 
             // Stash for the cross-panel drag-drop hook so audio
@@ -1604,6 +1775,17 @@ private:
             drPanel->setOnPadClick([inst](int note) {
                 auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
                 if (dr) dr->setSelectedPad(note);
+            });
+
+            // Right-click on a pad → forward up to App so it can
+            // open the per-pad fx context menu (Add / Remove
+            // effects). DetailPanel doesn't know about the audio-
+            // effect factory; App owns that knowledge.
+            drPanel->setOnPadRightClick([this, inst](int note,
+                                                       float sx, float sy) {
+                auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
+                if (dr && m_onDrumPadFxMenu)
+                    m_onDrumPadFxMenu(dr, note, sx, sy);
             });
 
             m_displayUpdaters.push_back([drPanel, inst, lastSel = -1]() mutable {
@@ -1638,6 +1820,13 @@ private:
                                                     dr->padSampleChannels(sel));
                 else
                     drPanel->setSelectedPadWaveform(nullptr, 0, 1);
+
+                // Region trim markers — pushed every frame so the
+                // markers track the Region knobs live as the user
+                // drags them, and so a kit-preset load also updates
+                // the display without an extra rebuild.
+                drPanel->setSelectedPadRegion(dr->padStart(sel),
+                                              dr->padEnd(sel));
             });
         } else if (nm == "Instrument Rack") {
             auto* irPanel = new InstrumentRackDisplayPanel();
@@ -2017,6 +2206,10 @@ private:
     fw2::MultisamplerDisplayPanel*   m_msDisplay         = nullptr;
     instruments::Multisampler*       m_msInst            = nullptr;
 
+    // App-wired callback for per-pad fx context menu (right-click).
+    // See setOnDrumPadFxMenu().
+    DrumPadFxMenuCallback m_onDrumPadFxMenu;
+
     // Two-stage wiring shim — the Multisampler panel's
     // preferred-width callback needs the GroupedKnobBody*, which
     // doesn't exist when we set up the panel itself. Stash the panel
@@ -2076,8 +2269,13 @@ private:
     midi::MidiEffectChain*   m_lastMidiChain = nullptr;
     instruments::Instrument* m_lastInst      = nullptr;
     effects::EffectChain*    m_lastFxChain   = nullptr;
-    int m_lastMidiCount = 0;
-    int m_lastFxCount   = 0;
+    int m_lastMidiCount  = 0;
+    int m_lastFxCount    = 0;
+    // DrumRack-only fingerprint pieces. Track the selected pad and
+    // the count of effects on its chain so a pad change or a
+    // chain-mutation triggers a rebuild via tickRebuildIfNeeded().
+    int m_lastPadNote    = -1;
+    int m_lastPadFxCount = 0;
 
     // Audio clip view state
     ViewMode m_viewMode = ViewMode::Devices;

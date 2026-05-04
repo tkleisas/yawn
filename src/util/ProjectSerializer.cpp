@@ -3,6 +3,7 @@
 #include "ProjectSerializer.h"
 #include "util/Base64.h"
 #include "util/Logger.h"
+#include "util/EffectChainJson.h"
 #include "visual/VisualEngineAPI.h"
 
 #ifdef YAWN_HAS_VST3
@@ -255,6 +256,30 @@ json serializeInstrument(const instruments::Instrument& inst,
             padJ["volume"] = p.volume;
             padJ["pan"] = p.pan;
             padJ["pitchAdjust"] = p.pitchAdjust;
+            // Default 0 = no group — omit from JSON for cleaner
+            // diffs on the common case (most pads aren't in any
+            // choke group). Older saves without this key load
+            // fine since the Pad default is 0.
+            if (p.chokeGroup != 0)
+                padJ["chokeGroup"] = static_cast<int>(p.chokeGroup);
+            // Same omit-defaults policy for AR envelope. Default
+            // attack 0.001s and decay 10s mean "let the sample
+            // play through unmodified" — only write when shaped.
+            if (std::abs(p.attackS - 0.001f) > 1e-5f)
+                padJ["attack"] = p.attackS;
+            if (std::abs(p.decayS - 10.0f) > 1e-3f)
+                padJ["decay"] = p.decayS;
+            // Region trim. start=0 / end=1 = full sample. end<start
+            // is the reverse-mode signal — preserved as-is.
+            if (p.startNorm != 0.0f) padJ["start"] = p.startNorm;
+            if (p.endNorm   != 1.0f) padJ["end"]   = p.endNorm;
+            // Per-pad fx chain — only written when the user has
+            // actually added an effect (lazy-allocated chain stays
+            // null otherwise). serializeEffectChainStandalone uses
+            // the same JSON shape as track effect chains so future
+            // tools can move chains around without translation.
+            if (auto* fxChain = rack.padFxChainOrNull(note))
+                padJ["fx"] = serializeEffectChainStandalone(*fxChain);
             pads.push_back(padJ);
         }
         j["pads"] = pads;
@@ -437,6 +462,19 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
                 rack.setPadPan(note, padJ["pan"].get<float>());
             if (padJ.contains("pitchAdjust"))
                 rack.setPadPitch(note, padJ["pitchAdjust"].get<float>());
+            if (padJ.contains("chokeGroup"))
+                rack.setPadChokeGroup(note, padJ["chokeGroup"].get<int>());
+            if (padJ.contains("attack"))
+                rack.setPadAttack(note, padJ["attack"].get<float>());
+            if (padJ.contains("decay"))
+                rack.setPadDecay(note, padJ["decay"].get<float>());
+            if (padJ.contains("start"))
+                rack.setPadStart(note, padJ["start"].get<float>());
+            if (padJ.contains("end"))
+                rack.setPadEnd(note, padJ["end"].get<float>());
+            if (padJ.contains("fx"))
+                deserializeEffectChainStandalone(*rack.padFxChain(note),
+                    padJ["fx"], sampleRate, maxBlockSize);
         }
     }
 

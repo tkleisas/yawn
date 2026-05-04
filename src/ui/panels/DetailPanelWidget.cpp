@@ -35,6 +35,29 @@ bool DetailPanelWidget::handleRightClick(float mx, float my) {
 
         if (!m_deviceWidgets[i]->isExpanded()) return true;
 
+        // Devices with a customBody (DrumRack, Multisampler, …)
+        // route their own clicks through the body's display widget
+        // (e.g. DrumRack's per-pad fx context menu fires from a
+        // right-click on a pad). Try the device's normal dispatch
+        // first — if its body consumes the right-click we're done.
+        // Only fall back to handleKnobRightClick (the legacy
+        // MIDI-Learn / Reset menu) if nothing consumed, so plain
+        // knob grids still get their per-param menu.
+        //
+        // handleKnobRightClick assumes a regular knob layout
+        // starting at db.x+8; for customBody devices the actual
+        // knob columns sit further right (after the display panel)
+        // so the legacy menu fires at the WRONG positions and
+        // hides the body's own right-click handler. The dispatch-
+        // first ordering fixes that without breaking the regular
+        // knob-grid case.
+        MouseEvent ev{};
+        ev.x = mx; ev.y = my;
+        ev.lx = mx; ev.ly = my;
+        ev.button = MouseButton::Right;
+        if (m_deviceWidgets[i]->dispatchMouseDown(ev))
+            return true;
+
         return handleKnobRightClick(i, mx, my);
     }
     return false;

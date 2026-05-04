@@ -4883,6 +4883,69 @@ bool App::init() {
             /*allow_many*/ false);
     });
 
+    // Per-pad fx context menu — surfaced from a right-click on a
+    // DrumRack pad. Lists every audio effect we can build (mirrors
+    // the track effect chain "Add Effect" submenu) plus, when the
+    // pad already has a chain, a Remove submenu listing its
+    // current effects. The menu mutates the rack's pad chain
+    // directly; the audio thread picks up the change on its next
+    // block via the chain's lock-free m_count read.
+    m_detailPanel->setOnDrumPadFxMenu(
+        [this](instruments::DrumRack* dr, int note, float sx, float sy) {
+            if (!dr) return;
+            using Item = ui::ContextMenu::Item;
+            std::vector<Item> items;
+
+            // "Add Pad FX →" submenu — every audio effect plus
+            // every loaded VST3 effect.
+            std::vector<Item> addItems;
+            auto addFx = [this, dr, note, &addItems](const char* label,
+                            std::function<std::unique_ptr<effects::AudioEffect>()> make) {
+                addItems.push_back({label, [this, dr, note, make]() {
+                    auto* chain = dr->padFxChain(note);
+                    if (chain) chain->append(make());
+                    LOG_INFO("User", "DrumRack pad %d → add fx", note);
+                }});
+            };
+            addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
+            addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
+            addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
+            addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
+            addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
+            addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
+            addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
+            addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
+            addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
+            addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
+            addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
+            items.push_back({"Add Pad FX", nullptr, false, true, std::move(addItems)});
+
+            // Remove submenu — only when the pad has a chain with
+            // at least one effect on it.
+            auto* existing = dr->padFxChainOrNull(note);
+            if (existing && existing->count() > 0) {
+                std::vector<Item> remItems;
+                for (int i = 0; i < existing->count(); ++i) {
+                    auto* fx = existing->effectAt(i);
+                    if (!fx) continue;
+                    std::string label = fx->name();
+                    int slot = i;
+                    remItems.push_back({label, [this, dr, note, slot]() {
+                        auto* chain = dr->padFxChain(note);
+                        if (chain) chain->remove(slot);
+                        LOG_INFO("User", "DrumRack pad %d → remove fx slot %d", note, slot);
+                    }});
+                }
+                items.push_back({"Remove Pad FX", nullptr, false, true, std::move(remItems)});
+                items.push_back({"Clear All Pad FX", [dr, note]() {
+                    dr->clearPadFx(note);
+                }});
+            }
+
+            ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+                                         ui::fw::Point{sx, sy});
+        });
+
     m_detailPanel->setOnLoadConvIR([this](effects::ConvolutionReverb* cr) {
         if (!cr) return;
         m_pendingConvIRReverb = cr;
@@ -7276,6 +7339,14 @@ void App::insertSceneAtSelection() {
 // SubtractiveSynth so they're audible out of the box. Engine sync is
 // the caller's responsibility (syncTracksToEngine / startup flow).
 void App::resetEngineState() {
+    // Drop any cached pointers in the detail panel BEFORE we tear
+    // down the instruments / effect chains they reference. The panel
+    // caches raw pointers (m_lastInst, m_drumRackInst, m_lastFxChain)
+    // for its tick-time fingerprint; without this clear, the next
+    // tick after a project load would dereference freed instrument
+    // memory in dynamic_cast and crash with a Windows EH exception.
+    if (m_detailPanel) m_detailPanel->clear();
+
     for (int t = 0; t < kMaxTracks; ++t) {
         m_audioEngine.setInstrument(t, nullptr);
         m_audioEngine.midiEffectChain(t).clear();

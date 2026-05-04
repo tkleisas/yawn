@@ -43,8 +43,24 @@ public:
         m_waveChannels = channels;
     }
 
+    // Region start / end as 0..1 fractions of the displayed waveform.
+    // Drawn as two vertical markers with the played region tinted
+    // brighter than the trimmed-out tails. When end < start the rack
+    // plays the region in reverse — we still draw both markers and
+    // tint between them so the user sees the same region either way,
+    // and add a small "REV" badge so the reverse case isn't silent.
+    void setSelectedPadRegion(float startNorm, float endNorm) {
+        m_regionStart = std::clamp(startNorm, 0.0f, 1.0f);
+        m_regionEnd   = std::clamp(endNorm,   0.0f, 1.0f);
+    }
+
     void setOnPadClick(std::function<void(int)> cb) { m_onPadClick = std::move(cb); }
     void setOnPageChange(std::function<void(int)> cb) { m_onPageChange = std::move(cb); }
+    // Right-click on a pad — App uses this to surface the
+    // per-pad fx context menu (add / remove effect entries).
+    void setOnPadRightClick(std::function<void(int note, float sx, float sy)> cb) {
+        m_onPadRightClick = std::move(cb);
+    }
 
     // Hit-test helper for cross-panel drag-drop. Returns the MIDI
     // note of the pad under (sx, sy), or -1 if the point is not
@@ -85,8 +101,22 @@ public:
     }
 
     bool onMouseDown(MouseEvent& e) override {
-        if (e.button != MouseButton::Left) return false;
         const float mx = e.x, my = e.y;
+        // Right-click on a pad → surface the per-pad fx context
+        // menu via the wired callback. Doesn't interfere with the
+        // existing left-click pad-select / page-nav flow below.
+        if (e.button == MouseButton::Right) {
+            if (mx >= m_gridRect.x && mx < m_gridRect.x + m_gridRect.w &&
+                my >= m_gridRect.y && my < m_gridRect.y + m_gridRect.h) {
+                const int note = padNoteAt(mx, my);
+                if (note >= 0 && m_onPadRightClick) {
+                    m_onPadRightClick(note, mx, my);
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (e.button != MouseButton::Left) return false;
 
         if (mx >= m_pageBarRect.x && mx < m_pageBarRect.x + m_pageBarRect.w &&
             my >= m_pageBarRect.y && my < m_pageBarRect.y + m_pageBarRect.h) {
@@ -180,7 +210,25 @@ public:
                 const float halfH = ph * 0.5f;
                 int numBars = static_cast<int>(pw);
                 if (numBars < 1) numBars = 1;
-                const Color waveCol{0, 180, 230, 180};
+                // Region bounds in pixel x. Sorted so lo<=hi for the
+                // tint range; we still remember which side is "start"
+                // for marker colouring and the reverse-mode badge.
+                const float startX = px + m_regionStart * pw;
+                const float endX   = px + m_regionEnd   * pw;
+                const float regLo  = std::min(startX, endX);
+                const float regHi  = std::max(startX, endX);
+                const bool reverse = m_regionEnd < m_regionStart;
+
+                // Tint the played region with a faint background fill
+                // so the trimmed tails read as visually muted without
+                // having to compare two separate colours of waveform.
+                if (regHi > regLo) {
+                    r.drawRect(regLo, py, regHi - regLo, ph,
+                               Color{0, 90, 130, 36});
+                }
+
+                const Color waveColIn { 0, 200, 240, 220 };
+                const Color waveColOut{ 90, 100, 120, 120 };
                 for (int i = 0; i < numBars; ++i) {
                     const int startFrame = (i * m_waveFrames) / numBars;
                     const int endFrame = ((i + 1) * m_waveFrames) / numBars;
@@ -194,9 +242,47 @@ public:
                     float bot = midY - minVal * halfH;
                     float barH = bot - top;
                     if (barH < 0.5f) { top = midY - 0.25f; barH = 0.5f; }
-                    r.drawRect(px + i, top, 1, barH, waveCol);
+                    const float colX = px + i;
+                    const bool inRegion = (colX >= regLo && colX <= regHi);
+                    r.drawRect(colX, top, 1, barH,
+                               inRegion ? waveColIn : waveColOut);
                 }
                 r.drawRect(px, midY, pw, 1, Color{50, 50, 60, 80});
+
+                // Region markers — bright orange line for start (so it
+                // matches the selected-pad accent), bright red for end.
+                // Drawn last so they sit on top of waveform pixels.
+                {
+                    const Color startCol{255, 180,  60, 235};
+                    const Color endCol  {255,  90,  90, 235};
+                    r.drawRect(startX, py, 1.0f, ph, startCol);
+                    r.drawRect(endX,   py, 1.0f, ph, endCol);
+                    // Tiny notch at top + bottom to make the
+                    // marker readable even when it overlaps a tall
+                    // waveform peak.
+                    r.drawRect(startX - 2, py,           5, 2, startCol);
+                    r.drawRect(startX - 2, py + ph - 2,  5, 2, startCol);
+                    r.drawRect(endX   - 2, py,           5, 2, endCol);
+                    r.drawRect(endX   - 2, py + ph - 2,  5, 2, endCol);
+                }
+
+                if (reverse && tm) {
+                    // Tiny "REV" badge in the top-right of the
+                    // waveform pane so the user always sees that the
+                    // region will play backwards. Cheap reminder for a
+                    // gesture (end<start) that's easy to set
+                    // accidentally with the knobs.
+                    const float badgeFs = theme().metrics.fontSizeSmall;
+                    const char* badge = "REV";
+                    const float bw = tm->textWidth(badge, badgeFs);
+                    const float bh = tm->lineHeight(badgeFs);
+                    const float bx = px + pw - bw - 4;
+                    const float by = py + 2;
+                    r.drawRect(bx - 3, by - 1, bw + 6, bh + 2,
+                               Color{60, 20, 20, 200});
+                    tm->drawText(r, badge, bx, by, badgeFs,
+                                  Color{255, 200, 120, 240});
+                }
             }
         } else if (tm) {
             // Use the theme's "small" font so the placeholder
@@ -359,8 +445,14 @@ private:
     int m_waveFrames = 0;
     int m_waveChannels = 1;
 
+    // Region trim — defaults to "play the entire sample" so a fresh
+    // pad shows full-extent markers exactly at the waveform's edges.
+    float m_regionStart = 0.0f;
+    float m_regionEnd   = 1.0f;
+
     std::function<void(int)> m_onPadClick;
     std::function<void(int)> m_onPageChange;
+    std::function<void(int /*note*/, float /*sx*/, float /*sy*/)> m_onPadRightClick;
 };
 
 } // namespace fw2
