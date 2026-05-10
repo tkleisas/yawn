@@ -583,6 +583,22 @@ void SessionPanel::paintSceneLabels(Renderer2D& r, TextMetrics& tm, float x, flo
             tm.drawText(r, name, textX, textY, labelSize,
                          ::yawn::ui::Theme::textSecondary);
         }
+
+        // Record-target indicator — bright red ring around the scene
+        // label cell that's been armed as the next session-record
+        // target. Drawn after the cell fill but before the bottom
+        // separator so it sits cleanly inside the cell gutter.
+        if (s == m_recordTargetScene) {
+            const ::yawn::ui::Color recCol{255, 60, 60, 240};
+            r.drawRectOutline(x + 2, sy + 2, w - 4, sh - 4, recCol, 2.0f);
+            // Small filled dot in the right gutter to make the ring
+            // unambiguous even when the cell sits next to a normal
+            // selection highlight.
+            const float dotR = std::min(5.0f, sh * 0.18f);
+            r.drawRect(x + w - dotR * 2 - 4, sy + sh * 0.5f - dotR,
+                        dotR * 2, dotR * 2, recCol);
+        }
+
         r.drawRect(x, sy + sh - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
     }
     r.popClip();

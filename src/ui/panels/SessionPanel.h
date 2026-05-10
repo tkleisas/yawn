@@ -80,6 +80,14 @@ public:
     int  selectedTrack() const   { return m_selectedTrack; }
     void setSelectedScene(int s) { m_selectedScene = s; }
     int  selectedScene() const   { return m_selectedScene; }
+
+    // Record-target scene — the row armed-tracks will record into
+    // when the user presses the Record button. App sets this when
+    // transport recording arms; -1 means no record-target indicator.
+    // Rendered as a red ring around the scene label so the user can
+    // see which row will get the take before they hit record.
+    void setRecordTargetScene(int s) { m_recordTargetScene = s; }
+    int  recordTargetScene() const   { return m_recordTargetScene; }
     float scrollX() const        { return m_scrollX; }
     float scrollY() const        { return m_scrollY; }
     void setScrollX(float sx)    { m_scrollX = sx; }
@@ -576,6 +584,7 @@ private:
     int   m_activeScene    = -1;
     int   m_selectedTrack  = 0;
     int   m_selectedScene  = 0;
+    int   m_recordTargetScene = -1;   // see setRecordTargetScene()
     int   m_lastClickTrack = -1;
     int   m_lastClickScene = -1;
     int   m_lastRightClickTrack = -1;

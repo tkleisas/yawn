@@ -172,6 +172,19 @@ public:
 
     void setSelectedScene(int scene) { m_selectedScene = scene; }
     void setCountInBars(int bars) { m_countInBars = bars; }
+
+    // Optional override for the Record button. When set, the panel
+    // calls this callback instead of sending TransportRecordMsg
+    // directly — App.cpp wires it to orchestrate the full session-
+    // record gesture (start per-track recording on armed tracks,
+    // launch slot clips on non-armed tracks, send TransportRecordMsg
+    // last). Lua / MIDI-controller paths that send TransportRecordMsg
+    // directly bypass the orchestration and just toggle transport
+    // recording — acceptable for those callers.
+    using RecordPressedCallback = std::function<void(bool armed)>;
+    void setOnRecordPressed(RecordPressedCallback cb) {
+        m_onRecordPressed = std::move(cb);
+    }
     void setMetronomeVisualStyle(int style) { m_metroVisualStyle = style; }
     // When false, the LINK button is rendered disabled and clicks are
     // ignored — the user has to enable Ableton Link in Preferences →
@@ -284,6 +297,7 @@ private:
     audio::AudioEngine* m_engine  = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
     int                 m_selectedScene = 0;
+    RecordPressedCallback m_onRecordPressed;
 
     bool   m_transportPlaying     = false;
     double m_transportBeats       = 0.0;

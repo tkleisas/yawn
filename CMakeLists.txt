@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(YAWN
-    VERSION 0.61.0
+    VERSION 0.62.0
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
@@ -497,6 +497,20 @@ if(MSVC)
     # (~80 MB more in build/bin/Release); no perf impact.
     target_compile_options(${PROJECT_NAME} PRIVATE /Zi)
     target_link_options(${PROJECT_NAME} PRIVATE /DEBUG)
+
+    # GUI subsystem in Release builds — suppresses the second
+    # console window that would otherwise pop up next to the YAWN
+    # main window. We keep `int main(argc, argv)` rather than
+    # WinMain (cross-platform source), and tell the linker to use
+    # the Windows-subsystem CRT entry point that funnels into our
+    # main(). Debug builds keep the console subsystem so stdout /
+    # stderr from logging + asserts is visible during dev.
+    target_link_options(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
+        $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>
+        $<$<CONFIG:RelWithDebInfo>:/SUBSYSTEM:WINDOWS>
+        $<$<CONFIG:RelWithDebInfo>:/ENTRY:mainCRTStartup>
+    )
 endif()
 
 # NAM force-link is handled above via $<LINK_LIBRARY:WHOLE_ARCHIVE,nam>

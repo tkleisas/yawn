@@ -25,6 +25,22 @@
 namespace yawn {
 namespace audio {
 
+// Unified per-track transport state. The single source of truth for
+// "what is this track doing right now" — replaces having UI ad-hoc
+// poll a half-dozen separate flags (m_audioRecordStates[t].recording,
+// m_trackRecordStates[t].recording, ClipEngine::trackState(t).active,
+// MidiClipEngine likewise) and getting them out of sync.
+//
+// Stuck-state guarantee: every transition between these values fires
+// a ClipStateUpdate (see AudioEngine::emitClipStateUpdates) — even
+// the Recording → Idle case on a track with no playing clip, which
+// previously emitted nothing and left the UI cell red.
+enum class TrackTransportState : uint8_t {
+    Idle      = 0,   // not playing, not recording
+    Playing   = 1,   // a clip (audio or MIDI) is rendering on this track
+    Recording = 2,   // capturing input into a target slot
+};
+
 struct AudioDevice {
     int id = -1;
     std::string name;
@@ -353,6 +369,28 @@ public:
                 ars.maxFrames, ars.channels, ars.targetScene};
     }
 
+    // Unified per-track transport state. Polling-side accessor —
+    // useful as a fallback when the UI's event-driven mirror has
+    // missed a message (e.g. event queue was full, or the UI panel
+    // was destroyed and recreated mid-recording). Steady-state UI
+    // should still consume the per-frame ClipStateUpdate stream.
+    //
+    // Recording wins over Playing when both flags happen to be set
+    // (shouldn't ever happen on the same track — the engine
+    // explicitly stops the playing clip when recording starts —
+    // but the precedence is documented here so if it does happen
+    // the UI shows the more important state).
+    TrackTransportState trackTransportState(int track) const {
+        if (track < 0 || track >= kMaxTracks) return TrackTransportState::Idle;
+        if (m_trackRecordStates[track].recording ||
+            m_audioRecordStates[track].recording)
+            return TrackTransportState::Recording;
+        if (m_clipEngine.trackState(track).active ||
+            m_midiClipEngine.trackState(track).active)
+            return TrackTransportState::Playing;
+        return TrackTransportState::Idle;
+    }
+
 private:
     static int paCallback(
         const void* inputBuffer,
@@ -498,6 +536,26 @@ private:
         }
     };
     AudioRecordState m_audioRecordStates[kMaxTracks];
+
+    // Last-emitted ClipStateUpdate per track (for audio + MIDI). The
+    // emitter compares the freshly-derived state against this cache
+    // and only fires a message when something changed. The crucial
+    // invariant: when state goes from Recording/Playing → Idle, the
+    // emitter MUST fire the all-zero update so SessionPanel's mirror
+    // clears. Previous "lazy" emitter (if state.clip || audioRec)
+    // skipped that final all-zero update on tracks where the clip
+    // pointer was nulled at stop, leaving the cell stuck red/green.
+    struct LastEmittedClipState {
+        bool   audioPlaying    = false;
+        int    audioPlayScene  = -1;
+        bool   audioRecording  = false;
+        int    audioRecScene   = -1;
+        bool   midiPlaying     = false;
+        int    midiPlayScene   = -1;
+        bool   midiRecording   = false;
+        int    midiRecScene    = -1;
+    };
+    LastEmittedClipState m_lastEmittedClipState[kMaxTracks];
 
     // Per-track input buffer (interleaved from PortAudio, deinterleaved during processing)
     std::vector<float> m_inputBufferHeap;   // inputChannels * kMaxFramesPerBuffer

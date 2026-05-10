@@ -14,6 +14,11 @@ Label::Label(std::string text) : m_text(std::move(text)) {
 }
 
 void Label::setText(std::string t) {
+    // Take by value (compose-friendly with rvalues), then compare
+    // and conditionally move. Callers passing a const lvalue ref
+    // still pay one copy per call — see PianoRollPanel for the
+    // change-guard idiom (call setText only when content actually
+    // changed) which keeps render() allocation-free at steady state.
     if (t != m_text) {
         m_text = std::move(t);
         invalidate();   // content-driven width may change

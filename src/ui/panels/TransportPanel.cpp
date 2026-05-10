@@ -622,7 +622,15 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         const bool newState = !m_recording;
         LOG_INFO("User", "transport record button → %s (scene=%d)",
                  newState ? "arm" : "disarm", m_selectedScene);
-        m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
+        // App-side orchestration: per-track record-arm + non-armed-
+        // track clip launch + transport arm. When the callback isn't
+        // wired (Lua / MIDI controller test paths) fall back to the
+        // bare TransportRecordMsg so the engine still arms recording.
+        if (m_onRecordPressed) {
+            m_onRecordPressed(newState);
+        } else {
+            m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
+        }
         return true;
     }
 

@@ -662,11 +662,20 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     // Clip name (right-aligned). fw2::Label renders at theme.metrics
     // .fontSize * fontScale — measure at that same size so the label
     // box is wide enough and doesn't clip mid-glyph at the right edge.
+    //
+    // Only call setText when the name actually changed. Label::setText
+    // takes its argument by value, so the previous unconditional call
+    // copied the string into a temporary every render frame — ~60 Hz
+    // × hours of idle time fragments the heap badly enough that
+    // routine `new` calls (here in particular) will eventually throw
+    // std::bad_alloc on a long-running session.
     float clipNameLeft = m_px + m_pw;
     if (m_clip && !m_clip->name().empty()) {
-        m_clipNameLabel.setText(m_clip->name());
+        const std::string& clipName = m_clip->name();
+        if (clipName != m_clipNameLabel.text())
+            m_clipNameLabel.setText(clipName);
         const float fs = theme().metrics.fontSize * m_clipNameLabel.fontScale();
-        float nameW = tm.textWidth(m_clip->name(), fs);
+        float nameW = tm.textWidth(clipName, fs);
         if (nameW <= 0) nameW = 100.0f;
         nameW += 4.0f;   // small trailing slack so the last glyph isn't clipped
         clipNameLeft = m_px + m_pw - nameW - 8;

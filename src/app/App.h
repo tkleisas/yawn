@@ -285,6 +285,11 @@ private:
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
     int m_selectedScene = 0;
+    // The scene chosen as the target row for the next session-record
+    // gesture, set when the user presses Record on the transport. -1
+    // when transport recording is not armed. Drives the red record-
+    // target ring on SessionPanel's scene label.
+    int m_recordTargetScene = -1;
 
     // Detail panel target: what the detail panel is currently showing
     enum class DetailTarget { Track, ReturnBus, Master };

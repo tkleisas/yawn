@@ -4038,6 +4038,76 @@ bool App::init() {
     m_detailPanel->setLearnManager(&m_midiLearnManager);
     m_transportPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_transportPanel->setLearnManager(&m_midiLearnManager);
+
+    // Session-style record orchestration. The Record button on the
+    // transport panel calls back here so we can:
+    //   * pick the target scene (selected scene, defaulting to 0)
+    //   * for every track:
+    //       - armed → start per-track recording into the target slot
+    //         (audio = new take; MIDI = new clip — overdub flag stays
+    //         false so existing clip is replaced rather than layered)
+    //       - not armed → launch that scene's slot if it has a clip
+    //         (audio / MIDI / visual)
+    //   * send TransportRecordMsg LAST so the engine's auto-arm loop
+    //     sees recording=true on each track and skips re-init
+    //   * push the target scene to SessionPanel for the red record-
+    //     target indicator next to the scene label
+    //
+    // Disarm path just sends TransportRecordMsg(false) which gracefully
+    // finalises every per-track recording the engine knows about.
+    //
+    // Lua + MIDI controller paths still send TransportRecordMsg
+    // directly (bypassing this orchestration); the AudioEngine's
+    // handler now auto-arms BOTH armed MIDI and armed Audio tracks
+    // for those callers, but they don't get the non-armed-track
+    // launch behaviour. That's acceptable — the UI button is the
+    // canonical entry point for the full session-record gesture.
+    m_transportPanel->setOnRecordPressed([this](bool arm) {
+        if (arm) {
+            const int targetScene = std::max(0, m_selectedScene);
+            m_recordTargetScene = targetScene;
+            m_sessionPanel->setRecordTargetScene(targetScene);
+
+            for (int t = 0; t < m_project.numTracks(); ++t) {
+                const auto& trk = m_project.track(t);
+                if (trk.armed) {
+                    if (trk.type == Track::Type::Midi) {
+                        m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
+                            t, targetScene, /*overdub*/false,
+                            /*recordLengthBars*/0});
+                    } else if (trk.type == Track::Type::Audio) {
+                        m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
+                            t, targetScene, /*overdub*/false,
+                            /*recordLengthBars*/0});
+                    }
+                    // Visual tracks aren't recordable; ignore arming
+                    // them silently.
+                } else {
+                    auto* slot = m_project.getSlot(t, targetScene);
+                    if (!slot || slot->empty()) continue;
+                    const auto lq = slot->launchQuantize;
+                    if (slot->audioClip) {
+                        m_audioEngine.sendCommand(audio::LaunchClipMsg{
+                            t, targetScene, slot->audioClip.get(), lq,
+                            &slot->clipAutomation, slot->followAction});
+                    } else if (slot->midiClip) {
+                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
+                            t, targetScene, slot->midiClip.get(), lq,
+                            &slot->clipAutomation, slot->followAction});
+                    } else if (slot->visualClip) {
+                        launchVisualClipData(t, *slot->visualClip,
+                                              slot->visualClip->firstShaderPath());
+                    }
+                }
+            }
+            m_audioEngine.sendCommand(audio::TransportRecordMsg{true, targetScene});
+        } else {
+            m_audioEngine.sendCommand(audio::TransportRecordMsg{false, 0});
+            m_recordTargetScene = -1;
+            m_sessionPanel->setRecordTargetScene(-1);
+        }
+    });
+
     m_returnMasterPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_returnMasterPanel->setLearnManager(&m_midiLearnManager);
     m_mixerPanel->setOnReturnToggle([this](bool show) {

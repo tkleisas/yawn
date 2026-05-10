@@ -1317,7 +1317,12 @@ void AudioEngine::processCommands() {
                     } else if (!m_transport.isPlaying()) {
                         m_transport.play();
                     }
-                    // Auto-start per-track recording for all armed MIDI tracks
+                    // Auto-start per-track recording for all armed
+                    // MIDI tracks. Audio tracks get the parallel
+                    // setup just below — kept as a separate loop so
+                    // the per-track-state types (m_trackRecordStates
+                    // for MIDI vs m_audioRecordStates for audio) stay
+                    // legible.
                     for (int t = 0; t < kMaxTracks; ++t) {
                         if (m_trackArmed[t] && m_trackType[t] == 1 &&
                             !m_trackRecordStates[t].recording) {
@@ -1327,6 +1332,30 @@ void AudioEngine::processCommands() {
                             rs.targetScene = msg.sceneIndex;
                             rs.overdub = false;
                             rs.recordStartBeat = m_transport.positionInBeats();
+                        }
+                    }
+                    // Audio counterpart — must also pre-allocate the
+                    // recording buffer (5 minutes max, matching the
+                    // explicit StartAudioRecordMsg path) BEFORE
+                    // setting recording=true, otherwise the UI's
+                    // live-waveform poll could read into a mid-resize
+                    // vector.
+                    for (int t = 0; t < kMaxTracks; ++t) {
+                        if (m_trackArmed[t] && m_trackType[t] == 0 &&
+                            !m_audioRecordStates[t].recording) {
+                            auto& ars = m_audioRecordStates[t];
+                            ars.reset();
+                            ars.targetScene = msg.sceneIndex;
+                            ars.overdub = false;
+                            ars.channels = m_config.inputChannels;
+                            constexpr int64_t kMaxRecSec = 300;
+                            ars.maxFrames = static_cast<int64_t>(
+                                m_config.sampleRate * kMaxRecSec);
+                            ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
+                            ars.recordedFrames = 0;
+                            ars.recording = true;
+                            ars.usedCountIn = true;
+                            ars.recordStartBeat = m_transport.positionInBeats();
                         }
                     }
                 } else {
@@ -1936,46 +1965,70 @@ void AudioEngine::emitClipStates() {
                 { finalizeMidiRecord(t); midiRec = false; }
         }
 
-        int midiRecScene = midiRec ? m_trackRecordStates[t].targetScene : -1;
-        int audioRecScene = audioRec ? m_audioRecordStates[t].targetScene : -1;
+        const int midiRecScene  = midiRec  ? m_trackRecordStates[t].targetScene  : -1;
+        const int audioRecScene = audioRec ? m_audioRecordStates[t].targetScene  : -1;
 
-        // Audio clips
-        const auto& state = m_clipEngine.trackState(t);
-        if (state.clip || audioRec) {
+        // ── Snapshot current per-track state ──
+        const auto& aState = m_clipEngine.trackState(t);
+        const auto& mState = m_midiClipEngine.trackState(t);
+        const bool audioPlaying = aState.active;
+        const int  audioPlayScene = audioPlaying ? aState.sceneIndex : -1;
+        const bool midiPlaying  = mState.active;
+        const int  midiPlayScene  = midiPlaying ? mState.sceneIndex : -1;
+        auto& last = m_lastEmittedClipState[t];
+
+        // ── Audio update — emit on EVERY transition, including the
+        // Recording / Playing → Idle case. The previous emitter
+        // gated on `state.clip || audioRec`, which silently dropped
+        // the final "all clear" message and left UI cells stuck.
+        // Now we compare the fresh values against the last emitted
+        // values and fire a message whenever any of them changed.
+        // Per-frame ClipStateUpdates for active playback (where
+        // playPosition advances every block) keep flowing because
+        // the "any field changed" check picks up the position step.
+        const bool audioChanged =
+            audioPlaying    != last.audioPlaying    ||
+            audioPlayScene  != last.audioPlayScene  ||
+            audioRec        != last.audioRecording  ||
+            audioRecScene   != last.audioRecScene   ||
+            audioPlaying;   // streaming updates while playing
+        if (audioChanged) {
             ClipStateUpdate csu;
-            csu.trackIndex = t;
-            csu.playing = state.active;
-            csu.playPosition = state.playPosition;
-            csu.playingScene = state.sceneIndex;
-            csu.recording = audioRec;
+            csu.trackIndex     = t;
+            csu.playing        = audioPlaying;
+            csu.playPosition   = aState.playPosition;
+            csu.playingScene   = audioPlayScene;
+            csu.recording      = audioRec;
             csu.recordingScene = audioRecScene;
             m_eventQueue.push(csu);
-        }
-        // MIDI clips
-        const auto& mstate = m_midiClipEngine.trackState(t);
-        if (mstate.clip || midiRec) {
-            ClipStateUpdate csu;
-            csu.trackIndex = t;
-            csu.playing = mstate.active;
-            csu.playPosition = static_cast<int64_t>(mstate.playPositionBeats * 1000000.0);
-            csu.playingScene = mstate.sceneIndex;
-            csu.isMidi = true;
-            csu.clipLengthBeats = mstate.clip ? mstate.clip->lengthBeats() : 0.0;
-            csu.recording = midiRec;
-            csu.recordingScene = midiRecScene;
-            m_eventQueue.push(csu);
+            last.audioPlaying    = audioPlaying;
+            last.audioPlayScene  = audioPlayScene;
+            last.audioRecording  = audioRec;
+            last.audioRecScene   = audioRecScene;
         }
 
-        // Emit recording state even when no clip is loaded
-        if (!state.clip && !mstate.clip && (midiRec || audioRec)) {
+        // ── MIDI update — same change-detection pattern.
+        const bool midiChanged =
+            midiPlaying    != last.midiPlaying    ||
+            midiPlayScene  != last.midiPlayScene  ||
+            midiRec        != last.midiRecording  ||
+            midiRecScene   != last.midiRecScene   ||
+            midiPlaying;   // streaming updates while playing
+        if (midiChanged) {
             ClipStateUpdate csu;
-            csu.trackIndex = t;
-            csu.playing = false;
-            csu.playPosition = 0;
-            csu.isMidi = midiRec;
-            csu.recording = true;
-            csu.recordingScene = midiRec ? midiRecScene : audioRecScene;
+            csu.trackIndex      = t;
+            csu.playing         = midiPlaying;
+            csu.playPosition    = static_cast<int64_t>(mState.playPositionBeats * 1000000.0);
+            csu.playingScene    = midiPlayScene;
+            csu.isMidi          = true;
+            csu.clipLengthBeats = mState.clip ? mState.clip->lengthBeats() : 0.0;
+            csu.recording       = midiRec;
+            csu.recordingScene  = midiRecScene;
             m_eventQueue.push(csu);
+            last.midiPlaying    = midiPlaying;
+            last.midiPlayScene  = midiPlayScene;
+            last.midiRecording  = midiRec;
+            last.midiRecScene   = midiRecScene;
         }
     }
 }
