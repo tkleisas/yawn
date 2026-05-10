@@ -26,6 +26,9 @@ struct MidiClipPlayState {
     bool stopping = false;
     int sceneIndex = -1;          // which scene slot is playing
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+    // See ClipPlayState::autoRecordDisabled — same per-clip override
+    // for the MIDI clip path.
+    bool autoRecordDisabled = false;
 
     // Follow action tracking
     int64_t barsPlayed = 0;

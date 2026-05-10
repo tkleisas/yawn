@@ -183,6 +183,54 @@ void App::setupMenuBar() {
     m_menuBar.addMenu("Edit", {
         M::item("Undo", [this]() { if (m_undoManager.canUndo()) { m_undoManager.undo(); markDirty(); } }, "Ctrl+Z"),
         M::item("Redo", [this]() { if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); } }, "Ctrl+Y"),
+        // Wipe every recorded breakpoint envelope (track lanes +
+        // every clip's lanes) across the project. Doesn't touch LFO
+        // links, macro mappings, or MIDI Learn — those are device
+        // routing, not recorded automation. Confirms before firing
+        // because the operation is destructive (undoable, but the
+        // confirm dialog matches the v0.61 design discussion).
+        M::item("Clear All Automation…", [this]() {
+            ui::fw2::ConfirmDialog::prompt(
+                "Clear ALL recorded automation across every track + clip?\n"
+                "(LFO links and macro mappings are not affected.)",
+                [this]() {
+                    // Snapshot all track lanes + all slot lanes for undo.
+                    struct ClearAllSnap {
+                        std::vector<std::vector<automation::AutomationLane>> trackLanes;
+                        std::vector<std::vector<std::vector<automation::AutomationLane>>> slotLanes;
+                    };
+                    auto snap = std::make_shared<ClearAllSnap>();
+                    snap->trackLanes.resize(m_project.numTracks());
+                    snap->slotLanes.resize(m_project.numTracks());
+                    for (int t = 0; t < m_project.numTracks(); ++t) {
+                        snap->trackLanes[t] = m_project.track(t).automationLanes;
+                        snap->slotLanes[t].resize(m_project.numScenes());
+                        for (int s = 0; s < m_project.numScenes(); ++s) {
+                            auto* slot = m_project.getSlot(t, s);
+                            if (slot) snap->slotLanes[t][s] = slot->clipAutomation;
+                        }
+                    }
+                    m_project.clearAllAutomation();
+                    m_undoManager.push({"Clear All Automation",
+                        [this, snap]{
+                            for (int t = 0; t < (int)snap->trackLanes.size() &&
+                                            t < m_project.numTracks(); ++t) {
+                                m_project.track(t).automationLanes = snap->trackLanes[t];
+                                for (int s = 0; s < (int)snap->slotLanes[t].size() &&
+                                                s < m_project.numScenes(); ++s) {
+                                    auto* slot = m_project.getSlot(t, s);
+                                    if (slot) slot->clipAutomation = snap->slotLanes[t][s];
+                                }
+                            }
+                            markDirty();
+                        },
+                        [this]{
+                            m_project.clearAllAutomation();
+                            markDirty();
+                        }, ""});
+                    markDirty();
+                });
+        }),
         M::item("Preferences", [this]() {
             ui::fw2::FwPreferencesDialog::State state;
             state.selectedOutputDevice = m_audioEngine.config().outputDevice;
@@ -1468,6 +1516,56 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 markDirty();
             });   // promptCustom
     }, true, canDelete});
+
+    // Clear-automation entry on the track header. Wipes the
+    // arrangement-level lanes AND every per-clip envelope on this
+    // track (matches the v0.61 design). Conditionally surfaced so
+    // tracks with no recorded automation don't get a useless
+    // grey-out in the menu.
+    {
+        const auto& trk = m_project.track(trackIndex);
+        bool hasAny = !trk.automationLanes.empty();
+        if (!hasAny) {
+            for (int s = 0; s < m_project.numScenes(); ++s) {
+                const auto* slot = m_project.getSlot(trackIndex, s);
+                if (slot && !slot->clipAutomation.empty()) {
+                    hasAny = true;
+                    break;
+                }
+            }
+        }
+        if (hasAny) {
+            items.push_back({"Clear Track Automation",
+                [this, trackIndex]() {
+                    if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
+                    // Snapshot for undo: track lanes + every slot's
+                    // clip lanes on this track.
+                    auto savedTrack = m_project.track(trackIndex).automationLanes;
+                    std::vector<std::vector<automation::AutomationLane>> savedSlots(
+                        m_project.numScenes());
+                    for (int s = 0; s < m_project.numScenes(); ++s) {
+                        auto* slot = m_project.getSlot(trackIndex, s);
+                        if (slot) savedSlots[s] = slot->clipAutomation;
+                    }
+                    m_project.clearTrackAutomation(trackIndex);
+                    m_undoManager.push({"Clear Track Automation",
+                        [this, trackIndex, savedTrack, savedSlots]{
+                            if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
+                            m_project.track(trackIndex).automationLanes = savedTrack;
+                            for (int s = 0; s < (int)savedSlots.size(); ++s) {
+                                auto* slot = m_project.getSlot(trackIndex, s);
+                                if (slot) slot->clipAutomation = savedSlots[s];
+                            }
+                            markDirty();
+                        },
+                        [this, trackIndex]{
+                            m_project.clearTrackAutomation(trackIndex);
+                            markDirty();
+                        }, ""});
+                    markDirty();
+                }});
+        }
+    }
 
     ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
                                  ui::fw::Point{mx, my});
@@ -2912,6 +3010,36 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         }});
     }
 
+    // Clear-automation entry — only meaningful when the slot has any
+    // recorded clip-level automation lanes. Surface it conditionally
+    // so it doesn't clutter the menu on empty / never-automated slots.
+    {
+        auto* slotForAuto = m_project.getSlot(trackIndex, sceneIndex);
+        const bool hasClipAuto = slotForAuto &&
+                                   !slotForAuto->clipAutomation.empty();
+        if (hasClipAuto) {
+            items.push_back({"Clear Clip Automation",
+                [this, trackIndex, sceneIndex]() {
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s) return;
+                    auto saved = s->clipAutomation;   // copy for undo
+                    s->clipAutomation.clear();
+                    m_undoManager.push({"Clear Clip Automation",
+                        [this, trackIndex, sceneIndex, saved]{
+                            auto* ss = m_project.getSlot(trackIndex, sceneIndex);
+                            if (ss) ss->clipAutomation = saved;
+                            markDirty();
+                        },
+                        [this, trackIndex, sceneIndex]{
+                            auto* ss = m_project.getSlot(trackIndex, sceneIndex);
+                            if (ss) ss->clipAutomation.clear();
+                            markDirty();
+                        }, ""});
+                    markDirty();
+                }});
+        }
+    }
+
     ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
                                  ui::fw::Point{mx, my});
 }
@@ -4062,6 +4190,20 @@ bool App::init() {
     // for those callers, but they don't get the non-armed-track
     // launch behaviour. That's acceptable — the UI button is the
     // canonical entry point for the full session-record gesture.
+    // Master automation-arm wiring. The transport panel flips the
+    // visual state on click and tells us; we update the project
+    // (so save/load round-trips) and forward to the engine via a
+    // SetGlobalAutoRecordMsg. Initial state pushed below from the
+    // currently-loaded project's globalAutoRecord field.
+    m_transportPanel->setOnAutoArmPressed([this](bool armed) {
+        m_project.setGlobalAutoRecord(armed);
+        m_audioEngine.sendCommand(audio::SetGlobalAutoRecordMsg{armed});
+        markDirty();
+    });
+    m_transportPanel->setGlobalAutoArmed(m_project.globalAutoRecord());
+    m_audioEngine.sendCommand(audio::SetGlobalAutoRecordMsg{
+        m_project.globalAutoRecord()});
+
     m_transportPanel->setOnRecordPressed([this](bool arm) {
         if (arm) {
             const int targetScene = std::max(0, m_selectedScene);
@@ -4073,9 +4215,12 @@ bool App::init() {
                 if (trk.armed) {
                     if (trk.type == Track::Type::Midi) {
                         m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
-                            t, targetScene, /*overdub*/false,
+                            t, targetScene, trk.midiOverdub,
                             /*recordLengthBars*/0});
                     } else if (trk.type == Track::Type::Audio) {
+                        // Audio recording is always new-take per the
+                        // v0.61 design discussion — no per-track
+                        // overdub flag.
                         m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
                             t, targetScene, /*overdub*/false,
                             /*recordLengthBars*/0});
@@ -7027,6 +7172,44 @@ void App::update() {
     // the rationale.
     m_project.purgeClipGraveyard();
 
+    // Piano roll holds a raw midi::MidiClip* pointer to whatever the
+    // user opened for editing. Several slot-mutation paths (recording
+    // finalize, paste, scene insert, project load) can replace the
+    // slot's MidiClip out from under that pointer; the project's clip
+    // graveyard keeps the old object alive ~5 s, then frees it — and
+    // the next render frame UAFs reading m_clip->name() in
+    // PianoRollPanel::renderToolbar (manifests as a slow std::bad_alloc
+    // crash from the resulting garbage-length string copies).
+    //
+    // Defensive sweep: if the panel's clip pointer no longer matches
+    // any slot's midiClip OR any arrangement clip's midiClip, it's
+    // stale → close the panel rather than dereference freed memory.
+    // O(tracks × scenes + arrangement clips) per frame; cheap.
+    if (m_pianoRoll && m_pianoRoll->isOpen() && m_pianoRoll->clip()) {
+        const midi::MidiClip* held = m_pianoRoll->clip();
+        bool stillValid = false;
+        for (int t = 0; t < m_project.numTracks() && !stillValid; ++t) {
+            for (int s = 0; s < m_project.numScenes(); ++s) {
+                if (m_project.getMidiClip(t, s) == held) {
+                    stillValid = true;
+                    break;
+                }
+            }
+            if (stillValid) break;
+            for (const auto& ac : m_project.track(t).arrangementClips) {
+                if (ac.midiClip.get() == held) {
+                    stillValid = true;
+                    break;
+                }
+            }
+        }
+        if (!stillValid) {
+            LOG_WARN("UI", "PianoRoll: held clip %p no longer in project — closing",
+                      static_cast<const void*>(held));
+            m_pianoRoll->close();
+        }
+    }
+
     // Detail panel open/close height animation. Lives outside fw2's
     // measure cache so a re-layout in the same frame doesn't read a
     // stale height; tick() advances the animated height and bumps the
@@ -7259,6 +7442,18 @@ void App::update() {
             else if constexpr (std::is_same_v<T, audio::TransportRecordStateUpdate>) {
                 m_transportPanel->setRecordState(msg.recording, msg.countingIn, msg.countInProgress, msg.countInBeats);
                 m_sessionPanel->setGlobalRecordArmed(msg.recording);
+                // Clear the SessionPanel's record-target scene
+                // indicator whenever transport recording goes off,
+                // regardless of HOW it went off (transport Stop,
+                // Space key, project load, scene-launch finishing
+                // a fixed-length take, etc.) — previously the
+                // indicator only cleared via the Record-button
+                // disarm callback, so it stayed stuck on the scene
+                // label after Space-stop.
+                if (!msg.recording && m_recordTargetScene >= 0) {
+                    m_recordTargetScene = -1;
+                    m_sessionPanel->setRecordTargetScene(-1);
+                }
             }
             else if constexpr (std::is_same_v<T, audio::MidiRecordCompleteEvent>) {
                 int ti = msg.trackIndex;

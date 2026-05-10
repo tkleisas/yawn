@@ -81,13 +81,20 @@ void deserializeEffectChain(effects::EffectChain& chain, const json& arr,
             LOG_WARN("Project", "Unknown effect ID '%s' in chain - skipping", id.c_str());
             continue;
         }
-        fx->init(sampleRate, maxBlockSize);
-        fx->setBypassed(j.value("bypassed", false));
-        fx->setMix(j.value("mix", 1.0f));
+        // Append BEFORE init/state restore. EffectChain::insert calls
+        // effect->init(sr, maxBlockSize) internally — if we restore
+        // params first and then append, the second init() wipes them
+        // back to defaults (was the SplineEQ load bug — its init()
+        // unconditionally rewrites m_params with the default 3-band
+        // EQ layout). Append first, then operate on the slot pointer.
+        auto* slotFx = chain.append(std::move(fx));
+        if (!slotFx) continue;
+        slotFx->setBypassed(j.value("bypassed", false));
+        slotFx->setMix(j.value("mix", 1.0f));
 
 #ifdef YAWN_HAS_VST3
         if (isVST3Id(id)) {
-            auto* vfx = static_cast<vst3::VST3Effect*>(fx.get());
+            auto* vfx = static_cast<vst3::VST3Effect*>(slotFx);
             if (vfx->instance()) {
                 if (j.contains("vst3state")) {
                     auto data = base64Decode(j["vst3state"].get<std::string>());
@@ -101,14 +108,12 @@ void deserializeEffectChain(effects::EffectChain& chain, const json& arr,
         } else
 #endif
         if (j.contains("params"))
-            deserializeParams(*fx, j["params"]);
+            deserializeParams(*slotFx, j["params"]);
 
         // Restore generic extra state. See saveExtraState above for
         // the rationale — pure parametric effects ignore this.
         if (j.contains("extraState"))
-            fx->loadExtraState(j["extraState"], std::filesystem::path{});
-
-        chain.append(std::move(fx));
+            slotFx->loadExtraState(j["extraState"], std::filesystem::path{});
     }
 }
 
@@ -1017,6 +1022,7 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
     proj["timeSignatureDenominator"] = engine.transport().denominator();
     proj["viewMode"] = static_cast<int>(project.viewMode());
     proj["arrangementLength"] = project.arrangementLength();
+    proj["globalAutoRecord"] = project.globalAutoRecord();
     root["project"] = proj;
 
     // Tracks
@@ -1035,6 +1041,7 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         tj["midiInputPort"] = tr.midiInputPort;
         tj["midiInputChannel"] = tr.midiInputChannel;
         tj["armed"] = tr.armed;
+        tj["midiOverdub"] = tr.midiOverdub;
         tj["defaultScene"] = tr.defaultScene;
         tj["sidechainSource"] = tr.sidechainSource;
         tj["resampleSource"] = tr.resampleSource;
@@ -1275,6 +1282,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             proj.value("timeSignatureDenominator", 4));
         project.setViewMode(static_cast<ViewMode>(proj.value("viewMode", 0)));
         project.setArrangementLength(proj.value("arrangementLength", 64.0));
+        project.setGlobalAutoRecord(proj.value("globalAutoRecord", false));
     }
 
     // Tracks & Scenes
@@ -1306,6 +1314,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             tr.midiInputPort = tj.value("midiInputPort", -1);
             tr.midiInputChannel = tj.value("midiInputChannel", -1);
             tr.armed = tj.value("armed", false);
+            tr.midiOverdub = tj.value("midiOverdub", false);
             tr.defaultScene = tj.value("defaultScene", -1);
             tr.sidechainSource = tj.value("sidechainSource", -1);
             tr.resampleSource = tj.value("resampleSource", -1);

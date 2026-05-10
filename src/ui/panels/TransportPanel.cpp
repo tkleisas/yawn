@@ -155,9 +155,14 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_metroDotX = lx + metW + 6.0f;
     m_metroDotY = btnY + boxH * 0.5f;
 
-    // ── Center group: Home | Stop | Play | Record ──
-    const float totalBtnW = 4 * btnSize + 3 * btnGap;
-    const float centerX = bounds.x + (bounds.w - totalBtnW) * 0.5f;
+    // ── Center group: Home | Stop | Play | Record | AUTO ──
+    // AUTO is the master automation-record arm. Wider than the
+    // round transport buttons (it carries a text label), and sits
+    // immediately right of Record so the two arming controls are
+    // visually paired.
+    const float autoBtnW  = 56.0f;
+    const float totalBtnW = 4 * btnSize + 3 * btnGap + btnGap + autoBtnW;
+    const float centerX   = bounds.x + (bounds.w - totalBtnW) * 0.5f;
 
     m_homeBtnX = centerX;                          m_homeBtnY = btnY;
     m_homeBtnW = btnSize;                          m_homeBtnH = btnSize;
@@ -167,6 +172,8 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_playBtnW = btnSize;                          m_playBtnH = btnSize;
     m_recBtnX  = centerX + 3 * (btnSize + btnGap); m_recBtnY  = btnY;
     m_recBtnW  = btnSize;                          m_recBtnH  = btnSize;
+    m_autoBtnX = centerX + 4 * (btnSize + btnGap); m_autoBtnY = btnY;
+    m_autoBtnW = autoBtnW;                         m_autoBtnH = btnSize;
 
     // ── Right side: Link toggle (rightmost) ──
     const float linkW = 52.0f;
@@ -216,7 +223,7 @@ void TransportPanel::render(UIContext& ctx) {
     }
 
     // Transport buttons (center)
-    paintTransportButtons(r);
+    paintTransportButtons(r, &tm);
 
     // CC labels for mapped transport controls
     if (m_learnManager) {
@@ -464,7 +471,7 @@ void TransportPanel::render(UIContext& ctx) {
 
 // ─── Transport Buttons (immediate-mode) ────────────────────────────
 
-void TransportPanel::paintTransportButtons(Renderer2D& r) {
+void TransportPanel::paintTransportButtons(Renderer2D& r, TextMetrics* tmPtr) {
     constexpr float cornerR = 4.0f;
 
     // Home — return playhead to 0. Icon: a left-pointing triangle plus
@@ -540,6 +547,27 @@ void TransportPanel::paintTransportButtons(Renderer2D& r) {
             const float progW = m_recBtnW * static_cast<float>(m_countInProgress);
             r.drawRect(m_recBtnX, m_recBtnY + m_recBtnH - 3, progW, 3,
                         Color{255,100,100,255});
+        }
+    }
+
+    // AUTO master automation-arm — wider button with text label,
+    // bright red when armed (matches Live's "Automation Arm" colour
+    // language), dim grey when off.
+    {
+        const Color bg  = m_globalAutoArmed ? Color{200, 40, 40, 255}
+                                              : Color{42, 42, 50, 255};
+        const Color tc  = m_globalAutoArmed ? Color{255, 230, 230, 255}
+                                              : Color{170, 170, 180, 255};
+        r.drawRoundedRect(m_autoBtnX, m_autoBtnY, m_autoBtnW, m_autoBtnH,
+                           cornerR, bg);
+        if (tmPtr) {
+            const float fs = theme().metrics.fontSizeSmall;
+            const float tw = tmPtr->textWidth("AUTO", fs);
+            const float lh = tmPtr->lineHeight(fs);
+            tmPtr->drawText(r, "AUTO",
+                             m_autoBtnX + (m_autoBtnW - tw) * 0.5f,
+                             m_autoBtnY + (m_autoBtnH - lh) * 0.5f,
+                             fs, tc);
         }
     }
 }
@@ -631,6 +659,17 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         } else {
             m_engine->sendCommand(audio::TransportRecordMsg{newState, m_selectedScene});
         }
+        return true;
+    }
+    // Master automation-arm toggle. App owns the project state +
+    // engine sync; this panel just flips the visual state and tells
+    // App, mirroring how Record above works.
+    if (hitBtn(m_autoBtnX, m_autoBtnY, m_autoBtnW, m_autoBtnH, mx, my)) {
+        const bool newState = !m_globalAutoArmed;
+        LOG_INFO("User", "transport AUTO button → %s",
+                 newState ? "arm" : "disarm");
+        m_globalAutoArmed = newState;
+        if (m_onAutoArmPressed) m_onAutoArmPressed(newState);
         return true;
     }
 

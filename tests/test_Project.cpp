@@ -146,3 +146,100 @@ TEST(ProjectTest, ConstAccess) {
     EXPECT_EQ(cp.track(0).name, "Track 1");
     EXPECT_EQ(cp.scene(0).name, "1");
 }
+
+// ─── v0.63 ─ Global automation arm + clear scopes ──────────────────
+
+TEST(ProjectAutomation, GlobalAutoRecordDefault) {
+    Project p;
+    p.init(2, 2);
+    EXPECT_FALSE(p.globalAutoRecord());
+}
+
+TEST(ProjectAutomation, SetGlobalAutoRecord) {
+    Project p;
+    p.init(2, 2);
+    p.setGlobalAutoRecord(true);
+    EXPECT_TRUE(p.globalAutoRecord());
+    p.setGlobalAutoRecord(false);
+    EXPECT_FALSE(p.globalAutoRecord());
+}
+
+// Helper: stuff a single envelope point into a slot's clip
+// automation so the clear test has something to wipe.
+static void seedClipAuto(Project& p, int t, int s) {
+    auto* slot = p.getSlot(t, s);
+    if (!slot) return;
+    automation::AutomationLane lane;
+    lane.target = automation::AutomationTarget::instrument(t, 0);
+    lane.envelope.addPoint(0.0, 0.5f);
+    slot->clipAutomation.push_back(lane);
+}
+
+// Same for track-level (arrangement) automation.
+static void seedTrackAuto(Project& p, int t) {
+    if (t < 0 || t >= p.numTracks()) return;
+    automation::AutomationLane lane;
+    lane.target = automation::AutomationTarget::instrument(t, 1);
+    lane.envelope.addPoint(0.0, 0.7f);
+    p.track(t).automationLanes.push_back(lane);
+}
+
+TEST(ProjectAutomation, ClearClipAutomationEmptiesSlot) {
+    Project p;
+    p.init(1, 2);
+    seedClipAuto(p, 0, 0);
+    seedClipAuto(p, 0, 1);
+    EXPECT_FALSE(p.getSlot(0, 0)->clipAutomation.empty());
+
+    p.clearClipAutomation(0, 0);
+    EXPECT_TRUE(p.getSlot(0, 0)->clipAutomation.empty());
+    // Other slot on the same track is untouched.
+    EXPECT_FALSE(p.getSlot(0, 1)->clipAutomation.empty());
+}
+
+TEST(ProjectAutomation, ClearTrackAutomationEmptiesEverythingOnTrack) {
+    Project p;
+    p.init(2, 2);
+    seedTrackAuto(p, 0);
+    seedTrackAuto(p, 1);
+    seedClipAuto(p, 0, 0);
+    seedClipAuto(p, 0, 1);
+    seedClipAuto(p, 1, 0);
+
+    p.clearTrackAutomation(0);
+
+    // Track 0: arrangement lanes + every slot's clip lanes wiped.
+    EXPECT_TRUE(p.track(0).automationLanes.empty());
+    EXPECT_TRUE(p.getSlot(0, 0)->clipAutomation.empty());
+    EXPECT_TRUE(p.getSlot(0, 1)->clipAutomation.empty());
+    // Track 1 untouched.
+    EXPECT_FALSE(p.track(1).automationLanes.empty());
+    EXPECT_FALSE(p.getSlot(1, 0)->clipAutomation.empty());
+}
+
+TEST(ProjectAutomation, ClearAllAutomationEmptiesEverything) {
+    Project p;
+    p.init(3, 2);
+    for (int t = 0; t < 3; ++t) {
+        seedTrackAuto(p, t);
+        for (int s = 0; s < 2; ++s) seedClipAuto(p, t, s);
+    }
+
+    p.clearAllAutomation();
+
+    for (int t = 0; t < 3; ++t) {
+        EXPECT_TRUE(p.track(t).automationLanes.empty())
+            << "track " << t << " arrangement lanes not cleared";
+        for (int s = 0; s < 2; ++s) {
+            EXPECT_TRUE(p.getSlot(t, s)->clipAutomation.empty())
+                << "track " << t << " scene " << s
+                << " clip lanes not cleared";
+        }
+    }
+}
+
+TEST(ProjectAutomation, MidiOverdubDefaultsToFalse) {
+    Project p;
+    p.init(1, 1);
+    EXPECT_FALSE(p.track(0).midiOverdub);
+}

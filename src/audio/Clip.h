@@ -78,6 +78,13 @@ struct ClipPlayState {
     bool stopping = false;        // fade-out before stop
     int sceneIndex = -1;          // which scene slot is playing
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+    // Mirrored from ClipSlot::autoRecordDisabled at launch time.
+    // While this clip is active on the track, the AutomationEngine
+    // suppresses recording into track lanes (keeps reading existing
+    // automation, still applies live touch values — just doesn't
+    // persist new breakpoints). Lets a user freeze a take's
+    // automation without disabling the track-wide arm.
+    bool autoRecordDisabled = false;
 
     float fadeGain = 1.0f;        // for fade-in/fade-out
     static constexpr float kFadeIncrement = 0.002f; // ~5ms at 44.1kHz per sample

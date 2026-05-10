@@ -162,8 +162,17 @@ void FwExportDialog::syncDropdownsToConfig() {
     else if (m_config.sampleRate == 96000) srIdx = 2;
     m_sampleRateDD.setSelectedIndex(srIdx, ValueChangeSource::Programmatic);
 
+    // Loop Region scope is available whenever a non-empty loop range
+    // is stored on the transport — the loopEnabled flag is the
+    // playback-time toggle, not a precondition for "I want to export
+    // these bars". Previously we required loopEnabled which meant
+    // the user had to first press L (or click the loop toggle)
+    // before the option appeared in the dropdown — surprising UX
+    // when they'd just dragged the loop markers and expected to
+    // export them.
     const bool loopScopeAvailable =
-        m_config.loopEnabled && m_config.loopEndBeats > m_config.loopStartBeats;
+        m_config.loopEndBeats > m_config.loopStartBeats &&
+        m_config.loopEndBeats > 0.0;
     using Labels = std::vector<std::string>;
     if (loopScopeAvailable) {
         m_scopeDD.setItems(Labels{"Full Arrangement", "Loop Region"});

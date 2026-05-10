@@ -115,13 +115,19 @@ inline void deserializeEffectChainStandalone(
                      id.c_str());
             continue;
         }
-        fx->init(sampleRate, maxBlockSize);
-        fx->setBypassed(j.value("bypassed", false));
-        fx->setMix(j.value("mix", 1.0f));
+        // Append BEFORE state restore — EffectChain::insert calls
+        // effect->init() which on SplineEQ unconditionally rewrites
+        // m_params back to defaults, wiping a preceding loadExtraState.
+        // Mirrors the fix in ProjectSerializer's deserializeEffectChain.
+        (void)sampleRate; (void)maxBlockSize;   // chain.append uses its own SR
+        auto* slotFx = chain.append(std::move(fx));
+        if (!slotFx) continue;
+        slotFx->setBypassed(j.value("bypassed", false));
+        slotFx->setMix(j.value("mix", 1.0f));
 
 #ifdef YAWN_HAS_VST3
         if (isVST3Id(id)) {
-            auto* vfx = static_cast<vst3::VST3Effect*>(fx.get());
+            auto* vfx = static_cast<vst3::VST3Effect*>(slotFx);
             if (vfx->instance()) {
                 if (j.contains("vst3state")) {
                     auto data = base64Decode(j["vst3state"].get<std::string>());
@@ -136,11 +142,9 @@ inline void deserializeEffectChainStandalone(
 #endif
 
         if (j.contains("params"))
-            ecDeserializeParams(*fx, j["params"]);
+            ecDeserializeParams(*slotFx, j["params"]);
         if (j.contains("extraState"))
-            fx->loadExtraState(j["extraState"], std::filesystem::path{});
-
-        chain.append(std::move(fx));
+            slotFx->loadExtraState(j["extraState"], std::filesystem::path{});
     }
 }
 

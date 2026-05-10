@@ -239,6 +239,53 @@ public:
         }
     }
 
+    // ── Project / preset persistence ──
+    // SplineEQ has 40 params (8 nodes × 5 fields) but parameterInfo
+    // returns the SAME 5 names ("On"/"Type"/"Freq"/"Gain"/"Q") for
+    // every node — that's what the display panel + UI label code
+    // expects. The generic ProjectSerializer::serializeParams uses
+    // info.name as the JSON key, so without an override the 8 nodes'
+    // values would all collide on the same 5 keys → only the last
+    // node's values survive a round-trip. Override the extra-state
+    // hooks to dump/restore the full 40 floats under unique keys
+    // ("n0.On", "n0.Type", … "n7.Q"). The stock parameter loop on
+    // the chain serializer side still runs (writes the colliding
+    // keys to "params") but those values are stomped by our
+    // extraState restore on load, so the round-trip is correct.
+    nlohmann::json saveExtraState(const std::filesystem::path& assetDir) const override {
+        (void)assetDir;
+        nlohmann::json j = nlohmann::json::object();
+        for (int n = 0; n < kMaxNodes; ++n) {
+            std::string prefix = "n" + std::to_string(n) + ".";
+            j[prefix + "On"]   = m_params[nodeParam(n, pfEnabled)];
+            j[prefix + "Type"] = m_params[nodeParam(n, pfType)];
+            j[prefix + "Freq"] = m_params[nodeParam(n, pfFreq)];
+            j[prefix + "Gain"] = m_params[nodeParam(n, pfGain)];
+            j[prefix + "Q"]    = m_params[nodeParam(n, pfQ)];
+        }
+        return j;
+    }
+    void loadExtraState(const nlohmann::json& state,
+                          const std::filesystem::path& assetDir) override {
+        (void)assetDir;
+        if (!state.is_object()) return;
+        for (int n = 0; n < kMaxNodes; ++n) {
+            std::string prefix = "n" + std::to_string(n) + ".";
+            auto loadField = [&](const char* suffix, ParamField pf) {
+                std::string key = prefix + suffix;
+                if (state.contains(key)) {
+                    setParameter(nodeParam(n, pf),
+                                  state[key].template get<float>());
+                }
+            };
+            loadField("On",   pfEnabled);
+            loadField("Type", pfType);
+            loadField("Freq", pfFreq);
+            loadField("Gain", pfGain);
+            loadField("Q",    pfQ);
+        }
+    }
+
     // ── Spectrum-analyser readout for the display panel ──
     // Both arrays are kSpectrumBins long, log-frequency-binned over
     // 20 Hz – 20 kHz. Values are in linear magnitude (0..~1 typical

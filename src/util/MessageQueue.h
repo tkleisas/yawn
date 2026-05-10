@@ -256,6 +256,14 @@ struct SetAutoModeMsg {
     uint8_t mode; // automation::AutoMode as uint8_t
 };
 
+// Master automation-record arm. Toggles the engine's global gate
+// above the per-track AutoMode — when off, no breakpoints get
+// written into any lane regardless of track mode. Touch values
+// still apply live, just aren't persisted.
+struct SetGlobalAutoRecordMsg {
+    bool armed;
+};
+
 struct AutoParamTouchMsg {
     int trackIndex;
     uint8_t targetType;   // automation::TargetType as uint8_t
@@ -334,6 +342,7 @@ using AudioCommand = std::variant<
     MoveAudioEffectMsg,
     ResetMidiEffectChainMsg,
     SetAutoModeMsg,
+    SetGlobalAutoRecordMsg,
     AutoParamTouchMsg,
     SetEffectParamMsg,
     SetTrackArrActiveMsg,

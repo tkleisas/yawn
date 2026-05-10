@@ -71,9 +71,23 @@ void AutomationEngine::process(const Context& ctx) {
         if (mode == AutoMode::Off) continue;
 
         // --- Recording (Touch / Latch) ---
+        // Three-level arming: global gate → per-track AutoMode →
+        // per-clip autoRecordDisabled. All three must allow before
+        // a breakpoint is written. When recording is suppressed by
+        // any level, the touch value still applies live (so the user
+        // hears their knob movement) — only the persistence into a
+        // lane is skipped.
         if ((mode == AutoMode::Touch || mode == AutoMode::Latch) && ctx.trackLanes[t]) {
             auto& ts = m_touchState[t];
-            bool shouldRecord = ts.active || ts.latchHolding;
+            const bool wantsRecord = ts.active || ts.latchHolding;
+            // The per-clip autoRecordDisabled override is plumbed in
+            // ClipPlayState / MidiClipPlayState already but not yet
+            // surfaced through the engine context — that's a v0.64
+            // plumbing follow-up. For v0.63 the global arm is the
+            // sole gate above the per-track AutoMode.
+            const bool clipBlocks  = ctx.clips[t].playing &&
+                                       ctx.clips[t].autoRecordDisabled;
+            const bool shouldRecord = wantsRecord && m_globalAutoRecord && !clipBlocks;
 
             if (shouldRecord) {
                 auto* lane = findOrCreateLane(*ctx.trackLanes[t], ts.target, t);
@@ -82,6 +96,12 @@ void AutomationEngine::process(const Context& ctx) {
                     applyValue(ctx, ts.target, ts.lastValue);
                     continue; // Skip normal read-back for this track while recording
                 }
+            } else if (wantsRecord) {
+                // Suppressed by global / clip gate — still let the
+                // touch value apply live so the user's knob movement
+                // is audible even though it isn't persisted.
+                applyValue(ctx, ts.target, ts.lastValue);
+                continue;
             }
         }
 

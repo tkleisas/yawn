@@ -40,6 +40,16 @@ struct Track {
     int sidechainSource = -1;  // -1=none, -2=live audio input, else track index
     int resampleSource = -1;   // -1=none, track index for resampling audio input
     bool armed = false;
+    // MIDI recording mode for THIS track when an existing MIDI clip
+    // is in the target slot at record time:
+    //   * false (default) → replace — the existing clip is wiped
+    //     and a fresh one is recorded
+    //   * true            → overdub — incoming notes/CCs are layered
+    //     into the existing clip; the clip's lengthBeats is extended
+    //     when the recording runs past the current end
+    // Audio tracks ignore this flag (audio is always new-take per
+    // the v0.61 design discussion).
+    bool midiOverdub = false;
     MonitorMode monitorMode = MonitorMode::Auto;
     VisualBlendMode visualBlendMode = VisualBlendMode::Normal;
     audio::QuantizeMode recordQuantize = audio::QuantizeMode::NextBar;
@@ -127,6 +137,16 @@ struct ClipSlot {
 
     // Per-clip automation lanes (times relative to clip start, loop with clip)
     std::vector<automation::AutomationLane> clipAutomation;
+
+    // Per-clip override for automation recording. The automation
+    // engine writes into clipAutomation only when the global arm is
+    // on, the track's auto-mode is Touch/Latch, AND this flag is
+    // false. Default false → recording follows the global + track
+    // arming. Set to true to lock a specific clip's automation while
+    // still letting the user record into other clips on the same
+    // track. Useful for "freeze this take" without disabling the
+    // whole track's recording.
+    bool autoRecordDisabled = false;
 };
 
 // Which top-level view is displayed (UI only; per-track mode is Track::arrangementActive)
@@ -155,6 +175,35 @@ public:
 
     int numTracks() const { return static_cast<int>(m_tracks.size()); }
     int numScenes() const { return static_cast<int>(m_scenes.size()); }
+
+    // Global automation-record arm. Master gate above the per-track
+    // AutoMode and per-clip autoRecordDisabled — when off, no
+    // automation is recorded anywhere regardless of those finer
+    // settings. Defaults to off so users explicitly opt in (matches
+    // Live's "Automation Arm" workflow). Persists with the project.
+    bool globalAutoRecord() const { return m_globalAutoRecord; }
+    void setGlobalAutoRecord(bool on) { m_globalAutoRecord = on; }
+
+    // Clear envelope automation at three scopes. Only the recorded
+    // breakpoint envelopes are wiped — LFO links, macro mappings,
+    // and MIDI Learn assignments are device routing, not "automation"
+    // in the recorded-takes sense, so they're untouched. Each scope
+    // is meant to be paired with an UndoManager push at the call
+    // site so the operation is reversible.
+    void clearClipAutomation(int trackIndex, int sceneIndex) {
+        auto* slot = getSlot(trackIndex, sceneIndex);
+        if (slot) slot->clipAutomation.clear();
+    }
+    void clearTrackAutomation(int trackIndex) {
+        if (trackIndex < 0 || trackIndex >= numTracks()) return;
+        m_tracks[trackIndex].automationLanes.clear();
+        for (auto& slot : m_clipSlots[trackIndex])
+            slot.clipAutomation.clear();
+    }
+    void clearAllAutomation() {
+        for (int t = 0; t < numTracks(); ++t)
+            clearTrackAutomation(t);
+    }
 
     Track& track(int index) { return m_tracks[index]; }
     const Track& track(int index) const { return m_tracks[index]; }
@@ -520,6 +569,8 @@ private:
     std::vector<std::vector<ClipSlot>> m_clipSlots;
     ViewMode m_viewMode = ViewMode::Session;
     double m_arrangementLength = 64.0; // default 16 bars
+    // Global automation-record arm (see globalAutoRecord()).
+    bool m_globalAutoRecord = false;
 
     // Recently-evicted clips kept alive briefly so the audio thread
     // doesn't UAF its cached state.clip pointer. Drained by

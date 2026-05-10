@@ -274,20 +274,36 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             return true;
         }
 
-        // Check if clicking on loop start/end marker for dragging
+        // Check if clicking on loop start/end marker for dragging.
+        // Tolerance bumped 5 → 8 px so the markers are catchable
+        // without sub-pixel mouse precision (matches Live/Bitwig
+        // ruler-handle hit-test sizing). captureMouse() was missing
+        // entirely from the previous version — that's why the user
+        // could pick a marker but couldn't drag it: subsequent
+        // mouseMove events went elsewhere because the panel never
+        // claimed the grab.
         if (m_loopEnabled && m_loopEnd > m_loopStart) {
+            const float kMarkerHitTol = 8.0f;
             float lx0 = gridX + static_cast<float>(m_loopStart) * m_pixelsPerBeat - m_scrollX;
             float lx1 = gridX + static_cast<float>(m_loopEnd) * m_pixelsPerBeat - m_scrollX;
-            if (std::abs(e.x - lx0) < 5.0f) {
-                m_loopDragMode = LoopDragMode::DragStart;
-                m_loopDragOrigStart = m_loopStart;
-                m_loopDragOrigEnd = m_loopEnd;
-                return true;
-            }
-            if (std::abs(e.x - lx1) < 5.0f) {
+            // End-marker check FIRST so when the loop is collapsed
+            // to its minimum (start ≈ end) the user can still drag
+            // the end marker outwards instead of being stuck on
+            // start. With both markers at the same x, the previous
+            // ordering biased toward DragStart and you'd never
+            // expand the loop.
+            if (std::abs(e.x - lx1) < kMarkerHitTol) {
                 m_loopDragMode = LoopDragMode::DragEnd;
                 m_loopDragOrigStart = m_loopStart;
                 m_loopDragOrigEnd = m_loopEnd;
+                captureMouse();
+                return true;
+            }
+            if (std::abs(e.x - lx0) < kMarkerHitTol) {
+                m_loopDragMode = LoopDragMode::DragStart;
+                m_loopDragOrigStart = m_loopStart;
+                m_loopDragOrigEnd = m_loopEnd;
+                captureMouse();
                 return true;
             }
         }
@@ -760,8 +776,34 @@ bool ArrangementPanel::onMouseUp(MouseEvent&) {
 }
 
 bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
+    // Edge-scroll helper. Used by drag-style gestures (loop marker
+    // drag, playhead scrub, clip move/resize) so the user can keep
+    // dragging past the visible viewport. Returns the px increment
+    // applied to m_scrollX this frame so callers can compensate
+    // their beat math if needed.
+    auto edgeAutoScrollX = [this](float mouseX) -> float {
+        const float gridX = m_bounds.x + kTrackHeaderW;
+        const float gridR = m_bounds.x + m_bounds.w - kScrollbarW;
+        const float edgePx = 32.0f;          // dead zone width
+        const float maxStep = 16.0f;         // px per frame at the edge
+        float step = 0.0f;
+        if (mouseX > gridR - edgePx) {
+            const float over = std::min(edgePx, mouseX - (gridR - edgePx));
+            step = (over / edgePx) * maxStep;
+        } else if (mouseX < gridX + edgePx) {
+            const float over = std::min(edgePx, (gridX + edgePx) - mouseX);
+            step = -(over / edgePx) * maxStep;
+        }
+        if (step != 0.0f) {
+            m_scrollX = std::max(0.0f, m_scrollX + step);
+            invalidate();
+        }
+        return step;
+    };
+
     // Loop marker drag
     if (m_loopDragMode != LoopDragMode::None) {
+        edgeAutoScrollX(e.x);
         float gridX = m_bounds.x + kTrackHeaderW;
         double beat = std::max(0.0, static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat));
         beat = snapBeat(beat);
@@ -776,6 +818,7 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
 
     // Ruler scrub drag — continuously update playhead
     if (m_rulerDragging) {
+        edgeAutoScrollX(e.x);
         float gridX = m_bounds.x + kTrackHeaderW;
         double beat = std::max(0.0, static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat));
         if (m_onPlayheadClick) m_onPlayheadClick(beat);
@@ -1139,6 +1182,39 @@ bool ArrangementPanel::handleAppKey(int sdlKeycode, bool ctrl) {
         if (m_loopEnd <= m_loopStart) m_loopStart = std::max(0.0, m_loopEnd - 4.0);
         m_loopEnabled = true;
         if (m_onLoopChange) m_onLoopChange(m_loopEnabled, m_loopStart, m_loopEnd);
+        return true;
+    }
+
+    // Time zoom — bare + / - / = (no modifier required) so you can
+    // zoom the arrangement timeline from the keyboard the same way
+    // most DAWs do (Live's [+]/[-], Reaper's PgUp/PgDn). Centred
+    // on the current playhead so the zoom doesn't drag the visible
+    // region off-screen. = is the unshifted form of + on US layouts;
+    // accept both so users on different keyboards aren't stuck.
+    if (sdlKeycode == SDLK_PLUS || sdlKeycode == SDLK_EQUALS ||
+        sdlKeycode == SDLK_MINUS) {
+        const float factor = (sdlKeycode == SDLK_MINUS)
+                              ? (1.0f / 1.25f) : 1.25f;
+        const float oldZoom = m_pixelsPerBeat;
+        m_pixelsPerBeat = std::clamp(m_pixelsPerBeat * factor,
+                                       kMinZoom, kMaxZoom);
+        // Anchor zoom on the playhead so the user keeps their
+        // place in the timeline.
+        const double anchorBeat = m_engine
+            ? m_engine->transport().positionInBeats() : 0.0;
+        const float gridX = m_bounds.x + kTrackHeaderW;
+        const float gridW = m_bounds.w - kTrackHeaderW - kScrollbarW;
+        const float anchorPxOld = static_cast<float>(anchorBeat) * oldZoom - m_scrollX;
+        m_scrollX = static_cast<float>(anchorBeat) * m_pixelsPerBeat - anchorPxOld;
+        m_scrollX = std::max(0.0f, m_scrollX);
+        // Keep playhead at least within the viewport if it would be
+        // pushed out.
+        const float anchorPxNew = static_cast<float>(anchorBeat) * m_pixelsPerBeat - m_scrollX;
+        if (anchorPxNew < 0 || anchorPxNew > gridW) {
+            m_scrollX = std::max(0.0f,
+                static_cast<float>(anchorBeat) * m_pixelsPerBeat - gridW * 0.5f);
+        }
+        invalidate();
         return true;
     }
 

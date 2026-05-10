@@ -584,19 +584,17 @@ void SessionPanel::paintSceneLabels(Renderer2D& r, TextMetrics& tm, float x, flo
                          ::yawn::ui::Theme::textSecondary);
         }
 
-        // Record-target indicator — bright red ring around the scene
-        // label cell that's been armed as the next session-record
-        // target. Drawn after the cell fill but before the bottom
-        // separator so it sits cleanly inside the cell gutter.
+        // Record-target indicator — small filled red dot in the
+        // top-left corner of the scene-label cell that's armed as
+        // the next session-record target. The previous version drew
+        // a full red ring + corner dot which read like a stop
+        // button; users tried to click it expecting playback to
+        // stop. Smaller dot is enough to communicate "this row
+        // gets the take" without the affordance confusion.
         if (s == m_recordTargetScene) {
             const ::yawn::ui::Color recCol{255, 60, 60, 240};
-            r.drawRectOutline(x + 2, sy + 2, w - 4, sh - 4, recCol, 2.0f);
-            // Small filled dot in the right gutter to make the ring
-            // unambiguous even when the cell sits next to a normal
-            // selection highlight.
-            const float dotR = std::min(5.0f, sh * 0.18f);
-            r.drawRect(x + w - dotR * 2 - 4, sy + sh * 0.5f - dotR,
-                        dotR * 2, dotR * 2, recCol);
+            const float dotR = std::min(4.0f, sh * 0.14f);
+            r.drawRect(x + 4, sy + 4, dotR * 2, dotR * 2, recCol);
         }
 
         r.drawRect(x, sy + sh - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);

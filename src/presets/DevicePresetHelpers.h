@@ -117,8 +117,18 @@ inline std::filesystem::path saveDevicePreset(const std::string& presetName,
     }
 #endif
 
+    // Effects with multi-node / multi-zone state (Spline EQ's 8 ×
+    // 5-field nodes, Conv Reverb's IR path, Neural Amp's model
+    // path) override saveExtraState. Without piping that through
+    // here, the preset round-trips only `params` — and SplineEQ's
+    // 40 params collide on 5 keys, so 7 of 8 nodes are lost.
+    // Mirrors the Instrument helper above.
+    const std::filesystem::path assetDir =
+        PresetManager::presetAssetDir(fx.id(), presetName);
+    json extra = fx.saveExtraState(assetDir);
+
     return PresetManager::savePreset(presetName, fx.id(), fx.name(),
-                                     params, vst3State, vst3CtrlState);
+                                     params, extra, vst3State, vst3CtrlState);
 }
 
 inline std::filesystem::path saveDevicePreset(const std::string& presetName,
@@ -177,6 +187,16 @@ inline bool loadDevicePreset(const std::filesystem::path& filePath,
 #endif
 
     deserializeDeviceParams(fx, data.params);
+    // Restore effect-specific extra state (Spline EQ per-node
+    // values, Conv Reverb IR path, Neural Amp model path). Mirrors
+    // the Instrument loader and the in-project chain deserializer
+    // — without this hook, presets that the save side wrote with
+    // extraState were silently throwing away the multi-node values.
+    if (!data.extraState.is_null() && !data.extraState.empty()) {
+        const std::filesystem::path assetDir =
+            filePath.parent_path() / filePath.stem();
+        fx.loadExtraState(data.extraState, assetDir);
+    }
     return true;
 }
 

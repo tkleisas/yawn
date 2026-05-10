@@ -18,6 +18,7 @@
 #include "effects/Rotary.h"
 #include "effects/Convolution.h"
 #include "effects/ConvolutionReverb.h"
+#include "effects/SplineEQ.h"
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include <cmath>
@@ -1533,6 +1534,65 @@ TEST(Rotary, ParameterAccess) {
     r.setParameter(Rotary::kParamCount + 1, 0.5f);
     EXPECT_EQ(r.getParameter(-1), 0.0f);
     EXPECT_EQ(r.getParameter(Rotary::kParamCount + 1), 0.0f);
+}
+
+// ── SplineEQ extra-state round-trip ────────────────────────────────
+//
+// SplineEQ has 40 params (8 nodes × 5 fields) but parameterInfo
+// returns only 5 distinct names ("On"/"Type"/"Freq"/"Gain"/"Q") —
+// so the generic name-keyed serializer collapses them. The fix is
+// saveExtraState/loadExtraState overrides that emit/restore unique
+// keys per node ("n0.On" … "n7.Q"). This test pins that round-trip.
+
+TEST(SplineEQ, ExtraStateRoundTripPreservesAllNodes) {
+    SplineEQ eq;
+    eq.init(kSampleRate, kBlockSize);
+
+    // Set deliberately-distinct values per node so a collapsed
+    // collision would lose 7 of them.
+    for (int n = 0; n < SplineEQ::kMaxNodes; ++n) {
+        eq.setParameter(SplineEQ::nodeParam(n, SplineEQ::pfEnabled),
+                         (n % 2 == 0) ? 1.0f : 0.0f);
+        eq.setParameter(SplineEQ::nodeParam(n, SplineEQ::pfType),
+                         static_cast<float>(n % SplineEQ::ntCount));
+        eq.setParameter(SplineEQ::nodeParam(n, SplineEQ::pfFreq),
+                         0.05f + n * 0.10f);
+        eq.setParameter(SplineEQ::nodeParam(n, SplineEQ::pfGain),
+                         -10.0f + n * 2.5f);
+        eq.setParameter(SplineEQ::nodeParam(n, SplineEQ::pfQ),
+                         0.5f + n * 0.5f);
+    }
+
+    auto state = eq.saveExtraState({});
+    ASSERT_TRUE(state.is_object());
+    EXPECT_EQ(state.size(), 40u)
+        << "extraState should have 40 unique keys (8 nodes × 5 fields)";
+
+    // Fresh instance — defaults populated by init().
+    SplineEQ eq2;
+    eq2.init(kSampleRate, kBlockSize);
+
+    // Restore.
+    eq2.loadExtraState(state, {});
+
+    // Every per-node value should match the originals.
+    for (int n = 0; n < SplineEQ::kMaxNodes; ++n) {
+        const float onA   = eq.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfEnabled));
+        const float onB   = eq2.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfEnabled));
+        const float typA  = eq.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfType));
+        const float typB  = eq2.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfType));
+        const float fqA   = eq.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfFreq));
+        const float fqB   = eq2.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfFreq));
+        const float gnA   = eq.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfGain));
+        const float gnB   = eq2.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfGain));
+        const float qA    = eq.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfQ));
+        const float qB    = eq2.getParameter(SplineEQ::nodeParam(n, SplineEQ::pfQ));
+        EXPECT_FLOAT_EQ(onA,  onB)  << "node " << n << " enabled differs";
+        EXPECT_FLOAT_EQ(typA, typB) << "node " << n << " type differs";
+        EXPECT_FLOAT_EQ(fqA,  fqB)  << "node " << n << " freq differs";
+        EXPECT_FLOAT_EQ(gnA,  gnB)  << "node " << n << " gain differs";
+        EXPECT_FLOAT_EQ(qA,   qB)   << "node " << n << " Q differs";
+    }
 }
 
 TEST(Rotary, StableUnderLongRender) {

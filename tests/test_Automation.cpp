@@ -335,6 +335,9 @@ TEST(AutomationEngine, DoesNothingWhenModeOff) {
 TEST(AutomationRecording, TouchModeRecordsWhileTouching) {
     automation::AutomationEngine engine;
     engine.setTrackAutoMode(0, AutoMode::Touch);
+    // v0.63 added a master arm above the per-track AutoMode. Tests
+    // exercising the recording path must opt in explicitly.
+    engine.setGlobalAutoRecord(true);
 
     auto target = AutomationTarget::instrument(0, 0);
     std::vector<AutomationLane> lanes;
@@ -370,6 +373,7 @@ TEST(AutomationRecording, TouchModeRecordsWhileTouching) {
 TEST(AutomationRecording, LatchModeHoldsAfterRelease) {
     automation::AutomationEngine engine;
     engine.setTrackAutoMode(0, AutoMode::Latch);
+    engine.setGlobalAutoRecord(true);   // v0.63 master arm
 
     auto target = AutomationTarget::instrument(0, 0);
     std::vector<AutomationLane> lanes;
@@ -438,6 +442,7 @@ TEST(AutomationRecording, NoRecordingInOffMode) {
 TEST(AutomationRecording, CreatesLaneForNewTarget) {
     automation::AutomationEngine engine;
     engine.setTrackAutoMode(0, AutoMode::Touch);
+    engine.setGlobalAutoRecord(true);   // v0.63 master arm
 
     std::vector<AutomationLane> lanes;
     automation::AutomationEngine::Context ctx;
@@ -465,6 +470,9 @@ TEST(AutomationRecording, CreatesLaneForNewTarget) {
 TEST(AutomationRecording, RecordsToExistingLane) {
     automation::AutomationEngine engine;
     engine.setTrackAutoMode(0, AutoMode::Touch);
+    // v0.63 added a master arm above the per-track AutoMode. Tests
+    // exercising the recording path must opt in explicitly.
+    engine.setGlobalAutoRecord(true);
 
     auto target = AutomationTarget::instrument(0, 0);
 
@@ -508,4 +516,78 @@ TEST(AutomationRecording, IsRecordingQuery) {
     EXPECT_TRUE(engine.isRecording(1)); // latch hold
     engine.stopLatchHold(1);
     EXPECT_FALSE(engine.isRecording(1));
+}
+
+// ─── v0.63 ─ Global automation arm ──────────────────────────────────
+
+TEST(GlobalAutoArm, DefaultIsOff) {
+    automation::AutomationEngine engine;
+    EXPECT_FALSE(engine.globalAutoRecord());
+}
+
+TEST(GlobalAutoArm, SetGetRoundTrip) {
+    automation::AutomationEngine engine;
+    engine.setGlobalAutoRecord(true);
+    EXPECT_TRUE(engine.globalAutoRecord());
+    engine.setGlobalAutoRecord(false);
+    EXPECT_FALSE(engine.globalAutoRecord());
+}
+
+TEST(GlobalAutoArm, NoRecordingWhenGlobalArmOff) {
+    automation::AutomationEngine engine;
+    engine.setTrackAutoMode(0, AutoMode::Touch);
+    engine.setGlobalAutoRecord(false);   // master OFF — should suppress
+
+    auto target = AutomationTarget::instrument(0, 0);
+    std::vector<AutomationLane> lanes;
+    automation::AutomationEngine::Context ctx;
+    ctx.isPlaying = true;
+    ctx.trackLanes[0] = &lanes;
+
+    engine.handleParamTouch(0, target, 0.5f, true);
+    ctx.positionInBeats = 1.0;
+    engine.process(ctx);
+
+    // Per-track Touch is on, but global arm is off — no breakpoint
+    // gets persisted into the lane.
+    EXPECT_TRUE(lanes.empty());
+}
+
+TEST(GlobalAutoArm, RecordsWhenGlobalAndTrackBothOn) {
+    automation::AutomationEngine engine;
+    engine.setTrackAutoMode(0, AutoMode::Touch);
+    engine.setGlobalAutoRecord(true);
+
+    auto target = AutomationTarget::instrument(0, 0);
+    std::vector<AutomationLane> lanes;
+    automation::AutomationEngine::Context ctx;
+    ctx.isPlaying = true;
+    ctx.trackLanes[0] = &lanes;
+
+    engine.handleParamTouch(0, target, 0.5f, true);
+    ctx.positionInBeats = 1.0;
+    engine.process(ctx);
+
+    EXPECT_EQ(lanes.size(), 1u);
+    EXPECT_EQ(lanes[0].envelope.pointCount(), 1);
+}
+
+TEST(GlobalAutoArm, GlobalArmDoesNotOverrideTrackOff) {
+    // Global on but per-track Off — should still not record. The
+    // per-track AutoMode is the floor below the global gate.
+    automation::AutomationEngine engine;
+    engine.setTrackAutoMode(0, AutoMode::Off);
+    engine.setGlobalAutoRecord(true);
+
+    auto target = AutomationTarget::instrument(0, 0);
+    std::vector<AutomationLane> lanes;
+    automation::AutomationEngine::Context ctx;
+    ctx.isPlaying = true;
+    ctx.trackLanes[0] = &lanes;
+
+    engine.handleParamTouch(0, target, 0.5f, true);
+    ctx.positionInBeats = 1.0;
+    engine.process(ctx);
+
+    EXPECT_TRUE(lanes.empty());
 }

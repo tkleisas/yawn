@@ -1618,6 +1618,9 @@ void AudioEngine::processCommands() {
                 m_automationEngine.setTrackAutoMode(msg.trackIndex,
                     static_cast<automation::AutoMode>(msg.mode));
             }
+            else if constexpr (std::is_same_v<T, SetGlobalAutoRecordMsg>) {
+                m_automationEngine.setGlobalAutoRecord(msg.armed);
+            }
             else if constexpr (std::is_same_v<T, AutoParamTouchMsg>) {
                 automation::AutomationTarget target;
                 target.type       = static_cast<automation::TargetType>(msg.targetType);

@@ -185,6 +185,17 @@ public:
     void setOnRecordPressed(RecordPressedCallback cb) {
         m_onRecordPressed = std::move(cb);
     }
+
+    // Master automation-record arm — set by App from Project state
+    // (so the button reflects load / undo / etc.) and read back by
+    // the click handler before flipping. Pure visual state on the
+    // panel; the engine arm lives in Project + AutomationEngine.
+    void setGlobalAutoArmed(bool on) { m_globalAutoArmed = on; }
+    bool globalAutoArmed() const     { return m_globalAutoArmed; }
+    using AutoArmPressedCallback = std::function<void(bool armed)>;
+    void setOnAutoArmPressed(AutoArmPressedCallback cb) {
+        m_onAutoArmPressed = std::move(cb);
+    }
     void setMetronomeVisualStyle(int style) { m_metroVisualStyle = style; }
     // When false, the LINK button is rendered disabled and clicks are
     // ignored — the user has to enable Ableton Link in Preferences →
@@ -282,9 +293,9 @@ private:
     }
 
 #ifdef YAWN_TEST_BUILD
-    void paintTransportButtons(Renderer2D&) {}
+    void paintTransportButtons(Renderer2D&, TextMetrics*) {}
 #else
-    void paintTransportButtons(Renderer2D& r);
+    void paintTransportButtons(Renderer2D& r, TextMetrics* tm);
 #endif
 
     void openTransportLearnMenu(float mx, float my,
@@ -298,6 +309,7 @@ private:
     undo::UndoManager*  m_undoManager = nullptr;
     int                 m_selectedScene = 0;
     RecordPressedCallback m_onRecordPressed;
+    AutoArmPressedCallback m_onAutoArmPressed;
 
     bool   m_transportPlaying     = false;
     double m_transportBeats       = 0.0;
@@ -326,6 +338,11 @@ private:
     float m_stopBtnX = 0, m_stopBtnY = 0, m_stopBtnW = 0, m_stopBtnH = 0;
     float m_playBtnX = 0, m_playBtnY = 0, m_playBtnW = 0, m_playBtnH = 0;
     float m_recBtnX  = 0, m_recBtnY  = 0, m_recBtnW  = 0, m_recBtnH  = 0;
+    // AUTO master-automation-arm button — sits immediately right of
+    // Record. Wider (carries the "AUTO" text label) and renders
+    // bright red when m_globalAutoArmed.
+    float m_autoBtnX = 0, m_autoBtnY = 0, m_autoBtnW = 0, m_autoBtnH = 0;
+    bool  m_globalAutoArmed = false;
 
     // BPM/TimeSig box positions — used by handleDoubleClick + MIDI-Learn
     // right-click hit-testing.

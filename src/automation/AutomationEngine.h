@@ -28,6 +28,15 @@ public:
             m_trackMode[track] = mode;
     }
 
+    // Global automation-record arm. Master gate above the per-track
+    // mode and the per-clip autoRecordDisabled flag — when off, no
+    // automation breakpoints are written anywhere regardless of those
+    // finer settings. Touch values still apply to the live params
+    // (so the user's knob movement is still heard); they just don't
+    // get persisted into a lane. Defaults to off.
+    bool globalAutoRecord() const { return m_globalAutoRecord; }
+    void setGlobalAutoRecord(bool on) { m_globalAutoRecord = on; }
+
     // Supply external state needed to resolve and apply automation targets.
     // Called once per buffer from the audio callback.
     struct Context {
@@ -40,6 +49,14 @@ public:
             double clipLocalBeat = 0.0;         // current position within clip (already looped)
             double clipLengthBeats = 0.0;        // clip length (for reference)
             const std::vector<AutomationLane>* clipLanes = nullptr;
+            // Per-clip override of automation recording — when true,
+            // any active touch on this track does NOT get written
+            // into a lane while this clip is the one playing (the
+            // touch value still applies live, just isn't persisted).
+            // Lets the user freeze a single take's automation while
+            // still being able to record into other clips on the
+            // same track.
+            bool autoRecordDisabled = false;
         };
         ClipInfo clips[kMaxTracks];
 
@@ -127,6 +144,7 @@ private:
 
     AutoMode   m_trackMode[kMaxTracks] = {};
     TouchState m_touchState[kMaxTracks] = {};
+    bool       m_globalAutoRecord = false;
 };
 
 } // namespace automation
