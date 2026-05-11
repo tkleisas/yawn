@@ -42,6 +42,8 @@ struct LaunchClipMsg {
     QuantizeMode quantize = QuantizeMode::NextBar;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
     FollowAction followAction;  // copied from ClipSlot at launch
+    bool autoRecordDisabled = false;   // mirrored from ClipSlot, drives
+                                        // ClipPlayState::autoRecordDisabled
 };
 
 struct StopClipMsg {
@@ -150,6 +152,19 @@ struct LaunchMidiClipMsg {
     QuantizeMode quantize = QuantizeMode::NextBar;
     const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
     FollowAction followAction;  // copied from ClipSlot at launch
+    bool autoRecordDisabled = false;   // mirrored from ClipSlot, drives
+                                        // MidiClipPlayState::autoRecordDisabled
+};
+
+// Toggle autoRecordDisabled on the currently-playing clip mid-launch.
+// Sent when the user flips the per-clip flag while it's already
+// active so the change takes effect immediately rather than on next
+// re-launch. Engine routes to whichever ClipPlayState matches the
+// track + scene.
+struct SetClipAutoRecordDisabledMsg {
+    int  trackIndex;
+    int  sceneIndex;
+    bool disabled;
 };
 
 // Stop a MIDI clip on a track
@@ -326,6 +341,7 @@ using AudioCommand = std::variant<
     SendMidiToTrackMsg,
     LaunchMidiClipMsg,
     StopMidiClipMsg,
+    SetClipAutoRecordDisabledMsg,
     TransportRecordMsg,
     TransportSetCountInMsg,
     SetTrackArmedMsg,

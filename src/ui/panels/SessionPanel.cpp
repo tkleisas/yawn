@@ -102,6 +102,16 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                 m_rightClickSceneLabel = si;
                 return true;
             }
+            // Defer to App-side orchestration when wired — App also
+            // does the armed-track recording branch, transport-record
+            // arming, and the record-target indicator. Falls through
+            // to the inline launch-only logic for the standalone /
+            // test-build case where the callback isn't set.
+            if (m_onSceneLaunch) {
+                m_onSceneLaunch(si);
+                m_activeScene = si;
+                return true;
+            }
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* slot = m_project->getSlot(t, si);
                 if (slot && slot->audioClip) {

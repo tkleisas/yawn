@@ -458,6 +458,15 @@ private:
     TestTone m_testTone;
     int m_posUpdateCounter = 0;
     bool m_trackArmed[kMaxTracks] = {};
+    // Side-channel mirror of ClipSlot::autoRecordDisabled for the
+    // CURRENTLY-PLAYING clip on each track. Set by LaunchClipMsg /
+    // LaunchMidiClipMsg / SetClipAutoRecordDisabledMsg; read in the
+    // AutomationEngine context build to populate
+    // ClipInfo::autoRecordDisabled. Cheaper than threading the flag
+    // through ClipEngine internals — the AutomationEngine already
+    // has a per-track view of "what's playing", so a parallel
+    // per-track bool fits the same model.
+    bool m_clipAutoRecordDisabled[kMaxTracks] = {};
     uint8_t m_trackMonitorMode[kMaxTracks] = {}; // 0=Auto, 1=In, 2=Off
     uint8_t m_trackType[kMaxTracks] = {};         // 0=Audio, 1=Midi
     int m_trackAudioInputCh[kMaxTracks] = {};     // 0=none, 1=In1, 2=In2, 3=In1+2...

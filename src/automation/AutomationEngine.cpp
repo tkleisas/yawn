@@ -80,11 +80,6 @@ void AutomationEngine::process(const Context& ctx) {
         if ((mode == AutoMode::Touch || mode == AutoMode::Latch) && ctx.trackLanes[t]) {
             auto& ts = m_touchState[t];
             const bool wantsRecord = ts.active || ts.latchHolding;
-            // The per-clip autoRecordDisabled override is plumbed in
-            // ClipPlayState / MidiClipPlayState already but not yet
-            // surfaced through the engine context — that's a v0.64
-            // plumbing follow-up. For v0.63 the global arm is the
-            // sole gate above the per-track AutoMode.
             const bool clipBlocks  = ctx.clips[t].playing &&
                                        ctx.clips[t].autoRecordDisabled;
             const bool shouldRecord = wantsRecord && m_globalAutoRecord && !clipBlocks;

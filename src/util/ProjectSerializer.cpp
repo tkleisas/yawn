@@ -1185,6 +1185,8 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
             }
             if (!slot->clipAutomation.empty())
                 clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
+            if (slot->autoRecordDisabled)
+                clipJ["autoRecordDisabled"] = true;
             // Follow action
             if (slot->followAction.enabled) {
                 json fa;
@@ -1470,6 +1472,11 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 auto* slot = project.getSlot(trackIdx, sceneIdx);
                 if (slot)
                     slot->clipAutomation = automation::lanesFromJson(val["clipAutomation"]);
+            }
+            // Per-clip auto-rec disable flag
+            if (val.contains("autoRecordDisabled")) {
+                auto* slot = project.getSlot(trackIdx, sceneIdx);
+                if (slot) slot->autoRecordDisabled = val["autoRecordDisabled"].get<bool>();
             }
             // Follow action
             if (val.contains("followAction")) {

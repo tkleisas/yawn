@@ -46,6 +46,11 @@ class VisualParamsPanel : public Widget {
 public:
     using ChangeCallback     = std::function<void(const std::string& name, float value)>;
     using KnobChangeCallback = std::function<void(int index, float value)>;
+    // Touch begin / end pair fired at knob drag-end. App routes
+    // these through AutoParamTouchMsg with TargetType::VisualKnob
+    // so the AutomationEngine can record breakpoints when
+    // GlobalAutoRecord + per-track Touch/Latch are armed.
+    using KnobTouchCallback = std::function<void(int index, float value, bool touching)>;
     using KnobRightClickCallback = std::function<void(int index, float mx, float my)>;
     using PostFXChangeCallback = std::function<void(int fxIndex,
                                                       const std::string& name,
@@ -118,6 +123,17 @@ public:
             k->setOnChange([this, idx](float v) {
                 if (m_onKnobChanged) m_onKnobChanged(idx, v);
             });
+            k->setOnDragEnd([this, idx](float startV, float endV) {
+                // Synthetic touch begin/end pair so the
+                // AutomationEngine can record the knob's start/end
+                // positions when GlobalAutoRecord + per-track
+                // Touch/Latch are armed. Mirrors the pattern used
+                // by GroupedKnobBody for instrument / fx knobs.
+                if (m_onKnobTouch) {
+                    m_onKnobTouch(idx, startV, /*touching*/true);
+                    m_onKnobTouch(idx, endV,   /*touching*/false);
+                }
+            });
             k->setOnRightClick([this, idx](Point screen) {
                 if (m_onKnobRightClick) m_onKnobRightClick(idx, screen.x, screen.y);
             });
@@ -138,6 +154,7 @@ public:
 
     void setOnChanged(ChangeCallback cb)          { m_onChanged     = std::move(cb); }
     void setOnKnobChanged(KnobChangeCallback cb)  { m_onKnobChanged = std::move(cb); }
+    void setOnKnobTouch(KnobTouchCallback cb)     { m_onKnobTouch   = std::move(cb); }
     void setOnKnobRightClick(KnobRightClickCallback cb) { m_onKnobRightClick = std::move(cb); }
     void setOnPostFXChanged(PostFXChangeCallback cb) { m_onPostFXChanged = std::move(cb); }
     void setOnPostFXRemove(PostFXRemoveCallback cb)  { m_onPostFXRemove  = std::move(cb); }
@@ -1051,6 +1068,7 @@ private:
     std::string m_shaderName;
     ChangeCallback         m_onChanged;
     KnobChangeCallback     m_onKnobChanged;
+    KnobTouchCallback      m_onKnobTouch;
     KnobRightClickCallback m_onKnobRightClick;
 
     std::vector<PostFXEntry> m_postFX;

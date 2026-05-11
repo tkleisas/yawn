@@ -927,6 +927,14 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                 actx.clips[t].clipLengthBeats = midiState.clip->lengthBeats();
                 actx.clips[t].clipLanes = midiState.clipAutomation;
             }
+            // Per-clip auto-rec override flows through the side
+            // channel mirrored on LaunchClipMsg / LaunchMidiClipMsg
+            // / SetClipAutoRecordDisabledMsg. Only set when the
+            // track has a playing clip — touch values without an
+            // active clip flow through the standard track-level
+            // arming logic.
+            if (actx.clips[t].playing)
+                actx.clips[t].autoRecordDisabled = m_clipAutoRecordDisabled[t];
         }
         m_automationEngine.process(actx);
     }
@@ -1215,6 +1223,8 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, LaunchClipMsg>) {
                 m_clipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation, msg.followAction);
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
+                    m_clipAutoRecordDisabled[msg.trackIndex] = msg.autoRecordDisabled;
                 if (!m_transport.isPlaying())
                     m_transport.play();
             }
@@ -1293,9 +1303,28 @@ void AudioEngine::processCommands() {
                                 msg.trackIndex, msg.sceneIndex, (const void*)msg.clip,
                                 msg.clip ? msg.clip->lengthBeats() : 0.0);
                     m_midiClipEngine.scheduleClip(msg.trackIndex, msg.sceneIndex, msg.clip, msg.quantize, msg.clipAutomation, msg.followAction);
+                    m_clipAutoRecordDisabled[msg.trackIndex] = msg.autoRecordDisabled;
                     // Auto-start transport if not playing
                     if (!m_transport.isPlaying())
                         m_transport.play();
+                }
+            }
+            else if constexpr (std::is_same_v<T, SetClipAutoRecordDisabledMsg>) {
+                // Honour an in-flight toggle on the currently-playing
+                // clip — only takes effect if it's still the one we
+                // launched (matching trackIndex; sceneIndex isn't
+                // strictly required since side-channel state is
+                // per-track). The clip's slot scene is checked as a
+                // sanity gate so a stale toggle from a since-stopped
+                // clip doesn't flip a freshly-launched different one.
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    const auto& aState = m_clipEngine.trackState(msg.trackIndex);
+                    const auto& mState = m_midiClipEngine.trackState(msg.trackIndex);
+                    const bool sceneMatches =
+                        (aState.active && aState.sceneIndex == msg.sceneIndex) ||
+                        (mState.active && mState.sceneIndex == msg.sceneIndex);
+                    if (sceneMatches)
+                        m_clipAutoRecordDisabled[msg.trackIndex] = msg.disabled;
                 }
             }
             else if constexpr (std::is_same_v<T, StopMidiClipMsg>) {

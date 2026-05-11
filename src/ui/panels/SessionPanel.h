@@ -183,6 +183,19 @@ public:
     using VisualStopCallback = std::function<void(int track)>;
     void setOnStopVisualClip(VisualStopCallback cb) { m_onStopVisualClip = std::move(cb); }
 
+    // Scene-label click → App-side orchestration. When wired, App
+    // takes over the per-track decision (armed → record into the
+    // scene's slot; non-armed → launch the slot's clip OR stop the
+    // track if the slot is empty). When NOT wired (test build /
+    // standalone use), SessionPanel falls back to its own inline
+    // launch logic which only handles the non-armed branch.
+    //
+    // The callback also lets App update transport-record arming
+    // state + the record-target scene indicator + dirty flag —
+    // none of which SessionPanel can reach on its own.
+    using SceneLaunchCallback = std::function<void(int sceneIdx)>;
+    void setOnSceneLaunch(SceneLaunchCallback cb) { m_onSceneLaunch = std::move(cb); }
+
     // ─── Live input status query ───────────────────────────────────────
     // App wires this so the grid can colour the per-clip "LIVE" pip by
     // the engine's current connection state. Return values encode
@@ -653,6 +666,7 @@ private:
     std::function<void(float)> m_onScrollChanged;
     RenameCallback m_onTrackRenamed;
     VisualLaunchCallback m_onLaunchVisualClip;
+    SceneLaunchCallback  m_onSceneLaunch;
     VisualStopCallback   m_onStopVisualClip;
     VisualLiveStateCallback m_onQueryLiveState;
 

@@ -792,6 +792,26 @@ void App::buildWidgetTree() {
             markDirty();
         });
 
+    // Visual A-H knob touch → AutoParamTouchMsg with TargetType::
+    // VisualKnob. Lets the AutomationEngine record breakpoints when
+    // GlobalAutoRecord + the visual track's AutoMode are armed.
+    // The knob itself fires (touching=true with startV) then
+    // (touching=false with endV) at drag-release; AutomationEngine
+    // records both end values + whatever is current at each
+    // process() block in between.
+    m_visualParamsPanel->setOnKnobTouch(
+        [this](int idx, float v, bool touching) {
+            if (m_selectedTrack < 0 ||
+                m_selectedTrack >= m_project.numTracks()) return;
+            // VisualKnob target: chainIndex unused, paramIndex = idx
+            // (the A..H knob index, 0..7). Mirrors how PadFx etc.
+            // route through AutoParamTouchMsg.
+            m_audioEngine.sendCommand(audio::AutoParamTouchMsg{
+                m_selectedTrack,
+                static_cast<uint8_t>(automation::TargetType::VisualKnob),
+                /*chainIndex*/0, idx, v, touching});
+        });
+
     // Right-click on an A..H knob → LFO configuration context menu.
     m_visualParamsPanel->setOnKnobRightClick(
         [this](int idx, float mx, float my) {
@@ -1534,6 +1554,34 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 }
             }
         }
+        // MIDI Overdub toggle — only meaningful for MIDI tracks.
+        // Replace = recording over a slot that has a MIDI clip wipes
+        // the old clip and records a fresh one. Overdub = layers
+        // incoming notes/CCs into the existing clip, extending its
+        // length if the take runs past the current end. Undoable.
+        if (trk.type == Track::Type::Midi) {
+            const bool curOverdub = trk.midiOverdub;
+            std::string label = "MIDI Overdub: ";
+            label += curOverdub ? "On" : "Off";
+            items.push_back({label.c_str(),
+                [this, trackIndex, curOverdub]() {
+                    if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
+                    m_project.track(trackIndex).midiOverdub = !curOverdub;
+                    m_undoManager.push({"Toggle MIDI Overdub",
+                        [this, trackIndex, curOverdub]{
+                            if (trackIndex >= 0 && trackIndex < m_project.numTracks())
+                                m_project.track(trackIndex).midiOverdub = curOverdub;
+                            markDirty();
+                        },
+                        [this, trackIndex, curOverdub]{
+                            if (trackIndex >= 0 && trackIndex < m_project.numTracks())
+                                m_project.track(trackIndex).midiOverdub = !curOverdub;
+                            markDirty();
+                        }, ""});
+                    markDirty();
+                }});
+        }
+
         if (hasAny) {
             items.push_back({"Clear Track Automation",
                 [this, trackIndex]() {
@@ -3010,6 +3058,52 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         }});
     }
 
+    // Per-clip automation-record toggle — disables recording into
+    // this clip's lanes regardless of global / track arming. Lets
+    // the user freeze a take's automation without disabling the
+    // track-wide arm. Always shown on slots that have a clip (audio
+    // or MIDI; visual clips don't go through the audio thread's
+    // automation engine, so the toggle is meaningless there).
+    {
+        auto* slotForLock = m_project.getSlot(trackIndex, sceneIndex);
+        const bool hasAudioOrMidi = slotForLock &&
+                                       (slotForLock->audioClip || slotForLock->midiClip);
+        if (hasAudioOrMidi) {
+            const bool curDisabled = slotForLock->autoRecordDisabled;
+            std::string label = "Auto-Rec: ";
+            label += curDisabled ? "Disabled (this clip)" : "Enabled";
+            items.push_back({label.c_str(),
+                [this, trackIndex, sceneIndex, curDisabled]() {
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s) return;
+                    s->autoRecordDisabled = !curDisabled;
+                    // Push the change to the engine so it takes
+                    // effect immediately even if the clip is mid-
+                    // playback. The next launch will also carry the
+                    // value via LaunchClipMsg.autoRecordDisabled,
+                    // so this msg is just for the live case.
+                    m_audioEngine.sendCommand(audio::SetClipAutoRecordDisabledMsg{
+                        trackIndex, sceneIndex, !curDisabled});
+                    m_undoManager.push({"Toggle Per-Clip Auto-Rec",
+                        [this, trackIndex, sceneIndex, curDisabled]{
+                            auto* ss = m_project.getSlot(trackIndex, sceneIndex);
+                            if (ss) ss->autoRecordDisabled = curDisabled;
+                            m_audioEngine.sendCommand(audio::SetClipAutoRecordDisabledMsg{
+                                trackIndex, sceneIndex, curDisabled});
+                            markDirty();
+                        },
+                        [this, trackIndex, sceneIndex, curDisabled]{
+                            auto* ss = m_project.getSlot(trackIndex, sceneIndex);
+                            if (ss) ss->autoRecordDisabled = !curDisabled;
+                            m_audioEngine.sendCommand(audio::SetClipAutoRecordDisabledMsg{
+                                trackIndex, sceneIndex, !curDisabled});
+                            markDirty();
+                        }, ""});
+                    markDirty();
+                }});
+        }
+    }
+
     // Clear-automation entry — only meaningful when the slot has any
     // recorded clip-level automation lanes. Surface it conditionally
     // so it doesn't clutter the menu on empty / never-automated slots.
@@ -4204,6 +4298,92 @@ bool App::init() {
     m_audioEngine.sendCommand(audio::SetGlobalAutoRecordMsg{
         m_project.globalAutoRecord()});
 
+    // Scene-launch orchestration — left-click on the scene label
+    // (column to the left of the clip grid) fires the same per-track
+    // logic the Record button does PLUS the existing "stop empty-slot
+    // tracks" behaviour the scene-click used to have. So one gesture
+    // covers the band-practice workflow:
+    //
+    //   "I have armed track A and clips on B/C/D. Click scene 2 →
+    //    metronome count-in, B/C/D play scene 2's clips, A records
+    //    into scene 2's slot for as long as I'm holding the key."
+    //
+    // Differs from setOnRecordPressed in two ways:
+    //   * Non-armed track with empty slot → STOPS that track (scene-
+    //     click semantics) — Record button leaves it alone instead.
+    //   * Transport-record state only flips ON when at least one
+    //     track is armed, so the all-launch case (no armed tracks)
+    //     doesn't unexpectedly arm transport recording.
+    m_sessionPanel->setOnSceneLaunch([this](int sceneIdx) {
+        if (sceneIdx < 0 || sceneIdx >= m_project.numScenes()) return;
+        bool anyArmed = false;
+        for (int t = 0; t < m_project.numTracks(); ++t) {
+            if (m_project.track(t).armed) { anyArmed = true; break; }
+        }
+
+        for (int t = 0; t < m_project.numTracks(); ++t) {
+            auto& trk = m_project.track(t);
+            if (trk.armed) {
+                if (trk.type == Track::Type::Midi) {
+                    m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
+                        t, sceneIdx, trk.midiOverdub,
+                        /*recordLengthBars*/0});
+                } else if (trk.type == Track::Type::Audio) {
+                    m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
+                        t, sceneIdx, /*overdub*/false,
+                        /*recordLengthBars*/0});
+                }
+                trk.defaultScene = sceneIdx;
+                // Visual tracks aren't recordable; ignore arming.
+            } else {
+                auto* slot = m_project.getSlot(t, sceneIdx);
+                if (slot && slot->audioClip) {
+                    m_audioEngine.sendCommand(audio::LaunchClipMsg{
+                        t, sceneIdx, slot->audioClip.get(),
+                        slot->launchQuantize, &slot->clipAutomation,
+                        slot->followAction, slot->autoRecordDisabled});
+                    trk.defaultScene = sceneIdx;
+                } else if (slot && slot->midiClip) {
+                    m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
+                        t, sceneIdx, slot->midiClip.get(),
+                        slot->launchQuantize, &slot->clipAutomation,
+                        slot->followAction, slot->autoRecordDisabled});
+                    trk.defaultScene = sceneIdx;
+                } else if (slot && slot->visualClip) {
+                    launchVisualClipData(t, *slot->visualClip,
+                                          slot->visualClip->firstShaderPath());
+                    trk.defaultScene = sceneIdx;
+                    m_sessionPanel->updateClipState(t, true, 0,
+                                                      sceneIdx, false, 0.0);
+                } else if (trk.type != Track::Type::Visual) {
+                    // Empty slot on a non-armed audio/MIDI track →
+                    // stop whatever was playing. Matches the inline
+                    // SessionPanel scene-click semantics.
+                    m_audioEngine.sendCommand(audio::StopClipMsg{t});
+                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
+                    trk.defaultScene = -1;
+                } else {
+                    // Empty slot on a visual track → clear the layer.
+                    m_visualEngine.clearLayer(t);
+                    m_sessionPanel->updateClipState(t, false, 0, -1,
+                                                      false, 0.0);
+                    trk.defaultScene = -1;
+                }
+            }
+        }
+
+        // Set transport-record arm + indicator only when SOMETHING
+        // armed asked to record. Pure launch (no armed tracks) leaves
+        // transport recording alone.
+        if (anyArmed) {
+            m_recordTargetScene = sceneIdx;
+            m_sessionPanel->setRecordTargetScene(sceneIdx);
+            m_audioEngine.sendCommand(audio::TransportRecordMsg{
+                true, sceneIdx});
+        }
+        markDirty();
+    });
+
     m_transportPanel->setOnRecordPressed([this](bool arm) {
         if (arm) {
             const int targetScene = std::max(0, m_selectedScene);
@@ -4234,11 +4414,13 @@ bool App::init() {
                     if (slot->audioClip) {
                         m_audioEngine.sendCommand(audio::LaunchClipMsg{
                             t, targetScene, slot->audioClip.get(), lq,
-                            &slot->clipAutomation, slot->followAction});
+                            &slot->clipAutomation, slot->followAction,
+                            slot->autoRecordDisabled});
                     } else if (slot->midiClip) {
                         m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
                             t, targetScene, slot->midiClip.get(), lq,
-                            &slot->clipAutomation, slot->followAction});
+                            &slot->clipAutomation, slot->followAction,
+                            slot->autoRecordDisabled});
                     } else if (slot->visualClip) {
                         launchVisualClipData(t, *slot->visualClip,
                                               slot->visualClip->firstShaderPath());
