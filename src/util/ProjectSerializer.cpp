@@ -588,6 +588,13 @@ json serializeMidiClip(const midi::MidiClip& clip) {
     j["type"] = "midi";
     j["lengthBeats"] = clip.lengthBeats();
     j["loop"] = clip.loop();
+    // loopStartBeat — the in-clip loop start point (0 by default,
+    // can be moved if the user dragged the start marker on the
+    // piano roll). Was missing from v0.64 and earlier saves; old
+    // projects load with loopStartBeat = 0 which matches the
+    // default, so no migration needed.
+    if (clip.loopStartBeat() != 0.0)
+        j["loopStartBeat"] = clip.loopStartBeat();
 
     json notes = json::array();
     for (int i = 0; i < clip.noteCount(); ++i) {
@@ -626,6 +633,7 @@ std::unique_ptr<midi::MidiClip> deserializeMidiClip(const json& j) {
     clip->setName(j.value("name", ""));
     clip->setLengthBeats(j.value("lengthBeats", 4.0));
     clip->setLoop(j.value("loop", true));
+    clip->setLoopStartBeat(j.value("loopStartBeat", 0.0));
 
     if (j.contains("notes")) {
         for (const auto& nj : j["notes"]) {
@@ -673,6 +681,30 @@ json serializeAudioClip(const audio::Clip& clip, const fs::path& samplesDir,
     j["transposeSemitones"] = clip.transposeSemitones;
     j["detuneCents"] = clip.detuneCents;
 
+    // Warp state — was missing through v0.64.1, so warp settings
+    // didn't survive a save/load. Conditional emission so old
+    // projects (default warpMode=Off, no markers) don't grow noise
+    // and the format stays readable.
+    if (clip.warpMode != audio::WarpMode::Off)
+        j["warpMode"] = static_cast<int>(clip.warpMode);
+    if (clip.originalBPM > 0.0)
+        j["originalBPM"] = clip.originalBPM;
+    if (!clip.warpMarkers.empty()) {
+        json wms = json::array();
+        for (const auto& wm : clip.warpMarkers) {
+            json wj;
+            wj["s"] = wm.samplePosition;
+            wj["b"] = wm.beatPosition;
+            wms.push_back(wj);
+        }
+        j["warpMarkers"] = wms;
+    }
+    if (!clip.transients.empty()) {
+        json tr = json::array();
+        for (auto t : clip.transients) tr.push_back(t);
+        j["transients"] = tr;
+    }
+
     if (clip.buffer&& clip.buffer->numFrames() > 0) {
         std::string filename = "clip_" + std::to_string(sampleCounter++) + ".wav";
         fs::path samplePath = samplesDir / filename;
@@ -693,6 +725,22 @@ std::unique_ptr<audio::Clip> deserializeAudioClip(const json& j,
     clip->gain = j.value("gain", 1.0f);
     clip->transposeSemitones = j.value("transposeSemitones", 0);
     clip->detuneCents = j.value("detuneCents", 0);
+
+    // Warp state — see serializeAudioClip for the matching emit.
+    clip->warpMode    = static_cast<audio::WarpMode>(j.value("warpMode", 0));
+    clip->originalBPM = j.value("originalBPM", 0.0);
+    if (j.contains("warpMarkers")) {
+        for (const auto& wj : j["warpMarkers"]) {
+            audio::WarpMarker wm;
+            wm.samplePosition = wj.value("s", (int64_t)0);
+            wm.beatPosition   = wj.value("b", 0.0);
+            clip->warpMarkers.push_back(wm);
+        }
+    }
+    if (j.contains("transients")) {
+        for (const auto& tj : j["transients"])
+            clip->transients.push_back(tj.get<int64_t>());
+    }
 
     if (j.contains("sampleFile")){
         fs::path samplePath = projectDir / j["sampleFile"].get<std::string>();
@@ -1187,6 +1235,21 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                 clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
             if (slot->autoRecordDisabled)
                 clipJ["autoRecordDisabled"] = true;
+            // Per-slot record settings — also missing from earlier
+            // saves. recordLengthBars defaults to 0 (unlimited) so
+            // emit only when set; recordLoop defaults to true so
+            // emit only when explicitly cleared.
+            if (slot->recordLengthBars > 0)
+                clipJ["recordLengthBars"] = slot->recordLengthBars;
+            if (!slot->recordLoop)
+                clipJ["recordLoop"] = false;
+            // launchQuantize (per-slot) defaults to NextBar (==1
+            // since QuantizeMode::None=0, NextBar=1, NextBeat=2).
+            // Emit when not the default so non-NextBar choices
+            // round-trip. Cast to int since the enum doesn't auto-
+            // serialize.
+            if (slot->launchQuantize != audio::QuantizeMode::NextBar)
+                clipJ["launchQuantize"] = static_cast<int>(slot->launchQuantize);
             // Follow action
             if (slot->followAction.enabled) {
                 json fa;
@@ -1477,6 +1540,20 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             if (val.contains("autoRecordDisabled")) {
                 auto* slot = project.getSlot(trackIdx, sceneIdx);
                 if (slot) slot->autoRecordDisabled = val["autoRecordDisabled"].get<bool>();
+            }
+            // Per-slot record settings
+            if (val.contains("recordLengthBars")) {
+                auto* slot = project.getSlot(trackIdx, sceneIdx);
+                if (slot) slot->recordLengthBars = val["recordLengthBars"].get<int>();
+            }
+            if (val.contains("recordLoop")) {
+                auto* slot = project.getSlot(trackIdx, sceneIdx);
+                if (slot) slot->recordLoop = val["recordLoop"].get<bool>();
+            }
+            if (val.contains("launchQuantize")) {
+                auto* slot = project.getSlot(trackIdx, sceneIdx);
+                if (slot) slot->launchQuantize =
+                    static_cast<audio::QuantizeMode>(val["launchQuantize"].get<int>());
             }
             // Follow action
             if (val.contains("followAction")) {
