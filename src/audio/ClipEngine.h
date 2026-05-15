@@ -124,6 +124,18 @@ public:
     // Check and fire pending quantized launches. Call once per buffer before processing tracks.
     void checkAndFirePending();
 
+    // Force the next checkAndFirePending call to behave as if it
+    // were the first invocation — sets m_lastQuantizeCheck back to
+    // -1 (the "always at boundary" sentinel). AudioEngine calls this
+    // when count-in just ended, so a pending NextBar launch fires AT
+    // the boundary count-in just crossed (position ~0) rather than
+    // waiting one more bar (the boundary detection compares
+    // lastQuantizeCheck/iInterval to currentPos/iInterval; both 0
+    // during count-in → no crossing → no fire on first post-count-in
+    // block → user's "scene click → other tracks come in 1 bar
+    // late" report).
+    void resetQuantizeCheck() { m_lastQuantizeCheck = -1; }
+
     // Query state
     bool isTrackPlaying(int trackIndex) const;
     const ClipPlayState& trackState(int trackIndex) const { return m_tracks[trackIndex]; }

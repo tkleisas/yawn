@@ -68,6 +68,12 @@ public:
     // Check and fire pending quantized launches. Call once per buffer.
     void checkAndFirePending();
 
+    // Mirror of ClipEngine::resetQuantizeCheck — called by AudioEngine
+    // when count-in just ended so a pending NextBar launch fires AT
+    // the just-crossed boundary instead of waiting another full bar.
+    // See ClipEngine::resetQuantizeCheck for the full rationale.
+    void resetQuantizeCheck() { m_lastQuantizeCheck = -1; }
+
     // Process one buffer: scan clips for notes/CCs, write into MIDI buffers.
     // Must be called BEFORE MIDI effect chains and instruments.
     void process(midi::MidiBuffer* trackMidiBuffers, int numFrames);

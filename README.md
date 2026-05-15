@@ -377,7 +377,7 @@ device works on first install. Attribution + license details live in
 - 🖥️ Move OLED display — pending reverse-engineering of Ableton's proprietary USB pairing protocol (or until someone lifts the protocol and we feel ethically OK about it)
 - 🪪 Lua bindings for Undo/Mute/Copy and the remaining Move buttons that currently just no-op
 - 🪟 MIDI clock send/receive (Link covers most cases but some hardware still wants the old protocol)
-- 🎬 Retrospective recording (capture what was just played even though Record wasn't armed — the "I should've recorded that" workflow Live has had since 11)
+- 🎬 **Retrospective recording** (capture what was just played even though Record wasn't armed — the "I should've recorded that" workflow Live has had since 11). Requires a separate per-track always-on **ring buffer** that's always rolling, independent of arm state — sized for ~30 s of audio per track, sample-rate-aware, allocated once at engine init. When the user fires the "save what just happened" gesture, the engine memcpys the last N seconds (or as much as has been captured since the last transport stop) into a fresh `audio::Clip`, lands it in the targeted slot, and offers the same auto-launch path the standard record finalize uses. Current linear `ars.buffer` (post-arm, 5-min cap) stays as-is for normal recording — they're orthogonal paths. Visual / MIDI ring versions are a follow-up
 - 🌍 Localisation (English / Greek / Russian / Chinese baseline)
 - 🐛 Whatever bugs the PM discovers by wiggling knobs at 3 AM
 

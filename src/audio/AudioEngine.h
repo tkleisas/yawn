@@ -546,6 +546,14 @@ private:
     };
     AudioRecordState m_audioRecordStates[kMaxTracks];
 
+    // Tracks the previous-callback's count-in state. Used to detect
+    // the count-in → play transition so we can reset the per-engine
+    // quantize-check sentinel — without it, a NextBar-quantized
+    // launch scheduled before count-in would wait an extra bar
+    // because the boundary detection compares "current bar" to
+    // "last-checked bar" (both 0 throughout count-in).
+    bool m_prevWasCountingIn = false;
+
     // Last-emitted ClipStateUpdate per track (for audio + MIDI). The
     // emitter compares the freshly-derived state against this cache
     // and only fires a message when something changed. The crucial

@@ -59,6 +59,20 @@ void Transport::advance(int numFrames) {
         int64_t newCountIn = countIn - numFrames;
         if (newCountIn <= 0) {
             m_countInRemaining.store(0, std::memory_order_release);
+            // Count-in completed mid-buffer. Advance positionInSamples
+            // by the leftover frames (the part of the buffer that
+            // ISN'T count-in) so the next buffer's metronome.process
+            // doesn't re-click "beat 0 of play time" right after the
+            // boundary-beat click of count-in. Without this they
+            // sound 1-2 ms apart — perceived as a flam / "metronome
+            // a little off".  Audio capture for those leftover
+            // frames is still lost (the capture branch was gated
+            // off for the whole buffer because isCountingIn was
+            // true at top-of-buffer), but the count-in stretch is
+            // measured in milliseconds and not normally noticeable.
+            int64_t leftover = numFrames - countIn;
+            if (leftover > 0 && m_playing.load(std::memory_order_acquire))
+                m_positionInSamples.fetch_add(leftover, std::memory_order_relaxed);
         } else {
             m_countInRemaining.store(newCountIn, std::memory_order_release);
         }

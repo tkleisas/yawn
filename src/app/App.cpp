@@ -4321,54 +4321,73 @@ bool App::init() {
             if (m_project.track(t).armed) { anyArmed = true; break; }
         }
 
+        // ── PASS 1: armed tracks → Start*RecordMsg FIRST. ──
+        // This ensures the StartMidiRecordMsg / StartAudioRecordMsg
+        // handlers see `!m_transport.isPlaying()` and trigger the
+        // count-in path (beginCountIn + pendingStart). If we sent
+        // launches first, the LaunchClipMsg handler would call
+        // m_transport.play() before the record-start handlers, and
+        // the latter would fall into the "transport already playing,
+        // no count-in" branch — recording would stamp recordStartBeat
+        // immediately and capture 1 bar of "music played during
+        // count-in" as the first bar of the clip.
         for (int t = 0; t < m_project.numTracks(); ++t) {
             auto& trk = m_project.track(t);
-            if (trk.armed) {
-                if (trk.type == Track::Type::Midi) {
-                    m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
-                        t, sceneIdx, trk.midiOverdub,
-                        /*recordLengthBars*/0});
-                } else if (trk.type == Track::Type::Audio) {
-                    m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
-                        t, sceneIdx, /*overdub*/false,
-                        /*recordLengthBars*/0});
-                }
+            if (!trk.armed) continue;
+            auto* armedSlot = m_project.getSlot(t, sceneIdx);
+            const int recBars = armedSlot ? armedSlot->recordLengthBars : 0;
+            if (trk.type == Track::Type::Midi) {
+                m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
+                    t, sceneIdx, trk.midiOverdub, recBars});
+            } else if (trk.type == Track::Type::Audio) {
+                m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
+                    t, sceneIdx, /*overdub*/false, recBars});
+            }
+            trk.defaultScene = sceneIdx;
+            // Visual tracks aren't recordable; ignore arming.
+        }
+
+        // ── PASS 2: non-armed tracks → launch / stop. ──
+        // Now that count-in has been initialised by pass 1 (if any
+        // track was armed and required it), launches use NextBar
+        // quantize and naturally land on the post-count-in boundary
+        // via my AudioEngine resetQuantizeCheck() at the count-in
+        // → play transition.
+        for (int t = 0; t < m_project.numTracks(); ++t) {
+            auto& trk = m_project.track(t);
+            if (trk.armed) continue;
+            auto* slot = m_project.getSlot(t, sceneIdx);
+            if (slot && slot->audioClip) {
+                m_audioEngine.sendCommand(audio::LaunchClipMsg{
+                    t, sceneIdx, slot->audioClip.get(),
+                    slot->launchQuantize, &slot->clipAutomation,
+                    slot->followAction, slot->autoRecordDisabled});
                 trk.defaultScene = sceneIdx;
-                // Visual tracks aren't recordable; ignore arming.
+            } else if (slot && slot->midiClip) {
+                m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
+                    t, sceneIdx, slot->midiClip.get(),
+                    slot->launchQuantize, &slot->clipAutomation,
+                    slot->followAction, slot->autoRecordDisabled});
+                trk.defaultScene = sceneIdx;
+            } else if (slot && slot->visualClip) {
+                launchVisualClipData(t, *slot->visualClip,
+                                      slot->visualClip->firstShaderPath());
+                trk.defaultScene = sceneIdx;
+                m_sessionPanel->updateClipState(t, true, 0,
+                                                  sceneIdx, false, 0.0);
+            } else if (trk.type != Track::Type::Visual) {
+                // Empty slot on a non-armed audio/MIDI track →
+                // stop whatever was playing. Matches the inline
+                // SessionPanel scene-click semantics.
+                m_audioEngine.sendCommand(audio::StopClipMsg{t});
+                m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
+                trk.defaultScene = -1;
             } else {
-                auto* slot = m_project.getSlot(t, sceneIdx);
-                if (slot && slot->audioClip) {
-                    m_audioEngine.sendCommand(audio::LaunchClipMsg{
-                        t, sceneIdx, slot->audioClip.get(),
-                        slot->launchQuantize, &slot->clipAutomation,
-                        slot->followAction, slot->autoRecordDisabled});
-                    trk.defaultScene = sceneIdx;
-                } else if (slot && slot->midiClip) {
-                    m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
-                        t, sceneIdx, slot->midiClip.get(),
-                        slot->launchQuantize, &slot->clipAutomation,
-                        slot->followAction, slot->autoRecordDisabled});
-                    trk.defaultScene = sceneIdx;
-                } else if (slot && slot->visualClip) {
-                    launchVisualClipData(t, *slot->visualClip,
-                                          slot->visualClip->firstShaderPath());
-                    trk.defaultScene = sceneIdx;
-                    m_sessionPanel->updateClipState(t, true, 0,
-                                                      sceneIdx, false, 0.0);
-                } else if (trk.type != Track::Type::Visual) {
-                    // Empty slot on a non-armed audio/MIDI track →
-                    // stop whatever was playing. Matches the inline
-                    // SessionPanel scene-click semantics.
-                    m_audioEngine.sendCommand(audio::StopClipMsg{t});
-                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
-                    trk.defaultScene = -1;
-                } else {
-                    // Empty slot on a visual track → clear the layer.
-                    m_visualEngine.clearLayer(t);
-                    m_sessionPanel->updateClipState(t, false, 0, -1,
-                                                      false, 0.0);
-                    trk.defaultScene = -1;
-                }
+                // Empty slot on a visual track → clear the layer.
+                m_visualEngine.clearLayer(t);
+                m_sessionPanel->updateClipState(t, false, 0, -1,
+                                                  false, 0.0);
+                trk.defaultScene = -1;
             }
         }
 
@@ -4390,41 +4409,48 @@ bool App::init() {
             m_recordTargetScene = targetScene;
             m_sessionPanel->setRecordTargetScene(targetScene);
 
+            // PASS 1: armed tracks → Start*RecordMsg first so the
+            // count-in branch fires before any LaunchClipMsg starts
+            // the transport. See setOnSceneLaunch comment for the
+            // full rationale.
             for (int t = 0; t < m_project.numTracks(); ++t) {
                 const auto& trk = m_project.track(t);
-                if (trk.armed) {
-                    if (trk.type == Track::Type::Midi) {
-                        m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
-                            t, targetScene, trk.midiOverdub,
-                            /*recordLengthBars*/0});
-                    } else if (trk.type == Track::Type::Audio) {
-                        // Audio recording is always new-take per the
-                        // v0.61 design discussion — no per-track
-                        // overdub flag.
-                        m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
-                            t, targetScene, /*overdub*/false,
-                            /*recordLengthBars*/0});
-                    }
-                    // Visual tracks aren't recordable; ignore arming
-                    // them silently.
-                } else {
-                    auto* slot = m_project.getSlot(t, targetScene);
-                    if (!slot || slot->empty()) continue;
-                    const auto lq = slot->launchQuantize;
-                    if (slot->audioClip) {
-                        m_audioEngine.sendCommand(audio::LaunchClipMsg{
-                            t, targetScene, slot->audioClip.get(), lq,
-                            &slot->clipAutomation, slot->followAction,
-                            slot->autoRecordDisabled});
-                    } else if (slot->midiClip) {
-                        m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
-                            t, targetScene, slot->midiClip.get(), lq,
-                            &slot->clipAutomation, slot->followAction,
-                            slot->autoRecordDisabled});
-                    } else if (slot->visualClip) {
-                        launchVisualClipData(t, *slot->visualClip,
-                                              slot->visualClip->firstShaderPath());
-                    }
+                if (!trk.armed) continue;
+                auto* armedSlot = m_project.getSlot(t, targetScene);
+                const int recBars = armedSlot ? armedSlot->recordLengthBars : 0;
+                if (trk.type == Track::Type::Midi) {
+                    m_audioEngine.sendCommand(audio::StartMidiRecordMsg{
+                        t, targetScene, trk.midiOverdub, recBars});
+                } else if (trk.type == Track::Type::Audio) {
+                    // Audio recording is always new-take per the
+                    // v0.61 design discussion — no per-track
+                    // overdub flag.
+                    m_audioEngine.sendCommand(audio::StartAudioRecordMsg{
+                        t, targetScene, /*overdub*/false, recBars});
+                }
+                // Visual tracks aren't recordable; ignore arming
+                // them silently.
+            }
+            // PASS 2: non-armed tracks → launches.
+            for (int t = 0; t < m_project.numTracks(); ++t) {
+                const auto& trk = m_project.track(t);
+                if (trk.armed) continue;
+                auto* slot = m_project.getSlot(t, targetScene);
+                if (!slot || slot->empty()) continue;
+                const auto lq = slot->launchQuantize;
+                if (slot->audioClip) {
+                    m_audioEngine.sendCommand(audio::LaunchClipMsg{
+                        t, targetScene, slot->audioClip.get(), lq,
+                        &slot->clipAutomation, slot->followAction,
+                        slot->autoRecordDisabled});
+                } else if (slot->midiClip) {
+                    m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
+                        t, targetScene, slot->midiClip.get(), lq,
+                        &slot->clipAutomation, slot->followAction,
+                        slot->autoRecordDisabled});
+                } else if (slot->visualClip) {
+                    launchVisualClipData(t, *slot->visualClip,
+                                          slot->visualClip->firstShaderPath());
                 }
             }
             m_audioEngine.sendCommand(audio::TransportRecordMsg{true, targetScene});

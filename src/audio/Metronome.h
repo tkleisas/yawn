@@ -38,6 +38,20 @@ public:
 
     void reset();
 
+    // Force-trigger an accent (downbeat) click on the next process()
+    // call regardless of where positionInSamples is. AudioEngine
+    // calls this at the count-in → play transition because the
+    // count-in metronome stops clicking after the last count-in beat
+    // and (with the Transport::advance leftover fix that suppresses
+    // the duplicate at the boundary) the natural beat-0 click of
+    // play time falls between samples and gets skipped — leaving
+    // a "missing downbeat" gap that musicians instinctively wait
+    // for, resulting in them playing one bar late.
+    void triggerDownbeatClick() {
+        m_clickPos = 0;
+        m_clickAccent = true;
+    }
+
     // Call from audio thread: adds click on top of output buffer.
     // Must be called BEFORE transport.advance() so positionInSamples is current.
     void process(float* output, int numFrames, int numChannels,

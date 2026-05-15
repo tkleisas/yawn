@@ -732,6 +732,32 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
     }
 
+    // Detect count-in → play transition. When count-in just ended,
+    // any clip launches that were scheduled with NextBar/NextBeat
+    // quantize while count-in was running need their boundary
+    // detection re-armed. Without this, the per-engine
+    // m_lastQuantizeCheck (set to 0 every block during count-in
+    // because position doesn't advance) makes the first post-
+    // count-in block's "are we at a new bar?" check return false,
+    // and the launch waits one extra bar — symptom: scene-clicked
+    // tracks come in 1 bar late on the armed-track-with-count-in
+    // gesture.
+    {
+        const bool nowCountingIn = m_transport.isCountingIn();
+        if (m_prevWasCountingIn && !nowCountingIn) {
+            m_clipEngine.resetQuantizeCheck();
+            m_midiClipEngine.resetQuantizeCheck();
+            // Trigger an explicit downbeat click — see metronome
+            // header for the why. Without this the user hears
+            // 4 count-in clicks → silence → beat-1-of-play click
+            // and naturally interprets the beat-1 click as "start
+            // playing now," recording their performance one bar
+            // late inside the captured clip.
+            m_metronome.triggerDownbeatClick();
+        }
+        m_prevWasCountingIn = nowCountingIn;
+    }
+
     // Render each track's clip into its own buffer
     m_arrPlayback.applyPendingClips();
     m_clipEngine.checkAndFirePending();
@@ -1985,8 +2011,20 @@ void AudioEngine::maybeStopTransportRecording() {
 
 void AudioEngine::emitClipStates() {
     for (int t = 0; t < kMaxTracks; ++t) {
-        bool midiRec = m_trackRecordStates[t].recording;
-        bool audioRec = m_audioRecordStates[t].recording;
+        // The "recording" flag goes true immediately when the
+        // StartMidi/AudioRecordMsg arrives — well before count-in
+        // ends. We do NOT want the session-cell red indicator to
+        // light up during count-in: users see it and play through
+        // count-in, captured notes go into the post-count-in clip
+        // starting at relBeat 0, but the user thought they were
+        // already recording during count-in → reads as "first bar
+        // empty" / "recording started before count-in finished".
+        // Gate the UI signal on `!pendingStart` so the indicator
+        // only lights when actual capture begins (after count-in).
+        bool midiRec  = m_trackRecordStates[t].recording &&
+                          !m_trackRecordStates[t].pendingStart;
+        bool audioRec = m_audioRecordStates[t].recording &&
+                          !m_audioRecordStates[t].pendingStart;
 
         // Safety: only one recording type should be active per track
         if (midiRec && audioRec) {
