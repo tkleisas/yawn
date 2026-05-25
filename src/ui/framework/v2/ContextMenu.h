@@ -106,9 +106,15 @@ public:
     // root is at index 0, submenus stack on top.
     struct Level {
         std::vector<MenuEntry> entries;
-        Rect  bounds{};           // screen coords
+        Rect  bounds{};           // screen coords (height clamped to viewport)
         int   highlighted    = -1; // keyboard focus row
         int   openSubmenuRow = -1; // row in this level whose submenu is open
+        // Scrolling: when the full content is taller than the viewport
+        // the bounds height is clamped and the list scrolls. scrollOffset
+        // is how many px the content is shifted up; contentHeight is the
+        // full (unclamped) height used to compute the scroll range.
+        float scrollOffset  = 0.0f;
+        float contentHeight = 0.0f;
     };
 
     static ContextMenuManager& instance();
@@ -193,6 +199,12 @@ private:
 
     // Step highlight in a level, skipping disabled / separator / header.
     int stepHighlight(const std::vector<MenuEntry>& entries, int from, int dir) const;
+
+    // Scrolling helpers.
+    static float maxScroll(const Level& L);          // 0 when content fits
+    void  scrollLevel(int levelIdx, float deltaPx);  // clamped
+    void  ensureRowVisible(Level& L, int row);       // keyboard scroll-into-view
+    bool  onScroll(ScrollEvent& e);
 
     // Helpers.
     static bool isSelectable(const MenuEntry& e);

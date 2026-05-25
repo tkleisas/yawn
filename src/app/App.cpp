@@ -46,6 +46,7 @@
 #include "util/Logger.h"
 #include "util/FileIO.h"
 #include "audio/OfflineRenderer.h"
+#include "presets/PresetGenerator.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cinttypes>
@@ -450,6 +451,25 @@ void App::setupMenuBar() {
             disabled("Link Settings"),
         });
     }
+
+    // Tools menu — procedural preset generation. Runs on a worker
+    // thread; results land in the global preset library and show up in
+    // the Browser → Presets tab (where they can be auditioned/loaded).
+    m_menuBar.addMenu("Tools", {
+        M::item("Generate Preset Library (balanced names)", [this]() {
+            startPresetGeneration(0.5f, /*selectedDeviceOnly*/false);
+        }),
+        M::item("Generate Preset Library (alien names)", [this]() {
+            startPresetGeneration(0.85f, false);
+        }),
+        M::item("Generate Preset Library (descriptive names)", [this]() {
+            startPresetGeneration(0.15f, false);
+        }),
+        M::separator(),
+        M::item("Generate Presets for Selected Track's Device", [this]() {
+            startPresetGeneration(0.5f, /*selectedDeviceOnly*/true);
+        }),
+    });
 
     // Help menu
     m_menuBar.addMenu("Help", {
@@ -7368,6 +7388,31 @@ void App::processEvents() {
 }
 
 void App::update() {
+    // Background preset generation finished → toast the result on the
+    // UI thread (the worker can't safely touch the toast manager).
+    if (m_genFinished.exchange(false)) {
+        std::string msg = "Generated " + std::to_string(m_genCount.load()) +
+                          " presets (" + std::to_string(m_genValid.load()) +
+                          " audible)";
+        m_toastManager.show(msg, 3.5f, ui::ToastManager::Severity::Info);
+        // Re-index the presets folder so the new files land in the
+        // library DB, then refresh the Browser once the scan finishes.
+        if (m_libraryScanner) {
+            m_libraryScanner->scanPresets();
+            m_genRescanWait = 0;
+        }
+    }
+    // Race-safe Browser refresh after the post-generation rescan:
+    // wait a few frames for the async scan to actually start, and only
+    // refresh once it has finished (isScanning() back to false).
+    if (m_genRescanWait >= 0 && m_libraryScanner) {
+        ++m_genRescanWait;
+        if (m_genRescanWait > 5 && !m_libraryScanner->isScanning()) {
+            m_browserPanel->presetsTab().refreshList();
+            m_genRescanWait = -1;
+        }
+    }
+
     // Update animation timer for session panel (recording pulse, playback pulse)
     uint64_t now = SDL_GetTicks();
     float dt = (m_lastFrameTicks > 0) ? (now - m_lastFrameTicks) / 1000.0f : 0.0f;
@@ -8478,6 +8523,55 @@ void App::startExportRender(const std::string& filePath) {
             }
         }
         progress.done.store(true);
+    }).detach();
+}
+
+void App::startPresetGeneration(float alienRatio, bool selectedDeviceOnly) {
+    using namespace yawn::presets;
+    if (m_genRunning.load()) {
+        m_toastManager.show("Preset generation already running…", 2.0f,
+                            ui::ToastManager::Severity::Info);
+        return;
+    }
+
+    GenOptions opt;
+    opt.alienNameRatio = alienRatio;
+    opt.validate = true;
+    opt.sampleRate = m_audioEngine.sampleRate();
+
+    std::vector<GenSpec> catalog;
+    if (selectedDeviceOnly) {
+        auto* inst = m_audioEngine.instrument(m_selectedTrack);
+        if (!inst || !PresetGenerator::isSupported(inst->id())) {
+            m_toastManager.show(
+                "Selected track's instrument can't be auto-generated",
+                3.0f, ui::ToastManager::Severity::Warn);
+            return;
+        }
+        std::string id = inst->id();
+        catalog.push_back({id, PresetGenerator::kindOf(id),
+                           id == "instrack" ? 40 : 30});
+    } else {
+        catalog = PresetGenerator::defaultCatalog();
+    }
+
+    m_genRunning.store(true);
+    m_genFinished.store(false);
+    m_toastManager.show("Generating presets… (this takes a few seconds)",
+                        2.5f, ui::ToastManager::Severity::Info);
+
+    // Detached worker — the generator builds its OWN device instances
+    // via Factory, so it shares no state with the live audio thread.
+    // Capture opt/catalog by value so nothing dangles.
+    std::thread([this, opt, catalog]() {
+        PresetGenerator gen(opt);
+        std::vector<GeneratedPreset> results = gen.generateBatch(catalog);
+        int valid = 0;
+        for (const auto& r : results) if (r.valid) ++valid;
+        m_genCount.store(static_cast<int>(results.size()));
+        m_genValid.store(valid);
+        m_genRunning.store(false);
+        m_genFinished.store(true);  // publish last → update() reads counts
     }).detach();
 }
 

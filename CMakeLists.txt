@@ -256,6 +256,8 @@ set(YAWN_CORE_SOURCES
     # stbi_* symbols without needing its own dedicated TU.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/stb_image_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetGenerator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetNameGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryDatabase.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryScanner.cpp
     # Slim-API stub — delegates to the main exe's VisualEngine when

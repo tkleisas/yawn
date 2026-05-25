@@ -149,8 +149,9 @@ void ContextMenuManager::show(std::vector<MenuEntry> entries, Point screenPos) {
     }
 
     Level root;
-    root.entries = std::move(entries);
-    root.bounds  = computeRootBounds(ctx, root.entries, screenPos);
+    root.entries       = std::move(entries);
+    root.contentHeight = computeSize(ctx, root.entries).h;
+    root.bounds        = computeRootBounds(ctx, root.entries, screenPos);
     m_levels.push_back(std::move(root));
 
     pushOrRefreshEntry(ctx);
@@ -215,7 +216,7 @@ void ContextMenuManager::pushOrRefreshEntry(UIContext& ctx) {
     };
     entry.onMouseDown = [this](MouseEvent& e) { return onMouseDown(e); };
     entry.onMouseMove = [this](MouseMoveEvent& e) { return onMouseMove(e); };
-    entry.onScroll    = [](ScrollEvent&) { return true; };   // swallow, no scroll support
+    entry.onScroll    = [this](ScrollEvent& e) { return onScroll(e); };
     entry.onKey       = [this](KeyEvent& e) { return onKey(e); };
     entry.onEscape    = [this]() { onEscape(); };
     entry.onDismiss   = [this]() {
@@ -238,11 +239,14 @@ void ContextMenuManager::pushOrRefreshEntry(UIContext& ctx) {
 
 int ContextMenuManager::rowAt(const Level& L, float sy) const {
     const float padY = theme().metrics.baseUnit * 0.5f;
-    float y = L.bounds.y + padY;
+    float y = L.bounds.y + padY - L.scrollOffset;
     for (int i = 0; i < static_cast<int>(L.entries.size()); ++i) {
         float h = (L.entries[i].kind == MenuEntryKind::Separator)
                   ? separatorRowHeight() : rowHeight();
-        if (sy >= y && sy < y + h) return i;
+        // Only count hits inside the visible bounds (scrolled-off rows
+        // fall outside and are ignored).
+        if (sy >= y && sy < y + h && sy >= L.bounds.y && sy < L.bounds.y + L.bounds.h)
+            return i;
         y += h;
     }
     return -1;
@@ -286,6 +290,46 @@ int ContextMenuManager::stepHighlight(const std::vector<MenuEntry>& entries,
         if (isSelectable(entries[idx])) return idx;
     }
     return -1;
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Scrolling
+// ───────────────────────────────────────────────────────────────────
+
+float ContextMenuManager::maxScroll(const Level& L) {
+    return std::max(0.0f, L.contentHeight - L.bounds.h);
+}
+
+void ContextMenuManager::scrollLevel(int levelIdx, float deltaPx) {
+    if (levelIdx < 0 || levelIdx >= static_cast<int>(m_levels.size())) return;
+    Level& L = m_levels[levelIdx];
+    const float maxS = maxScroll(L);
+    if (maxS <= 0.0f) { L.scrollOffset = 0.0f; return; }
+    L.scrollOffset = std::clamp(L.scrollOffset + deltaPx, 0.0f, maxS);
+}
+
+void ContextMenuManager::ensureRowVisible(Level& L, int row) {
+    if (row < 0 || row >= static_cast<int>(L.entries.size())) return;
+    const float maxS = maxScroll(L);
+    if (maxS <= 0.0f) { L.scrollOffset = 0.0f; return; }
+    const float top = rowYOffset(L.entries, row);   // from content top
+    const float h   = (L.entries[row].kind == MenuEntryKind::Separator)
+                      ? separatorRowHeight() : rowHeight();
+    if (top - L.scrollOffset < 0.0f)
+        L.scrollOffset = top;
+    else if (top + h - L.scrollOffset > L.bounds.h)
+        L.scrollOffset = top + h - L.bounds.h;
+    L.scrollOffset = std::clamp(L.scrollOffset, 0.0f, maxS);
+}
+
+bool ContextMenuManager::onScroll(ScrollEvent& e) {
+    if (m_levels.empty()) return false;
+    // Scroll the level under the pointer; fall back to the topmost.
+    HitResult hit = hitTestAll(e.x, e.y);
+    int li = (hit.level >= 0) ? hit.level : static_cast<int>(m_levels.size()) - 1;
+    // Wheel-up (dy > 0) reveals earlier items → scroll content up.
+    scrollLevel(li, -e.dy * rowHeight() * 3.0f);
+    return true;
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -380,9 +424,11 @@ bool ContextMenuManager::onKey(KeyEvent& e) {
             return true;
         case Key::Up:
             L.highlighted = stepHighlight(L.entries, L.highlighted, -1);
+            ensureRowVisible(L, L.highlighted);
             return true;
         case Key::Down:
             L.highlighted = stepHighlight(L.entries, L.highlighted, +1);
+            ensureRowVisible(L, L.highlighted);
             return true;
         case Key::Right:
             if (L.highlighted >= 0 &&
@@ -453,8 +499,9 @@ void ContextMenuManager::openSubmenuForRow(int parentLevelIdx, int parentRow,
     }
 
     Level sub;
-    sub.entries = trigger.children;
-    sub.bounds  = computeSubmenuBounds(ctx, sub.entries, parent.bounds, parentRow);
+    sub.entries       = trigger.children;
+    sub.contentHeight = computeSize(ctx, sub.entries).h;
+    sub.bounds        = computeSubmenuBounds(ctx, sub.entries, parent.bounds, parentRow);
     m_levels.push_back(std::move(sub));
 
     parent.openSubmenuRow = parentRow;
@@ -537,6 +584,12 @@ Rect ContextMenuManager::computeRootBounds(UIContext& ctx,
     Size s = computeSize(ctx, entries);
     const Rect& v = ctx.viewport;
 
+    // Clamp height to the viewport (with a small margin). When the menu
+    // is taller than this, it scrolls.
+    const float margin = theme().metrics.baseUnit;
+    const float maxH = v.h - margin * 2.0f;
+    if (s.h > maxH) s.h = maxH;
+
     float x = anchor.x;
     float y = anchor.y;
     // Shift left if we'd clip the right edge.
@@ -555,6 +608,11 @@ Rect ContextMenuManager::computeSubmenuBounds(UIContext& ctx,
     Size s = computeSize(ctx, entries);
     const Rect& v = ctx.viewport;
     const float gap = 1.0f;   // slight overlap with parent looks tight
+
+    // Clamp height to the viewport (with margin) — tall submenus scroll.
+    const float margin = theme().metrics.baseUnit;
+    const float maxH = v.h - margin * 2.0f;
+    if (s.h > maxH) s.h = maxH;
 
     float x = parent.x + parent.w + gap;
     // Flip left if we'd clip the right edge.

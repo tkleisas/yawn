@@ -3,6 +3,7 @@
 #include "instruments/Instrument.h"
 #include "effects/EffectChain.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -89,6 +90,28 @@ public:
         m_selectedChain = 0;
     }
 
+    // ── Audio-safe structural-edit handshake ───────────────────────
+    // Mutating the chain set (clearChains / addChain) from the UI
+    // thread frees sub-instruments the audio thread may be mid-
+    // process() on → use-after-free. Wrap such edits in
+    // beginChainEdit() / endChainEdit(): while editing, process()
+    // emits silence and touches no chains, and beginChainEdit() spins
+    // (bounded) until any in-flight process() has returned. The
+    // symmetric seq_cst store-then-load on both sides guarantees the
+    // audio thread never dereferences a chain after the edit frees it.
+    void beginChainEdit() {
+        m_rebuilding.store(true, std::memory_order_seq_cst);
+        // Each audio block is ~1-2 ms; cap far above that so a stalled
+        // or stopped audio thread can never deadlock the UI thread.
+        for (int i = 0; i < 4000000 &&
+                        m_inProcess.load(std::memory_order_seq_cst); ++i) {
+            // busy-wait
+        }
+    }
+    void endChainEdit() {
+        m_rebuilding.store(false, std::memory_order_seq_cst);
+    }
+
     Chain&       chain(int i)       { return m_chains[i]; }
     const Chain& chain(int i) const { return m_chains[i]; }
     int chainCount() const { return m_numChains; }
@@ -130,6 +153,16 @@ public:
 
     const char* name() const override { return "Instrument Rack"; }
     const char* id()   const override { return "instrack"; }
+
+    // Preset extra state — serializes the chain list (per-chain
+    // sub-instrument id + parameters, key/velocity range, vol/pan,
+    // enabled) so rack presets round-trip. The project serializer
+    // writes an equivalent structure at the top level; this hook is
+    // what makes the *preset* pipeline (saveDevicePreset) capture the
+    // chains, which it otherwise wouldn't.
+    nlohmann::json saveExtraState(const std::filesystem::path& assetDir) const override;
+    void loadExtraState(const nlohmann::json& state,
+                        const std::filesystem::path& assetDir) override;
 
     // Parameter indices
     static constexpr int kVolume      = 0;
@@ -191,6 +224,12 @@ private:
     int   m_numChains = 0;
     int   m_selectedChain = 0;
     float m_rackVolume = 1.0f;
+
+    // Structural-edit handshake (see beginChainEdit). m_inProcess is
+    // set by the audio thread around its chain access; m_rebuilding by
+    // the editing (UI) thread.
+    std::atomic<bool> m_rebuilding{false};
+    std::atomic<bool> m_inProcess{false};
 
     midi::MidiBuffer   m_chainMidi[kMaxChains];
     std::vector<float> m_chainBufHeap;

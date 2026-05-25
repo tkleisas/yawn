@@ -26,11 +26,15 @@
 
 #include "app/App.h"
 #include "util/Logger.h"
+#include "presets/PresetGenerator.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <csignal>
 #include <exception>
 #include <ctime>
+#include <string>
+#include <vector>
 
 #ifndef _WIN32
 #include <execinfo.h>
@@ -234,7 +238,75 @@ static int runAppSEH() {
 }
 #endif
 
-int main(int /*argc*/, char* /*argv*/[]) {
+// ─── Headless preset-generation CLI ──────────────────────────────────────────
+// `YAWN --gen-presets [--seed N] [--alien 0..1] [--no-validate]
+//                     [--device <id>] [--count N]`
+// Generates procedural presets into the global preset library and exits
+// without opening the GUI. Output goes to the console (logging is not
+// redirected to yawn.log in this mode).
+static int runGenPresets(int argc, char* argv[]) {
+    using namespace yawn::presets;
+    GenOptions opt;
+    std::string onlyDevice;
+    int overrideCount = -1;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&](const char* def) -> std::string {
+            return (i + 1 < argc) ? std::string(argv[++i]) : std::string(def);
+        };
+        if      (a == "--seed")        opt.masterSeed = std::strtoull(next("0").c_str(), nullptr, 10);
+        else if (a == "--alien")       opt.alienNameRatio = std::strtof(next("0.5").c_str(), nullptr);
+        else if (a == "--no-validate") opt.validate = false;
+        else if (a == "--device")      onlyDevice = next("");
+        else if (a == "--count")       overrideCount = std::atoi(next("0").c_str());
+    }
+
+    PresetGenerator gen(opt);
+    std::vector<GenSpec> catalog = PresetGenerator::defaultCatalog();
+    if (!onlyDevice.empty()) {
+        std::vector<GenSpec> filtered;
+        for (auto& s : catalog)
+            if (s.deviceId == onlyDevice) {
+                if (overrideCount > 0) s.count = overrideCount;
+                filtered.push_back(s);
+            }
+        if (filtered.empty() && PresetGenerator::isSupported(onlyDevice))
+            filtered.push_back({onlyDevice, PresetGenerator::kindOf(onlyDevice),
+                                overrideCount > 0 ? overrideCount : 10});
+        catalog = filtered;
+    } else if (overrideCount > 0) {
+        for (auto& s : catalog) s.count = overrideCount;
+    }
+
+    std::fprintf(stderr,
+                 "YAWN preset generator — seed=%llu alien=%.2f validate=%d devices=%zu\n",
+                 static_cast<unsigned long long>(gen.options().masterSeed),
+                 gen.options().alienNameRatio, static_cast<int>(gen.options().validate),
+                 catalog.size());
+
+    std::vector<GeneratedPreset> results = gen.generateBatch(catalog);
+
+    int valid = 0;
+    for (const auto& r : results) if (r.valid) ++valid;
+    std::fprintf(stderr, "Generated %zu presets (%d valid). Manifest: %s\n",
+                 results.size(), valid,
+                 PresetGenerator::manifestPath().string().c_str());
+    int shown = 0;
+    for (const auto& r : results) {
+        if (shown++ >= 50) break;
+        std::fprintf(stderr, "  [%-13s] %s%s\n", r.deviceId.c_str(),
+                     r.name.c_str(), r.valid ? "" : "  (unvalidated)");
+    }
+    return 0;
+}
+
+int main(int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--gen-presets") == 0)
+            return runGenPresets(argc, argv);
+    }
+
     initLogging();
     initCrashHandler();
 

@@ -184,6 +184,12 @@ private:
     void doSaveProject(const std::filesystem::path& path);
     void doOpenProject(const std::filesystem::path& path);
     void openExportDialog();
+
+    // Procedural preset generation (Tools menu). Runs the generator on
+    // a detached worker thread (full catalog ≈ 6 s) and posts a
+    // completion toast from update(). `selectedDeviceOnly` limits the
+    // batch to the currently-selected track's instrument.
+    void startPresetGeneration(float alienRatio, bool selectedDeviceOnly);
     void startExportRender(const std::string& filePath);
     void syncTracksToEngine();
     void setupDefaultTracks();
@@ -290,6 +296,19 @@ private:
     // when transport recording is not armed. Drives the red record-
     // target ring on SessionPanel's scene label.
     int m_recordTargetScene = -1;
+
+    // Background preset-generation state (Tools menu). The worker
+    // thread is detached; these atomics hand the result back to the
+    // UI thread, which posts a toast in update() when m_genFinished
+    // flips true.
+    std::atomic<bool> m_genRunning{false};
+    std::atomic<bool> m_genFinished{false};
+    std::atomic<int>  m_genCount{0};
+    std::atomic<int>  m_genValid{0};
+    // After generation, presets are re-indexed by an async library
+    // scan; this UI-thread frame counter waits for that scan to finish
+    // (≥0 = active) before refreshing the Browser's preset list.
+    int               m_genRescanWait = -1;
 
     // Detail panel target: what the detail panel is currently showing
     enum class DetailTarget { Track, ReturnBus, Master };

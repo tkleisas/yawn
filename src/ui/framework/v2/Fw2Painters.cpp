@@ -413,7 +413,7 @@ static void paintContextMenuLevels(
         const float rowH       = ContextMenuManager::rowHeight();
         const float sepH       = ContextMenuManager::separatorRowHeight();
 
-        float rowY = b.y + padY;
+        float rowY = b.y + padY - L.scrollOffset;
         for (int i = 0; i < static_cast<int>(L.entries.size()); ++i) {
             const MenuEntry& e = L.entries[i];
 
@@ -489,6 +489,24 @@ static void paintContextMenuLevels(
             }
 
             rowY += rowH;
+        }
+
+        // Scroll affordances — small chevrons when there's hidden content
+        // above / below. drawn last so they sit on top of clipped rows.
+        const float maxScroll = std::max(0.0f, L.contentHeight - b.h);
+        if (maxScroll > 0.5f) {
+            const float cw = m.fontSize * 0.5f;
+            const float cx = b.x + b.w * 0.5f;
+            if (L.scrollOffset > 0.5f) {                 // ▲ more above
+                const float cy = b.y + 4.0f;
+                ctx.renderer->drawTriangle(cx - cw, cy + cw, cx + cw, cy + cw, cx, cy,
+                                           p.textSecondary);
+            }
+            if (L.scrollOffset < maxScroll - 0.5f) {     // ▼ more below
+                const float cy = b.y + b.h - 4.0f;
+                ctx.renderer->drawTriangle(cx - cw, cy - cw, cx + cw, cy - cw, cx, cy,
+                                           p.textSecondary);
+            }
         }
 
         ctx.renderer->popClip();

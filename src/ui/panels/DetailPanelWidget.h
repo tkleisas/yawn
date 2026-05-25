@@ -724,11 +724,15 @@ public:
         // per-chain fx count. Other instruments leave both at -1/0.
         int chainIdx     = -1;
         int chainFxCount = 0;
+        int   chainCount    = 0;
+        void* chainInstPtr  = nullptr;  // selected chain's sub-instrument
         if (auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst)) {
-            chainIdx = ir->selectedChain();
+            chainIdx   = ir->selectedChain();
+            chainCount = ir->chainCount();
             if (chainIdx >= 0 && chainIdx < ir->chainCount()) {
                 const auto* fc = ir->chainFxChainOrNull(chainIdx);
                 chainFxCount = fc ? fc->count() : 0;
+                chainInstPtr = static_cast<void*>(ir->chain(chainIdx).instrument.get());
             } else {
                 chainIdx = -1;
             }
@@ -741,7 +745,14 @@ public:
             padNote == m_lastPadNote &&
             padFxCount == m_lastPadFxCount &&
             chainIdx == m_lastChainIdx &&
-            chainFxCount == m_lastChainFxCount)
+            chainFxCount == m_lastChainFxCount &&
+            // Rack chain composition: a preset load keeps the same rack
+            // object but swaps its chain sub-instruments — without these
+            // two the guard would skip the rebuild and the ChainInst
+            // DeviceRefs would dangle onto freed instruments (crash in
+            // updateParamValues).
+            chainCount == m_lastChainCount &&
+            chainInstPtr == m_lastChainInstPtr)
             return;
 
         m_viewMode = ViewMode::Devices;
@@ -997,6 +1008,8 @@ public:
         m_lastPadFxCount = padFxCount;
         m_lastChainIdx  = chainIdx;
         m_lastChainFxCount = chainFxCount;
+        m_lastChainCount   = chainCount;
+        m_lastChainInstPtr = chainInstPtr;
 
         // Auto-open when devices are populated
         if (!m_deviceWidgets.empty()) setOpen(true);
@@ -1033,6 +1046,8 @@ public:
         m_lastPadFxCount = 0;
         m_lastChainIdx  = -1;
         m_lastChainFxCount = 0;
+        m_lastChainCount   = 0;
+        m_lastChainInstPtr = nullptr;
         m_viewMode = ViewMode::Devices;
         m_clipPtr  = nullptr;
     }
@@ -2489,6 +2504,13 @@ private:
     // chain's per-chain fx count.
     int m_lastChainIdx   = -1;
     int m_lastChainFxCount = 0;
+    // Rack chain composition fingerprint — chain count + the selected
+    // chain's sub-instrument pointer. A preset load swaps these out
+    // under the same rack object, so the simple inst-pointer guard
+    // above can't see the change; without these the ChainInst refs
+    // would dangle onto freed instruments.
+    int   m_lastChainCount   = 0;
+    void* m_lastChainInstPtr = nullptr;
 
     // Audio clip view state
     ViewMode m_viewMode = ViewMode::Devices;
