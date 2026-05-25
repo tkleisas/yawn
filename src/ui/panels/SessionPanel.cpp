@@ -579,6 +579,13 @@ void SessionPanel::paintSceneLabels(Renderer2D& r, TextMetrics& tm, float x, flo
     const float labelSize = theme().metrics.fontSizeSmall;
     const float lh = tm.lineHeight(labelSize);
 
+    // Arming is per-track (a column property), so if any track is
+    // armed every scene-launch will record on it — drive the red/green
+    // launch affordance off this single flag.
+    bool anyArmed = false;
+    for (int t = 0; t < m_project->numTracks(); ++t)
+        if (m_project->track(t).armed) { anyArmed = true; break; }
+
     for (int s = 0; s < m_project->numScenes(); ++s) {
         float sy = y + s * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
         float sh = ::yawn::ui::Theme::kClipSlotHeight;
@@ -605,6 +612,27 @@ void SessionPanel::paintSceneLabels(Renderer2D& r, TextMetrics& tm, float x, flo
             const ::yawn::ui::Color recCol{255, 60, 60, 240};
             const float dotR = std::min(4.0f, sh * 0.14f);
             r.drawRect(x + 4, sy + 4, dotR * 2, dotR * 2, recCol);
+        }
+
+        // Scene-launch affordance — a play triangle on the right of the
+        // scene square. Red when any track is armed (launching this row
+        // records on the armed track[s] while the rest play back);
+        // green when nothing is armed but the row has at least one clip
+        // to launch. Empty, unarmed rows get no triangle.
+        bool rowHasClip = false;
+        for (int t = 0; t < m_project->numTracks(); ++t) {
+            auto* sl = m_project->getSlot(t, s);
+            if (sl && !sl->empty()) { rowHasClip = true; break; }
+        }
+        if (anyArmed || rowHasClip) {
+            const ::yawn::ui::Color triCol = anyArmed
+                ? ::yawn::ui::Color{225, 60, 60, 230}
+                : ::yawn::ui::Color{80, 215, 110, 230};
+            const float triCX = x + w - 13.0f;
+            const float triCY = sy + sh * 0.5f;
+            r.drawTriangle(triCX - 3.0f, triCY - 5.0f,
+                           triCX - 3.0f, triCY + 5.0f,
+                           triCX + 5.0f, triCY, triCol);
         }
 
         r.drawRect(x, sy + sh - 1, w, 1, ::yawn::ui::Theme::clipSlotBorder);
@@ -984,10 +1012,145 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
             }
         }
 
+        // ── Live MIDI notes of the in-progress recording ──
+        // MIDI tracks have no sample buffer; instead we draw the notes
+        // captured so far, the same way the loaded-clip preview above
+        // draws note bars. Same lock-free snapshot model as the audio
+        // waveform (see liveMidiRecording() docs). Held notes
+        // (endBeat < 0) are drawn extended to the current playhead so
+        // sustained notes grow in real time rather than popping in only
+        // when released.
+        else if (m_engine && m_project &&
+                 m_project->track(ti).type == Track::Type::Midi) {
+            auto live = m_engine->liveMidiRecording(ti);
+            if (live.active && live.notes && live.noteCount > 0 &&
+                live.sceneIndex == si && !live.pendingStart &&
+                live.lengthBeats > 0.0) {
+                float nY = iy + 18.0f;
+                float nH = ih - 22.0f - kPillRowReserve;
+                if (nH > 4.0f) {
+                    const double len = live.lengthBeats;
+                    // Pitch range across the notes captured so far.
+                    int minP = 127, maxP = 0;
+                    for (int i = 0; i < live.noteCount; ++i) {
+                        int p = live.notes[i].pitch;
+                        if (p < minP) minP = p;
+                        if (p > maxP) maxP = p;
+                    }
+                    int pRange = std::max(1, maxP - minP + 1);
+                    constexpr float kMaxNoteH = 8.0f;
+                    const float bandH = nH / static_cast<float>(pRange);
+                    const float drawH = std::max(1.0f, std::min(bandH, kMaxNoteH));
+                    const ::yawn::ui::Color recNoteCol{235, 90, 90, 220};
+                    for (int i = 0; i < live.noteCount; ++i) {
+                        const auto& n = live.notes[i];
+                        double sB = n.startBeat;
+                        if (sB > len) continue;  // beyond the view yet
+                        double eB = (n.endBeat < 0.0f)
+                                  ? live.currentBeatRel        // still held
+                                  : static_cast<double>(n.endBeat);
+                        if (eB < sB) eB = sB;
+                        if (eB > len) eB = len;
+                        float nx = contentX + 4 +
+                            static_cast<float>(sB / len) * (contentW - 8);
+                        float nw = std::max(1.0f,
+                            static_cast<float>((eB - sB) / len) * (contentW - 8));
+                        float bandTop = nY + nH -
+                            (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
+                        float ny = bandTop + (bandH - drawH) * 0.5f;
+                        r.drawRect(nx, ny, nw, drawH, recNoteCol);
+                    }
+                    // Record playhead line.
+                    float frac = static_cast<float>(
+                        std::min(1.0, live.currentBeatRel / len));
+                    float phX = contentX + 4 + frac * (contentW - 8);
+                    r.drawRect(phX, nY, 2, nH,
+                               ::yawn::ui::Color{235, 120, 120, 230});
+                }
+            }
+        }
+
         float pulse = (std::sin(m_animTimer * 4.0f) + 1.0f) * 0.5f;
         ::yawn::ui::Color recCol = ::yawn::ui::Color{220, 40, 40}.withAlpha(
             static_cast<uint8_t>(150 + static_cast<int>(pulse * 105)));
         r.drawRectOutline(ix, iy, iw, ih, recCol, 2.0f);
+    }
+
+    // ── Recorded-bar readout + playback-position pie ──
+    // Applies to audio and MIDI content clips (and to a slot that is
+    // actively recording into an empty cell). The bar readout sits in
+    // the bottom-left band, clear of the record-setting pills on the
+    // right; the pie is a small clock in the top-right that fills
+    // clockwise from 12 o'clock as the clip plays through its loop.
+    if (m_engine && (aClip || mClip || isRecording)) {
+        const bool isAudioTrk = m_project->track(ti).type == Track::Type::Audio;
+        const bool isMidiTrk  = m_project->track(ti).type == Track::Type::Midi;
+        if (isAudioTrk || isMidiTrk) {
+            const int    beatsPerBar = std::max(1, m_engine->transport().beatsPerBar());
+            const double bpm         = std::max(1.0, m_engine->transport().bpm());
+            const double srate       = std::max(1.0, m_engine->sampleRate());
+
+            // Length in beats: live recorded length while recording,
+            // else the clip's own length (MIDI: beats; audio: derived
+            // from frame count at the project tempo).
+            double clipBeats = 0.0;
+            if (isRecording) {
+                if (isAudioTrk) {
+                    auto la = m_engine->liveAudioRecording(ti);
+                    if (la.active && la.sceneIndex == si) clipBeats = la.currentBeatRel;
+                } else {
+                    auto lm = m_engine->liveMidiRecording(ti);
+                    if (lm.active && lm.sceneIndex == si) clipBeats = lm.currentBeatRel;
+                }
+            } else if (mClip) {
+                clipBeats = mClip->lengthBeats();
+            } else if (aClip && aClip->buffer && aClip->buffer->numFrames() > 0) {
+                clipBeats = (static_cast<double>(aClip->buffer->numFrames()) / srate)
+                          * (bpm / 60.0);
+            }
+
+            if (clipBeats > 0.0) {
+                double bars = clipBeats / static_cast<double>(beatsPerBar);
+                char bbuf[24];
+                if (std::fabs(bars - std::round(bars)) < 0.05)
+                    std::snprintf(bbuf, sizeof(bbuf), "%d bars",
+                                  static_cast<int>(std::lround(bars)));
+                else
+                    std::snprintf(bbuf, sizeof(bbuf), "%.1f bars", bars);
+                const ::yawn::ui::Color barCol = isRecording
+                    ? ::yawn::ui::Color{255, 150, 150, 235}
+                    : ::yawn::ui::Color{175, 175, 185, 210};
+                tm.drawText(r, bbuf, contentX + 5, iy + ih - 20.0f,
+                             smallSize, barCol);
+            }
+
+            // Playback-position pie clock (top-right corner).
+            if (isPlaying) {
+                double frac = -1.0;
+                if (mClip && m_trackStates[ti].isMidiPlaying) {
+                    frac = m_trackStates[ti].midiPlayFrac;
+                } else if (aClip && aClip->buffer && aClip->buffer->numFrames() > 0) {
+                    frac = std::fmod(
+                        static_cast<double>(m_trackStates[ti].playPosition) /
+                        static_cast<double>(aClip->buffer->numFrames()), 1.0);
+                }
+                if (frac >= 0.0) {
+                    frac = std::clamp(frac, 0.0, 1.0);
+                    const float pcx = ix + iw - 11.0f;
+                    const float pcy = iy + 11.0f;
+                    const float pr  = 7.0f;
+                    r.drawFilledCircle(pcx, pcy, pr + 1.0f,
+                                       ::yawn::ui::Color{0, 0, 0, 170}, 20);
+                    r.drawFilledCircle(pcx, pcy, pr,
+                                       ::yawn::ui::Color{40, 40, 46, 220}, 20);
+                    constexpr float kHalfPi = 1.5707963f;
+                    constexpr float kTwoPi  = 6.2831853f;
+                    r.drawPie(pcx, pcy, pr, -kHalfPi,
+                              static_cast<float>(frac) * kTwoPi,
+                              ::yawn::ui::Theme::playing, 28);
+                }
+            }
+        }
     }
 
     // Selection highlight (shown when not playing/recording to avoid visual clash)

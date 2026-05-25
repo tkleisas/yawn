@@ -16,6 +16,7 @@
 #include "automation/AutomationEngine.h"
 #include "util/MessageQueue.h"
 #include <portaudio.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -163,7 +164,28 @@ public:
             m_trackMidiOutCh[i]   = m_trackMidiOutCh[i + 1];
             m_trackSidechainSource[i] = m_trackSidechainSource[i + 1];
             m_trackResampleSource[i]  = m_trackResampleSource[i + 1];
-            m_trackRecordStates[i]= std::move(m_trackRecordStates[i + 1]);
+            // TrackRecordState holds a std::atomic (liveNoteCount) so
+            // it can't be move-assigned wholesale — transfer members
+            // manually. Safe: this runs with transport stopped and
+            // nothing recording, so the live-note array is inert.
+            {
+                auto& dst = m_trackRecordStates[i];
+                auto& src = m_trackRecordStates[i + 1];
+                dst.recording           = src.recording;
+                dst.pendingStart        = src.pendingStart;
+                dst.usedCountIn         = src.usedCountIn;
+                dst.targetScene         = src.targetScene;
+                dst.overdub             = src.overdub;
+                dst.recordStartBeat     = src.recordStartBeat;
+                dst.pendingStopQuantize = src.pendingStopQuantize;
+                dst.targetLengthBars    = src.targetLengthBars;
+                dst.pendingNotes        = std::move(src.pendingNotes);
+                dst.recordedNotes       = std::move(src.recordedNotes);
+                dst.recordedCCs         = std::move(src.recordedCCs);
+                dst.liveNoteCount.store(
+                    src.liveNoteCount.load(std::memory_order_relaxed),
+                    std::memory_order_relaxed);
+            }
             m_audioRecordStates[i]= std::move(m_audioRecordStates[i + 1]);
             // RecordedMidiData/RecordedAudioData contain atomics — transfer manually
             m_recordedMidi[i].notes       = std::move(m_recordedMidi[i + 1].notes);
@@ -351,12 +373,13 @@ public:
     // thread is gone). When `active==false`, treat the snapshot as
     // empty regardless of the other fields.
     struct LiveAudioRecording {
-        bool         active        = false;
-        const float* data          = nullptr;
-        int64_t      frames        = 0;
-        int64_t      maxFrames     = 0;
-        int          channels      = 0;
-        int          sceneIndex    = -1;
+        bool         active         = false;
+        const float* data           = nullptr;
+        int64_t      frames         = 0;
+        int64_t      maxFrames      = 0;
+        int          channels       = 0;
+        int          sceneIndex     = -1;
+        double       currentBeatRel = 0.0;  // recorded length in beats
     };
     LiveAudioRecording liveAudioRecording(int track) const {
         if (track < 0 || track >= kMaxTracks) return {};
@@ -365,9 +388,41 @@ public:
         // produce stale-by-one-block values, not crashes. The buffer
         // pointer stays valid as long as `active` is true.
         if (!ars.recording) return {};
+        // Beats captured so far (0 during count-in, when recordStartBeat
+        // isn't meaningful yet) — drives the live recorded-bar readout.
+        double rel = ars.pendingStart
+                   ? 0.0
+                   : std::max(0.0, m_transport.positionInBeats() -
+                                   ars.recordStartBeat);
         return {true, ars.buffer.data(), ars.recordedFrames,
-                ars.maxFrames, ars.channels, ars.targetScene};
+                ars.maxFrames, ars.channels, ars.targetScene, rel};
     }
+
+    // Snapshot of an in-progress MIDI recording, for live note
+    // visualisation on the session clip slot. Same lock-free safety
+    // model as LiveAudioRecording: the backing note array lives inside
+    // the per-track record state (a member array with a stable
+    // address) and the audio thread only ever appends — it sets
+    // recording=true before writing any note and never shrinks the
+    // array. The UI reads noteCount with acquire then iterates
+    // [0, noteCount); torn reads of a note's fields are cosmetic
+    // (stale by one block), never a crash. endBeat < 0 means the note
+    // is still held — draw it extended to currentBeatRel.
+    struct LiveMidiNote {
+        float   startBeat = 0.0f;   // beats from the recording start
+        float   endBeat   = -1.0f;  // beats from start; < 0 = still held
+        uint8_t pitch     = 0;      // MIDI note number
+    };
+    struct LiveMidiRecording {
+        bool                active         = false;
+        int                 sceneIndex     = -1;
+        const LiveMidiNote* notes          = nullptr;
+        int                 noteCount      = 0;
+        double              currentBeatRel = 0.0;  // playhead, beats from start
+        double              lengthBeats    = 0.0;  // x-axis length (>0 while active)
+        bool                pendingStart   = false; // true during count-in
+    };
+    LiveMidiRecording liveMidiRecording(int track) const;
 
     // Unified per-track transport state. Polling-side accessor —
     // useful as a fallback when the UI's event-driven mirror has
@@ -493,10 +548,20 @@ private:
             uint8_t channel = 0;
             uint16_t velocity = 0;
             double startBeat = 0.0;
+            int liveIndex = -1;   // slot in liveNotes for held-note extend
         };
         std::vector<PendingNote> pendingNotes;
         std::vector<midi::MidiNote> recordedNotes;
         std::vector<midi::MidiCCEvent> recordedCCs;
+
+        // Live UI visualisation snapshot — fixed array so the data
+        // pointer the UI reads stays valid for the whole recording
+        // (audio thread only appends, never reallocates). Overflow
+        // past kMaxLiveNotes simply stops feeding the live view; the
+        // real take in recordedNotes is unaffected.
+        static constexpr int kMaxLiveNotes = 1024;
+        LiveMidiNote liveNotes[kMaxLiveNotes];
+        std::atomic<int> liveNoteCount{0};
 
         void reset() {
             recording = false;
@@ -510,6 +575,7 @@ private:
             pendingNotes.clear();
             recordedNotes.clear();
             recordedCCs.clear();
+            liveNoteCount.store(0, std::memory_order_release);
         }
     };
 

@@ -828,6 +828,18 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                     pn.channel = msg.channel;
                     pn.velocity = msg.velocity;
                     pn.startBeat = relBeat;
+                    // Publish to the live-view array as a held note
+                    // (endBeat < 0). Write the fields, THEN bump the
+                    // count with release so the UI never sees a slot
+                    // before it's fully written.
+                    int li = rs.liveNoteCount.load(std::memory_order_relaxed);
+                    if (li < TrackRecordState::kMaxLiveNotes) {
+                        rs.liveNotes[li].startBeat = static_cast<float>(relBeat);
+                        rs.liveNotes[li].endBeat   = -1.0f;
+                        rs.liveNotes[li].pitch     = msg.note;
+                        pn.liveIndex = li;
+                        rs.liveNoteCount.store(li + 1, std::memory_order_release);
+                    }
                     rs.pendingNotes.push_back(pn);
                 }
                 else if (msg.type == midi::MidiMessage::Type::NoteOff ||
@@ -842,6 +854,14 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                             note.velocity = static_cast<uint16_t>(it->velocity * 512);
                             if (note.velocity == 0) note.velocity = 1;
                             rs.recordedNotes.push_back(note);
+                            // Close the held live note so the UI stops
+                            // extending it to the playhead. Plain store
+                            // to an already-published slot — a torn read
+                            // is cosmetic for one block.
+                            if (it->liveIndex >= 0 &&
+                                it->liveIndex < TrackRecordState::kMaxLiveNotes)
+                                rs.liveNotes[it->liveIndex].endBeat =
+                                    static_cast<float>(relBeat);
                             rs.pendingNotes.erase(it);
                             break;
                         }
@@ -1780,6 +1800,38 @@ void AudioEngine::checkPendingRecordStops(int bufferSize) {
             }
         }
     }
+}
+
+AudioEngine::LiveMidiRecording AudioEngine::liveMidiRecording(int track) const {
+    if (track < 0 || track >= kMaxTracks) return {};
+    const auto& rs = m_trackRecordStates[track];
+    if (!rs.recording) return {};
+    LiveMidiRecording out;
+    out.active       = true;
+    out.sceneIndex   = rs.targetScene;
+    out.notes        = rs.liveNotes;
+    out.noteCount    = rs.liveNoteCount.load(std::memory_order_acquire);
+    out.pendingStart = rs.pendingStart;
+    // During count-in (pendingStart) recordStartBeat isn't meaningful
+    // yet and no notes are captured, so report a zero playhead.
+    const double cur = m_transport.positionInBeats();
+    out.currentBeatRel = rs.pendingStart
+                       ? 0.0
+                       : std::max(0.0, cur - rs.recordStartBeat);
+    // X-axis display length. A fixed-length recording uses its bar
+    // target so notes land in their final positions immediately; an
+    // unlimited recording grows the length to the next whole bar past
+    // the playhead (min one bar) so the view extends in bar-sized
+    // chunks rather than sliding continuously.
+    const double beatsPerBar = std::max(1, m_transport.beatsPerBar());
+    if (rs.targetLengthBars > 0) {
+        out.lengthBeats = static_cast<double>(rs.targetLengthBars) * beatsPerBar;
+    } else {
+        double bars = std::ceil((out.currentBeatRel + 1e-6) / beatsPerBar);
+        if (bars < 1.0) bars = 1.0;
+        out.lengthBeats = bars * beatsPerBar;
+    }
+    return out;
 }
 
 void AudioEngine::finalizeMidiRecord(int trackIndex) {

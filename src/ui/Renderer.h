@@ -26,6 +26,12 @@ public:
     void drawRectOutline(float x, float y, float w, float h, Color color, float thickness = 1.0f);
     void drawTriangle(float x0, float y0, float x1, float y1, float x2, float y2, Color color);
     void drawFilledCircle(float cx, float cy, float radius, Color color, int segments = 24);
+    // Filled pie wedge: a sector from startAngle spanning sweepAngle
+    // radians (angles in screen space, +y down, 0 = pointing right).
+    // segments is the count for a full circle; the wedge uses a
+    // proportional share. Used for clip playback-position clocks.
+    void drawPie(float cx, float cy, float radius, float startAngle,
+                 float sweepAngle, Color color, int segments = 32);
     void drawRoundedRect(float x, float y, float w, float h, float radius, Color color, int cornerSegs = 6);
     void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness = 1.0f);
 

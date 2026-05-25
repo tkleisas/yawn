@@ -278,6 +278,36 @@ void Renderer2D::drawFilledCircle(float cx, float cy, float radius,
     }
 }
 
+void Renderer2D::drawPie(float cx, float cy, float radius, float startAngle,
+                          float sweepAngle, Color color, int segments) {
+    if (m_currentTexture != m_whiteTexture) {
+        flush();
+        m_currentTexture = m_whiteTexture;
+        glBindTexture(GL_TEXTURE_2D, m_currentTexture);
+    }
+    if (sweepAngle <= 0.0f || radius <= 0.0f) return;
+    constexpr float kTwoPi = 2.0f * 3.14159265f;
+    if (sweepAngle > kTwoPi) sweepAngle = kTwoPi;
+    if (segments < 6) segments = 6;
+    // Scale the wedge's segment count to its share of a full circle so
+    // small slices stay cheap and full ones stay smooth (min 1).
+    int segs = static_cast<int>(segments * (sweepAngle / kTwoPi) + 0.5f);
+    if (segs < 1) segs = 1;
+    if (m_vertices.size() + static_cast<size_t>(segs) + 2 > kMaxVertices) flush();
+    uint32_t base = static_cast<uint32_t>(m_vertices.size());
+    addTriVert(cx, cy, color);  // hub
+    for (int i = 0; i <= segs; ++i) {
+        float a = startAngle + sweepAngle * (static_cast<float>(i) /
+                                             static_cast<float>(segs));
+        addTriVert(cx + radius * std::cos(a), cy + radius * std::sin(a), color);
+    }
+    for (int i = 0; i < segs; ++i) {
+        m_indices.push_back(base);
+        m_indices.push_back(base + 1 + i);
+        m_indices.push_back(base + 2 + i);
+    }
+}
+
 void Renderer2D::drawRoundedRect(float x, float y, float w, float h,
                                   float radius, Color color, int cornerSegs) {
     if (m_currentTexture != m_whiteTexture) {
