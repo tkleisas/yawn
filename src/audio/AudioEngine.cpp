@@ -833,7 +833,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                     // count with release so the UI never sees a slot
                     // before it's fully written.
                     int li = rs.liveNoteCount.load(std::memory_order_relaxed);
-                    if (li < TrackRecordState::kMaxLiveNotes) {
+                    if (li < static_cast<int>(rs.liveNotes.size())) {
                         rs.liveNotes[li].startBeat = static_cast<float>(relBeat);
                         rs.liveNotes[li].endBeat   = -1.0f;
                         rs.liveNotes[li].pitch     = msg.note;
@@ -859,7 +859,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                             // to an already-published slot — a torn read
                             // is cosmetic for one block.
                             if (it->liveIndex >= 0 &&
-                                it->liveIndex < TrackRecordState::kMaxLiveNotes)
+                                it->liveIndex < static_cast<int>(rs.liveNotes.size()))
                                 rs.liveNotes[it->liveIndex].endBeat =
                                     static_cast<float>(relBeat);
                             rs.pendingNotes.erase(it);
@@ -1486,6 +1486,15 @@ void AudioEngine::processCommands() {
 
                     auto& rs = m_trackRecordStates[msg.trackIndex];
                     rs.reset();
+                    // Allocate the live-view note buffer once (reused on
+                    // subsequent records). Heap-backed so AudioEngine
+                    // stays small enough to stack-allocate; sized before
+                    // `recording` is published so the UI never sees a
+                    // recording track with an empty buffer. Matches the
+                    // StartAudioRecordMsg pre-allocation pattern.
+                    if (static_cast<int>(rs.liveNotes.size()) !=
+                        TrackRecordState::kMaxLiveNotes)
+                        rs.liveNotes.resize(TrackRecordState::kMaxLiveNotes);
                     rs.recording = true;
                     rs.targetScene = msg.sceneIndex;
                     rs.overdub = msg.overdub;
@@ -1809,8 +1818,9 @@ AudioEngine::LiveMidiRecording AudioEngine::liveMidiRecording(int track) const {
     LiveMidiRecording out;
     out.active       = true;
     out.sceneIndex   = rs.targetScene;
-    out.notes        = rs.liveNotes;
-    out.noteCount    = rs.liveNoteCount.load(std::memory_order_acquire);
+    out.notes        = rs.liveNotes.empty() ? nullptr : rs.liveNotes.data();
+    out.noteCount    = std::min(rs.liveNoteCount.load(std::memory_order_acquire),
+                                static_cast<int>(rs.liveNotes.size()));
     out.pendingStart = rs.pendingStart;
     // During count-in (pendingStart) recordStartBeat isn't meaningful
     // yet and no notes are captured, so report a zero playhead.

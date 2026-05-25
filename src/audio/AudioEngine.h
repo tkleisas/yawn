@@ -182,6 +182,7 @@ public:
                 dst.pendingNotes        = std::move(src.pendingNotes);
                 dst.recordedNotes       = std::move(src.recordedNotes);
                 dst.recordedCCs         = std::move(src.recordedCCs);
+                dst.liveNotes           = std::move(src.liveNotes);
                 dst.liveNoteCount.store(
                     src.liveNoteCount.load(std::memory_order_relaxed),
                     std::memory_order_relaxed);
@@ -554,13 +555,18 @@ private:
         std::vector<midi::MidiNote> recordedNotes;
         std::vector<midi::MidiCCEvent> recordedCCs;
 
-        // Live UI visualisation snapshot — fixed array so the data
-        // pointer the UI reads stays valid for the whole recording
-        // (audio thread only appends, never reallocates). Overflow
-        // past kMaxLiveNotes simply stops feeding the live view; the
-        // real take in recordedNotes is unaffected.
+        // Live UI visualisation snapshot. Heap-backed (NOT an inline
+        // array) — an inline LiveMidiNote[1024] per track would add
+        // ~768 KB to AudioEngine across kMaxTracks and overflow the
+        // stack wherever an engine is stack-allocated (e.g. unit
+        // tests). Sized once to kMaxLiveNotes at record-start, then the
+        // audio thread only writes by index — capacity never changes
+        // during recording, so .data() stays stable for the UI reader
+        // (same contract the old fixed array gave). Overflow past
+        // kMaxLiveNotes simply stops feeding the live view; the real
+        // take in recordedNotes is unaffected.
         static constexpr int kMaxLiveNotes = 1024;
-        LiveMidiNote liveNotes[kMaxLiveNotes];
+        std::vector<LiveMidiNote> liveNotes;
         std::atomic<int> liveNoteCount{0};
 
         void reset() {
