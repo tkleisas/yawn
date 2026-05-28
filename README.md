@@ -177,6 +177,16 @@
 - **MIDI Learn** — Map any CC or Note to any parameter (instrument, effect, mixer, transport), learn mode with visual feedback, per-channel or omni, JSON persistence
 - **MIDI Monitor** — Lock-free 65K-event ring buffer tracking all message types (Note, CC, PitchBend, Pressure, Clock, SysEx), port identification, millisecond timestamps
 
+### MIDI Loops
+
+*The AI generated 500+ drum loops across 24 genres — including time signatures it cannot count to — for a feature it will never hear. It wrote a Balkan 7/8 groove and an Indian Rupak tal before learning that "4/4" is not a fraction you simplify. It then had to add a guard so its own 15/16 loops wouldn't get silently rounded up to 4 bars by its own MIDI reader. The AI was, in this metaphor, both the arsonist and the fire brigade.*
+
+- **Loops Browser tab** — Browse / search / filter the MIDI loop library by category (drums, bass, lead, chord, misc). Double-click to load into the selected slot, or **drag a loop straight onto a session clip slot** — with a live drop-zone highlight (blue on valid MIDI tracks, red where it won't land).
+- **Save to library** — Right-click any MIDI clip → **Save to Loop Library…**. The loop is auto-categorised from its note content and stamped with the current transport tempo + time signature; the Browser refreshes on save, no restart.
+- **SMF read/write** — Minimal Standard MIDI File reader + writer (`util/MidiFileIO`, type 0/1, PPQ) round-trips construction-kit loops: 16-bit velocity ↔ 7-bit, GM drum channel preserved, tempo + time-signature meta. The reader rounds loop length up to whole beats, which is exactly why odd meters needed a sanity guard
+- **Self-healing index** — SQLite `midi_loops` table populated by the async library scanner; rows for loops whose files were deleted are pruned on the next scan, so the browser never lists a loop that isn't there
+- **Factory drum construction-kit** — 500+ loops seeded on first launch from authored 1-bar grooves + fills composed by arrangement templates into multi-bar patterns (favouring 4- and 8-bar phrases with fill turnarounds). 24 genres: rock, funk, disco, house, techno, hip-hop, breakbeat, dnb (amen-style), idm, waltz, plus world (Latin, salsa, Balkan 7/8, Greek 9/8, Arabic maqsum, Indian Rupak 7/8) and deliberately-awkward meters (5/4, 7/8, 9/8, 11/8, 13/8, **15/16**, 5/16, 7/4). Seeding is idempotent — delete what you don't want and it stays gone
+
 ### Automation & Modulation
 - **Automation Engine** — Per-parameter breakpoint envelopes with Read/Touch/Latch modes
 - **Track Automation** — Automation lanes in arrangement view with click to add/drag/right-click delete breakpoints
@@ -243,7 +253,7 @@
 - **Virtual Keyboard** — QWERTY-to-MIDI mapping (Q2W3ER5T6Y7UI9O0P), Z/X octave switching, per-key note tracking. Yields number keys to text-input edits so typing a knob value doesn't accidentally play notes
 - **Track Selection** — Click to select tracks, highlight in session & mixer views
 - **Track Type Icons** — Waveform icon for audio tracks, DIN circle icon for MIDI tracks, monitor icon for visual tracks
-- **Targeted Drag & Drop** — Drop audio files onto specific clip slots; drop video files onto visual tracks; drop samples onto Sampler/DrumRack/Granular
+- **Targeted Drag & Drop** — Drop audio files onto specific clip slots; drop video files onto visual tracks; drop samples onto Sampler/DrumRack/Granular; drag MIDI loops from the Loops browser onto MIDI clip slots
 - **Custom 2D Renderer** — Batched OpenGL 3.3 rendering with font atlas (stb_truetype), texture atlas, scissor-stack clipping
 - **Crash Handler** — Signal handlers (SIGSEGV, SIGABRT, SIGFPE, SIGILL) with stack traces (Windows: SymFromAddr + dbghelp, Unix: backtrace + addr2line), crash log appended to `yawn.log`
 - **Multi-window Ready** — Built on SDL3 for the visual output window (and future detachable panels)
