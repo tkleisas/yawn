@@ -8254,7 +8254,14 @@ void App::resetEngineState() {
         m_audioEngine.mixer().returnEffects(r).clear();
     m_audioEngine.mixer().masterEffects().clear();
     m_audioEngine.mixer().setMasterVolume(1.0f);
-    m_audioEngine.sendCommand(audio::TransportSetBPMMsg{120.0});
+    // Reset tempo synchronously, NOT via the command queue. On the load
+    // path resetEngineState() runs before the project loader, which sets
+    // BPM with a direct transport().setBPM(). A queued reset would be
+    // drained by the audio thread AFTER that direct write and clobber the
+    // loaded tempo back to 120 (the "project BPM doesn't load" bug). A
+    // direct write here preserves ordering and matches every other reset
+    // in this function.
+    m_audioEngine.transport().setBPM(120.0);
 }
 
 void App::setupDefaultTracks() {
