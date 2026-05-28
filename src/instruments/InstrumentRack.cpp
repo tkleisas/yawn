@@ -5,15 +5,7 @@
 namespace yawn {
 namespace instruments {
 
-InstrumentRack::InstrumentRack() {
-    // Auto-populate with a single full-range SubtractiveSynth chain
-    // so the rack makes sound on first add. Without this the user
-    // sees an empty rack panel and has to click "Add Chain" before
-    // the keys do anything — confusing first impression. Project /
-    // preset load wipes this default via clearChains() before
-    // re-populating from JSON.
-    addChain(std::make_unique<SubtractiveSynth>());
-}
+InstrumentRack::InstrumentRack() = default;
 
 void InstrumentRack::init(double sampleRate, int maxBlockSize) {
     m_sampleRate = sampleRate;

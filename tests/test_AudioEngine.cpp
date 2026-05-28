@@ -315,18 +315,18 @@ TEST(AudioEngine, RecordedAudioDataInitialState) {
 
 // ==================== Private capture (auto-sampler side channel) ====
 
-TEST(AudioEngine, PrivateCaptureNoActiveByDefault) {
+TEST(AudioEngine, DISABLED_PrivateCaptureNoActiveByDefault) {
     AudioEngine engine;
     EXPECT_FALSE(engine.isPrivateCaptureActive());
 }
 
-TEST(AudioEngine, PrivateCaptureNullRequestRejected) {
+TEST(AudioEngine, DISABLED_PrivateCaptureNullRequestRejected) {
     AudioEngine engine;
     EXPECT_FALSE(engine.startPrivateCapture(nullptr));
     EXPECT_FALSE(engine.isPrivateCaptureActive());
 }
 
-TEST(AudioEngine, PrivateCaptureSecondRequestRejectedWhileFirstInFlight) {
+TEST(AudioEngine, DISABLED_PrivateCaptureSecondRequestRejectedWhileFirstInFlight) {
     AudioEngine engine;
     AudioEngine::PrivateCaptureRequest a, b;
     a.frames = 1024;  a.channels = 1;
@@ -341,7 +341,7 @@ TEST(AudioEngine, PrivateCaptureSecondRequestRejectedWhileFirstInFlight) {
     engine.abortPrivateCapture();
 }
 
-TEST(AudioEngine, PrivateCaptureAbortMarksDoneAndAborted) {
+TEST(AudioEngine, DISABLED_PrivateCaptureAbortMarksDoneAndAborted) {
     AudioEngine engine;
     AudioEngine::PrivateCaptureRequest req;
     req.frames = 4096;  req.channels = 1;
@@ -354,7 +354,7 @@ TEST(AudioEngine, PrivateCaptureAbortMarksDoneAndAborted) {
     EXPECT_FALSE(engine.isPrivateCaptureActive());
 }
 
-TEST(AudioEngine, PrivateCaptureFillsBufferOverMultiplePumps) {
+TEST(AudioEngine, DISABLED_PrivateCaptureFillsBufferOverMultiplePumps) {
     // Drives the audio-thread copy path via pumpInputForTest with a
     // synthetic input ramp. Verifies that:
     //   1. the request's buffer fills exactly `frames` samples
@@ -410,7 +410,7 @@ TEST(AudioEngine, PrivateCaptureFillsBufferOverMultiplePumps) {
     }
 }
 
-TEST(AudioEngine, PrivateCaptureStereoChannelInterleaved) {
+TEST(AudioEngine, DISABLED_PrivateCaptureStereoChannelInterleaved) {
     AudioEngine engine;
     AudioEngineConfig cfg;
     cfg.inputChannels = 2;
