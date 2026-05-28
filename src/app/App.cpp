@@ -50,6 +50,7 @@
 #include "presets/PresetGenerator.h"
 #include "presets/MidiLoopManager.h"
 #include "presets/DrumPatterns.h"
+#include "presets/MelodicPatterns.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cinttypes>
@@ -4952,9 +4953,11 @@ bool App::init() {
                 m_loopDragStartY    = m_lastMouseY;
             });
 
-        // Seed the factory drum-loop construction kit (idempotent — only
-        // writes patterns that don't already exist) before the scan indexes them.
+        // Seed the factory drum-loop construction kit + the melodic
+        // (bass/lead/chord/misc) loops (idempotent — only writes patterns
+        // that don't already exist) before the scan indexes them.
         DrumPatterns::seedFactoryLoops();
+        MelodicPatterns::seedFactoryLoops();
 
         // Initial data load
         m_browserPanel->filesTab().refreshTree();

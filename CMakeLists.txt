@@ -261,6 +261,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetNameGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/MidiLoopManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/DrumPatterns.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/MelodicPatterns.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryDatabase.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryScanner.cpp
     # Slim-API stub — delegates to the main exe's VisualEngine when

@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
-#include <map>
 #include <set>
 #include <string>
 #include <system_error>
@@ -18,25 +17,7 @@ namespace yawn {
 
 namespace fs = std::filesystem;
 
-namespace {
-
-// ── GM drum note numbers (channel 9) ────────────────────────────────────────
-enum Gm : uint8_t {
-    Kick      = 36,   // Bass Drum 1
-    Rim       = 37,   // Side Stick / clave / tabla strokes
-    Snare     = 38,   // Acoustic Snare
-    Clap      = 39,   // Hand Clap
-    HatClosed = 42,   // Closed Hi-Hat / shaker
-    TomFloor  = 43,   // High Floor Tom
-    TomLow    = 45,   // Low Tom
-    HatOpen   = 46,   // Open Hi-Hat
-    TomMid    = 48,   // Hi-Mid Tom
-    Crash     = 49,   // Crash Cymbal 1
-    TomHi     = 50,   // High Tom
-    Ride      = 51,   // Ride Cymbal 1
-    CongaHi   = 63,   // Open Hi Conga
-    CongaLo   = 64,   // Low Conga
-};
+namespace drumkit {
 
 // Grid characters → 16-bit velocity (the engine stores vel7 << 9).
 // 'X' accent, 'x' normal, 'o' soft, 'g' ghost, '.' rest.
@@ -51,26 +32,13 @@ uint16_t velFor(char c) {
     }
 }
 bool isHit(char c)  { return c == 'X' || c == 'x' || c == 'o' || c == 'g'; }
-bool isStep(char c) { return isHit(c) || c == '.'; }
-
-// Each grid step is a sixteenth note (a quarter of one quarter-note beat).
-constexpr double kStepBeats = 0.25;
-
-// A single bar of one instrument's grid. A Bar maps GM pitch → grid string.
-using Bar   = std::map<uint8_t, std::string>;
-struct Genre {
-    const char*           name;
-    int                   tsNum;   // time-signature numerator
-    int                   tsDen;   // time-signature denominator (4 or 8)
-    int                   bpm;
-    std::map<char, Bar>   bars;     // 'A'..'D' grooves, 'F'/'G' fills
-};
+static bool isStep(char c) { return isHit(c) || c == '.'; }
 
 // Sixteenth-note steps in one bar of this meter.
 int stepsPerBar(int tsNum, int tsDen) { return tsNum * 16 / tsDen; }
 
 // Strip visual separators, keeping only grid characters.
-std::string gridOnly(const std::string& s) {
+static std::string gridOnly(const std::string& s) {
     std::string o;
     o.reserve(s.size());
     for (char c : s)
@@ -80,71 +48,14 @@ std::string gridOnly(const std::string& s) {
 
 // Normalize an authored bar to exactly n grid steps (pad rests / truncate).
 // The clamp keeps a stray miscount from drifting alignment across bars.
-std::string fitBar(const std::string& g, int n) {
+static std::string fitBar(const std::string& g, int n) {
     std::string o = gridOnly(g);
     if (static_cast<int>(o.size()) < n) o.append(n - o.size(), '.');
     else if (static_cast<int>(o.size()) > n) o.resize(n);
     return o;
 }
 
-// Assemble an arrangement (e.g. "AAAF") into one multi-bar clip.
-midi::MidiClip buildClip(const Genre& g, const std::string& arr) {
-    const int S     = stepsPerBar(g.tsNum, g.tsDen);
-    const int nbars = static_cast<int>(arr.size());
-
-    // Union of all pitches used by any referenced bar.
-    std::set<uint8_t> pitches;
-    for (char l : arr) {
-        const Bar& bar = g.bars.at(l);
-        for (const auto& kv : bar) pitches.insert(kv.first);
-    }
-
-    midi::MidiClip clip;
-    clip.setLoop(true);
-
-    for (uint8_t pitch : pitches) {
-        std::string full;
-        full.reserve(static_cast<size_t>(S) * nbars);
-        for (char l : arr) {
-            const Bar& bar = g.bars.at(l);
-            auto it = bar.find(pitch);
-            full += (it != bar.end()) ? fitBar(it->second, S)
-                                      : std::string(S, '.');
-        }
-        int step = 0;
-        for (char c : full) {
-            if (isHit(c)) {
-                midi::MidiNote n;
-                n.startBeat = step * kStepBeats;
-                n.duration  = kStepBeats;
-                n.pitch     = pitch;
-                n.channel   = 9;
-                n.velocity  = velFor(c);
-                clip.addNote(n);
-            }
-            ++step;
-        }
-    }
-
-    const double totalBeats = S * nbars * kStepBeats;
-
-    // The SMF writer derives loop length from the last note-off and the
-    // reader rounds up to whole beats — extend the final hit out to the bar
-    // boundary so a pattern that ends on a rest still loops cleanly.
-    int    lastIdx = -1;
-    double maxEnd  = 0.0;
-    for (int i = 0; i < clip.noteCount(); ++i) {
-        const double end = clip.note(i).startBeat + clip.note(i).duration;
-        if (end > maxEnd) { maxEnd = end; lastIdx = i; }
-    }
-    if (lastIdx >= 0 && maxEnd < totalBeats - 1e-9)
-        clip.note(lastIdx).duration += (totalBeats - maxEnd);
-
-    clip.setLengthBeats(totalBeats);
-    return clip;
-}
-
-// Arrangement templates. Letters A-D pick grooves, F/G pick fills. Weighted
+// Arrangement templates. Letters A-C pick grooves, F/G pick fills. Weighted
 // toward long, evolving phrases (4- and 8-bar) with fill turnarounds. Every
 // template's bar count is even, so odd meters (7/8, 9/8 …) still total a
 // whole number of beats. A genre emits one loop per template whose letters
@@ -375,6 +286,108 @@ const std::vector<Genre>& genres() {
     return kGenres;
 }
 
+std::string composedRow(const Genre& g, const std::string& arr, uint8_t pitch) {
+    const int S = stepsPerBar(g.tsNum, g.tsDen);
+    std::string full;
+    full.reserve(static_cast<size_t>(S) * arr.size());
+    for (char l : arr) {
+        const Bar& bar = g.bars.at(l);
+        auto it = bar.find(pitch);
+        full += (it != bar.end()) ? fitBar(it->second, S) : std::string(S, '.');
+    }
+    return full;
+}
+
+std::string composedUnion(const Genre& g, const std::string& arr,
+                          const std::vector<uint8_t>& pitches) {
+    std::string out;
+    for (uint8_t p : pitches) {
+        std::string r = composedRow(g, arr, p);
+        if (out.empty()) out.assign(r.size(), '.');
+        for (size_t i = 0; i < r.size() && i < out.size(); ++i)
+            if (isHit(r[i]) && velFor(r[i]) > velFor(out[i])) out[i] = r[i];
+    }
+    return out;
+}
+
+std::vector<ArrEntry> validArrangements(const Genre& g) {
+    std::vector<ArrEntry> out;
+    const int S = stepsPerBar(g.tsNum, g.tsDen);
+    int idx = 0;
+    for (const std::string& arr : arrangements()) {
+        bool ok = true;
+        for (char l : arr)
+            if (!g.bars.count(l)) { ok = false; break; }
+        if (!ok) continue;
+
+        // The SMF reader rounds loop length up to whole beats — skip
+        // arrangements whose total isn't a whole number of beats for this
+        // meter (keeps odd meters like 15/16 looping cleanly).
+        const double totalBeats = S * static_cast<int>(arr.size()) * kStepBeats;
+        const double frac = totalBeats - std::floor(totalBeats);
+        if (frac > 1e-6 && frac < 1.0 - 1e-6) continue;
+
+        ArrEntry e;
+        e.arr   = arr;
+        e.index = ++idx;
+        e.bars  = static_cast<int>(arr.size());
+        e.fill  = (arr.back() == 'F' || arr.back() == 'G' || arr.back() == 'H');
+        out.push_back(std::move(e));
+    }
+    return out;
+}
+
+std::string descriptor(const ArrEntry& e) {
+    return " (" + std::to_string(e.bars) + "-bar" + (e.fill ? " fill" : "") + ")";
+}
+
+} // namespace drumkit
+
+namespace {
+
+// Build the drum clip for an arrangement — every drum pitch's composed row,
+// each hit a sixteenth on channel 9. Identical output to the original
+// inline builder.
+midi::MidiClip buildDrumClip(const drumkit::Genre& g, const std::string& arr) {
+    using namespace drumkit;
+    const int S     = stepsPerBar(g.tsNum, g.tsDen);
+    const int nbars = static_cast<int>(arr.size());
+
+    std::set<uint8_t> pitches;
+    for (char l : arr)
+        for (const auto& kv : g.bars.at(l)) pitches.insert(kv.first);
+
+    midi::MidiClip clip;
+    clip.setLoop(true);
+    for (uint8_t pitch : pitches) {
+        const std::string full = composedRow(g, arr, pitch);
+        for (int step = 0; step < static_cast<int>(full.size()); ++step) {
+            if (isHit(full[step])) {
+                midi::MidiNote n;
+                n.startBeat = step * kStepBeats;
+                n.duration  = kStepBeats;
+                n.pitch     = pitch;
+                n.channel   = 9;
+                n.velocity  = velFor(full[step]);
+                clip.addNote(n);
+            }
+        }
+    }
+
+    const double totalBeats = S * nbars * kStepBeats;
+    int    lastIdx = -1;
+    double maxEnd  = 0.0;
+    for (int i = 0; i < clip.noteCount(); ++i) {
+        const double end = clip.note(i).startBeat + clip.note(i).duration;
+        if (end > maxEnd) { maxEnd = end; lastIdx = i; }
+    }
+    if (lastIdx >= 0 && maxEnd < totalBeats - 1e-9)
+        clip.note(lastIdx).duration += (totalBeats - maxEnd);
+
+    clip.setLengthBeats(totalBeats);
+    return clip;
+}
+
 } // namespace
 
 int DrumPatterns::seedFactoryLoops() {
@@ -383,38 +396,17 @@ int DrumPatterns::seedFactoryLoops() {
     fs::create_directories(dir, ec);
 
     int written = 0;
-    for (const Genre& g : genres()) {
-        const int S = stepsPerBar(g.tsNum, g.tsDen);
-        int idx = 0;
-        for (const std::string& arr : arrangements()) {
-            bool ok = true;
-            for (char l : arr)
-                if (!g.bars.count(l)) { ok = false; break; }
-            if (!ok) continue;
-
-            // The SMF reader rounds loop length up to whole beats, so skip
-            // arrangements whose total isn't a whole number of beats for this
-            // meter — keeps odd meters (15/16, 5/16 …) looping cleanly.
-            const double totalBeats = S * static_cast<int>(arr.size()) * kStepBeats;
-            const double frac = totalBeats - std::floor(totalBeats);
-            if (frac > 1e-6 && frac < 1.0 - 1e-6) continue;
-
-            ++idx;
-            const int  nbars = static_cast<int>(arr.size());
-            const char last  = arr.back();
-            const bool fill  = (last == 'F' || last == 'G' || last == 'H');
-
+    for (const drumkit::Genre& g : drumkit::genres()) {
+        for (const drumkit::ArrEntry& e : drumkit::validArrangements(g)) {
             char num[8];
-            std::snprintf(num, sizeof num, "%02d", idx);
-            std::string name = std::string(g.name) + " " + num + " (" +
-                               std::to_string(nbars) + "-bar" +
-                               (fill ? " fill" : "") + ")";
+            std::snprintf(num, sizeof num, "%02d", e.index);
+            std::string name = std::string(g.name) + " " + num + drumkit::descriptor(e);
 
             std::string safe = MidiLoopManager::sanitizeName(name);
             fs::path file = dir / (safe + ".mid");
             if (fs::exists(file, ec)) continue;     // idempotent — respect deletions
 
-            midi::MidiClip clip = buildClip(g, arr);
+            midi::MidiClip clip = buildDrumClip(g, e.arr);
             clip.setName(name);
             if (util::saveMidiFile(file, clip, static_cast<double>(g.bpm), g.tsNum, g.tsDen))
                 ++written;
