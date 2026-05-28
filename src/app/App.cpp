@@ -1025,18 +1025,7 @@ void App::buildWidgetTree() {
             auto* slot = m_project.getSlot(track, scene);
             if (!slot || !slot->visualClip) return;
             launchVisualClipData(track, *slot->visualClip, shaderPath);
-            // Session launches use wall-clock time — iTime starts at
-            // 0 on launch and advances with real time, regardless of
-            // where the transport sits. Explicitly set to override any
-            // previous arrangement mode on the same track.
-            m_visualEngine.setLayerWallClock(track);
-            // Stamp the launch beat so the follow-action poller knows
-            // when barCount bars have elapsed on this clip.
-            if (track >= 0 && track < kMaxTracks) {
-                m_visualLaunchBeat[track]  =
-                    m_audioEngine.transport().positionInBeats();
-                m_visualLaunchScene[track] = scene;
-            }
+            stampVisualLaunch(track, scene);
         });
 
     // ─── Wire v2 framework ──────────────────────────────────────────
@@ -1640,6 +1629,17 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 
     ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
                                  ui::fw::Point{mx, my});
+}
+
+void App::stampVisualLaunch(int track, int scene) {
+    if (track < 0 || track >= kMaxTracks) return;
+    // Session launches use wall-clock iTime (starts at 0, advances with
+    // real time). Stamping the launch beat + scene gives the per-clip
+    // visual envelope poller its time origin — without it the poller is
+    // gated out and the envelope stays frozen until the clip is clicked.
+    m_visualEngine.setLayerWallClock(track);
+    m_visualLaunchBeat[track]  = m_audioEngine.transport().positionInBeats();
+    m_visualLaunchScene[track] = scene;
 }
 
 void App::launchVisualClipData(int track,
@@ -4501,6 +4501,7 @@ bool App::init() {
             } else if (slot && slot->visualClip) {
                 launchVisualClipData(t, *slot->visualClip,
                                       slot->visualClip->firstShaderPath());
+                stampVisualLaunch(t, sceneIdx);
                 trk.defaultScene = sceneIdx;
                 m_sessionPanel->updateClipState(t, true, 0,
                                                   sceneIdx, false, 0.0);
@@ -4580,6 +4581,7 @@ bool App::init() {
                 } else if (slot->visualClip) {
                     launchVisualClipData(t, *slot->visualClip,
                                           slot->visualClip->firstShaderPath());
+                    stampVisualLaunch(t, targetScene);
                 }
             }
             m_audioEngine.sendCommand(audio::TransportRecordMsg{true, targetScene});
@@ -6596,6 +6598,11 @@ void App::handleKeyEvent(const SDL_Event& event) {
                     else if (slot->midiClip)
                         m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{t, ds, slot->midiClip.get(),
                             slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                    else if (slot->visualClip) {
+                        launchVisualClipData(t, *slot->visualClip,
+                                              slot->visualClip->firstShaderPath());
+                        stampVisualLaunch(t, ds);
+                    }
                 }
                 m_audioEngine.sendCommand(audio::TransportPlayMsg{});
             }

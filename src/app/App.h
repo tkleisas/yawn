@@ -135,6 +135,12 @@ private:
     void launchVisualClipData(int track,
                                const visual::VisualClip& vc,
                                const std::string& shaderPath);
+    // Stamp a session-launched visual clip's time origin: switches the
+    // layer to wall-clock iTime and records the launch beat + scene so
+    // the per-clip visual envelope poller (pollVisualKnobAutomation) has
+    // a time reference. Every session launch path must call this after
+    // launchVisualClipData, or envelopes never advance.
+    void stampVisualLaunch(int track, int scene);
     // Arrangement playback — polled each frame; fires launch / clear
     // on visual tracks as the transport head crosses clip boundaries.
     void pollArrangementVisualPlayback();
