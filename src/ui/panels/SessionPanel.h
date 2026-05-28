@@ -92,6 +92,28 @@ public:
     float scrollY() const        { return m_scrollY; }
     void setScrollX(float sx)    { m_scrollX = sx; }
 
+    // Map a screen-space point to a clip cell (track, scene). Returns
+    // false when the point isn't over a valid grid cell (header, scene
+    // labels, scrollbar, or past the last track/scene). Used by App to
+    // route a MIDI-loop drag-drop onto the slot under the cursor.
+    bool cellAtScreen(float mx, float my, int& outTrack, int& outScene) const {
+        if (!m_project) return false;
+        const float gridX = m_bounds.x + ::yawn::ui::Theme::kSceneLabelWidth;
+        const float gridY = m_bounds.y + ::yawn::ui::Theme::kTrackHeaderHeight;
+        const float gridH = m_bounds.h - ::yawn::ui::Theme::kTrackHeaderHeight - kScrollbarH;
+        if (mx < gridX || mx >= m_bounds.x + m_bounds.w) return false;
+        if (my < gridY || my >= gridY + gridH)           return false;
+        const int ti = static_cast<int>(
+            (mx + m_scrollX - gridX) / ::yawn::ui::Theme::kTrackWidth);
+        const int si = static_cast<int>(
+            (my + m_scrollY - gridY) / ::yawn::ui::Theme::kClipSlotHeight);
+        if (ti < 0 || ti >= m_project->numTracks()) return false;
+        if (si < 0 || si >= m_project->numScenes()) return false;
+        outTrack = ti;
+        outScene = si;
+        return true;
+    }
+
     // Auto-scroll so the selected clip slot is visible in the grid viewport
     void ensureSelectionVisible() {
         if (!m_project) return;

@@ -45,8 +45,11 @@
 #include "util/ProjectSerializer.h"
 #include "util/Logger.h"
 #include "util/FileIO.h"
+#include "util/MidiFileIO.h"
 #include "audio/OfflineRenderer.h"
 #include "presets/PresetGenerator.h"
+#include "presets/MidiLoopManager.h"
+#include "presets/DrumPatterns.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cinttypes>
@@ -3006,6 +3009,71 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         (void)trackIndex; (void)sceneIndex;
     }, false, hasClip});
 
+    // Save a MIDI clip into the loop library so it shows up in the
+    // Browser's Loops tab. Prompts for a name (default = clip name),
+    // auto-categorizes, writes the .mid, and indexes the result inline
+    // so the tab updates without waiting for a rescan.
+    if (slot && slot->midiClip) {
+        items.push_back({"Save to Loop Library…", [this, trackIndex, sceneIndex]() {
+            auto* s = m_project.getSlot(trackIndex, sceneIndex);
+            if (!s || !s->midiClip) return;
+            std::string def = s->midiClip->name();
+            if (def.empty()) def = "loop";
+            SDL_StartTextInput(m_mainWindow.getHandle());
+            m_textInputDialog.prompt("Loop Name", def,
+                [this, trackIndex, sceneIndex](const std::string& raw) {
+                    SDL_StopTextInput(m_mainWindow.getHandle());
+                    if (raw.empty()) return;
+                    auto* s2 = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s2 || !s2->midiClip) return;
+                    const midi::MidiClip& clip = *s2->midiClip;
+
+                    const std::string cat = MidiLoopManager::autoCategory(clip);
+                    const double bpm   = m_audioEngine.transport().bpm();
+                    const int    tsNum = m_audioEngine.transport().numerator();
+                    const int    tsDen = m_audioEngine.transport().denominator();
+
+                    auto path = MidiLoopManager::saveMidiLoop(raw, cat, clip, bpm, tsNum, tsDen);
+                    if (path.empty()) {
+                        m_toastManager.show("Couldn't save MIDI loop", 2.5f,
+                                            ui::ToastManager::Severity::Error);
+                        return;
+                    }
+
+                    // Index it immediately so it appears in the Loops tab.
+                    // Mirrors LibraryScanner::doScanMidiLoops record build
+                    // (libraryPathId 0 = YAWN-managed root).
+                    library::MidiLoopRecord r;
+                    r.path        = path.string();
+                    r.name        = path.stem().string();
+                    r.category    = cat;
+                    r.lengthBeats = clip.lengthBeats();
+                    r.tempoBPM    = bpm;
+                    r.timeSigNum  = tsNum;
+                    r.timeSigDen  = tsDen;
+                    r.noteCount   = clip.noteCount();
+                    int lo = 127, hi = 0;
+                    for (int i = 0; i < clip.noteCount(); ++i) {
+                        int p = clip.note(i).pitch;
+                        if (p < lo) lo = p;
+                        if (p > hi) hi = p;
+                    }
+                    if (clip.noteCount() == 0) { lo = 0; hi = 0; }
+                    r.lowestPitch   = lo;
+                    r.highestPitch  = hi;
+                    r.libraryPathId = 0;
+                    std::error_code ec;
+                    auto ftime = std::filesystem::last_write_time(path, ec);
+                    r.lastModified = std::chrono::duration_cast<std::chrono::seconds>(
+                        ftime.time_since_epoch()).count();
+                    m_libraryDb.insertOrUpdateMidiLoop(r);
+                    m_browserPanel->loopsTab().refreshList();
+                    m_toastManager.show("Saved \"" + r.name + "\" to loops", 2.0f,
+                                        ui::ToastManager::Severity::Info);
+                });
+        }, false, true});
+    }
+
     items.push_back({"", nullptr, true}); // separator
 
     // Record length setting — per-slot. Clicking this slot to start a
@@ -3936,6 +4004,47 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
                                  ui::fw::Point{mx, my});
 }
 
+bool App::loadMidiLoopIntoSlot(const std::string& path, int track, int scene) {
+    if (track < 0 || track >= m_project.numTracks()) return false;
+    if (scene < 0 || scene >= m_project.numScenes()) return false;
+    if (m_project.track(track).type != Track::Type::Midi) {
+        m_toastManager.show("MIDI loops need a MIDI track", 2.5f,
+                            ui::ToastManager::Severity::Warn);
+        return false;
+    }
+    auto clip = util::loadMidiFile(path);
+    if (!clip) {
+        m_toastManager.show("Couldn't load MIDI loop", 2.5f,
+                            ui::ToastManager::Severity::Error);
+        return false;
+    }
+
+    const std::string loopName = clip->name();
+    // Snapshots kept as shared_ptr so the undo/redo std::function
+    // closures stay copyable.
+    std::shared_ptr<midi::MidiClip> newSnap = clip->clone();
+    auto* prev = m_project.getMidiClip(track, scene);
+    std::shared_ptr<midi::MidiClip> prevSnap =
+        prev ? std::shared_ptr<midi::MidiClip>(prev->clone()) : nullptr;
+
+    m_project.setMidiClip(track, scene, std::move(clip));
+    markDirty();
+    m_undoManager.push({"Load MIDI Loop",
+        [this, track, scene, prevSnap] {
+            if (prevSnap) m_project.setMidiClip(track, scene, prevSnap->clone());
+            else if (auto* s = m_project.getSlot(track, scene))
+                m_project.graveyardSlotClips(*s);
+            markDirty();
+        },
+        [this, track, scene, newSnap] {
+            m_project.setMidiClip(track, scene, newSnap->clone());
+            markDirty();
+        }, ""});
+    m_toastManager.show("Loaded " + loopName, 2.0f,
+                        ui::ToastManager::Severity::Info);
+    return true;
+}
+
 void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy) {
     auto* srcSlot = m_project.getSlot(srcT, srcS);
     auto* dstSlot = m_project.getSlot(dstT, dstS);
@@ -4822,9 +4931,33 @@ bool App::init() {
                 }
             });
 
+        // Loops tab: double-click → load the .mid into the selected MIDI
+        // slot (m_selectedTrack / m_selectedScene).
+        m_browserPanel->loopsTab().setOnLoopDoubleClick(
+            [this](const std::string& path) {
+                loadMidiLoopIntoSlot(path, m_selectedTrack, m_selectedScene);
+            });
+
+        // Loops tab: mouse-down on a row arms a potential drag-to-slot.
+        // The global mouse-move handler promotes it once the cursor
+        // moves past the threshold; mouse-up drops it onto the session
+        // cell under the pointer.
+        m_browserPanel->loopsTab().setOnLoopDragStart(
+            [this](const std::string& path) {
+                m_loopDragArmedPath = path;
+                m_loopDragArmed     = true;
+                m_loopDragStartX    = m_lastMouseX;
+                m_loopDragStartY    = m_lastMouseY;
+            });
+
+        // Seed the factory drum-loop construction kit (idempotent — only
+        // writes patterns that don't already exist) before the scan indexes them.
+        DrumPatterns::seedFactoryLoops();
+
         // Initial data load
         m_browserPanel->filesTab().refreshTree();
         m_browserPanel->presetsTab().refreshList();
+        m_browserPanel->loopsTab().refreshList();
 
         // Start background scan
         m_libraryScanner->startFullScan();
@@ -6733,6 +6866,23 @@ void App::processEvents() {
                 // "+" badge for clone semantics.
                 {
                     auto& dm = ui::fw2::DragManager::instance();
+                    // Promote an armed MIDI-loop drag (mouse-down on a
+                    // Loops-tab row) into an active global drag once the
+                    // cursor moves past the threshold. This keeps a plain
+                    // click-to-select from flashing a drag ghost.
+                    if (m_loopDragArmed && !dm.active()) {
+                        const float dx = mx - m_loopDragStartX;
+                        const float dy = my - m_loopDragStartY;
+                        constexpr float kThresh = 5.0f;
+                        if (dx * dx + dy * dy > kThresh * kThresh) {
+                            ui::fw2::DragPayload pl;
+                            pl.kind = ui::fw2::DragPayload::Kind::MidiLoop;
+                            pl.midiLoopPath = m_loopDragArmedPath;
+                            pl.label = std::filesystem::path(m_loopDragArmedPath)
+                                           .stem().string();
+                            dm.start(std::move(pl), mx, my);
+                        }
+                    }
                     dm.updatePos(mx, my);
                     dm.setCtrlHeld((SDL_GetModState() & SDL_KMOD_CTRL) != 0);
                 }
@@ -7034,6 +7184,23 @@ void App::processEvents() {
                 float mx = event.button.x;
                 float my = event.button.y;
                 int btn = event.button.button;
+
+                // MIDI-loop drag-to-slot: resolve before anything else
+                // consumes the release. Drop onto the session cell under
+                // the cursor; otherwise the drag just tears down. The
+                // arm flag is always cleared (covers a plain click that
+                // armed but never crossed the drag threshold).
+                {
+                    auto& dm = ui::fw2::DragManager::instance();
+                    if (dm.isDraggingMidiLoop()) {
+                        int dt = -1, ds = -1;
+                        if (m_sessionPanel->cellAtScreen(mx, my, dt, ds))
+                            loadMidiLoopIntoSlot(dm.payload().midiLoopPath, dt, ds);
+                        dm.finish();
+                    }
+                    m_loopDragArmed = false;
+                    m_loopDragArmedPath.clear();
+                }
 
                 // fw2 LayerStack — mirror mouse-down routing.
                 {
@@ -7410,6 +7577,18 @@ void App::update() {
         if (m_genRescanWait > 5 && !m_libraryScanner->isScanning()) {
             m_browserPanel->presetsTab().refreshList();
             m_genRescanWait = -1;
+        }
+    }
+    // One-shot Browser refresh once the initial startup scan completes,
+    // so seeded factory loops and freshly-indexed files/presets show up
+    // without needing a restart.
+    if (m_initialScanRefresh >= 0 && m_libraryScanner) {
+        ++m_initialScanRefresh;
+        if (m_initialScanRefresh > 5 && !m_libraryScanner->isScanning()) {
+            m_browserPanel->filesTab().refreshTree();
+            m_browserPanel->presetsTab().refreshList();
+            m_browserPanel->loopsTab().refreshList();
+            m_initialScanRefresh = -1;
         }
     }
 

@@ -65,6 +65,28 @@ struct AudioEngineConfig {
     int outputDevice = -1;
 };
 
+// ⚠️  SIZE / STACK-ALLOCATION WARNING ⚠️
+// AudioEngine is a VERY large object — it holds dozens of per-track
+// arrays sized to kMaxTracks (instruments, mixer state, record states,
+// MIDI/automation buffers, …). Its sizeof is on the order of hundreds
+// of KB and climbs as features are added.
+//
+// PREFER HEAP ALLOCATION: in the app it lives behind std::unique_ptr;
+// do the same anywhere else (`auto engine = std::make_unique<AudioEngine>();`).
+// Unit tests historically declare `AudioEngine engine;` on the stack —
+// that already sits close to the 1 MB default Windows stack limit, so:
+//
+//   *** Never add a large INLINE per-track member to AudioEngine (or to
+//       any struct it embeds by value, e.g. TrackRecordState /
+//       AudioRecordState). Heap-back it instead (std::vector /
+//       unique_ptr), like AudioRecordState::buffer and
+//       TrackRecordState::liveNotes already do. ***
+//
+// A single inline LiveMidiNote[1024] per track (~768 KB across
+// kMaxTracks) once overflowed the stack and SEGFAULT'd the whole test
+// suite (v0.65.0/v0.66.0 red CI, fixed in v0.66.1). If you grow this
+// object, prefer heap-backed storage and consider moving the stack
+// `AudioEngine engine;` test fixtures to make_unique as well.
 class AudioEngine {
 public:
     AudioEngine();

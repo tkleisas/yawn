@@ -1,5 +1,7 @@
 #include "LibraryScanner.h"
 #include "presets/PresetManager.h"
+#include "presets/MidiLoopManager.h"
+#include "util/MidiFileIO.h"
 #include "util/Logger.h"
 #include <sndfile.h>
 #include <algorithm>
@@ -71,6 +73,21 @@ void LibraryScanner::scanPresets() {
     }
 }
 
+void LibraryScanner::scanMidiLoops() {
+    {
+        std::lock_guard<std::mutex> lock(m_jobMutex);
+        m_jobs.push({ScanJob::MidiLoops, 0, ""});
+    }
+    m_jobCv.notify_one();
+
+    if (!m_running.load()) {
+        m_stopRequested = false;
+        m_running = true;
+        if (m_thread.joinable()) m_thread.join();
+        m_thread = std::thread(&LibraryScanner::workerFunc, this);
+    }
+}
+
 void LibraryScanner::stop() {
     m_stopRequested = true;
     m_jobCv.notify_one();
@@ -94,9 +111,9 @@ void LibraryScanner::workerFunc() {
         m_progress = 0.0f;
 
         if (job.type == ScanJob::FullScan) {
-            // Scan all library paths
+            // Scan all library paths, then presets, then MIDI loops.
             auto paths = m_db.getLibraryPaths();
-            float total = static_cast<float>(paths.size()) + 1.0f; // +1 for presets
+            float total = static_cast<float>(paths.size()) + 2.0f; // presets + midi loops
             int done = 0;
             for (auto& lp : paths) {
                 if (m_stopRequested.load()) break;
@@ -105,6 +122,10 @@ void LibraryScanner::workerFunc() {
             }
             if (!m_stopRequested.load()) {
                 doScanPresets();
+                m_progress = static_cast<float>(++done) / total;
+            }
+            if (!m_stopRequested.load()) {
+                doScanMidiLoops();
                 m_progress = 1.0f;
             }
         } else if (job.type == ScanJob::AudioPath) {
@@ -112,6 +133,9 @@ void LibraryScanner::workerFunc() {
             m_progress = 1.0f;
         } else if (job.type == ScanJob::Presets) {
             doScanPresets();
+            m_progress = 1.0f;
+        } else if (job.type == ScanJob::MidiLoops) {
+            doScanMidiLoops();
             m_progress = 1.0f;
         }
 
@@ -220,6 +244,94 @@ void LibraryScanner::doScanPresets() {
             rec.lastModified = epoch;
             m_db.insertOrUpdatePreset(rec);
         }
+    }
+}
+
+void LibraryScanner::doScanMidiLoops() {
+    namespace mfs = std::filesystem;
+    auto rootStr = m_midiLoopsRoot.empty()
+                 ? MidiLoopManager::midiLoopsRootDir().string()
+                 : m_midiLoopsRoot;
+    mfs::path root(rootStr);
+
+    auto isMidiExt = [](const mfs::path& p) {
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return ext == ".mid" || ext == ".midi";
+    };
+
+    auto processFile = [this](const mfs::path& f, int64_t libPathId,
+                              const std::string& categoryHint,
+                              std::vector<std::string>* found) {
+        util::MidiFileInfo info;
+        auto clip = util::loadMidiFile(f, &info);
+        if (!clip) return;
+        if (found) found->push_back(f.string());
+        MidiLoopRecord r;
+        r.path           = f.string();
+        r.name           = f.stem().string();
+        r.category       = categoryHint.empty()
+                         ? std::string(MidiLoopManager::autoCategory(*clip))
+                         : categoryHint;
+        r.lengthBeats    = clip->lengthBeats();
+        r.tempoBPM       = info.tempoBPM;
+        r.timeSigNum     = info.timeSigNum;
+        r.timeSigDen     = info.timeSigDen;
+        r.noteCount      = clip->noteCount();
+        int lo = 127, hi = 0;
+        for (int i = 0; i < clip->noteCount(); ++i) {
+            int p = clip->note(i).pitch;
+            if (p < lo) lo = p;
+            if (p > hi) hi = p;
+        }
+        if (clip->noteCount() == 0) { lo = 0; hi = 0; }
+        r.lowestPitch    = lo;
+        r.highestPitch   = hi;
+        r.libraryPathId  = libPathId;
+        std::error_code ec;
+        auto ftime = mfs::last_write_time(f, ec);
+        r.lastModified = std::chrono::duration_cast<std::chrono::seconds>(
+            ftime.time_since_epoch()).count();
+        m_db.insertOrUpdateMidiLoop(r);
+    };
+
+    // (a) YAWN-managed root with category subfolders. The folder name
+    //     is a hint when it matches a supported category; otherwise we
+    //     fall back to auto-categorization.
+    std::error_code ec;
+    if (mfs::exists(root, ec)) {
+        std::vector<std::string> rootFound;
+        for (auto& catDir : mfs::directory_iterator(root, ec)) {
+            if (m_stopRequested.load()) return;
+            if (!catDir.is_directory()) continue;
+            std::string cat = catDir.path().filename().string();
+            std::string hint = MidiLoopManager::isValidCategory(cat) ? cat : "";
+            for (auto& entry : mfs::recursive_directory_iterator(catDir.path(), ec)) {
+                if (m_stopRequested.load()) return;
+                if (!entry.is_regular_file()) continue;
+                if (!isMidiExt(entry.path())) continue;
+                processFile(entry.path(), 0, hint, &rootFound);
+            }
+        }
+        // Prune rows for managed loops whose files were deleted.
+        m_db.removeDeletedMidiLoops(0, rootFound);
+    }
+
+    // (b) User-added library paths (shared with audio scanner). Auto-
+    //     categorize since these aren't organized by YAWN's convention.
+    auto paths = m_db.getLibraryPaths();
+    for (auto& lp : paths) {
+        if (m_stopRequested.load()) return;
+        if (!mfs::exists(lp.path, ec)) continue;
+        std::vector<std::string> pathFound;
+        for (auto& entry : mfs::recursive_directory_iterator(lp.path, ec)) {
+            if (m_stopRequested.load()) return;
+            if (!entry.is_regular_file()) continue;
+            if (!isMidiExt(entry.path())) continue;
+            processFile(entry.path(), lp.id, "", &pathFound);
+        }
+        m_db.removeDeletedMidiLoops(lp.id, pathFound);
     }
 }
 

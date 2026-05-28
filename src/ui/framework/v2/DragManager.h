@@ -51,6 +51,7 @@ struct DragPayload {
     enum class Kind {
         None,
         AudioClip,   // shared_ptr<AudioBuffer> in audioBuffer; label set
+        MidiLoop,    // .mid path in midiLoopPath; label set
     };
 
     Kind kind = Kind::None;
@@ -58,6 +59,11 @@ struct DragPayload {
     // Audio-clip payload fields.
     std::shared_ptr<audio::AudioBuffer> audioBuffer;
     std::string label;          // shown in ghost ("bass-loop.wav")
+
+    // MIDI-loop payload fields. Absolute path to the .mid on disk; the
+    // drop target loads it lazily on release rather than carrying the
+    // parsed clip through the drag.
+    std::string midiLoopPath;
 
     // Source coordinates so a drop target can ignore drops onto its
     // own origin (e.g. if the user drags a session cell to its own
@@ -109,6 +115,9 @@ public:
     // check.
     bool isDraggingAudioClip() const {
         return m_active && m_payload.kind == DragPayload::Kind::AudioClip;
+    }
+    bool isDraggingMidiLoop() const {
+        return m_active && m_payload.kind == DragPayload::Kind::MidiLoop;
     }
 
     // Test-only — wipe state. Used by fixtures.

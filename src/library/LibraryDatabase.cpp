@@ -162,11 +162,35 @@ void LibraryDatabase::createTables() {
             last_modified INTEGER DEFAULT 0
         );
     )");
+    // midi_loops — schema v2+. Fresh installs get the table here;
+    // existing DBs pick it up via the v1→v2 migrate step below
+    // (CREATE TABLE IF NOT EXISTS is idempotent in both paths).
+    exec(R"(
+        CREATE TABLE IF NOT EXISTS midi_loops (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            path            TEXT UNIQUE NOT NULL,
+            name            TEXT NOT NULL,
+            category        TEXT DEFAULT 'misc',
+            length_beats    REAL DEFAULT 0,
+            tempo_bpm       REAL DEFAULT 0,
+            time_sig_num    INTEGER DEFAULT 4,
+            time_sig_den    INTEGER DEFAULT 4,
+            note_count      INTEGER DEFAULT 0,
+            lowest_pitch    INTEGER DEFAULT 0,
+            highest_pitch   INTEGER DEFAULT 0,
+            tags            TEXT DEFAULT '',
+            library_path_id INTEGER REFERENCES library_paths(id),
+            last_modified   INTEGER DEFAULT 0
+        );
+    )");
     exec("CREATE INDEX IF NOT EXISTS idx_audio_name ON audio_files(name)");
     exec("CREATE INDEX IF NOT EXISTS idx_audio_lib  ON audio_files(library_path_id)");
     exec("CREATE INDEX IF NOT EXISTS idx_preset_dev ON presets(device_id)");
     exec("CREATE INDEX IF NOT EXISTS idx_preset_name ON presets(name)");
     exec("CREATE INDEX IF NOT EXISTS idx_preset_type ON presets(device_type)");
+    exec("CREATE INDEX IF NOT EXISTS idx_loop_name ON midi_loops(name)");
+    exec("CREATE INDEX IF NOT EXISTS idx_loop_cat  ON midi_loops(category)");
+    exec("CREATE INDEX IF NOT EXISTS idx_loop_lib  ON midi_loops(library_path_id)");
 }
 
 // ─── Schema migrations ─────────────────────────────────────────────────
@@ -260,6 +284,18 @@ void LibraryDatabase::migrateSchema() {
 
         LOG_INFO("LibraryDB", "v1 migration: classified %d of %zu unknown rows",
                  classified, toUpdate.size());
+    }
+
+    // v1 → v2: introduce the midi_loops table. createTables() already
+    // ran the CREATE TABLE IF NOT EXISTS, so this step is a no-op on a
+    // fresh install — it only matters on an upgrade where createTables
+    // ran against the old schema before this build was deployed. Kept
+    // explicit + idempotent in case a future migration needs to
+    // back-fill rows.
+    if (userVersion < 2) {
+        // (CREATE TABLE is already issued by createTables; no row
+        // back-fill needed since v2 only adds a new table.)
+        LOG_INFO("LibraryDB", "v2 migration: midi_loops table ready");
     }
 
     // Stamp user_version at the end so partial migrations re-run on
@@ -621,6 +657,202 @@ std::vector<PresetRecord> LibraryDatabase::getFilteredPresets(const std::string&
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             PresetRecord r;
             readPresetRow(stmt, r);
+            result.push_back(std::move(r));
+        }
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+// ── MIDI loops ─────────────────────────────────────────────────────────
+
+namespace {
+constexpr const char* kMidiLoopColumns =
+    "id,path,name,category,length_beats,tempo_bpm,time_sig_num,time_sig_den,"
+    "note_count,lowest_pitch,highest_pitch,tags,library_path_id,last_modified";
+
+void readMidiLoopRow(sqlite3_stmt* stmt, MidiLoopRecord& r) {
+    r.id            = sqlite3_column_int64(stmt, 0);
+    r.path          = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    r.name          = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+    const unsigned char* cat = sqlite3_column_text(stmt, 3);
+    r.category      = cat ? reinterpret_cast<const char*>(cat) : "misc";
+    r.lengthBeats   = sqlite3_column_double(stmt, 4);
+    r.tempoBPM      = sqlite3_column_double(stmt, 5);
+    r.timeSigNum    = sqlite3_column_int(stmt, 6);
+    r.timeSigDen    = sqlite3_column_int(stmt, 7);
+    r.noteCount     = sqlite3_column_int(stmt, 8);
+    r.lowestPitch   = sqlite3_column_int(stmt, 9);
+    r.highestPitch  = sqlite3_column_int(stmt, 10);
+    const unsigned char* tg = sqlite3_column_text(stmt, 11);
+    r.tags          = tg ? reinterpret_cast<const char*>(tg) : "";
+    r.libraryPathId = sqlite3_column_int64(stmt, 12);
+    r.lastModified  = sqlite3_column_int64(stmt, 13);
+}
+} // anon
+
+void LibraryDatabase::insertOrUpdateMidiLoop(const MidiLoopRecord& rec) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_db) return;
+    const char* sql = R"(
+        INSERT INTO midi_loops(path, name, category, length_beats, tempo_bpm,
+                                time_sig_num, time_sig_den, note_count,
+                                lowest_pitch, highest_pitch, tags,
+                                library_path_id, last_modified)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(path) DO UPDATE SET
+            name=excluded.name, category=excluded.category,
+            length_beats=excluded.length_beats, tempo_bpm=excluded.tempo_bpm,
+            time_sig_num=excluded.time_sig_num, time_sig_den=excluded.time_sig_den,
+            note_count=excluded.note_count,
+            lowest_pitch=excluded.lowest_pitch, highest_pitch=excluded.highest_pitch,
+            tags=excluded.tags, library_path_id=excluded.library_path_id,
+            last_modified=excluded.last_modified
+    )";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text  (stmt,  1, rec.path.c_str(),     -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text  (stmt,  2, rec.name.c_str(),     -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text  (stmt,  3, rec.category.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_double(stmt,  4, rec.lengthBeats);
+        sqlite3_bind_double(stmt,  5, rec.tempoBPM);
+        sqlite3_bind_int   (stmt,  6, rec.timeSigNum);
+        sqlite3_bind_int   (stmt,  7, rec.timeSigDen);
+        sqlite3_bind_int   (stmt,  8, rec.noteCount);
+        sqlite3_bind_int   (stmt,  9, rec.lowestPitch);
+        sqlite3_bind_int   (stmt, 10, rec.highestPitch);
+        sqlite3_bind_text  (stmt, 11, rec.tags.c_str(),     -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64 (stmt, 12, rec.libraryPathId);
+        sqlite3_bind_int64 (stmt, 13, rec.lastModified);
+        sqlite3_step(stmt);
+    }
+    sqlite3_finalize(stmt);
+}
+
+void LibraryDatabase::removeMidiLoopsForPath(int64_t libraryPathId) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_db) return;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db,
+            "DELETE FROM midi_loops WHERE library_path_id = ?",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, libraryPathId);
+        sqlite3_step(stmt);
+    }
+    sqlite3_finalize(stmt);
+}
+
+void LibraryDatabase::removeDeletedMidiLoops(
+        int64_t libraryPathId, const std::vector<std::string>& existingPaths) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_db) return;
+    // Pull all paths for the library_path, then DELETE rows whose path
+    // isn't in the freshly-walked `existingPaths` set. Same pattern as
+    // removeDeletedFiles for audio.
+    std::vector<std::pair<int64_t, std::string>> dbRows;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db,
+            "SELECT id, path FROM midi_loops WHERE library_path_id = ?",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, libraryPathId);
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+            dbRows.emplace_back(sqlite3_column_int64(stmt, 0),
+                reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+    }
+    sqlite3_finalize(stmt);
+    std::unordered_set<std::string> kept(existingPaths.begin(), existingPaths.end());
+    sqlite3_stmt* del = nullptr;
+    if (sqlite3_prepare_v2(m_db, "DELETE FROM midi_loops WHERE id = ?",
+                            -1, &del, nullptr) == SQLITE_OK) {
+        for (auto& row : dbRows) {
+            if (kept.count(row.second)) continue;
+            sqlite3_bind_int64(del, 1, row.first);
+            sqlite3_step(del);
+            sqlite3_reset(del);
+        }
+    }
+    sqlite3_finalize(del);
+}
+
+void LibraryDatabase::clearMidiLoops() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_db) return;
+    exec("DELETE FROM midi_loops");
+}
+
+std::vector<MidiLoopRecord> LibraryDatabase::getAllMidiLoops() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<MidiLoopRecord> result;
+    if (!m_db) return result;
+    sqlite3_stmt* stmt = nullptr;
+    std::string sql = std::string("SELECT ") + kMidiLoopColumns +
+                      " FROM midi_loops ORDER BY category, name";
+    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            MidiLoopRecord r;
+            readMidiLoopRow(stmt, r);
+            result.push_back(std::move(r));
+        }
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+std::vector<MidiLoopRecord> LibraryDatabase::getMidiLoopsForPath(int64_t libraryPathId) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<MidiLoopRecord> result;
+    if (!m_db) return result;
+    sqlite3_stmt* stmt = nullptr;
+    std::string sql = std::string("SELECT ") + kMidiLoopColumns +
+                      " FROM midi_loops WHERE library_path_id = ? ORDER BY category, name";
+    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, libraryPathId);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            MidiLoopRecord r;
+            readMidiLoopRow(stmt, r);
+            result.push_back(std::move(r));
+        }
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+std::vector<MidiLoopRecord> LibraryDatabase::getMidiLoopsByCategory(
+        const std::string& category) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<MidiLoopRecord> result;
+    if (!m_db) return result;
+    sqlite3_stmt* stmt = nullptr;
+    std::string sql = std::string("SELECT ") + kMidiLoopColumns +
+                      " FROM midi_loops WHERE category = ? ORDER BY name";
+    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, category.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            MidiLoopRecord r;
+            readMidiLoopRow(stmt, r);
+            result.push_back(std::move(r));
+        }
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+std::vector<MidiLoopRecord> LibraryDatabase::searchMidiLoops(const std::string& query) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<MidiLoopRecord> result;
+    if (!m_db || query.empty()) return result;
+    std::string pattern = "%" + query + "%";
+    sqlite3_stmt* stmt = nullptr;
+    std::string sql = std::string("SELECT ") + kMidiLoopColumns +
+                      " FROM midi_loops WHERE name LIKE ? OR tags LIKE ? OR category LIKE ? "
+                      "ORDER BY category, name LIMIT 200";
+    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, pattern.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, pattern.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, pattern.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            MidiLoopRecord r;
+            readMidiLoopRow(stmt, r);
             result.push_back(std::move(r));
         }
     }

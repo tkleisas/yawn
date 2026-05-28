@@ -699,6 +699,29 @@ void SessionPanel::paintClipGrid(Renderer2D& r, TextMetrics& tm, float x, float 
         }
     }
 
+    // MIDI-loop drag-to-slot drop feedback: highlight the cell under
+    // the cursor. Blue/green when it's a valid MIDI-track cell, red
+    // when the track underneath can't accept a MIDI loop.
+    {
+        auto& dm = ::yawn::ui::fw2::DragManager::instance();
+        if (dm.isDraggingMidiLoop() && m_project) {
+            int dt = -1, ds = -1;
+            if (cellAtScreen(dm.currentX(), dm.currentY(), dt, ds)) {
+                float dstX = x + dt * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+                float dstY = y + ds * ::yawn::ui::Theme::kClipSlotHeight - m_scrollY;
+                const bool ok = m_project->track(dt).type == Track::Type::Midi;
+                ::yawn::ui::Color fill   = ok ? ::yawn::ui::Color{90, 200, 255, 70}
+                                              : ::yawn::ui::Color{255, 90, 90, 50};
+                ::yawn::ui::Color border = ok ? ::yawn::ui::Color{90, 200, 255, 220}
+                                              : ::yawn::ui::Color{255, 90, 90, 180};
+                r.drawRect(dstX, dstY, ::yawn::ui::Theme::kTrackWidth,
+                           ::yawn::ui::Theme::kClipSlotHeight, fill);
+                r.drawRectOutline(dstX, dstY, ::yawn::ui::Theme::kTrackWidth,
+                                  ::yawn::ui::Theme::kClipSlotHeight, border, 2.0f);
+            }
+        }
+    }
+
     r.popClip();
     (void)tm;
 }

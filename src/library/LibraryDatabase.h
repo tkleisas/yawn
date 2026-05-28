@@ -46,6 +46,24 @@ struct PresetRecord {
 const char* classifyDeviceType(const std::string& deviceId,
                                 const std::string& deviceName);
 
+// One indexed MIDI loop (.mid file) in the library. Schema v2.
+struct MidiLoopRecord {
+    int64_t     id = 0;
+    std::string path;            // absolute path on disk
+    std::string name;            // filename stem
+    std::string category;        // "drums" | "bass" | "lead" | "chord" | "misc"
+    double      lengthBeats = 0;
+    double      tempoBPM = 0;    // 0 = unknown / not detected
+    int         timeSigNum = 4;
+    int         timeSigDen = 4;
+    int         noteCount = 0;
+    int         lowestPitch = 0;
+    int         highestPitch = 0;
+    std::string tags;            // comma-separated free-form tags
+    int64_t     libraryPathId = 0;
+    int64_t     lastModified = 0;
+};
+
 struct LibraryPath {
     int64_t     id = 0;
     std::string path;
@@ -84,6 +102,17 @@ public:
     // "instrument" / "effect" returns only matching rows.
     std::vector<PresetRecord> getFilteredPresets(const std::string& deviceType);
 
+    // ── MIDI loops ─────────────────────────────────────────────────────
+    void insertOrUpdateMidiLoop(const MidiLoopRecord& rec);
+    void removeMidiLoopsForPath(int64_t libraryPathId);
+    void removeDeletedMidiLoops(int64_t libraryPathId,
+                                const std::vector<std::string>& existingPaths);
+    void clearMidiLoops();
+    std::vector<MidiLoopRecord> getAllMidiLoops();
+    std::vector<MidiLoopRecord> getMidiLoopsForPath(int64_t libraryPathId);
+    std::vector<MidiLoopRecord> getMidiLoopsByCategory(const std::string& category);
+    std::vector<MidiLoopRecord> searchMidiLoops(const std::string& query);
+
     // ── Utility ────────────────────────────────────────────────────────
     static std::filesystem::path databasePath();
 
@@ -94,7 +123,7 @@ private:
 
     // Bump when the schema needs changes. Each numeric step maps to a
     // dedicated migrate-to-vN routine in LibraryDatabase.cpp.
-    static constexpr int kSchemaVersion = 1;
+    static constexpr int kSchemaVersion = 2;
 
     sqlite3*    m_db = nullptr;
     std::mutex  m_mutex;

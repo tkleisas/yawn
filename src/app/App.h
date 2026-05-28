@@ -170,6 +170,11 @@ private:
     // 4.1; audio + MIDI targets land in 4.2).
     void applyMacroMappings();
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
+    // Load a .mid loop file into the (track, scene) slot with undo + a
+    // status toast. Shared by the Loops-tab double-click (selected slot)
+    // and the drag-to-slot drop (slot under the cursor). Returns true if
+    // the loop was loaded.
+    bool loadMidiLoopIntoSlot(const std::string& path, int track, int scene);
     void updateDetailForSelectedTrack();
     void updateDetailForReturnBus(int bus);
     void updateDetailForMaster();
@@ -309,6 +314,11 @@ private:
     // scan; this UI-thread frame counter waits for that scan to finish
     // (≥0 = active) before refreshing the Browser's preset list.
     int               m_genRescanWait = -1;
+    // One-shot Browser refresh after the initial startup FullScan
+    // finishes (≥0 = waiting). Needed because the tabs first refresh
+    // against an empty DB; without this the seeded factory loops (and
+    // any indexed presets/files) wouldn't appear until a restart.
+    int               m_initialScanRefresh = 0;
 
     // Detail panel target: what the detail panel is currently showing
     enum class DetailTarget { Track, ReturnBus, Master };
@@ -359,6 +369,16 @@ private:
     // Mouse tracking for drag
     float m_lastMouseX = 0;
     float m_lastMouseY = 0;
+
+    // MIDI-loop drag-to-slot arming. A mouse-down on a Loops-tab row
+    // arms a potential drag (stores the .mid path + down position); the
+    // global mouse-move handler promotes it to an active DragManager
+    // drag once the cursor moves past a small threshold. Cleared on
+    // mouse-up regardless of whether a drop landed.
+    std::string m_loopDragArmedPath;
+    bool        m_loopDragArmed  = false;
+    float       m_loopDragStartX = 0;
+    float       m_loopDragStartY = 0;
 
     // Track which scene/track to assign next dropped file to
     int m_nextDropScene = 0;

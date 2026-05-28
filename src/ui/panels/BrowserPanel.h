@@ -30,6 +30,7 @@
 #include "midi/MidiMonitorBuffer.h"
 #include "BrowserFilesTab.h"
 #include "BrowserPresetsTab.h"
+#include "BrowserMidiLoopsTab.h"
 #include <vector>
 #include <string>
 #include <cstdio>
@@ -41,7 +42,7 @@ namespace fw2 {
 
 class BrowserPanel : public Widget {
 public:
-    enum class Tab { Files = 0, Presets, Clip, Midi, COUNT };
+    enum class Tab { Files = 0, Presets, Loops, Clip, Midi, COUNT };
 
     BrowserPanel() {
         initFollowActionWidgets();
@@ -85,11 +86,13 @@ public:
     FollowAction* followActionPtr() const { return m_followActionPtr; }
 
     // ── Files & Presets tabs ──
-    BrowserFilesTab&   filesTab()   { return m_filesTab; }
-    BrowserPresetsTab& presetsTab() { return m_presetsTab; }
+    BrowserFilesTab&     filesTab()   { return m_filesTab; }
+    BrowserPresetsTab&   presetsTab() { return m_presetsTab; }
+    BrowserMidiLoopsTab& loopsTab()   { return m_loopsTab; }
     void setLibraryDatabase(library::LibraryDatabase* db) {
         m_filesTab.setDatabase(db);
         m_presetsTab.setDatabase(db);
+        m_loopsTab.setDatabase(db);
     }
     void setLibraryScanner(library::LibraryScanner* sc) {
         m_filesTab.setScanner(sc);
@@ -114,7 +117,8 @@ public:
     bool hasEditingWidget() const {
         return m_faBarCountKnob.isEditing() ||
                m_filesTab.isSearchEditing() ||
-               m_presetsTab.isSearchEditing();
+               m_presetsTab.isSearchEditing() ||
+               m_loopsTab.isSearchEditing();
     }
     // Keep old name for backward compat with App.cpp
     bool hasEditingKnob() const { return hasEditingWidget(); }
@@ -134,6 +138,7 @@ public:
         }
         if (m_filesTab.isSearchEditing()) return m_filesTab.forwardKeyDown(key);
         if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardKeyDown(key);
+        if (m_loopsTab.isSearchEditing()) return m_loopsTab.forwardKeyDown(key);
         return false;
     }
     bool forwardTextInput(const char* text) {
@@ -143,6 +148,7 @@ public:
         }
         if (m_filesTab.isSearchEditing()) return m_filesTab.forwardTextInput(text);
         if (m_presetsTab.isSearchEditing()) return m_presetsTab.forwardTextInput(text);
+        if (m_loopsTab.isSearchEditing()) return m_loopsTab.forwardTextInput(text);
         return false;
     }
     void cancelEditingKnobs() {
@@ -150,6 +156,7 @@ public:
             m_faBarCountKnob.endEdit(/*commit*/false);
         m_filesTab.cancelEditing();
         m_presetsTab.cancelEditing();
+        m_loopsTab.cancelEditing();
     }
 
 protected:
@@ -222,6 +229,11 @@ protected:
             return m_presetsTab.dispatchMouseDown(e);
         }
 
+        // Loops tab — fw2 sub-widget, dispatch natively.
+        if (m_activeTab == Tab::Loops) {
+            return m_loopsTab.dispatchMouseDown(e);
+        }
+
         // Clip tab: follow action widgets.
         // v2 dropdowns handle their open-state via LayerStack; when a
         // popup is open the panel doesn't see the click at all.
@@ -286,6 +298,9 @@ protected:
         if (m_activeTab == Tab::Presets) {
             return m_presetsTab.dispatchMouseMove(e);
         }
+        if (m_activeTab == Tab::Loops) {
+            return m_loopsTab.dispatchMouseMove(e);
+        }
         // fw2 drag in progress — forward translated events to the
         // captured widget via its local coordinates.
         // `cap != this` guards against the "panel self-captured →
@@ -315,6 +330,9 @@ protected:
         if (m_activeTab == Tab::Presets) {
             return m_presetsTab.dispatchMouseUp(e);
         }
+        if (m_activeTab == Tab::Loops) {
+            return m_loopsTab.dispatchMouseUp(e);
+        }
         // fw2 drag release — dispatch to captured widget; its own
         // gesture SM releases capture internally. Same `cap != this`
         // guard as the move handler above.
@@ -340,6 +358,9 @@ protected:
         }
         if (m_activeTab == Tab::Presets) {
             return m_presetsTab.dispatchScroll(e);
+        }
+        if (m_activeTab == Tab::Loops) {
+            return m_loopsTab.dispatchScroll(e);
         }
         // v2 dropdowns route wheel events to their popup automatically
         // when open (LayerStack dispatch). No per-panel glue needed.
@@ -371,7 +392,7 @@ public:
         // Tab font — use theme metrics so it tracks the UI font-scale
         // preference like the rest of the v2 chrome.
         const float tabFontSize = theme().metrics.fontSize;
-        static const char* tabNames[] = {"Files", "Presets", "Clip", "MIDI"};
+        static const char* tabNames[] = {"Files", "Presets", "Loops", "Clip", "MIDI"};
         // Compute tab widths from text
         for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i)
             m_tabWidths[i] = tm.textWidth(tabNames[i], tabFontSize) + kTabPad;
@@ -403,6 +424,11 @@ public:
             m_presetsTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
             m_presetsTab.render(ctx);
             break;
+        case Tab::Loops:
+            m_loopsTab.measure(Constraints::tight(w, bodyH), ctx);
+            m_loopsTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
+            m_loopsTab.render(ctx);
+            break;
         case Tab::Clip:
             paintClipTab(ctx, x, bodyY, w, bodyH);
             break;
@@ -425,11 +451,12 @@ private:
     static constexpr float kTabPad = 16.0f; // horizontal padding per tab
 
     Tab m_activeTab = Tab::Files;
-    float m_tabWidths[4] = {55, 55, 55, 55}; // computed in render
+    float m_tabWidths[5] = {55, 55, 55, 55, 55}; // computed in render
 
-    // Files and Presets tabs — fw2 widgets; bounds driven by our render().
-    BrowserFilesTab   m_filesTab;
-    BrowserPresetsTab m_presetsTab;
+    // Files, Presets and Loops tabs — fw2 widgets; bounds driven by our render().
+    BrowserFilesTab     m_filesTab;
+    BrowserPresetsTab   m_presetsTab;
+    BrowserMidiLoopsTab m_loopsTab;
 
     // MIDI monitor state
     midi::MidiMonitorBuffer* m_midiMonitor = nullptr;

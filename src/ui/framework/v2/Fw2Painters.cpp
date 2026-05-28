@@ -625,6 +625,7 @@ static void paintDragGhost(const DragPayload& payload,
     const char* prefix = "";
     switch (payload.kind) {
         case DragPayload::Kind::AudioClip: prefix = "Audio: "; break;
+        case DragPayload::Kind::MidiLoop:  prefix = "MIDI: ";  break;
         case DragPayload::Kind::None:      prefix = "";        break;
     }
     std::string text = std::string(prefix) +

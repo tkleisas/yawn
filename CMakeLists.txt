@@ -250,6 +250,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiClipEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/OfflineRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util/MidiFileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
     # stb_image single-TU implementation. Lives in yawn_core so every
     # downstream binary (main exe, tests, tinygltf impl) resolves the
@@ -258,6 +259,8 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/PresetNameGenerator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/MidiLoopManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presets/DrumPatterns.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryDatabase.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library/LibraryScanner.cpp
     # Slim-API stub — delegates to the main exe's VisualEngine when

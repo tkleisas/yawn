@@ -27,23 +27,32 @@ public:
     // Scan presets directory only
     void scanPresets();
 
+    // Scan MIDI loops directory + library paths for .mid files
+    void scanMidiLoops();
+
     void stop();
     bool isScanning() const { return m_running.load(); }
     float progress() const  { return m_progress.load(); }
 
     // Set the presets root directory (from PresetManager)
     void setPresetsRoot(const std::string& path) { m_presetsRoot = path; }
+    // Set the MIDI loops root (from MidiLoopManager); empty = default
+    // (%APPDATA%/YAWN/midi_loops). User-added library_paths are also
+    // walked for .mid files alongside this managed root.
+    void setMidiLoopsRoot(const std::string& path) { m_midiLoopsRoot = path; }
 
 private:
     void workerFunc();
     void doScanAudioPath(int64_t pathId, const std::filesystem::path& dir);
     void doScanPresets();
+    void doScanMidiLoops();
     AudioFileRecord probeAudioFile(const std::filesystem::path& file, int64_t pathId);
 
     static bool isAudioExtension(const std::string& ext);
 
     LibraryDatabase& m_db;
     std::string      m_presetsRoot;
+    std::string      m_midiLoopsRoot;
 
     std::thread      m_thread;
     std::atomic<bool> m_running{false};
@@ -51,7 +60,7 @@ private:
     std::atomic<float> m_progress{0.0f};
 
     struct ScanJob {
-        enum Type { AudioPath, Presets, FullScan };
+        enum Type { AudioPath, Presets, MidiLoops, FullScan };
         Type        type;
         int64_t     pathId = 0;
         std::string path;
