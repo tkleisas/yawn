@@ -34,6 +34,15 @@ struct MidiClipPlayState {
     int64_t barsPlayed = 0;
     int64_t barStartSample = 0;
     FollowAction followAction;
+
+    // Notes currently sounding on this track (note-on emitted, matching
+    // note-off not yet emitted). Maintained by scanAndEmit. Lets a
+    // mid-playback clip swap release exactly the notes the replacement
+    // clip won't keep sounding — so dropping a new clip doesn't leave
+    // the old clip's long notes hanging, while an in-place edit that
+    // keeps a note doesn't cut it. See MidiClipEngine::swapClip.
+    struct HeldNote { uint8_t channel; uint8_t pitch; };
+    std::vector<HeldNote> heldNotes;
 };
 
 // Pending MIDI clip launch (for quantized launching)
@@ -64,6 +73,19 @@ public:
 
     void scheduleStop(int trackIndex,
                       QuantizeMode quantize = QuantizeMode::NextBar);
+
+    // Re-point a track's active (and/or quantized-pending) clip from
+    // oldClip to newClip without restarting playback. No-op unless the
+    // track is currently referencing oldClip. Play position is clamped
+    // into the new clip's length so we never scan past its end. Used
+    // when the UI replaces a slot's MIDI clip in place (piano-roll edit
+    // clone-swap, or dragging a new loop onto a playing slot).
+    //
+    // Emits note-offs into `buffer` for any held notes the new clip
+    // does not keep sounding at the current position, preventing hung
+    // notes when the replacement clip lacks the old clip's notes.
+    void swapClip(int trackIndex, const midi::MidiClip* oldClip,
+                  const midi::MidiClip* newClip, midi::MidiBuffer& buffer);
 
     // Check and fire pending quantized launches. Call once per buffer.
     void checkAndFirePending();
@@ -108,7 +130,8 @@ private:
     void stopNow(int trackIndex);
     void checkFollowActions();
 
-    void scanAndEmit(midi::MidiBuffer& buffer, const midi::MidiClip* clip,
+    void scanAndEmit(MidiClipPlayState& state, midi::MidiBuffer& buffer,
+                     const midi::MidiClip* clip,
                      double scanStart, double scanEnd,
                      double offsetBeat, double samplesPerBeat, int numFrames);
 

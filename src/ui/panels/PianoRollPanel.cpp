@@ -439,20 +439,32 @@ bool PianoRollPanel::onMouseUp(MouseEvent& e) {
         return true;
     }
     if (m_dragMode == Drag::Move && !m_selectedNotes.empty() && m_clip) {
+        // The per-frame Move drag rewrote the selected notes' fields in
+        // place (safe — no realloc). On release we re-sort by removing
+        // and re-inserting them, which is structural, so it goes through
+        // editClip's clone-swap. Read the moved notes off the live clip
+        // first, then rebuild the selection against the new clip.
         std::vector<midi::MidiNote> notes;
         notes.reserve(m_selectedNotes.size());
         std::vector<int> indices(m_selectedNotes.begin(), m_selectedNotes.end());
         for (auto& n_idx : indices)
             notes.push_back(m_clip->note(n_idx));
-        for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i)
-            m_clip->removeNote(indices[i]);
+        bool extended = false;
+        editClip([&](midi::MidiClip& c) {
+            for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i)
+                c.removeNote(indices[i]);
+            for (auto& n : notes) {
+                c.addNote(n);
+                double end = n.startBeat + n.duration;
+                if (end > c.lengthBeats()) { c.setLengthBeats(end); extended = true; }
+            }
+        });
         m_selectedNotes.clear();
         for (auto& n : notes) {
-            m_clip->addNote(n);
             int found = findNote(n.startBeat, n.pitch);
             if (found >= 0) m_selectedNotes.insert(found);
-            autoExtend(n);
         }
+        if (extended && m_onLengthChanged) m_onLengthChanged();
     } else if (m_dragMode == Drag::RubberBand && m_clip) {
         finalizeRubberBand();
     }
@@ -514,10 +526,12 @@ bool PianoRollPanel::handleKeyDown(int key, bool ctrl) {
         if (!m_selectedNotes.empty() && m_clip) {
             std::vector<int> indices(m_selectedNotes.rbegin(), m_selectedNotes.rend());
             m_selectedNotes.clear();
-            for (int idx : indices) {
-                if (idx >= 0 && idx < m_clip->noteCount())
-                    m_clip->removeNote(idx);
-            }
+            editClip([&](midi::MidiClip& c) {
+                for (int idx : indices) {
+                    if (idx >= 0 && idx < c.noteCount())
+                        c.removeNote(idx);
+                }
+            });
             return true;
         }
         return false;

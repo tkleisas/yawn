@@ -338,3 +338,76 @@ TEST_F(MidiClipEngineTest, LoopRespectsLoopStartBeat) {
     // Note 72 at beat 2.5 should fire many times (once per loop)
     EXPECT_GE(noteOn72, 10);
 }
+
+// Hot-swapping a clip mid-playback must release any of the old clip's
+// notes that are still sounding but that the replacement clip does not
+// keep alive — otherwise their note-off (which lived in the now-gone
+// clip) never fires and the note hangs. This is the "drop a loop while
+// long notes are playing" case.
+TEST_F(MidiClipEngineTest, SwapReleasesHungNotesAbsentFromNewClip) {
+    MidiClip a;
+    a.setLengthBeats(8.0);
+    a.setLoop(true);
+    a.addNote({0.0, 8.0, 60, 0, 32000, 0, 0, 0, 0});  // long held note, pitch 60
+
+    m_engine.scheduleClip(0, 0, &a, QuantizeMode::None);
+    m_engine.checkAndFirePending();
+    m_transport.play();
+
+    m_engine.process(m_buffers, 256);  // emits noteOn 60; it stays held
+    bool on60 = false, earlyOff60 = false;
+    for (int i = 0; i < m_buffers[0].count(); ++i) {
+        const auto& m = m_buffers[0][i];
+        if (m.note != 60) continue;
+        if (m.type == MidiMessage::Type::NoteOn)  on60 = true;
+        if (m.type == MidiMessage::Type::NoteOff) earlyOff60 = true;
+    }
+    ASSERT_TRUE(on60);
+    ASSERT_FALSE(earlyOff60) << "note 60 should still be held before the swap";
+
+    m_buffers[0].clear();
+
+    MidiClip b;
+    b.setLengthBeats(8.0);
+    b.setLoop(true);
+    b.addNote({0.0, 1.0, 64, 0, 32000, 0, 0, 0, 0});  // different pitch
+
+    m_engine.swapClip(0, &a, &b, m_buffers[0]);
+
+    bool off60 = false;
+    for (int i = 0; i < m_buffers[0].count(); ++i) {
+        const auto& m = m_buffers[0][i];
+        if (m.type == MidiMessage::Type::NoteOff && m.note == 60) off60 = true;
+    }
+    EXPECT_TRUE(off60) << "hung note 60 must be released on swap";
+}
+
+// The flip side: if the replacement clip still sounds the note at the
+// current position, the swap must NOT cut it — an edit elsewhere should
+// leave a sustaining note untouched.
+TEST_F(MidiClipEngineTest, SwapKeepsNotesNewClipStillSustains) {
+    MidiClip a;
+    a.setLengthBeats(8.0);
+    a.setLoop(true);
+    a.addNote({0.0, 8.0, 60, 0, 32000, 0, 0, 0, 0});
+
+    m_engine.scheduleClip(0, 0, &a, QuantizeMode::None);
+    m_engine.checkAndFirePending();
+    m_transport.play();
+    m_engine.process(m_buffers, 256);
+    m_buffers[0].clear();
+
+    MidiClip b;
+    b.setLengthBeats(8.0);
+    b.setLoop(true);
+    b.addNote({0.0, 8.0, 60, 0, 40000, 0, 0, 0, 0});  // same pitch still spanning pos
+
+    m_engine.swapClip(0, &a, &b, m_buffers[0]);
+
+    bool off60 = false;
+    for (int i = 0; i < m_buffers[0].count(); ++i) {
+        const auto& m = m_buffers[0][i];
+        if (m.type == MidiMessage::Type::NoteOff && m.note == 60) off60 = true;
+    }
+    EXPECT_FALSE(off60) << "note 60 still sustained by new clip; must not be cut";
+}

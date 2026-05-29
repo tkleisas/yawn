@@ -32,6 +32,56 @@ void MidiClipEngine::scheduleStop(int trackIndex, QuantizeMode quantize) {
     }
 }
 
+void MidiClipEngine::swapClip(int trackIndex, const midi::MidiClip* oldClip,
+                              const midi::MidiClip* newClip,
+                              midi::MidiBuffer& buffer) {
+    if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
+    if (!newClip || !oldClip) return;
+
+    // Re-point active playback if it's the clip being replaced. We
+    // compare pointers only (oldClip is not dereferenced — it may be
+    // sitting in the clip graveyard awaiting purge).
+    auto& state = m_tracks[trackIndex];
+    if (state.clip == oldClip) {
+        state.clip = newClip;
+        double newLen = newClip->lengthBeats();
+        if (newLen > 0.0 && state.playPositionBeats >= newLen) {
+            state.playPositionBeats = newClip->loop()
+                ? std::fmod(state.playPositionBeats, newLen)
+                : newLen;
+        }
+
+        // Release held notes the new clip doesn't keep sounding at the
+        // current position — otherwise the old clip's in-flight notes
+        // (whose note-offs lived in the now-replaced clip) hang forever.
+        // Notes the new clip still sustains here are left untouched so
+        // an edit that preserves a note doesn't audibly cut it; the new
+        // clip's scan emits their note-off at the right beat.
+        double pos = state.playPositionBeats;
+        m_noteIndices.clear();
+        newClip->getActiveNotesAt(pos, m_noteIndices);
+        auto soundsInNew = [&](uint8_t ch, uint8_t pitch) {
+            for (int idx : m_noteIndices) {
+                const auto& nn = newClip->note(idx);
+                if (nn.channel == ch && nn.pitch == pitch) return true;
+            }
+            return false;
+        };
+        for (auto it = state.heldNotes.begin(); it != state.heldNotes.end(); ) {
+            if (!soundsInNew(it->channel, it->pitch)) {
+                buffer.addMessage(midi::MidiMessage::noteOff(it->channel, it->pitch, 0, 0));
+                it = state.heldNotes.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // A quantized launch may still be queued against the old pointer.
+    if (m_pending[trackIndex].valid && m_pending[trackIndex].clip == oldClip)
+        m_pending[trackIndex].clip = newClip;
+}
+
 void MidiClipEngine::checkAndFirePending() {
     if (!m_transport) return;
 
@@ -144,24 +194,24 @@ void MidiClipEngine::process(midi::MidiBuffer* trackMidiBuffers, int numFrames) 
         // Handle looping: may need to scan across loop boundary
         if (clip->loop() && bufEndBeat > clipLen) {
             // First segment: bufStartBeat .. clipLen
-            scanAndEmit(trackMidiBuffers[t], clip, bufStartBeat, clipLen,
+            scanAndEmit(state, trackMidiBuffers[t], clip, bufStartBeat, clipLen,
                         bufStartBeat, samplesPerBeat, numFrames);
             // Second segment: wrap to loopStart (not 0)
             double loopLen = clipLen - loopStart;
             if (loopLen <= 0) loopLen = clipLen; // safety
             double overshoot = bufEndBeat - clipLen;
-            scanAndEmit(trackMidiBuffers[t], clip, loopStart,
+            scanAndEmit(state, trackMidiBuffers[t], clip, loopStart,
                         loopStart + std::min(overshoot, loopLen),
                         bufStartBeat - clipLen + loopStart, samplesPerBeat, numFrames);
 
             state.playPositionBeats = loopStart + std::fmod(overshoot, loopLen);
         } else if (!clip->loop() && bufEndBeat > clipLen) {
             // Play to end then stop
-            scanAndEmit(trackMidiBuffers[t], clip, bufStartBeat, clipLen,
+            scanAndEmit(state, trackMidiBuffers[t], clip, bufStartBeat, clipLen,
                         bufStartBeat, samplesPerBeat, numFrames);
             stopNow(t);
         } else {
-            scanAndEmit(trackMidiBuffers[t], clip, bufStartBeat, bufEndBeat,
+            scanAndEmit(state, trackMidiBuffers[t], clip, bufStartBeat, bufEndBeat,
                         bufStartBeat, samplesPerBeat, numFrames);
             state.playPositionBeats = bufEndBeat;
         }
@@ -180,6 +230,7 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
     state.playPositionBeats = 0.0;
     state.active = true;
     state.stopping = false;
+    state.heldNotes.clear();
     state.sceneIndex = sceneIndex;
     state.clipAutomation = clipAutomation;
     state.followAction = followAction;
@@ -193,16 +244,34 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
 
 void MidiClipEngine::stopNow(int trackIndex) {
     auto& state = m_tracks[trackIndex];
-    // Note-off cleanup is tracked via m_activeNotes
-    // The AudioEngine should call allNotesOff() for this track
+    // Held-note bookkeeping is cleared here; the AudioEngine flushes the
+    // actual note-offs for this track (all-notes-off) on stop.
     state.active = false;
     state.stopping = false;
     // Keep state.clip so emitClipStates() continues reporting playing=false
     // to the UI (prevents stale "playing" state blocking relaunch).
     state.playPositionBeats = 0.0;
+    state.heldNotes.clear();
 }
 
-void MidiClipEngine::scanAndEmit(midi::MidiBuffer& buffer,
+namespace {
+// Track which (channel, pitch) notes are currently sounding so a clip
+// hot-swap can release exactly the ones the replacement won't keep.
+void addHeld(std::vector<MidiClipPlayState::HeldNote>& held,
+             uint8_t ch, uint8_t pitch) {
+    for (auto& h : held)
+        if (h.channel == ch && h.pitch == pitch) return;  // already on
+    held.push_back({ch, pitch});
+}
+void removeHeld(std::vector<MidiClipPlayState::HeldNote>& held,
+                uint8_t ch, uint8_t pitch) {
+    for (auto it = held.begin(); it != held.end(); ++it)
+        if (it->channel == ch && it->pitch == pitch) { held.erase(it); return; }
+}
+} // namespace
+
+void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
+                                 midi::MidiBuffer& buffer,
                                  const midi::MidiClip* clip,
                                  double scanStart, double scanEnd,
                                  double offsetBeat, double samplesPerBeat,
@@ -241,6 +310,7 @@ void MidiClipEngine::scanAndEmit(midi::MidiBuffer& buffer,
 
             buffer.addMessage(
                 midi::MidiMessage::noteOff(n.channel, n.pitch, relVel7, frame));
+            removeHeld(state.heldNotes, n.channel, n.pitch);
         }
         // Early exit: if note starts after scanEnd, no more note-offs possible
         if (n.startBeat >= scanEnd) break;
@@ -262,6 +332,7 @@ void MidiClipEngine::scanAndEmit(midi::MidiBuffer& buffer,
 
         buffer.addMessage(
             midi::MidiMessage::noteOn(n.channel, n.pitch, vel7, frame));
+        addHeld(state.heldNotes, n.channel, n.pitch);
     }
 
     // --- CC Events ---

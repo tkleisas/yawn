@@ -172,6 +172,20 @@ struct StopMidiClipMsg {
     int trackIndex;
 };
 
+// Re-point a playing (or quantized-pending) MIDI clip to a replacement
+// clip object WITHOUT restarting playback. Sent when the UI replaces a
+// slot's MIDI clip in place — piano-roll edits (which clone-and-swap so
+// the audio thread never reads a clip whose note vector is being
+// mutated) and dragging a new loop onto a playing slot. The old clip
+// object is kept alive in the project clip graveyard long enough for
+// the audio thread to process this and stop referencing it.
+// See MidiClipEngine::swapClip.
+struct SwapMidiClipMsg {
+    int trackIndex;
+    const midi::MidiClip* oldClip;   // pointer identity to match (not dereferenced)
+    const midi::MidiClip* newClip;   // replacement, owned by the project slot
+};
+
 // Recording
 struct TransportRecordMsg {
     bool arm;
@@ -341,6 +355,7 @@ using AudioCommand = std::variant<
     SendMidiToTrackMsg,
     LaunchMidiClipMsg,
     StopMidiClipMsg,
+    SwapMidiClipMsg,
     SetClipAutoRecordDisabledMsg,
     TransportRecordMsg,
     TransportSetCountInMsg,

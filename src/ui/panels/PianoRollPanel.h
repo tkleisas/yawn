@@ -225,6 +225,15 @@ public:
     using LengthChangedCallback = std::function<void()>;
     void setOnLengthChanged(LengthChangedCallback cb) { m_onLengthChanged = std::move(cb); }
 
+    // Host hook for structural edits. Given the clip currently being
+    // edited (by pointer identity) and a mutated clone, the host swaps
+    // the clone in as the new live clip and returns its pointer (or
+    // nullptr if it couldn't be located). See editClip().
+    using ReplaceClipCallback =
+        std::function<midi::MidiClip*(const midi::MidiClip*,
+                                      std::unique_ptr<midi::MidiClip>)>;
+    void setOnReplaceClip(ReplaceClipCallback cb) { m_onReplaceClip = std::move(cb); }
+
     void setTransport(const audio::Transport* t) { m_transport = t; }
 
     void setPlayBeat(double beat, bool playing) {
@@ -543,6 +552,10 @@ private:
         double loopStart = m_clip->loopStartBeat();
         double len = m_clip->lengthBeats();
 
+        // All clip ops are structural (insert/erase/length), so they
+        // run inside editClip on a clone that is then swapped in as the
+        // new live clip. Selection is rebuilt afterwards against the
+        // new m_clip via findNote (Dup is the only op that re-selects).
         switch (op) {
         case 0: { // Dup — duplicate selected notes
             if (m_selectedNotes.empty()) break;
@@ -556,11 +569,16 @@ private:
             }
             double shift = maxEndBeat - minBeat;
             if (shift <= 0) shift = snapVal();
+            for (auto& n : copies) n.startBeat += shift;  // place duplicates
+            editClip([&](midi::MidiClip& c) {
+                for (auto& n : copies) {
+                    c.addNote(n);
+                    double end = n.startBeat + n.duration;
+                    if (end > c.lengthBeats()) c.setLengthBeats(end);
+                }
+            });
             m_selectedNotes.clear();
             for (auto& n : copies) {
-                n.startBeat += shift;
-                m_clip->addNote(n);
-                autoExtend(n);
                 int found = findNote(n.startBeat, n.pitch);
                 if (found >= 0) m_selectedNotes.insert(found);
             }
@@ -577,18 +595,22 @@ private:
                     copies.push_back(n);
                 }
             }
-            for (auto& n : copies) m_clip->addNote(n);
-            m_clip->setLengthBeats(len + regionLen);
+            editClip([&](midi::MidiClip& c) {
+                for (auto& n : copies) c.addNote(n);
+                c.setLengthBeats(len + regionLen);
+            });
             m_selectedNotes.clear();
             break;
         }
         case 2: { // /2 — halve clip
             double newLen = loopStart + (len - loopStart) * 0.5;
-            for (int i = m_clip->noteCount() - 1; i >= 0; --i) {
-                if (m_clip->note(i).startBeat >= newLen)
-                    m_clip->removeNote(i);
-            }
-            m_clip->setLengthBeats(newLen);
+            editClip([&](midi::MidiClip& c) {
+                for (int i = c.noteCount() - 1; i >= 0; --i) {
+                    if (c.note(i).startBeat >= newLen)
+                        c.removeNote(i);
+                }
+                c.setLengthBeats(newLen);
+            });
             m_selectedNotes.clear();
             break;
         }
@@ -597,50 +619,56 @@ private:
             std::vector<midi::MidiNote> notes;
             for (int i = 0; i < count; ++i)
                 notes.push_back(m_clip->note(i));
-            while (m_clip->noteCount() > 0)
-                m_clip->removeNote(m_clip->noteCount() - 1);
-            for (auto& n : notes) {
-                n.startBeat = len - (n.startBeat + n.duration);
-                if (n.startBeat < 0) n.startBeat = 0;
-                m_clip->addNote(n);
-            }
+            editClip([&](midi::MidiClip& c) {
+                while (c.noteCount() > 0)
+                    c.removeNote(c.noteCount() - 1);
+                for (auto& n : notes) {
+                    n.startBeat = len - (n.startBeat + n.duration);
+                    if (n.startBeat < 0) n.startBeat = 0;
+                    c.addNote(n);
+                }
+            });
             m_selectedNotes.clear();
             break;
         }
         case 4: // Clr — clear all notes
-            while (m_clip->noteCount() > 0)
-                m_clip->removeNote(m_clip->noteCount() - 1);
+            editClip([&](midi::MidiClip& c) {
+                while (c.noteCount() > 0)
+                    c.removeNote(c.noteCount() - 1);
+            });
             m_selectedNotes.clear();
             break;
         case 5: { // Set 1.1.1 here — crop clip to loop start
             if (loopStart <= 0) break;
-            // Remove notes that end before loop start
-            for (int i = m_clip->noteCount() - 1; i >= 0; --i) {
-                const auto& n = m_clip->note(i);
-                if (n.startBeat + n.duration <= loopStart)
-                    m_clip->removeNote(i);
-            }
-            // Shift all remaining notes back by loopStart
-            for (int i = 0; i < m_clip->noteCount(); ++i) {
-                auto& n = m_clip->note(i);
-                n.startBeat = std::max(0.0, n.startBeat - loopStart);
-            }
-            // Shift CC events: collect, remove, re-add shifted
-            std::vector<midi::MidiCCEvent> keptCCs;
-            for (int i = 0; i < m_clip->ccCount(); ++i) {
-                auto cc = m_clip->ccEvent(i);
-                if (cc.beat >= loopStart) {
-                    cc.beat -= loopStart;
-                    keptCCs.push_back(cc);
+            editClip([&](midi::MidiClip& c) {
+                // Remove notes that end before loop start
+                for (int i = c.noteCount() - 1; i >= 0; --i) {
+                    const auto& n = c.note(i);
+                    if (n.startBeat + n.duration <= loopStart)
+                        c.removeNote(i);
                 }
-            }
-            while (m_clip->ccCount() > 0)
-                m_clip->removeCC(m_clip->ccCount() - 1);
-            for (auto& cc : keptCCs)
-                m_clip->addCC(cc);
-            // Adjust clip length and reset loop start
-            m_clip->setLengthBeats(std::max(0.25, len - loopStart));
-            m_clip->setLoopStartBeat(0);
+                // Shift all remaining notes back by loopStart
+                for (int i = 0; i < c.noteCount(); ++i) {
+                    auto& n = c.note(i);
+                    n.startBeat = std::max(0.0, n.startBeat - loopStart);
+                }
+                // Shift CC events: collect, remove, re-add shifted
+                std::vector<midi::MidiCCEvent> keptCCs;
+                for (int i = 0; i < c.ccCount(); ++i) {
+                    auto cc = c.ccEvent(i);
+                    if (cc.beat >= loopStart) {
+                        cc.beat -= loopStart;
+                        keptCCs.push_back(cc);
+                    }
+                }
+                while (c.ccCount() > 0)
+                    c.removeCC(c.ccCount() - 1);
+                for (auto& cc : keptCCs)
+                    c.addCC(cc);
+                // Adjust clip length and reset loop start
+                c.setLengthBeats(std::max(0.25, len - loopStart));
+                c.setLoopStartBeat(0);
+            });
             m_selectedNotes.clear();
             break;
         }
@@ -753,6 +781,36 @@ private:
         return std::abs(mx - rx) < 6.0f;
     }
 
+    // Apply a STRUCTURAL mutation (note/CC insert or erase, length
+    // change) to the edited clip without racing the audio thread. The
+    // audio thread reads the live clip's note vector every buffer; an
+    // in-place insert/erase reallocates or shifts it under the reader →
+    // use-after-free (the crash in MidiClipEngine::scanAndEmit). So we
+    // mutate a private clone and hand it to the host, which swaps it in
+    // as the new live clip (old one retired via the clip graveyard) and
+    // re-points the audio engine. m_clip is updated to the new live
+    // clip, preserving the pointer-identity coupling App relies on
+    // (stale-clip sweep, playhead forwarding).
+    //
+    // In a host-less build (unit tests, no callback wired) we fall back
+    // to mutating in place — there is no audio thread to race there.
+    //
+    // NOTE: continuous drag handlers that only rewrite fields of
+    // existing notes (move/resize/velocity) do NOT go through here —
+    // field writes can't reallocate the vector, so they can't fault.
+    template <class Fn>
+    void editClip(Fn&& fn) {
+        if (!m_clip) return;
+        if (m_onReplaceClip) {
+            std::unique_ptr<midi::MidiClip> nc = m_clip->clone();
+            fn(*nc);
+            if (midi::MidiClip* live = m_onReplaceClip(m_clip, std::move(nc)))
+                m_clip = live;
+        } else {
+            fn(*m_clip);
+        }
+    }
+
     void createNote(double beat, int pitch) {
         if (!m_clip || pitch < 0 || pitch > 127) return;
         midi::MidiNote n{};
@@ -760,16 +818,21 @@ private:
         n.duration  = snapVal();
         n.pitch     = static_cast<uint8_t>(pitch);
         n.velocity  = kDefVel;
-        m_clip->addNote(n);
+        bool extended = false;
+        editClip([&](midi::MidiClip& c) {
+            c.addNote(n);
+            double end = n.startBeat + n.duration;
+            if (end > c.lengthBeats()) { c.setLengthBeats(end); extended = true; }
+        });
         int found = findNote(beat, pitch);
         m_selectedNotes.clear();
         if (found >= 0) m_selectedNotes.insert(found);
-        autoExtend(n);
+        if (extended && m_onLengthChanged) m_onLengthChanged();
     }
 
     void deleteNote(int idx) {
         if (!m_clip || idx < 0 || idx >= m_clip->noteCount()) return;
-        m_clip->removeNote(idx);
+        editClip([&](midi::MidiClip& c) { c.removeNote(idx); });
         // Renumber selection: remove idx, shift down indices > idx
         std::set<int> updated;
         for (int s : m_selectedNotes) {
@@ -849,6 +912,7 @@ private:
     int   m_trackIdx  = 0;
     Source m_source   = Source::Session;
     LengthChangedCallback m_onLengthChanged;
+    ReplaceClipCallback   m_onReplaceClip;
     bool  m_open      = false;
     double m_playBeat  = 0.0;
     bool  m_midiPlaying = false;

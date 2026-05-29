@@ -4028,17 +4028,20 @@ bool App::loadMidiLoopIntoSlot(const std::string& path, int track, int scene) {
     std::shared_ptr<midi::MidiClip> prevSnap =
         prev ? std::shared_ptr<midi::MidiClip>(prev->clone()) : nullptr;
 
-    m_project.setMidiClip(track, scene, std::move(clip));
+    // setMidiClipLive re-points the audio engine if this slot is playing,
+    // so dropping a new loop onto a live slot swaps immediately instead
+    // of waiting for a stop/relaunch.
+    setMidiClipLive(track, scene, std::move(clip));
     markDirty();
     m_undoManager.push({"Load MIDI Loop",
         [this, track, scene, prevSnap] {
-            if (prevSnap) m_project.setMidiClip(track, scene, prevSnap->clone());
+            if (prevSnap) setMidiClipLive(track, scene, prevSnap->clone());
             else if (auto* s = m_project.getSlot(track, scene))
                 m_project.graveyardSlotClips(*s);
             markDirty();
         },
         [this, track, scene, newSnap] {
-            m_project.setMidiClip(track, scene, newSnap->clone());
+            setMidiClipLive(track, scene, newSnap->clone());
             markDirty();
         }, ""});
     m_toastManager.show("Loaded " + loopName, 2.0f,
@@ -4384,6 +4387,14 @@ bool App::init() {
     buildWidgetTree();
     // v1 m_aboutDialog retired — fw2 About dialog is text-only for now.
     m_pianoRoll->setTransport(&m_audioEngine.transport());
+    // Piano-roll structural edits never mutate the live clip in place
+    // (that races the audio thread's note scan → UAF). They clone, edit
+    // the clone, and ask us to swap it in atomically.
+    m_pianoRoll->setOnReplaceClip(
+        [this](const midi::MidiClip* oldClip,
+               std::unique_ptr<midi::MidiClip> newClip) {
+            return replaceEditedMidiClip(oldClip, std::move(newClip));
+        });
     m_sessionPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_mixerPanel->init(&m_project, &m_audioEngine, &m_midiEngine, &m_undoManager);
     m_mixerPanel->setLearnManager(&m_midiLearnManager);
@@ -7905,12 +7916,17 @@ void App::update() {
                     if (ti >= 0 && si >= 0 && (!data.notes.empty() || !data.ccs.empty())) {
                         auto* existingClip = m_project.getMidiClip(ti, si);
                         if (data.overdub && existingClip) {
+                            // Overdub onto a clip that may be playing — mutating
+                            // it in place would race the audio thread's note
+                            // scan, so merge into a clone and swap it in.
+                            auto merged = existingClip->clone();
                             for (auto& note : data.notes)
-                                existingClip->addNote(note);
+                                merged->addNote(note);
                             for (auto& cc : data.ccs)
-                                existingClip->addCC(cc);
-                            if (data.lengthBeats > existingClip->lengthBeats())
-                                existingClip->setLengthBeats(data.lengthBeats);
+                                merged->addCC(cc);
+                            if (data.lengthBeats > merged->lengthBeats())
+                                merged->setLengthBeats(data.lengthBeats);
+                            setMidiClipLive(ti, si, std::move(merged));
                         } else {
                             auto* recSlot0 = m_project.getSlot(ti, si);
                             const bool shouldLoop = recSlot0 ? recSlot0->recordLoop : true;
@@ -8600,6 +8616,50 @@ void App::syncArrangementClipsToEngine(int trackIdx) {
         refs.push_back(std::move(ref));
     }
     m_audioEngine.arrangementPlayback().submitTrackClips(trackIdx, std::move(refs));
+}
+
+midi::MidiClip* App::setMidiClipLive(int track, int scene,
+                                     std::unique_ptr<midi::MidiClip> newClip) {
+    const midi::MidiClip* oldPtr = m_project.getMidiClip(track, scene);
+    midi::MidiClip* np = m_project.setMidiClip(track, scene, std::move(newClip));
+    if (oldPtr && np)
+        m_audioEngine.sendCommand(audio::SwapMidiClipMsg{track, oldPtr, np});
+    return np;
+}
+
+midi::MidiClip* App::replaceEditedMidiClip(const midi::MidiClip* oldClip,
+                                           std::unique_ptr<midi::MidiClip> newClip) {
+    if (!oldClip || !newClip) return nullptr;
+
+    // Session slots — setMidiClip graveyards the previous clip (so the
+    // audio thread's cached pointer stays valid until it processes the
+    // swap), then SwapMidiClipMsg re-points a playing/pending track.
+    for (int t = 0; t < m_project.numTracks(); ++t) {
+        for (int s = 0; s < m_project.numScenes(); ++s) {
+            if (m_project.getMidiClip(t, s) != oldClip) continue;
+            midi::MidiClip* np = m_project.setMidiClip(t, s, std::move(newClip));
+            m_audioEngine.sendCommand(audio::SwapMidiClipMsg{t, oldClip, np});
+            markDirty();
+            return np;
+        }
+    }
+
+    // Arrangement clips — playback holds shared_ptr copies submitted via
+    // a mutex-guarded queue, so swapping the shared_ptr and re-submitting
+    // keeps the old data alive for the audio thread until it adopts the
+    // new list.
+    for (int t = 0; t < m_project.numTracks(); ++t) {
+        for (auto& ac : m_project.track(t).arrangementClips) {
+            if (ac.midiClip.get() != oldClip) continue;
+            ac.midiClip = std::shared_ptr<midi::MidiClip>(std::move(newClip));
+            if (m_project.track(t).arrangementActive)
+                syncArrangementClipsToEngine(t);
+            markDirty();
+            return ac.midiClip.get();
+        }
+    }
+
+    return nullptr;
 }
 
 void SDLCALL App::onOpenFolderResult(void* userdata, const char* const* filelist, int /*filter*/) {

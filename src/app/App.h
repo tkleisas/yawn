@@ -187,6 +187,24 @@ private:
     void switchToView(ViewMode mode);
     void syncArrangementClipsToEngine(int trackIdx);
 
+    // Atomically replace the live MIDI clip identified by `oldClip`
+    // (located in a session slot or an arrangement clip) with `newClip`,
+    // retiring the old object through the clip graveyard and live-
+    // re-pointing the audio engine so a playing clip keeps going without
+    // a restart. Returns the new live pointer (owned by the model), or
+    // nullptr if `oldClip` was not found. Backs the piano-roll edit
+    // clone-swap (PianoRollPanel::setOnReplaceClip).
+    midi::MidiClip* replaceEditedMidiClip(const midi::MidiClip* oldClip,
+                                          std::unique_ptr<midi::MidiClip> newClip);
+
+    // Install a MIDI clip into a known (track, scene) slot, retiring the
+    // previous clip via the graveyard and live-re-pointing the audio
+    // engine if that slot is currently playing (so swapping a loop on a
+    // playing slot takes effect immediately instead of on next launch).
+    // Caller handles markDirty/undo. Returns the new live pointer.
+    midi::MidiClip* setMidiClipLive(int track, int scene,
+                                    std::unique_ptr<midi::MidiClip> newClip);
+
     // Project file operations
     void newProject();
     void openProject();

@@ -1373,6 +1373,11 @@ void AudioEngine::processCommands() {
                         m_clipAutoRecordDisabled[msg.trackIndex] = msg.disabled;
                 }
             }
+            else if constexpr (std::is_same_v<T, SwapMidiClipMsg>) {
+                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
+                    m_midiClipEngine.swapClip(msg.trackIndex, msg.oldClip, msg.newClip,
+                                              m_trackMidiBuffers[msg.trackIndex]);
+            }
             else if constexpr (std::is_same_v<T, StopMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_midiClipEngine.scheduleStop(msg.trackIndex, QuantizeMode::NextBar);
