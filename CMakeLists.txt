@@ -257,7 +257,9 @@ if(YAWN_HAS_BASIC_PITCH)
     # the embedded 230 KB model array + Eigen Tensor TUs blow the default
     # object-section limit (the main exe already uses it).
     if(MSVC)
-        target_compile_options(basicpitch PRIVATE /w /bigobj)
+        # /W0 matches the `nam` lib's treatment of vendored code; /bigobj
+        # for the embedded model array + Eigen Tensor TUs.
+        target_compile_options(basicpitch PRIVATE /W0 /bigobj)
     else()
         target_compile_options(basicpitch PRIVATE -w)
     endif()
