@@ -2,6 +2,7 @@
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
 #include "visual/VisualModBus.h"
+#include "transcribe/AudioToMidi.h"
 #include "ui/framework/v2/Fw2Painters.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
@@ -2778,6 +2779,42 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         audio::SetTrackArrActiveMsg{trackIndex, true});
                 }
                 markDirty();
+            }));
+        items.push_back(separator());
+    }
+
+    // "Convert to MIDI" — Basic Pitch audio-to-MIDI. Transcribes this
+    // audio clip into a new MIDI track in the same scene. Only shown when
+    // the feature is compiled in (YAWN_HAS_BASIC_PITCH). Runs
+    // synchronously; fast for typical clip-length audio (threading is a
+    // future refinement for long takes).
+    if (canSendAudio && transcribe::available()) {
+        items.push_back(item("Convert to MIDI (Basic Pitch)",
+            [this, trackIndex, sceneIndex]() {
+                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                if (!s || !s->audioClip || !s->audioClip->buffer) return;
+                const double sr  = m_audioEngine.sampleRate();
+                const double bpm = m_audioEngine.transport().bpm();
+                auto clip = transcribe::audioToMidi(*s->audioClip->buffer, sr, bpm);
+                if (!clip) {
+                    m_toastManager.show("Audio→MIDI: no notes detected",
+                                        2.5f, ui::ToastManager::Severity::Warn);
+                    return;
+                }
+                const std::string srcName = s->audioClip->name.empty()
+                                             ? "Audio" : s->audioClip->name;
+                clip->setName(srcName + " MIDI");
+                // New MIDI track (with a default synth) in the same scene.
+                const int idx = m_project.numTracks();
+                m_project.addTrack(srcName + " MIDI", Track::Type::Midi);
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
+                m_audioEngine.setInstrument(idx,
+                    std::make_unique<instruments::SubtractiveSynth>());
+                m_project.setMidiClip(idx, sceneIndex, std::move(clip));
+                markDirty();
+                m_toastManager.show(
+                    "Audio→MIDI: transcribed to track " + std::to_string(idx + 1),
+                    3.0f, ui::ToastManager::Severity::Info);
             }));
         items.push_back(separator());
     }

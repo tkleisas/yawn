@@ -27,5 +27,12 @@ target_link_libraries(yawn_tests PRIVATE
     GTest::gtest_main
 )
 
+# Basic Pitch audio-to-MIDI smoke test — link the inference lib + flag
+# so test_BasicPitch.cpp can run real ONNX inference on a synthetic tone.
+if(YAWN_HAS_BASIC_PITCH)
+    target_link_libraries(yawn_tests PRIVATE basicpitch)
+    target_compile_definitions(yawn_tests PRIVATE YAWN_HAS_BASIC_PITCH=1)
+endif()
+
 include(GoogleTest)
 gtest_discover_tests(yawn_tests)

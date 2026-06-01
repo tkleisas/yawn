@@ -233,6 +233,32 @@ if(YAWN_HAS_NAM)
     endif()
 endif()
 
+# Basic Pitch (Spotify) audio-to-MIDI — vendored MIT C++ port adapted
+# from sevagh/basicpitch.cpp (third_party/basicpitch/). Built as its own
+# C++20 static lib: it uses <ranges> + Eigen's unsupported Tensor module
+# + ONNX Runtime. A plain-struct facade (bp_api.h) keeps all of that out
+# of the rest of YAWN (which stays C++17), mirroring the NAM split. The
+# 226 KB ONNX model is embedded (basic_pitch_model.h) so there's no
+# runtime asset path to resolve.
+if(YAWN_HAS_BASIC_PITCH)
+    add_library(basicpitch STATIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/basicpitch/ort_inference.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/basicpitch/midi_notes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/basicpitch/bp_api.cpp)
+    set_target_properties(basicpitch PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(basicpitch
+        PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/basicpitch
+        PRIVATE ${eigen_SOURCE_DIR} ${ORT_INCLUDE_DIR})
+    target_link_libraries(basicpitch PRIVATE ${ORT_SHARED_LIB})
+    # Vendored third-party code — silence its warnings.
+    if(NOT MSVC)
+        target_compile_options(basicpitch PRIVATE -w)
+    endif()
+endif()
+
 # Collect sources
 file(GLOB_RECURSE YAWN_SOURCES
     src/*.cpp
@@ -540,6 +566,17 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glad
     lua54
 )
+
+# Basic Pitch audio-to-MIDI — link the C++20 static lib + its ONNX
+# Runtime, define the feature flag, and point the runtime loader at the
+# fetched ORT .so via rpath (dev builds run from the build tree; a
+# distribution step would copy libonnxruntime.so beside the binary).
+if(YAWN_HAS_BASIC_PITCH)
+    target_link_libraries(${PROJECT_NAME} PRIVATE basicpitch ${ORT_SHARED_LIB})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_BASIC_PITCH=1)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        BUILD_RPATH "${ORT_LIB_DIR}")
+endif()
 
 if(YAWN_HAS_VIDEO)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_TARGET})

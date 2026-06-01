@@ -230,7 +230,15 @@ option(YAWN_HAS_LINK "Enable Ableton Link support (network beat/tempo sync)" ON)
 # translation unit that sees NAM's headers. The .h stays clean
 # C++17 so it can be included from anywhere in YAWN.
 option(YAWN_HAS_NAM "Enable Neural Amp Modeler (.nam) inference" ON)
-if(YAWN_HAS_NAM)
+# Audio-to-MIDI via Spotify's Basic Pitch (ONNX Runtime). Off by default
+# — it pulls a prebuilt ONNX Runtime (Linux x64 only for now). See the
+# basicpitch static lib in CMakeLists.txt and third_party/basicpitch/.
+option(YAWN_HAS_BASIC_PITCH "Enable Basic Pitch audio-to-MIDI (ONNX Runtime, Linux x64)" OFF)
+
+# Eigen — shared by NAM and Basic Pitch. NAM uses placeholders::lastN
+# (Eigen master, not 3.4.0); Basic Pitch additionally uses the
+# unsupported Tensor module. Fetch the headers once if either is on.
+if(YAWN_HAS_NAM OR YAWN_HAS_BASIC_PITCH)
     FetchContent_Declare(
         eigen
         GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
@@ -250,7 +258,9 @@ if(YAWN_HAS_NAM)
         # the populated source directory directly via include path.
         FetchContent_Populate(eigen)
     endif()
+endif()
 
+if(YAWN_HAS_NAM)
     FetchContent_Declare(
         neural_amp_modeler_core
         GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
@@ -260,6 +270,46 @@ if(YAWN_HAS_NAM)
     FetchContent_GetProperties(neural_amp_modeler_core)
     if(NOT neural_amp_modeler_core_POPULATED)
         FetchContent_Populate(neural_amp_modeler_core)
+    endif()
+endif()
+
+# ONNX Runtime (prebuilt) — inference engine for Basic Pitch. We grab the
+# official Linux x64 release tarball and locate its include/ + lib/
+# (it extracts under a versioned subdir). Other platforms aren't wired
+# yet, so disable the feature there rather than fail the configure.
+if(YAWN_HAS_BASIC_PITCH)
+    if(WIN32 OR APPLE)
+        message(WARNING "YAWN_HAS_BASIC_PITCH currently only wires the Linux x64 "
+                        "prebuilt ONNX Runtime — disabling on this platform.")
+        set(YAWN_HAS_BASIC_PITCH OFF CACHE BOOL "" FORCE)
+    else()
+        FetchContent_Declare(
+            onnxruntime
+            URL https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-x64-1.20.1.tgz
+        )
+        FetchContent_GetProperties(onnxruntime)
+        if(NOT onnxruntime_POPULATED)
+            FetchContent_Populate(onnxruntime)
+        endif()
+        # The tarball nests everything under onnxruntime-linux-x64-<ver>/;
+        # find the header + .so wherever they landed.
+        file(GLOB_RECURSE _ort_hdrs
+            ${onnxruntime_SOURCE_DIR}/onnxruntime_cxx_api.h
+            ${onnxruntime_SOURCE_DIR}/*/onnxruntime_cxx_api.h)
+        file(GLOB _ort_libs
+            ${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.so
+            ${onnxruntime_SOURCE_DIR}/*/lib/libonnxruntime.so)
+        if(_ort_hdrs AND _ort_libs)
+            list(GET _ort_hdrs 0 _ort_hdr)
+            list(GET _ort_libs 0 ORT_SHARED_LIB)
+            get_filename_component(ORT_INCLUDE_DIR ${_ort_hdr} DIRECTORY)
+            get_filename_component(ORT_LIB_DIR ${ORT_SHARED_LIB} DIRECTORY)
+            message(STATUS "Basic Pitch: ONNX Runtime at ${ORT_LIB_DIR}")
+        else()
+            message(WARNING "YAWN_HAS_BASIC_PITCH on but ONNX Runtime headers/lib "
+                            "not found under ${onnxruntime_SOURCE_DIR} — disabling.")
+            set(YAWN_HAS_BASIC_PITCH OFF CACHE BOOL "" FORCE)
+        endif()
     endif()
 endif()
 
