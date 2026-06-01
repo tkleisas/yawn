@@ -63,6 +63,7 @@
 namespace yawn {
 
 namespace effects { class ConvolutionReverb; class NeuralAmp; }
+namespace midi { class LFO; }
 
 class App {
 public:
@@ -119,6 +120,17 @@ private:
     void showArrangementClipContextMenu(int trackIndex, int clipIdx, float mx, float my);
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
     void showShaderLibraryMenu(float mx, float my);
+
+    // MIDI LFO modulation-target picker (shown from the LFO device strip).
+    // Builds a grouped menu of every modulatable target reachable from the
+    // LFO at (track, chainSlot): instrument / audio-fx / midi-fx / mixer
+    // params on its own track, plus visual-layer knobs and shader params on
+    // any visual track. lfoTargetName() resolves the current target to a
+    // display string; lfoAt() resolves the LFO pointer (null if the slot
+    // isn't an LFO).
+    void showLfoTargetMenu(int track, int chainSlot, float mx, float my);
+    std::string lfoTargetName(int track, int chainSlot);
+    midi::LFO*  lfoAt(int track, int chainSlot);
     // Right-click menu for "Map to Macro N" on a parameter knob.
     // Builds a context menu showing each of the 8 macros as a target;
     // if the same target is already mapped, also offers "Unmap" and

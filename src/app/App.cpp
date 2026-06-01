@@ -1,6 +1,7 @@
 #include "app/App.h"
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
+#include "visual/VisualModBus.h"
 #include "ui/framework/v2/Fw2Painters.h"
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
@@ -3845,6 +3846,196 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
                                  ui::fw::Point{mx, my});
 }
 
+midi::LFO* App::lfoAt(int track, int chainSlot) {
+    if (track < 0 || track >= kMaxTracks) return nullptr;
+    auto& chain = m_audioEngine.midiEffectChain(track);
+    auto* fx = chain.effect(chainSlot);
+    if (!fx || std::string(fx->id()) != "lfo") return nullptr;
+    return static_cast<midi::LFO*>(fx);
+}
+
+std::string App::lfoTargetName(int track, int chainSlot) {
+    midi::LFO* lfo = lfoAt(track, chainSlot);
+    if (!lfo) return "";
+    const int type  = lfo->modulationTargetType();
+    const int chain = lfo->modulationTargetChain();
+    const int param = lfo->modulationTargetParam();
+
+    auto pname = [](auto* dev, int p) -> std::string {
+        if (!dev || p < 0 || p >= dev->parameterCount()) return "?";
+        const char* n = dev->parameterInfo(p).name;
+        return n ? n : "?";
+    };
+
+    switch (type) {
+    case midi::LFO::TgtInstrument: {
+        auto* inst = m_audioEngine.instrument(track);
+        if (!inst) return "Instrument";
+        return std::string(inst->name()) + ": " + pname(inst, param);
+    }
+    case midi::LFO::TgtAudioEffect: {
+        auto* afx = m_audioEngine.mixer().trackEffects(track).effectAt(chain);
+        if (!afx) return "Audio FX";
+        return "FX" + std::to_string(chain + 1) + ": " + pname(afx, param);
+    }
+    case midi::LFO::TgtMidiEffect: {
+        auto* mfx = m_audioEngine.midiEffectChain(track).effect(chain);
+        if (!mfx) return "MIDI FX";
+        return "MIDI" + std::to_string(chain + 1) + ": " + pname(mfx, param);
+    }
+    case midi::LFO::TgtMixer:
+        if (param == 0) return "Mixer: Volume";
+        if (param == 1) return "Mixer: Pan";
+        if (param >= 3) return "Mixer: Send " + std::to_string(param - 2);
+        return "Mixer";
+    case midi::LFO::TgtVisualKnob: {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "Vis T%d: Knob %c",
+                      lfo->visualTrack() + 1, static_cast<char>('A' + (param & 7)));
+        return buf;
+    }
+    case midi::LFO::TgtVisualParam:
+        return "Vis T" + std::to_string(lfo->visualTrack() + 1) + ": " +
+               lfo->targetName();
+    }
+    return "";
+}
+
+void App::showLfoTargetMenu(int track, int chainSlot, float mx, float my) {
+    if (!lfoAt(track, chainSlot)) return;
+
+    // Resolve the LFO fresh inside the action (the device tree may rebuild
+    // between menu-open and click) and write the target fields. These are
+    // scalar UI-thread writes; the audio thread only reads them.
+    auto setTarget = [this, track, chainSlot](int type, int chainIdx, int param,
+                                              int vtrack, std::string name) {
+        midi::LFO* l = lfoAt(track, chainSlot);
+        if (!l) return;
+        l->setParameter(midi::LFO::kTargetType,       static_cast<float>(type));
+        l->setParameter(midi::LFO::kTargetChainIndex, static_cast<float>(chainIdx));
+        l->setParameter(midi::LFO::kTargetParamIndex, static_cast<float>(param));
+        l->setVisualTrack(vtrack);
+        l->setTargetName(std::move(name));
+        markDirty();
+    };
+
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    std::vector<MenuEntry> items;
+    items.push_back(header("LFO Target"));
+    items.push_back(separator());
+    items.push_back(item("None", [setTarget]() {
+        setTarget(midi::LFO::TgtInstrument, 0, 0, -1, std::string());
+    }));
+
+    // Instrument params (same track).
+    if (auto* inst = m_audioEngine.instrument(track)) {
+        std::vector<MenuEntry> sub;
+        for (int p = 0; p < inst->parameterCount(); ++p) {
+            const auto& info = inst->parameterInfo(p);
+            if (info.isPerVoice) continue;
+            sub.push_back(item(info.name ? info.name : "?", [setTarget, p]() {
+                setTarget(midi::LFO::TgtInstrument, 0, p, -1, std::string());
+            }));
+        }
+        if (!sub.empty())
+            items.push_back(submenu(std::string("Instrument: ") + inst->name(),
+                                    std::move(sub)));
+    }
+
+    // Audio FX (same track).
+    {
+        auto& fxchain = m_audioEngine.mixer().trackEffects(track);
+        for (int slot = 0; slot < effects::kMaxEffectsPerChain; ++slot) {
+            auto* afx = fxchain.effectAt(slot);
+            if (!afx) continue;
+            std::vector<MenuEntry> sub;
+            for (int p = 0; p < afx->parameterCount(); ++p) {
+                const auto& info = afx->parameterInfo(p);
+                sub.push_back(item(info.name ? info.name : "?", [setTarget, slot, p]() {
+                    setTarget(midi::LFO::TgtAudioEffect, slot, p, -1, std::string());
+                }));
+            }
+            if (!sub.empty()) {
+                char lbl[72];
+                std::snprintf(lbl, sizeof(lbl), "FX%d: %s", slot + 1, afx->name());
+                items.push_back(submenu(lbl, std::move(sub)));
+            }
+        }
+    }
+
+    // MIDI FX (same track, excluding this LFO's own slot).
+    {
+        auto& mchain = m_audioEngine.midiEffectChain(track);
+        for (int slot = 0; slot < mchain.count(); ++slot) {
+            if (slot == chainSlot) continue;
+            auto* mfx = mchain.effect(slot);
+            if (!mfx) continue;
+            std::vector<MenuEntry> sub;
+            for (int p = 0; p < mfx->parameterCount(); ++p) {
+                const auto& info = mfx->parameterInfo(p);
+                if (info.widgetHint == WidgetHint::Hidden) continue;
+                sub.push_back(item(info.name ? info.name : "?", [setTarget, slot, p]() {
+                    setTarget(midi::LFO::TgtMidiEffect, slot, p, -1, std::string());
+                }));
+            }
+            if (!sub.empty()) {
+                char lbl[72];
+                std::snprintf(lbl, sizeof(lbl), "MIDI%d: %s", slot + 1, mfx->name());
+                items.push_back(submenu(lbl, std::move(sub)));
+            }
+        }
+    }
+
+    // Mixer (same track).
+    {
+        std::vector<MenuEntry> sub;
+        sub.push_back(item("Volume", [setTarget]() {
+            setTarget(midi::LFO::TgtMixer, 0, 0, -1, std::string()); }));
+        sub.push_back(item("Pan", [setTarget]() {
+            setTarget(midi::LFO::TgtMixer, 0, 1, -1, std::string()); }));
+        for (int s = 0; s < kMaxSendsPerTrack; ++s) {
+            char lbl[16];
+            std::snprintf(lbl, sizeof(lbl), "Send %d", s + 1);
+            sub.push_back(item(lbl, [setTarget, s]() {
+                setTarget(midi::LFO::TgtMixer, 0, 3 + s, -1, std::string());
+            }));
+        }
+        items.push_back(submenu("Mixer", std::move(sub)));
+    }
+
+    // Visual layers (any visual track) — knobs A..H + shader @range params.
+    {
+        std::vector<MenuEntry> visSub;
+        for (int vt = 0; vt < m_project.numTracks(); ++vt) {
+            if (m_project.track(vt).type != Track::Type::Visual) continue;
+            std::vector<MenuEntry> layerSub;
+            for (int k = 0; k < 8; ++k) {
+                char lbl[12];
+                std::snprintf(lbl, sizeof(lbl), "Knob %c",
+                              static_cast<char>('A' + k));
+                layerSub.push_back(item(lbl, [setTarget, vt, k]() {
+                    setTarget(midi::LFO::TgtVisualKnob, 0, k, vt, std::string());
+                }));
+            }
+            for (const auto& pinfo : m_visualEngine.getLayerParams(vt)) {
+                std::string pn = pinfo.name;
+                layerSub.push_back(item(pn, [setTarget, vt, pn]() {
+                    setTarget(midi::LFO::TgtVisualParam, 0, 0, vt, pn);
+                }));
+            }
+            char lbl[48];
+            std::snprintf(lbl, sizeof(lbl), "Track %d: %s", vt + 1,
+                          m_project.track(vt).name.c_str());
+            visSub.push_back(submenu(lbl, std::move(layerSub)));
+        }
+        if (!visSub.empty())
+            items.push_back(submenu("Visual", std::move(visSub)));
+    }
+
+    ui::fw2::ContextMenu::show(std::move(items), ui::fw2::Point{mx, my});
+}
+
 void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
     std::vector<ui::ContextMenu::Item> items;
     bool canDelete = m_project.numScenes() > 1;
@@ -5368,6 +5559,16 @@ bool App::init() {
         ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
                                  ui::fw::Point{mx, my});
     });
+
+    // Wire the LFO target picker: the LFO device strip is clickable and
+    // shows its modulation target by name. App owns the engine/visual
+    // enumeration, so it builds the menu and resolves the display name.
+    m_detailPanel->setOnLfoTargetMenu(
+        [this](int track, int chain, float mx, float my) {
+            showLfoTargetMenu(track, chain, mx, my);
+        });
+    m_detailPanel->setLfoTargetNameResolver(
+        [this](int track, int chain) { return lfoTargetName(track, chain); });
 
     // Wire Auto-Sample request from MultisamplerDisplayPanel.
     // Builds the dialog Context from current project + engine state and
@@ -7756,6 +7957,35 @@ void App::update() {
                     knobs[i] = m_project.track(t).macros.values[i];
                 m_visualParamsPanel->setKnobValues(knobs);
             }
+        }
+    }
+
+    // Apply MIDI-LFO → visual modulation. A midi::LFO living in any track's
+    // MIDI effect chain can target a visual layer's A..H knob or shader
+    // @range param (on a different, visual-type track). The audio thread
+    // published each such LFO's output to VisualModBus keyed by (track,
+    // slot); here we clear last frame's offsets on every visual layer and
+    // re-accumulate the current contributions. Clearing first makes removal
+    // / bypass restore the base value automatically.
+    for (int t = 0; t < m_project.numTracks() && t < kMaxTracks; ++t) {
+        if (m_project.track(t).type == Track::Type::Visual)
+            m_visualEngine.clearLayerMods(t);
+    }
+    for (int t = 0; t < kMaxTracks; ++t) {
+        auto& chain = m_audioEngine.midiEffectChain(t);
+        for (int e = 0; e < chain.count(); ++e) {
+            auto* fx = chain.effect(e);
+            if (!fx || fx->modulationTargetType() < midi::LFO::TgtVisualKnob)
+                continue;
+            const int vt = fx->modulationVisualTrack();
+            if (vt < 0 || vt >= m_project.numTracks() || vt >= kMaxTracks)
+                continue;
+            if (m_project.track(vt).type != Track::Type::Visual) continue;
+            const float mod = visual::VisualModBus::instance().read(t, e);
+            if (fx->modulationTargetType() == midi::LFO::TgtVisualKnob)
+                m_visualEngine.addLayerKnobMod(vt, fx->modulationTargetParam(), mod);
+            else
+                m_visualEngine.addLayerParamMod(vt, fx->modulationTargetName(), mod);
         }
     }
 

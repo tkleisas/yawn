@@ -216,6 +216,17 @@ public:
     float getLayerKnob(int track, int idx) const;
     void  setLayerKnob(int track, int idx, float value);
 
+    // ── External modulation (MIDI LFO → visual) ────────────────────────
+    // A midi::LFO on an audio/MIDI track can target this layer's knobs or
+    // shader @range params. Its bipolar output is composed on top of the
+    // base value each frame, without overwriting the base (so removing the
+    // LFO restores the user's value automatically). The App frame loop
+    // calls clearLayerMods() once per layer, then addLayerKnobMod /
+    // addLayerParamMod for each active LFO contribution (summed).
+    void clearLayerMods(int track);
+    void addLayerKnobMod(int track, int knob, float modRaw);
+    void addLayerParamMod(int track, const std::string& name, float modRaw);
+
     // Per-knob LFO (one per A..H slot). By default disabled.
     const VisualLFO* getLayerKnobLFO(int track, int idx) const;
     void  setLayerKnobLFO(int track, int idx, const VisualLFO& lfo);
@@ -239,6 +250,10 @@ private:
         float max;
         float defaultValue;
         GLint location = -1;
+        // Per-frame external modulation offset (already scaled to this
+        // param's range) from MIDI LFOs. Reset by clearLayerMods, summed
+        // by addLayerParamMod, applied at uniform-upload time.
+        float modOffset = 0.0f;
     };
 
     // ── Per-track layer ────────────────────────────────────────────────
@@ -310,6 +325,11 @@ private:
         // One optional LFO per knob slot. Modulates the knob's base value
         // on top, clamped to [0, 1]. Evaluated on the UI thread each frame.
         VisualLFO knobLFOs[8];
+
+        // Per-frame external modulation offset (from MIDI LFOs targeting
+        // this layer's knobs). Reset + re-accumulated each frame by the App
+        // and folded into knobDisplayValues alongside the per-knob VisualLFO.
+        float knobModulation[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
         // Cache of the most-recently-evaluated (base+LFO) knob value, so the
         // UI can render an arc that "breathes" with the modulation.

@@ -805,6 +805,36 @@ VisualEngine::getLayerParams(int track) const {
     return out;
 }
 
+void VisualEngine::clearLayerMods(int track) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    for (int i = 0; i < 8; ++i) L.knobModulation[i] = 0.0f;
+    for (auto& p : L.params) p.modOffset = 0.0f;
+}
+
+void VisualEngine::addLayerKnobMod(int track, int knob, float modRaw) {
+    if (knob < 0 || knob >= 8) return;
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    it->second.knobModulation[knob] += modRaw;
+}
+
+void VisualEngine::addLayerParamMod(int track, const std::string& name,
+                                    float modRaw) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    for (auto& p : it->second.params) {
+        if (p.name == name) {
+            // Scale the bipolar modulation into the param's natural range
+            // so depth=1 sweeps the full range, matching how the
+            // AudioEngine scales audio-target modulation.
+            p.modOffset += modRaw * (p.max - p.min);
+            return;
+        }
+    }
+}
+
 void VisualEngine::setLayerParam(int track, const std::string& name, float value) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return;
@@ -1804,9 +1834,12 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         float v = L.knobValues[i];
         if (L.knobLFOs[i].enabled) {
             float mod = L.knobLFOs[i].evaluate(transportBeats, preWall);
-            v = std::clamp(v + mod * L.knobLFOs[i].depth, 0.0f, 1.0f);
+            v += mod * L.knobLFOs[i].depth;
         }
-        L.knobDisplayValues[i] = v;  // cached for the UI
+        // External MIDI-LFO modulation (knob range is 0..1, so the raw
+        // bipolar offset adds directly).
+        v += L.knobModulation[i];
+        L.knobDisplayValues[i] = std::clamp(v, 0.0f, 1.0f);  // cached for the UI
     }
 
     // iChannel2 = video frame if attached, else dummy black.
@@ -2006,9 +2039,13 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             if (src.loc_knobs[i] >= 0)
                 glUniform1f(src.loc_knobs[i], L.knobDisplayValues[i]);
 
-        // Per-pass user-declared @range params.
+        // Per-pass user-declared @range params. modOffset carries any
+        // external MIDI-LFO modulation (already scaled to the param range),
+        // composed on top of the base value and clamped to [min, max].
         for (const auto& p : params)
-            if (p.location >= 0) glUniform1f(p.location, p.value);
+            if (p.location >= 0)
+                glUniform1f(p.location,
+                            std::clamp(p.value + p.modOffset, p.min, p.max));
 
         glBindVertexArray(m_vao);
         glDrawArrays(GL_TRIANGLES, 0, 3);

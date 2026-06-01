@@ -3,6 +3,7 @@
 #include "midi/MidiEffect.h"
 #include <cmath>
 #include <algorithm>
+#include <string>
 
 namespace yawn {
 namespace midi {
@@ -15,8 +16,14 @@ public:
     // Waveform shapes
     enum Shape : int { Sine = 0, Triangle, Saw, Square, SampleAndHold, kNumShapes };
 
-    // Target types (mirrors automation::TargetType)
-    enum TargetKind : int { TgtInstrument = 0, TgtAudioEffect, TgtMidiEffect, TgtMixer };
+    // Target types (mirrors automation::TargetType). Types 0-3 are audio
+    // targets on the LFO's own track (applied directly by the AudioEngine).
+    // Types 4-5 are visual targets on a separate visual track (routed to
+    // the UI thread via VisualModBus — see AudioEngine + App frame loop).
+    enum TargetKind : int {
+        TgtInstrument = 0, TgtAudioEffect, TgtMidiEffect, TgtMixer,
+        TgtVisualKnob, TgtVisualParam, kNumTargetKinds
+    };
 
     // Parameters
     enum Params {
@@ -25,9 +32,9 @@ public:
         kSync,              // Boolean: 1=beat-synced, 0=free-running Hz
         kDepth,             // 0.0 to 1.0 (modulation amount)
         kPhase,             // 0.0 to 1.0 (phase offset, maps to 0-360°)
-        kTargetType,        // 0=Instrument, 1=AudioEffect, 2=MidiEffect, 3=Mixer
+        kTargetType,        // TargetKind (0=Instrument..5=VisualParam)
         kTargetChainIndex,  // Effect slot index (for AudioEffect/MidiEffect targets)
-        kTargetParamIndex,  // Parameter index within target device
+        kTargetParamIndex,  // Parameter index within target device, or knob index for VisualKnob
         kBias,              // -1.0 to 1.0 DC offset added after depth scaling
         kNumParams
     };
@@ -43,18 +50,21 @@ public:
     int parameterCount() const override { return kNumParams; }
 
     static constexpr const char* kShapeLabels[]  = {"Sine", "Tri", "Saw", "Sqr", "S&H"};
-    static constexpr const char* kTargetLabels[] = {"Inst", "FX", "MIDI", "Mix"};
+    static constexpr const char* kTargetLabels[] = {"Inst", "FX", "MIDI", "Mix", "VKnob", "VParm"};
 
     const MidiEffectParameterInfo& parameterInfo(int index) const override {
+        // The three target params are driven by the Detail panel's named
+        // target picker (see LFODisplayWidget), not by visible knobs, so
+        // they're marked Hidden — but remain fully get/set-able + persisted.
         static const MidiEffectParameterInfo p[kNumParams] = {
             {"Shape",    0.0f, static_cast<float>(kNumShapes - 1), 0.0f, "",   false, false, WidgetHint::StepSelector, kShapeLabels, 5},
             {"Rate",     0.0625f, 16.0f,  1.0f,  "beats", false, false},
             {"Sync",     0.0f,    1.0f,   1.0f,  "",      true,  false},
             {"Depth",    0.0f,    1.0f,   0.5f,  "",      false, false, WidgetHint::DentedKnob},
             {"Phase",    0.0f,    1.0f,   0.0f,  "°",     false, false, WidgetHint::Knob360},
-            {"Target",   0.0f,    3.0f,   0.0f,  "",      false, false, WidgetHint::StepSelector, kTargetLabels, 4},
-            {"Chain",    0.0f,    7.0f,   0.0f,  "",      false, false, WidgetHint::StepSelector},
-            {"Param",    0.0f,    63.0f,  0.0f,  "",      false, false, WidgetHint::StepSelector},
+            {"Target",   0.0f,    static_cast<float>(kNumTargetKinds - 1), 0.0f, "", false, false, WidgetHint::Hidden, kTargetLabels, kNumTargetKinds},
+            {"Chain",    0.0f,    7.0f,   0.0f,  "",      false, false, WidgetHint::Hidden},
+            {"Param",    0.0f,    63.0f,  0.0f,  "",      false, false, WidgetHint::Hidden},
             {"Bias",    -1.0f,    1.0f,   0.0f,  "",      false, false, WidgetHint::DentedKnob},
         };
         return p[std::clamp(index, 0, kNumParams - 1)];
@@ -94,7 +104,7 @@ public:
                 m_phaseOffset = std::clamp(value, 0.0f, 1.0f);
                 break;
             case kTargetType:
-                m_targetType = static_cast<TargetKind>(std::clamp(static_cast<int>(value), 0, 3));
+                m_targetType = static_cast<TargetKind>(std::clamp(static_cast<int>(value), 0, kNumTargetKinds - 1));
                 break;
             case kTargetChainIndex:
                 m_targetChain = std::clamp(static_cast<int>(value), 0, 7);
@@ -116,6 +126,23 @@ public:
     int   modulationTargetType()  const override { return static_cast<int>(m_targetType); }
     int   modulationTargetChain() const override { return m_targetChain; }
     int   modulationTargetParam() const override { return m_targetParam; }
+    int   modulationVisualTrack() const override { return m_visualTrack; }
+    const char* modulationTargetName() const override { return m_targetName.c_str(); }
+
+    // True when the target is a visual layer (knob or shader param). The
+    // AudioEngine routes these to VisualModBus instead of applying them to
+    // an audio-engine parameter on its own track.
+    bool isVisualTarget() const {
+        return m_targetType == TgtVisualKnob || m_targetType == TgtVisualParam;
+    }
+
+    // Visual-target addressing (UI-owned; not part of the float param set).
+    // The visual layer lives on its own track; shader @range uniforms are
+    // addressed by name. These are written only by the UI thread.
+    int  visualTrack() const { return m_visualTrack; }
+    void setVisualTrack(int t) { m_visualTrack = t; }
+    const std::string& targetName() const { return m_targetName; }
+    void setTargetName(const std::string& n) { m_targetName = n; }
 
     // --- Phase linking interface ---
     bool     isLinkedToSource()  const override { return m_linkTargetId != 0; }
@@ -152,6 +179,8 @@ private:
     int        m_targetParam = 0;
     float      m_bias        = 0.0f;     // -1.0..1.0 DC offset
     uint32_t   m_linkTargetId = 0;       // 0 = no link, else leader's instanceId
+    int        m_visualTrack = -1;       // visual layer track (VisualKnob/VisualParam only)
+    std::string m_targetName;            // shader @range uniform name (VisualParam only)
 
     // State
     double m_freePhase    = 0.0;     // free-running phase accumulator

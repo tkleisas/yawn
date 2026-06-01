@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
+#include <string>
 
 namespace yawn {
 namespace ui {
@@ -34,8 +36,25 @@ public:
     void setCurrentPhase(double p) { m_currentPhase = p - std::floor(p); }
     void setLinked(bool linked)    { m_linked = linked; }
 
+    // Human-readable resolved modulation target (e.g. "Filter: Cutoff",
+    // "Visual T3: colorIntensity"). Shown along the bottom edge; clicking
+    // the widget opens the target picker.
+    void setTargetLabel(std::string s) { m_targetLabel = std::move(s); }
+
+    // Fired on click with screen coords so the host can open the picker
+    // menu anchored under the cursor.
+    void setOnClick(std::function<void(float, float)> cb) {
+        m_onClick = std::move(cb);
+    }
+
     Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({c.maxW, 52.0f});
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button != MouseButton::Left) return false;
+        if (m_onClick) m_onClick(e.x, e.y);
+        return true;
     }
 
 #ifdef YAWN_TEST_BUILD
@@ -123,6 +142,22 @@ public:
                           m_bounds.x + m_bounds.w - tw - 3, m_bounds.y + 1,
                           lblFs, Color{100, 220, 140, 200});
         }
+
+        // Resolved target label along the bottom edge, on a dark backing so
+        // it stays readable over the waveform. A faint "▾" hints it's a
+        // clickable picker.
+        if (tm) {
+            const std::string label =
+                (m_targetLabel.empty() ? "— no target —" : m_targetLabel)
+                + "  \xE2\x96\xBE";
+            const float ty = m_bounds.y + m_bounds.h - 13;
+            r.drawRect(m_bounds.x + 1, ty - 1, m_bounds.w - 2, 13,
+                       Color{12, 12, 16, 210});
+            const Color labelCol = m_targetLabel.empty()
+                                       ? Color{150, 130, 110, 220}
+                                       : Color{210, 200, 160, 235};
+            tm->drawText(r, label.c_str(), m_bounds.x + 4, ty, lblFs, labelCol);
+        }
     }
 #endif
 
@@ -152,6 +187,8 @@ private:
     float  m_currentValue = 0.0f;
     double m_currentPhase = 0.0;
     bool   m_linked       = false;
+    std::string m_targetLabel;
+    std::function<void(float, float)> m_onClick;
 };
 
 } // namespace fw2

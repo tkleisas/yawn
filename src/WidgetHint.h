@@ -14,6 +14,7 @@ enum class WidgetHint : uint8_t {
     StepSelector,   // Integer step selector with left/right arrows
     Toggle,         // On/off (or A/B) toggle switch
     Knob360,        // Full 360° rotation knob (phase, cyclic)
+    Hidden,         // Not rendered as a knob — driven by a custom panel/picker
 };
 
 } // namespace yawn

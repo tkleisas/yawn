@@ -133,6 +133,16 @@ json serializeMidiEffectChain(const midi::MidiEffectChain& chain) {
         j["params"] = serializeParams(*fx);
         if (fx->isLinkedToSource())
             j["linkTargetId"] = fx->linkSourceId();
+        // LFO visual-target addressing lives outside the float param set:
+        // the visual layer's track and (for shader params) the uniform name.
+        if (std::string(fx->id()) == "lfo") {
+            const auto* lfo = static_cast<const midi::LFO*>(fx);
+            if (lfo->isVisualTarget()) {
+                j["visualTrack"] = lfo->visualTrack();
+                if (!lfo->targetName().empty())
+                    j["targetName"] = lfo->targetName();
+            }
+        }
         arr.push_back(j);
     }
     return arr;
@@ -154,10 +164,15 @@ void deserializeMidiEffectChain(midi::MidiEffectChain& chain, const json& arr,
             fx->setInstanceId(j["instanceId"].get<uint32_t>());
         if (j.contains("params"))
             deserializeParams(*fx, j["params"]);
-        // Restore LFO link target ID
-        if (j.contains("linkTargetId") && id == "lfo") {
+        // Restore LFO link target ID + visual-target addressing
+        if (id == "lfo") {
             auto* lfo = static_cast<midi::LFO*>(fx.get());
-            lfo->setLinkTargetId(j["linkTargetId"].get<uint32_t>());
+            if (j.contains("linkTargetId"))
+                lfo->setLinkTargetId(j["linkTargetId"].get<uint32_t>());
+            if (j.contains("visualTrack"))
+                lfo->setVisualTrack(j["visualTrack"].get<int>());
+            if (j.contains("targetName"))
+                lfo->setTargetName(j["targetName"].get<std::string>());
         }
         chain.addEffect(std::move(fx));
     }

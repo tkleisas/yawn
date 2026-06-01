@@ -58,12 +58,18 @@ public:
 
     // --- Modulation output (for LFO and similar modulators) ---
     // Override in effects that produce modulation values for other parameters.
-    // targetType: 0=Instrument, 1=AudioEffect, 2=MidiEffect, 3=Mixer
+    // targetType: 0=Instrument, 1=AudioEffect, 2=MidiEffect, 3=Mixer,
+    //             4=VisualKnob, 5=VisualParam
     virtual bool  hasModulationOutput() const { return false; }
     virtual float modulationValue()     const { return 0.0f; }
     virtual int   modulationTargetType()  const { return 0; }
     virtual int   modulationTargetChain() const { return 0; }
     virtual int   modulationTargetParam() const { return 0; }
+    // Visual targets only (types 4/5). The visual layer lives on a
+    // separate track from the modulator, addressed by track index; shader
+    // @range uniforms are addressed by name. Empty/-1 for audio targets.
+    virtual int         modulationVisualTrack() const { return -1; }
+    virtual const char* modulationTargetName()  const { return ""; }
 
     // Additive modulation accumulates over frames because the engine
     // reads getParameter() (which reflects last frame's modulated value),

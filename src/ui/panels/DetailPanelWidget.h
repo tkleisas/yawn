@@ -254,6 +254,25 @@ public:
         m_onAutoSampleRequested = std::move(cb);
     }
 
+    // ── LFO target picker ───────────────────────────────────────────
+    // The LFO device strip shows its modulation target by name and opens
+    // a grouped picker when clicked. DetailPanel can't enumerate / name
+    // engine devices itself, so App bridges:
+    //   * Menu opener: build + show the picker for the LFO at
+    //     (track, chainIndex) anchored at the screen coords.
+    //   * Name resolver: return the human-readable current target name
+    //     for the LFO at (track, chainIndex), refreshed each frame.
+    using LfoTargetMenuCallback =
+        std::function<void(int track, int chainIndex, float screenX, float screenY)>;
+    using LfoTargetNameResolver =
+        std::function<std::string(int track, int chainIndex)>;
+    void setOnLfoTargetMenu(LfoTargetMenuCallback cb) {
+        m_onLfoTargetMenu = std::move(cb);
+    }
+    void setLfoTargetNameResolver(LfoTargetNameResolver cb) {
+        m_lfoTargetNameResolver = std::move(cb);
+    }
+
     // ── Sidechain source plumbing ───────────────────────────────────
     // Used by sidechain-aware instrument panels (Vocoder for now;
     // ring-mod / gate / etc. when they grow sidechain UI). The
@@ -1442,6 +1461,12 @@ private:
             if (audioEffect) return audioEffect->parameterInfo(i).defaultValue;
             return 0.0f;
         }
+        WidgetHint paramWidgetHint(int i) const {
+            if (midiEffect)  return midiEffect->parameterInfo(i).widgetHint;
+            if (instrument)  return instrument->parameterInfo(i).widgetHint;
+            if (audioEffect) return audioEffect->parameterInfo(i).widgetHint;
+            return WidgetHint::Knob;
+        }
         bool isBypassed() const {
             if (midiEffect)  return midiEffect->bypassed();
             if (instrument)  return instrument->bypassed();
@@ -1474,6 +1499,9 @@ private:
         std::vector<DeviceWidget::ParamInfo> params;
         int count = ref.paramCount();
         for (int p = 0; p < count; ++p) {
+            // Params hinted Hidden are not shown as knobs — they're driven
+            // by a custom panel/picker (e.g. the LFO's named target picker).
+            if (ref.paramWidgetHint(p) == WidgetHint::Hidden) continue;
             DeviceWidget::ParamInfo pi;
             pi.index = p;
             if (ref.midiEffect) {
@@ -2354,7 +2382,15 @@ private:
             dw->setCustomPanel(lfoDisp, 52.0f, 200.0f);
             configureDeviceWidget(dw, ref);
 
-            m_displayUpdaters.push_back([lfoDisp, fx]() {
+            // Clicking the display opens the named target picker (App
+            // builds + shows it — it owns the engine/visual enumeration).
+            const int track = m_autoTrackIndex;
+            const int chain = ref.chainIndex;
+            lfoDisp->setOnClick([this, track, chain](float sx, float sy) {
+                if (m_onLfoTargetMenu) m_onLfoTargetMenu(track, chain, sx, sy);
+            });
+
+            m_displayUpdaters.push_back([this, lfoDisp, fx, track, chain]() {
                 auto* lfo = static_cast<midi::LFO*>(fx);
                 lfoDisp->setShape(static_cast<int>(lfo->getParameter(midi::LFO::kShape)));
                 lfoDisp->setDepth(lfo->getParameter(midi::LFO::kDepth));
@@ -2363,6 +2399,8 @@ private:
                 lfoDisp->setCurrentValue(lfo->currentValue());
                 lfoDisp->setCurrentPhase(lfo->currentPhase());
                 lfoDisp->setLinked(lfo->linkTargetId() != 0);
+                if (m_lfoTargetNameResolver)
+                    lfoDisp->setTargetLabel(m_lfoTargetNameResolver(track, chain));
             });
             return true;
         }
@@ -2476,6 +2514,8 @@ private:
     ParamRightClickCallback m_onParamRightClick;
     PresetClickCallback m_onPresetClick;
     AutoSampleRequestCallback m_onAutoSampleRequested;
+    LfoTargetMenuCallback     m_onLfoTargetMenu;
+    LfoTargetNameResolver     m_lfoTargetNameResolver;
     TrackNamesProvider          m_trackNamesProvider;
     SidechainSourceProvider     m_sidechainSourceProvider;
     SetSidechainSourceCallback  m_setSidechainSource;

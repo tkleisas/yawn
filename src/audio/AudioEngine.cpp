@@ -1,5 +1,7 @@
 #include "audio/AudioEngine.h"
 #include "util/Logger.h"
+#include "midi/LFO.h"
+#include "visual/VisualModBus.h"
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -1018,6 +1020,19 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         for (int e = 0; e < chain.count(); ++e) {
             auto* fx = chain.effect(e);
             if (!fx) continue;
+
+            // Visual targets (types 4/5) can't be applied here — the visual
+            // layer lives on the UI thread (GL context). Publish the LFO's
+            // output to VisualModBus keyed by this (track, slot); the UI
+            // frame loop composes it onto the layer. Writing 0 when
+            // bypassed/idle lets the UI relax the offset (auto-undo).
+            if (fx->modulationTargetType() >= midi::LFO::TgtVisualKnob) {
+                const float mv = (fx->bypassed() || !fx->hasModulationOutput())
+                                     ? 0.0f : fx->modulationValue();
+                visual::VisualModBus::instance().write(t, e, mv);
+                continue;
+            }
+
             // When an LFO stops modulating (bypassed / depth+bias=0),
             // undo the offset it last applied so the user's base value
             // isn't left frozen at the last modulation position.

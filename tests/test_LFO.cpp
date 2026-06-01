@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "midi/LFO.h"
+#include "visual/VisualModBus.h"
 #include <cmath>
 
 using namespace yawn::midi;
@@ -458,4 +459,79 @@ TEST(LFO, LinkedFollowerDifferentShape) {
 
     follower.overridePhase(leader.currentPhase());
     EXPECT_NEAR(follower.modulationValue(), -0.5f, 0.01f);
+}
+
+// ===================== Visual target extensions ======================
+
+TEST(LFO, VisualTargetTypesAndClamp) {
+    LFO lfo;
+    lfo.init(44100.0);
+
+    // kTargetType now spans 0..5 (Inst, FX, MIDI, Mix, VKnob, VParam).
+    lfo.setParameter(LFO::kTargetType, 4.0f);
+    EXPECT_FLOAT_EQ(lfo.getParameter(LFO::kTargetType), 4.0f);
+    lfo.setParameter(LFO::kTargetType, 5.0f);
+    EXPECT_FLOAT_EQ(lfo.getParameter(LFO::kTargetType), 5.0f);
+
+    // Out-of-range clamps to the new max (kNumTargetKinds - 1 == 5).
+    lfo.setParameter(LFO::kTargetType, 99.0f);
+    EXPECT_FLOAT_EQ(lfo.getParameter(LFO::kTargetType),
+                    static_cast<float>(LFO::kNumTargetKinds - 1));
+}
+
+TEST(LFO, IsVisualTarget) {
+    LFO lfo;
+    lfo.init(44100.0);
+
+    lfo.setParameter(LFO::kTargetType, LFO::TgtInstrument);
+    EXPECT_FALSE(lfo.isVisualTarget());
+    lfo.setParameter(LFO::kTargetType, LFO::TgtMixer);
+    EXPECT_FALSE(lfo.isVisualTarget());
+
+    lfo.setParameter(LFO::kTargetType, LFO::TgtVisualKnob);
+    EXPECT_TRUE(lfo.isVisualTarget());
+    lfo.setParameter(LFO::kTargetType, LFO::TgtVisualParam);
+    EXPECT_TRUE(lfo.isVisualTarget());
+}
+
+TEST(LFO, VisualTargetAddressing) {
+    LFO lfo;
+    lfo.init(44100.0);
+
+    // Visual track + shader-param name are out-of-band (not float params).
+    EXPECT_EQ(lfo.visualTrack(), -1);
+    EXPECT_TRUE(lfo.targetName().empty());
+
+    lfo.setVisualTrack(3);
+    lfo.setTargetName("colorIntensity");
+    EXPECT_EQ(lfo.visualTrack(), 3);
+    EXPECT_EQ(lfo.targetName(), "colorIntensity");
+    EXPECT_STREQ(lfo.modulationTargetName(), "colorIntensity");
+    EXPECT_EQ(lfo.modulationVisualTrack(), 3);
+}
+
+// ========================== VisualModBus =============================
+
+TEST(VisualModBus, WriteReadRoundTrip) {
+    auto& bus = yawn::visual::VisualModBus::instance();
+    bus.write(2, 1, 0.42f);
+    EXPECT_FLOAT_EQ(bus.read(2, 1), 0.42f);
+
+    // Overwrite reflects latest value.
+    bus.write(2, 1, -0.17f);
+    EXPECT_FLOAT_EQ(bus.read(2, 1), -0.17f);
+
+    // Reset to idle.
+    bus.write(2, 1, 0.0f);
+    EXPECT_FLOAT_EQ(bus.read(2, 1), 0.0f);
+}
+
+TEST(VisualModBus, OutOfRangeIsSafe) {
+    auto& bus = yawn::visual::VisualModBus::instance();
+    // Out-of-range writes are ignored; reads return 0.
+    bus.write(-1, 0, 1.0f);
+    bus.write(0, -1, 1.0f);
+    bus.write(99999, 0, 1.0f);
+    EXPECT_FLOAT_EQ(bus.read(-1, 0), 0.0f);
+    EXPECT_FLOAT_EQ(bus.read(0, 999), 0.0f);
 }
