@@ -274,36 +274,59 @@ if(YAWN_HAS_NAM)
 endif()
 
 # ONNX Runtime (prebuilt) — inference engine for Basic Pitch. We grab the
-# official Linux x64 release tarball and locate its include/ + lib/
-# (it extracts under a versioned subdir). Other platforms aren't wired
-# yet, so disable the feature there rather than fail the configure.
+# official prebuilt release for the platform and locate its include/ +
+# lib/ (the archive nests everything under a versioned subdir).
+#   * Linux x64 : .tgz, link + run libonnxruntime.so (rpath).
+#   * Windows x64: .zip, link onnxruntime.lib, run onnxruntime.dll (copied
+#                  next to the exe — Windows has no rpath).
+# macOS is intentionally not wired (no test machine) — disable there.
 if(YAWN_HAS_BASIC_PITCH)
-    if(WIN32 OR APPLE)
-        message(WARNING "YAWN_HAS_BASIC_PITCH currently only wires the Linux x64 "
-                        "prebuilt ONNX Runtime — disabling on this platform.")
+    if(APPLE)
+        message(WARNING "YAWN_HAS_BASIC_PITCH: macOS is not wired/tested — "
+                        "disabling on this platform.")
         set(YAWN_HAS_BASIC_PITCH OFF CACHE BOOL "" FORCE)
     else()
-        FetchContent_Declare(
-            onnxruntime
-            URL https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-x64-1.20.1.tgz
-        )
+        set(_ort_ver 1.20.1)
+        if(WIN32)
+            set(_ort_url https://github.com/microsoft/onnxruntime/releases/download/v${_ort_ver}/onnxruntime-win-x64-${_ort_ver}.zip)
+        else()
+            set(_ort_url https://github.com/microsoft/onnxruntime/releases/download/v${_ort_ver}/onnxruntime-linux-x64-${_ort_ver}.tgz)
+        endif()
+        FetchContent_Declare(onnxruntime URL ${_ort_url})
         FetchContent_GetProperties(onnxruntime)
         if(NOT onnxruntime_POPULATED)
             FetchContent_Populate(onnxruntime)
         endif()
-        # The tarball nests everything under onnxruntime-linux-x64-<ver>/;
-        # find the header + .so wherever they landed.
+        # Find the header + libs wherever the archive landed (it nests
+        # under onnxruntime-<platform>-x64-<ver>/).
         file(GLOB_RECURSE _ort_hdrs
             ${onnxruntime_SOURCE_DIR}/onnxruntime_cxx_api.h
             ${onnxruntime_SOURCE_DIR}/*/onnxruntime_cxx_api.h)
-        file(GLOB _ort_libs
-            ${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.so
-            ${onnxruntime_SOURCE_DIR}/*/lib/libonnxruntime.so)
-        if(_ort_hdrs AND _ort_libs)
+        if(WIN32)
+            # Link against the import lib; the DLL is the runtime artifact
+            # copied beside the exe (see CMakeLists.txt POST_BUILD step).
+            file(GLOB _ort_link_libs
+                ${onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib
+                ${onnxruntime_SOURCE_DIR}/*/lib/onnxruntime.lib)
+            file(GLOB _ort_runtime_libs
+                ${onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll
+                ${onnxruntime_SOURCE_DIR}/*/lib/onnxruntime.dll)
+        else()
+            file(GLOB _ort_link_libs
+                ${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.so
+                ${onnxruntime_SOURCE_DIR}/*/lib/libonnxruntime.so)
+            set(_ort_runtime_libs ${_ort_link_libs})
+        endif()
+        if(_ort_hdrs AND _ort_link_libs)
             list(GET _ort_hdrs 0 _ort_hdr)
-            list(GET _ort_libs 0 ORT_SHARED_LIB)
+            list(GET _ort_link_libs 0 ORT_SHARED_LIB)   # link target (import lib on Win)
             get_filename_component(ORT_INCLUDE_DIR ${_ort_hdr} DIRECTORY)
             get_filename_component(ORT_LIB_DIR ${ORT_SHARED_LIB} DIRECTORY)
+            if(_ort_runtime_libs)
+                list(GET _ort_runtime_libs 0 ORT_RUNTIME_LIB) # .dll on Win, .so on Linux
+            else()
+                set(ORT_RUNTIME_LIB ${ORT_SHARED_LIB})
+            endif()
             message(STATUS "Basic Pitch: ONNX Runtime at ${ORT_LIB_DIR}")
         else()
             message(WARNING "YAWN_HAS_BASIC_PITCH on but ONNX Runtime headers/lib "

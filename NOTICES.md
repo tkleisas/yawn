@@ -81,6 +81,28 @@ varies; verify before redistributing).
 
 ---
 
+## Audio-to-MIDI Model
+
+### Spotify Basic Pitch — `third_party/basicpitch/basic_pitch_model.h`
+
+The polyphonic audio-to-MIDI transcription model (`Convert to MIDI`,
+gated on `YAWN_HAS_BASIC_PITCH`).
+
+- **Model:** `nmp.onnx` (the `icassp_2022` model) from
+  [spotify/basic-pitch](https://github.com/spotify/basic-pitch).
+- **License:** Apache-2.0.
+- **Form:** the 226 KB ONNX file is embedded as a C byte array
+  (`basic_pitch_model.h`, generated with `xxd -i`) so it ships inside
+  the binary with no runtime asset path.
+- **C++ inference + note-creation:** adapted from
+  [sevagh/basicpitch.cpp](https://github.com/sevagh/basicpitch.cpp)
+  (MIT) — see `third_party/basicpitch/LICENSE` and `README.md` for the
+  list of adaptations. Runs on ONNX Runtime (below).
+
+Both licenses are compatible with YAWN's MIT license.
+
+---
+
 ## Source-Code Dependencies
 
 Code dependencies are vendored by CMake's FetchContent and live
@@ -99,6 +121,8 @@ under `build/_deps/`. Each carries its own LICENSE file:
 - **minimp3** — CC0 — https://github.com/lieff/minimp3
 - **Eigen** — MPL 2.0 — https://gitlab.com/libeigen/eigen
 - **NeuralAmpModelerCore** — MIT — https://github.com/sdatkinson/NeuralAmpModelerCore
+- **ONNX Runtime** — MIT — https://github.com/microsoft/onnxruntime (prebuilt, behind `YAWN_HAS_BASIC_PITCH`)
+- **basicpitch.cpp** — MIT — https://github.com/sevagh/basicpitch.cpp (vendored + adapted in `third_party/basicpitch/`)
 - **tinygltf** — MIT — https://github.com/syoyo/tinygltf
 - **Ableton Link** — GPL 2 — https://github.com/Ableton/link
 - **VST3 SDK** — GPL 3 / Steinberg dual — https://github.com/steinbergmedia/vst3sdk

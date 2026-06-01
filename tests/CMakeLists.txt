@@ -32,6 +32,14 @@ target_link_libraries(yawn_tests PRIVATE
 if(YAWN_HAS_BASIC_PITCH)
     target_link_libraries(yawn_tests PRIVATE basicpitch)
     target_compile_definitions(yawn_tests PRIVATE YAWN_HAS_BASIC_PITCH=1)
+    if(WIN32)
+        # ctest launches yawn_tests.exe directly — the ONNX Runtime DLL
+        # must sit beside it (no rpath on Windows).
+        add_custom_command(TARGET yawn_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_RUNTIME_LIB}" "$<TARGET_FILE_DIR:yawn_tests>"
+            VERBATIM)
+    endif()
 endif()
 
 include(GoogleTest)

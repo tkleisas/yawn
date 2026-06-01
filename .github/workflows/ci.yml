@@ -89,7 +89,7 @@ jobs:
         run: pip install jinja2
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel

@@ -176,6 +176,7 @@
 - **8 MIDI Effects** — Arpeggiator (free-running & transport-synced), Chord, Scale, Note Length, Velocity, Random, Pitch, LFO
 - **MIDI Learn** — Map any CC or Note to any parameter (instrument, effect, mixer, transport), learn mode with visual feedback, per-channel or omni, JSON persistence
 - **MIDI Monitor** — Lock-free 65K-event ring buffer tracking all message types (Note, CC, PitchBend, Pressure, Clock, SysEx), port identification, millisecond timestamps
+- **Audio → MIDI (Basic Pitch)** — Right-click an audio clip → **Convert to MIDI** and Spotify's [Basic Pitch](https://github.com/spotify/basic-pitch) polyphonic transcription model drops the detected notes onto a new MIDI track in the same scene. Inference runs via **ONNX Runtime**; a MIT C++ port (adapted from [sevagh/basicpitch.cpp](https://github.com/sevagh/basicpitch.cpp)) lives in `third_party/basicpitch/`, built as a C++20 static lib while the rest of YAWN stays C++17 — a plain-struct facade (`bp_api.h`) keeps Eigen + ONNX Runtime off the C++17 side, the same PIMPL trick as the Neural Amp device. The 226 KB model is embedded as a byte array so there's no runtime asset to ship. Opt-in behind `-DYAWN_HAS_BASIC_PITCH=ON` (default OFF; Linux x64 + Windows x64, both CI-verified — macOS not wired). *The AI built a feature to turn sound it cannot hear into notes it cannot read, then wrote a unit test feeding a 440 Hz tone to assert the machine agrees that A is, in fact, A.*
 
 ### MIDI Loops
 
@@ -424,12 +425,13 @@ device works on first install. Attribution + license details live in
 | 3D Models (glTF 2.0) | tinygltf (optional) |
 | Scene Scripting | Lua 5.4 (vendored, sandboxed) |
 | Neural Amp Modelling | NeuralAmpModelerCore + Eigen (optional, fetched via FetchContent — gated on `YAWN_HAS_NAM`, default ON; built as a C++20 static lib with the rest of YAWN on C++17) |
+| Audio → MIDI | ONNX Runtime + Eigen (optional, prebuilt ORT fetched via FetchContent — gated on `YAWN_HAS_BASIC_PITCH`, default OFF; Linux x64 + Windows x64; runs Spotify's Basic Pitch model, vendored MIT port in `third_party/basicpitch/`) |
 | Convolution / FFT | KissFFT (optional — vendored fallback path; used by Convolution Reverb's uniformly-partitioned block convolver) |
 | Build System | CMake 3.24+ (needed for `$<LINK_LIBRARY:WHOLE_ARCHIVE>` generator expression — Neural Amp's static lib must not be DCE'd by the linker) |
 | Testing | Google Test 1.14 |
 | Platforms | Windows, Linux |
 
-All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. Lua 5.4 and SQLite3 are vendored as source amalgamations. NeuralAmpModelerCore + Eigen are FetchContent'd behind `YAWN_HAS_NAM` (default ON; flip OFF and the Neural Amp device falls back to a gain-stage passthrough). The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
+All dependencies are fetched automatically via CMake FetchContent — no manual installs needed. Lua 5.4 and SQLite3 are vendored as source amalgamations. NeuralAmpModelerCore + Eigen are FetchContent'd behind `YAWN_HAS_NAM` (default ON; flip OFF and the Neural Amp device falls back to a gain-stage passthrough). Audio→MIDI is behind `YAWN_HAS_BASIC_PITCH` (default OFF) — flip it ON and CMake grabs a prebuilt ONNX Runtime (Linux x64 / Windows x64) and the embedded Basic Pitch model comes along for the ride. The AI insisted on this because it can't `apt-get` and refused to write installation instructions longer than 3 lines.
 
 ## Building
 
