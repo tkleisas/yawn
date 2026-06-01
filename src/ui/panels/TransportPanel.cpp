@@ -14,6 +14,15 @@ namespace yawn {
 namespace ui {
 namespace fw2 {
 
+namespace {
+// Virtual-keyboard note-velocity presets for the transport-bar selector.
+// vel7 is the 7-bit MIDI velocity handed to VirtualKeyboard::setVelocity.
+struct VelPreset { const char* label; uint8_t vel7; };
+constexpr VelPreset kVelPresets[4] = {
+    {"Soft", 32}, {"Med", 64}, {"Norm", 96}, {"Hard", 127},
+};
+} // namespace
+
 void TransportPanel::setTransportState(bool playing, double beats, double bpm,
                                        int numerator, int denominator) {
     m_transportPlaying     = playing;
@@ -175,12 +184,21 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_autoBtnX = centerX + 4 * (btnSize + btnGap); m_autoBtnY = btnY;
     m_autoBtnW = autoBtnW;                         m_autoBtnH = btnSize;
 
-    // ── Right side: Link toggle (rightmost) ──
+    // ── Right side: Link toggle (rightmost), velocity selector left of it ──
     const float linkW = 52.0f;
     m_linkBtnX = bounds.x + bounds.w - 12.0f - linkW;
     m_linkBtnY = btnY;
     m_linkBtnW = linkW;
     m_linkBtnH = boxH;
+
+    // Velocity selector — just left of LINK. The CPU/MEM meters and the
+    // position display anchor to m_velBtnX (see render), so they reflow
+    // left to make room automatically.
+    const float velW = 78.0f;
+    m_velBtnW = velW;
+    m_velBtnH = boxH;
+    m_velBtnY = btnY;
+    m_velBtnX = m_linkBtnX - 8.0f - velW;
 }
 
 // ─── Render ────────────────────────────────────────────────────────
@@ -364,7 +382,7 @@ void TransportPanel::render(UIContext& ctx) {
         const float posSize = tmet.fontSizeLarge;
         const float tw = tm.textWidth(m_posText, posSize);
         const float lh = tm.lineHeight(posSize);
-        const float posRight = m_linkBtnX - 120.0f;
+        const float posRight = m_velBtnX - 120.0f;
         const float posX = posRight - tw;
         tm.drawText(r, m_posText, posX, y + (h - lh) * 0.5f,
                     posSize, ::yawn::ui::Theme::transportAccent);
@@ -432,6 +450,24 @@ void TransportPanel::render(UIContext& ctx) {
         }
     }
 
+    // Velocity selector — sets the virtual-keyboard note velocity.
+    // Click opens a small menu (Soft / Med / Norm / Hard).
+    {
+        const bool hovered = (m_hoveredBtn == 6);
+        const Color vbg = hovered ? Color{60, 64, 76, 255} : Color{48, 52, 62, 255};
+        r.drawRoundedRect(m_velBtnX, m_velBtnY, m_velBtnW, m_velBtnH, 4.0f, vbg);
+        r.drawRectOutline(m_velBtnX, m_velBtnY, m_velBtnW, m_velBtnH,
+                          Color{90, 95, 110, 255}, 1.0f);
+        const float fs = theme().metrics.fontSizeSmall;
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "Vel: %s \xe2\x96\xbe",
+                      kVelPresets[m_velLevel].label);
+        const float lh = tm.lineHeight(fs);
+        tm.drawText(r, buf, m_velBtnX + 6.0f,
+                    m_velBtnY + (m_velBtnH - lh) * 0.5f - lh * 0.15f,
+                    fs, Color{200, 205, 215, 255});
+    }
+
     // Performance meters (CPU / MEM).
     {
         if (++m_meterUpdateCounter >= 30) {
@@ -444,7 +480,7 @@ void TransportPanel::render(UIContext& ctx) {
 
         const float meterSize = tmet.fontSizeSmall;
         const float lineH = tm.lineHeight(meterSize);
-        const float rightEdge = m_linkBtnX - 8.0f;
+        const float rightEdge = m_velBtnX - 8.0f;
 
         char cpuBuf[16];
         const int cpuPct = static_cast<int>(m_cpuLoad * 100.0f + 0.5f);
@@ -625,6 +661,25 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
         return true;
     }
 
+    // Velocity selector — open a menu of the four presets. Selecting one
+    // updates the displayed level and pushes the 7-bit velocity to the
+    // virtual keyboard via the callback App wired.
+    if (hitBtn(m_velBtnX, m_velBtnY, m_velBtnW, m_velBtnH, mx, my)) {
+        std::vector<MenuEntry> items;
+        for (int i = 0; i < 4; ++i) {
+            char lbl[24];
+            std::snprintf(lbl, sizeof(lbl), "%s (%d)",
+                          kVelPresets[i].label, kVelPresets[i].vel7);
+            items.push_back(Menu::checkable(lbl, i == m_velLevel, [this, i]() {
+                m_velLevel = i;
+                if (m_onVelocityChanged) m_onVelocityChanged(kVelPresets[i].vel7);
+            }));
+        }
+        ContextMenu::show(std::move(items),
+                          Point{m_velBtnX, m_velBtnY + m_velBtnH + 2.0f});
+        return true;
+    }
+
     // Transport buttons.
     if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) {
         // Return-to-zero — leaves play state untouched so a user can
@@ -742,6 +797,7 @@ bool TransportPanel::onMouseMove(MouseMoveEvent& e) {
     else if (hitBtn(m_homeBtnX, m_homeBtnY, m_homeBtnW, m_homeBtnH, mx, my)) m_hoveredBtn = 3;
     else if (hitBtn(m_audioBtnX, m_audioBtnY, m_audioBtnW, m_audioBtnH, mx, my)) m_hoveredBtn = 4;
     else if (hitBtn(m_linkBtnX, m_linkBtnY, m_linkBtnW, m_linkBtnH, mx, my)) m_hoveredBtn = 5;
+    else if (hitBtn(m_velBtnX,  m_velBtnY,  m_velBtnW,  m_velBtnH,  mx, my)) m_hoveredBtn = 6;
     return (m_hoveredBtn != prev);
 }
 

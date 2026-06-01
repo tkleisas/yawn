@@ -350,15 +350,6 @@ void App::setupMenuBar() {
 
     // Track menu
     {
-        auto makeDeleteTrack = []() -> MenuEntry {
-            // v1 had "Delete Track" as a disabled placeholder (nullptr
-            // action + enabled=false). v2 Menu::item can't set enabled
-            // directly; build the entry manually.
-            MenuEntry e;
-            e.label = "Delete Track";
-            e.enabled = false;
-            return e;
-        };
         m_menuBar.addMenu("Track", {
             M::item("Add Audio Track", [this]() {
                 int idx = m_project.numTracks();
@@ -413,7 +404,6 @@ void App::setupMenuBar() {
                 LOG_INFO("Visual", "Added Visual track %d", m_project.numTracks());
             }),
             M::separator(),
-            makeDeleteTrack(),
             M::item("Rename Track", [this]() {
                 // SessionPanel is fw2 — check visibility directly.
                 if (m_sessionPanel->isVisible()) {
@@ -435,26 +425,8 @@ void App::setupMenuBar() {
         }),
     });
 
-    // MIDI menu — all three items are currently no-op placeholders.
-    {
-        auto disabled = [](std::string label) -> MenuEntry {
-            MenuEntry e;
-            e.label = std::move(label);
-            e.enabled = false;
-            return e;
-        };
-        m_menuBar.addMenu("MIDI", {
-            M::item("MIDI Devices",  nullptr),
-            M::item("MIDI Sync",     nullptr),
-            M::separator(),
-            M::item("Key Velocity: Soft (25%)",  [this]() { m_virtualKeyboard.setVelocity(32); }),
-            M::item("Key Velocity: Medium (50%)", [this]() { m_virtualKeyboard.setVelocity(64); }),
-            M::item("Key Velocity: Normal (75%)", [this]() { m_virtualKeyboard.setVelocity(96); }),
-            M::item("Key Velocity: Hard (100%)",  [this]() { m_virtualKeyboard.setVelocity(127); }),
-            M::separator(),
-            disabled("Link Settings"),
-        });
-    }
+    // (MIDI device + Link sync config live in Edit → Preferences; the
+    // virtual-keyboard note velocity is set from the transport bar.)
 
     // Tools menu — procedural preset generation. Runs on a worker
     // thread; results land in the global preset library and show up in
@@ -4630,6 +4602,16 @@ bool App::init() {
     m_detailPanel->setLearnManager(&m_midiLearnManager);
     m_transportPanel->init(&m_project, &m_audioEngine, &m_undoManager);
     m_transportPanel->setLearnManager(&m_midiLearnManager);
+
+    // Virtual-keyboard note velocity is set from the transport bar's
+    // Vel selector (replaces the old MIDI-menu velocity presets). Sync
+    // the initial level (Norm = 96) so the displayed level and the
+    // keyboard agree from the start.
+    m_transportPanel->setOnVelocityChanged([this](uint8_t vel7) {
+        m_virtualKeyboard.setVelocity(vel7);
+    });
+    m_transportPanel->setVelocityLevel(2);   // Norm
+    m_virtualKeyboard.setVelocity(96);
 
     // Session-style record orchestration. The Record button on the
     // transport panel calls back here so we can:

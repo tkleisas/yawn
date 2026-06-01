@@ -195,6 +195,20 @@ public:
     void setOnAutoArmPressed(AutoArmPressedCallback cb) {
         m_onAutoArmPressed = std::move(cb);
     }
+
+    // Virtual-keyboard note-velocity selector (a small selector left of
+    // the LINK button). The panel owns the level; App wires this to
+    // VirtualKeyboard::setVelocity. (Replaces the old MIDI-menu velocity
+    // presets, which went away with the MIDI menu.)
+    using VelocityChangedCallback = std::function<void(uint8_t vel7)>;
+    void setOnVelocityChanged(VelocityChangedCallback cb) {
+        m_onVelocityChanged = std::move(cb);
+    }
+    // Set the displayed level (0=Soft, 1=Med, 2=Norm, 3=Hard) without
+    // firing the callback — used by App to sync the initial state.
+    void setVelocityLevel(int level) {
+        m_velLevel = (level < 0) ? 0 : (level > 3) ? 3 : level;
+    }
     void setMetronomeVisualStyle(int style) { m_metroVisualStyle = style; }
     // When false, the LINK button is rendered disabled and clicks are
     // ignored — the user has to enable Ableton Link in Preferences →
@@ -309,6 +323,7 @@ private:
     int                 m_selectedScene = 0;
     RecordPressedCallback m_onRecordPressed;
     AutoArmPressedCallback m_onAutoArmPressed;
+    VelocityChangedCallback m_onVelocityChanged;
 
     bool   m_transportPlaying     = false;
     double m_transportBeats       = 0.0;
@@ -331,6 +346,10 @@ private:
 
     // Link sync toggle (right side, before CPU meter).
     float m_linkBtnX = 0, m_linkBtnY = 0, m_linkBtnW = 0, m_linkBtnH = 0;
+
+    // Virtual-keyboard velocity selector (sits just left of LINK).
+    float m_velBtnX = 0, m_velBtnY = 0, m_velBtnW = 0, m_velBtnH = 0;
+    int   m_velLevel = 2;  // index into kVelPresets; 2 = Normal (default)
 
     // Centered transport button positions.
     float m_homeBtnX = 0, m_homeBtnY = 0, m_homeBtnW = 0, m_homeBtnH = 0;
