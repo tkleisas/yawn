@@ -23,6 +23,7 @@
 #include "LayerStack.h"   // OverlayHandle, Rect
 #include "Widget.h"       // MouseEvent, KeyEvent
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <vector>
@@ -91,6 +92,15 @@ public:
         std::vector<Rect> buttonRects;             // same order as spec.buttons
         int               hoveredButton = -1;      // hover index, or -1
         int               pressedButton = -1;      // mouse-down active
+        // Vertical scroll of the message region when the dialog is
+        // clamped to the viewport and the content overflows. The title
+        // and button row stay pinned; only the message scrolls.
+        Rect              msgRect{};               // scrollable message viewport
+        float             msgContentH = 0.0f;      // full message height
+        float             scrollOffset = 0.0f;     // 0..scrollMax()
+        float             scrollMax() const {
+            return msgRect.h > 0.0f ? std::max(0.0f, msgContentH - msgRect.h) : 0.0f;
+        }
     };
 
     static DialogManager& instance();
@@ -124,8 +134,12 @@ private:
     bool onMouseDown(MouseEvent& e);
     bool onMouseUp(MouseEvent& e);
     bool onMouseMove(MouseMoveEvent& e);
+    bool onScroll(ScrollEvent& e);
     bool onKey(KeyEvent& e);
     void onEscape();
+
+    // Clamp scrollOffset to [0, scrollMax()].
+    void clampScroll();
 
     // Geometry + push.
     void layoutBody(UIContext& ctx);

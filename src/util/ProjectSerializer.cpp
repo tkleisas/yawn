@@ -26,6 +26,7 @@ json serializeEffectChain(const effects::EffectChain& chain) {
         j["id"] = fx->id();
         j["bypassed"] = fx->bypassed();
         j["mix"] = fx->mix();
+        if (!fx->currentPresetName().empty()) j["preset"] = fx->currentPresetName();
         j["params"] = serializeParams(*fx);
 
 #ifdef YAWN_HAS_VST3
@@ -91,6 +92,8 @@ void deserializeEffectChain(effects::EffectChain& chain, const json& arr,
         if (!slotFx) continue;
         slotFx->setBypassed(j.value("bypassed", false));
         slotFx->setMix(j.value("mix", 1.0f));
+        if (j.contains("preset"))
+            slotFx->setCurrentPresetName(j["preset"].get<std::string>());
 
 #ifdef YAWN_HAS_VST3
         if (isVST3Id(id)) {
@@ -130,6 +133,7 @@ json serializeMidiEffectChain(const midi::MidiEffectChain& chain) {
         j["id"] = fx->id();
         j["instanceId"] = fx->instanceId();
         j["bypassed"] = fx->bypassed();
+        if (!fx->currentPresetName().empty()) j["preset"] = fx->currentPresetName();
         j["params"] = serializeParams(*fx);
         if (fx->isLinkedToSource())
             j["linkTargetId"] = fx->linkSourceId();
@@ -164,6 +168,8 @@ void deserializeMidiEffectChain(midi::MidiEffectChain& chain, const json& arr,
             fx->setInstanceId(j["instanceId"].get<uint32_t>());
         if (j.contains("params"))
             deserializeParams(*fx, j["params"]);
+        if (j.contains("preset"))
+            fx->setCurrentPresetName(j["preset"].get<std::string>());
         // Restore LFO link target ID + visual-target addressing
         if (id == "lfo") {
             auto* lfo = static_cast<midi::LFO*>(fx.get());
@@ -187,6 +193,7 @@ json serializeInstrument(const instruments::Instrument& inst,
     json j;
     j["id"] = inst.id();
     j["bypassed"] = inst.bypassed();
+    if (!inst.currentPresetName().empty()) j["preset"] = inst.currentPresetName();
     j["params"] = serializeParams(inst);
 
 #ifdef YAWN_HAS_VST3
@@ -386,6 +393,8 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
         }
         inst->init(sampleRate, maxBlockSize);
         inst->setBypassed(j.value("bypassed", false));
+        if (j.contains("preset"))
+            inst->setCurrentPresetName(j["preset"].get<std::string>());
         auto* vinst = static_cast<vst3::VST3Instrument*>(inst.get());
         if (vinst->instance()) {
             if (j.contains("vst3state")) {
@@ -409,6 +418,8 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
 
     inst->init(sampleRate, maxBlockSize);
     inst->setBypassed(j.value("bypassed", false));
+    if (j.contains("preset"))
+        inst->setCurrentPresetName(j["preset"].get<std::string>());
     if (j.contains("params"))
         deserializeParams(*inst, j["params"]);
 

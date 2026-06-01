@@ -4,6 +4,7 @@
 #include "core/ParameterInfo.h"
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 namespace yawn {
 namespace midi {
@@ -56,6 +57,12 @@ public:
     bool bypassed() const { return m_bypassed; }
     void setBypassed(bool b) { m_bypassed = b; }
 
+    // Name of the preset currently loaded onto this device (empty = none).
+    // Display-only metadata, set by the preset load/save helpers and
+    // persisted with the project so the device strip can show it.
+    const std::string& currentPresetName() const { return m_currentPresetName; }
+    void setCurrentPresetName(const std::string& n) { m_currentPresetName = n; }
+
     // --- Modulation output (for LFO and similar modulators) ---
     // Override in effects that produce modulation values for other parameters.
     // targetType: 0=Instrument, 1=AudioEffect, 2=MidiEffect, 3=Mixer,
@@ -91,6 +98,7 @@ protected:
     bool   m_bypassed   = false;
     double m_sampleRate = kDefaultSampleRate;
     float  m_lastAppliedOffset = 0.0f;
+    std::string m_currentPresetName;
 
 private:
     static inline std::atomic<uint32_t> s_nextInstanceId{1};

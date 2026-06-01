@@ -562,18 +562,40 @@ static void paintDialog(const DialogManager::State& s, UIContext& ctx) {
         y += lh + rowGap;
     }
 
-    // Message — one line per '\n'.
-    if (!s.spec.message.empty() && ctx.textMetrics) {
+    // Message — one line per '\n', clipped to the scroll region and
+    // offset by the current scroll position. msgRect spans the full
+    // body when nothing overflows, so short dialogs render unchanged;
+    // tall ones scroll while the title + buttons stay pinned.
+    if (!s.spec.message.empty() && ctx.textMetrics && s.msgRect.h > 0.0f) {
         const float lh = ctx.textMetrics->lineHeight(fontSize);
+        ctx.renderer->pushClip(s.msgRect.x, s.msgRect.y, s.msgRect.w, s.msgRect.h);
+        float my = s.msgRect.y - s.scrollOffset;
         std::string line;
         for (size_t i = 0; i <= s.spec.message.size(); ++i) {
             const bool eol = (i == s.spec.message.size() || s.spec.message[i] == '\n');
             if (!eol) { line.push_back(s.spec.message[i]); continue; }
-            ctx.textMetrics->drawText(*ctx.renderer, line,
-                                       b.x + padX, y - lh * 0.15f,
-                                       fontSize, p.textSecondary);
-            y += lh;
+            if (my + lh >= s.msgRect.y && my <= s.msgRect.y + s.msgRect.h)
+                ctx.textMetrics->drawText(*ctx.renderer, line,
+                                           b.x + padX, my - lh * 0.15f,
+                                           fontSize, p.textSecondary);
+            my += lh;
             line.clear();
+        }
+        ctx.renderer->popClip();
+
+        // Scrollbar — only when the message overflows its region.
+        const float maxS = s.scrollMax();
+        if (maxS > 0.0f && s.msgContentH > 0.0f) {
+            const float trackX = b.x + b.w - 6.0f;
+            const float trackY = s.msgRect.y;
+            const float trackH = s.msgRect.h;
+            ctx.renderer->drawRect(trackX, trackY, 3.0f, trackH,
+                                   Color{255, 255, 255, 30});
+            const float thumbH = std::max(20.0f,
+                trackH * (s.msgRect.h / s.msgContentH));
+            const float thumbY = trackY + (trackH - thumbH) * (s.scrollOffset / maxS);
+            ctx.renderer->drawRect(trackX, thumbY, 3.0f, thumbH,
+                                   Color{255, 255, 255, 110});
         }
     }
 

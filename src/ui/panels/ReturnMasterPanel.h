@@ -24,7 +24,6 @@
 #include "app/Project.h"
 #include "core/Constants.h"
 #include "util/UndoManager.h"
-#include "ui/ContextMenu.h"
 #include "automation/AutomationTypes.h"
 #include "midi/MidiMapping.h"
 #include <cstdio>

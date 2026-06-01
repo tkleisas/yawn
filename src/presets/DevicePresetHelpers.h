@@ -79,6 +79,7 @@ inline void deserializeDeviceParams(midi::MidiEffect& fx, const json& params) {
 
 inline std::filesystem::path saveDevicePreset(const std::string& presetName,
                                                instruments::Instrument& inst) {
+    inst.setCurrentPresetName(presetName);
     json params = serializeDeviceParams(inst);
     std::vector<uint8_t> vst3State, vst3CtrlState;
 
@@ -105,6 +106,7 @@ inline std::filesystem::path saveDevicePreset(const std::string& presetName,
 
 inline std::filesystem::path saveDevicePreset(const std::string& presetName,
                                                effects::AudioEffect& fx) {
+    fx.setCurrentPresetName(presetName);
     json params = serializeDeviceParams(fx);
     std::vector<uint8_t> vst3State, vst3CtrlState;
 
@@ -133,6 +135,7 @@ inline std::filesystem::path saveDevicePreset(const std::string& presetName,
 
 inline std::filesystem::path saveDevicePreset(const std::string& presetName,
                                                midi::MidiEffect& fx) {
+    fx.setCurrentPresetName(presetName);
     json params = serializeDeviceParams(fx);
     // MIDI effects are never VST3 currently
     return PresetManager::savePreset(presetName, fx.id(), fx.name(), params);
@@ -144,6 +147,7 @@ inline bool loadDevicePreset(const std::filesystem::path& filePath,
                               instruments::Instrument& inst) {
     PresetData data;
     if (!PresetManager::loadPreset(filePath, data)) return false;
+    inst.setCurrentPresetName(filePath.stem().string());
 
 #ifdef YAWN_HAS_VST3
     if (auto* vi = dynamic_cast<vst3::VST3Instrument*>(&inst)) {
@@ -174,6 +178,7 @@ inline bool loadDevicePreset(const std::filesystem::path& filePath,
                               effects::AudioEffect& fx) {
     PresetData data;
     if (!PresetManager::loadPreset(filePath, data)) return false;
+    fx.setCurrentPresetName(filePath.stem().string());
 
 #ifdef YAWN_HAS_VST3
     if (auto* ve = dynamic_cast<vst3::VST3Effect*>(&fx)) {
@@ -204,6 +209,7 @@ inline bool loadDevicePreset(const std::filesystem::path& filePath,
                               midi::MidiEffect& fx) {
     PresetData data;
     if (!PresetManager::loadPreset(filePath, data)) return false;
+    fx.setCurrentPresetName(filePath.stem().string());
     deserializeDeviceParams(fx, data.params);
     return true;
 }

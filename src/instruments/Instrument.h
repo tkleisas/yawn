@@ -45,6 +45,12 @@ public:
     bool bypassed() const { return m_bypassed; }
     void setBypassed(bool b) { m_bypassed = b; }
 
+    // Name of the preset currently loaded onto this device (empty = none).
+    // Display-only metadata, set by the preset load/save helpers and
+    // persisted with the project so the device strip can show it.
+    const std::string& currentPresetName() const { return m_currentPresetName; }
+    void setCurrentPresetName(const std::string& n) { m_currentPresetName = n; }
+
     // Sidechain input: set by AudioEngine each buffer cycle.
     // Points to the interleaved stereo buffer of the source track (or nullptr).
     void setSidechainInput(const float* buffer) { m_sidechainBuffer = buffer; }
@@ -84,6 +90,7 @@ protected:
     int    m_maxBlockSize = 256;
     bool   m_bypassed     = false;
     const float* m_sidechainBuffer = nullptr;
+    std::string m_currentPresetName;
 };
 
 } // namespace instruments

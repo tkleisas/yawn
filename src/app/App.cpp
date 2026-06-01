@@ -7,7 +7,6 @@
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Dialog.h"
 #include "ui/framework/v2/DropDown.h"
-#include "ui/framework/v2/V1MenuBridge.h"
 #include "ui/framework/v2/Theme.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/FMSynth.h"
@@ -1089,10 +1088,19 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
     auto& track = m_project.track(trackIndex);
 
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    // item() defaults to enabled=true; several entries here grey-out the
+    // active/unavailable choice, so wrap with an explicit enabled flag.
+    auto itemEn = [](std::string label, std::function<void()> action, bool enabled) {
+        MenuEntry e = item(std::move(label), std::move(action));
+        e.enabled = enabled;
+        return e;
+    };
+    std::vector<MenuEntry> items;
 
     // Track type selection (with confirmation dialog)
-    items.push_back({"Set as Audio Track", [this, trackIndex]() {
+    items.push_back(itemEn("Set as Audio Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Audio) return;
         ui::fw2::ConfirmDialog::prompt(
@@ -1106,9 +1114,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_detailPanel->clear();
                 markDirty();
             });
-    }, false, track.type != Track::Type::Audio});
+    }, track.type != Track::Type::Audio));
 
-    items.push_back({"Set as MIDI Track", [this, trackIndex]() {
+    items.push_back(itemEn("Set as MIDI Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Midi) return;
         ui::fw2::ConfirmDialog::prompt(
@@ -1123,9 +1131,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_detailPanel->clear();
                 markDirty();
             });
-    }, false, track.type != Track::Type::Midi});
+    }, track.type != Track::Type::Midi));
 
-    items.push_back({"Set as Visual Track", [this, trackIndex]() {
+    items.push_back(itemEn("Set as Visual Track", [this, trackIndex]() {
         auto& trk = m_project.track(trackIndex);
         if (trk.type == Track::Type::Visual) return;
         ui::fw2::ConfirmDialog::prompt(
@@ -1139,19 +1147,19 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_detailPanel->clear();
                 markDirty();
             });
-    }, false, track.type != Track::Type::Visual});
+    }, track.type != Track::Type::Visual));
 
     // Blend Mode submenu — visible on Visual tracks only.
     if (track.type == Track::Type::Visual) {
-        std::vector<ui::ContextMenu::Item> bmItems;
+        std::vector<MenuEntry> bmItems;
         const auto cur = track.visualBlendMode;
         auto addMode = [&](const char* label, Track::VisualBlendMode m,
                             visual::VisualEngine::BlendMode vm) {
-            bmItems.push_back({label, [this, trackIndex, m, vm]{
+            bmItems.push_back(itemEn(label, [this, trackIndex, m, vm]{
                 m_project.track(trackIndex).visualBlendMode = m;
                 m_visualEngine.setLayerBlendMode(trackIndex, vm);
                 markDirty();
-            }, false, cur != m});
+            }, cur != m));
         };
         addMode("Normal",   Track::VisualBlendMode::Normal,
                 visual::VisualEngine::BlendMode::Normal);
@@ -1161,12 +1169,12 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 visual::VisualEngine::BlendMode::Multiply);
         addMode("Screen",   Track::VisualBlendMode::Screen,
                 visual::VisualEngine::BlendMode::Screen);
-        items.push_back({"Blend Mode", nullptr, false, true, std::move(bmItems)});
+        items.push_back(submenu("Blend Mode", std::move(bmItems)));
 
         // "Add Knob Lane" submenu — creates a track-level automation
         // lane targeting A..H. Lanes show up in the expanded track
         // row and can be edited in the arrangement view.
-        std::vector<ui::ContextMenu::Item> laneItems;
+        std::vector<MenuEntry> laneItems;
         auto& trackLanes = m_project.track(trackIndex).automationLanes;
         for (int k = 0; k < 8; ++k) {
             char label[16];
@@ -1181,7 +1189,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                     exists = true; break;
                 }
             }
-            laneItems.push_back({label,
+            laneItems.push_back(itemEn(label,
                 [this, trackIndex, k]{
                     auto& tr = m_project.track(trackIndex);
                     automation::AutomationLane lane;
@@ -1193,16 +1201,15 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                         tr.autoMode = automation::AutoMode::Read;
                     markDirty();
                 },
-                false, !exists});
+                !exists));
         }
-        items.push_back({"Add Knob Lane", nullptr, false, true,
-                           std::move(laneItems)});
+        items.push_back(submenu("Add Knob Lane", std::move(laneItems)));
     }
 
     // Separator + Instruments submenu
-    std::vector<ui::ContextMenu::Item> instrItems;
+    std::vector<MenuEntry> instrItems;
     auto addInstrItem = [&](const char* label, auto factory) {
-        instrItems.push_back({label, [this, trackIndex, label, factory]() {
+        instrItems.push_back(item(label, [this, trackIndex, label, factory]() {
             auto oldType = m_project.track(trackIndex).type;
             std::string oldInstr;
             auto* inst = m_audioEngine.instrument(trackIndex);
@@ -1228,7 +1235,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                     m_audioEngine.setInstrument(trackIndex, factory());
                     markDirty();
                 }, ""});
-        }});
+        }));
     };
     addInstrItem("SubSynth", [](){ return std::make_unique<instruments::SubtractiveSynth>(); });
     addInstrItem("FM Synth", [](){ return std::make_unique<instruments::FMSynth>(); });
@@ -1249,7 +1256,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     // present — re-picking the organ shouldn't stack Rotaries). The
     // rotary is the de-facto Hammond pairing, but kept as a
     // separate effect so it can be applied to anything else too.
-    instrItems.push_back({"Drawbar Organ", [this, trackIndex]() {
+    instrItems.push_back(item("Drawbar Organ", [this, trackIndex]() {
         auto oldType = m_project.track(trackIndex).type;
         std::string oldInstr;
         if (auto* inst = m_audioEngine.instrument(trackIndex))
@@ -1285,14 +1292,14 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                     std::make_unique<instruments::DrawbarOrgan>());
                 markDirty();
             }, ""});
-    }});
+    }));
 
     // Electric Piano — same auto-add-FX pattern as Drawbar Organ. Pairs
     // a Suitcase-default EP with a Phaser, the iconic Mark V / Steely
     // Dan rig setup. Phaser is added once; re-picking the EP later
     // doesn't stack a second one. The user can remove or replace the
     // phaser freely — it's just a sensible default starting point.
-    instrItems.push_back({"Electric Piano", [this, trackIndex]() {
+    instrItems.push_back(item("Electric Piano", [this, trackIndex]() {
         auto oldType = m_project.track(trackIndex).type;
         std::string oldInstr;
         if (auto* inst = m_audioEngine.instrument(trackIndex))
@@ -1327,34 +1334,36 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                     std::make_unique<instruments::ElectricPiano>());
                 markDirty();
             }, ""});
-    }});
+    }));
 
 #ifdef YAWN_HAS_VST3
     // VST3 instruments — flat list with separator
     if (m_vst3Scanner && !m_vst3Scanner->instruments().empty()) {
-        instrItems.push_back({"── VST3 ──", nullptr, true});
+        instrItems.push_back(separator());
+        instrItems.push_back(header("── VST3 ──"));
         for (auto& info : m_vst3Scanner->instruments()) {
             std::string label = info.name;
             if (!info.vendor.empty()) label += " (" + info.vendor + ")";
             std::string modulePath = info.modulePath;
             std::string classID = info.classIDString;
-            instrItems.push_back({label, [this, trackIndex, modulePath, classID]() {
+            instrItems.push_back(item(label, [this, trackIndex, modulePath, classID]() {
                 m_project.track(trackIndex).type = Track::Type::Midi;
                 m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
                 m_audioEngine.setInstrument(trackIndex,
                     std::make_unique<vst3::VST3Instrument>(modulePath, classID));
                 markDirty();
-            }});
+            }));
         }
     }
 #endif
 
-    items.push_back({"Add Instrument", nullptr, true, true, std::move(instrItems)});
+    items.push_back(separator());
+    items.push_back(submenu("Add Instrument", std::move(instrItems)));
 
     // Audio effects submenu
-    std::vector<ui::ContextMenu::Item> fxItems;
+    std::vector<MenuEntry> fxItems;
     auto addFxItem = [&](const char* label, auto factory) {
-        fxItems.push_back({label, [this, trackIndex, label, factory]() {
+        fxItems.push_back(item(label, [this, trackIndex, label, factory]() {
             LOG_INFO("User", "addFx '%s' to track %d", label, trackIndex);
             auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
             chain.append(factory());
@@ -1370,7 +1379,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                     m_audioEngine.mixer().trackEffects(trackIndex).append(factory());
                     markDirty();
                 }, ""});
-        }});
+        }));
     };
     addFxItem("Reverb",      [](){ return std::make_unique<effects::Reverb>(); });
     addFxItem("Delay",       [](){ return std::make_unique<effects::Delay>(); });
@@ -1399,29 +1408,30 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 #ifdef YAWN_HAS_VST3
     // VST3 effects — flat list with separator
     if (m_vst3Scanner && !m_vst3Scanner->effects().empty()) {
-        fxItems.push_back({"── VST3 ──", nullptr, true});
+        fxItems.push_back(separator());
+        fxItems.push_back(header("── VST3 ──"));
         for (auto& info : m_vst3Scanner->effects()) {
             std::string label = info.name;
             if (!info.vendor.empty()) label += " (" + info.vendor + ")";
             std::string modulePath = info.modulePath;
             std::string classID = info.classIDString;
-            fxItems.push_back({label, [this, trackIndex, modulePath, classID, label]() {
+            fxItems.push_back(item(label, [this, trackIndex, modulePath, classID, label]() {
                 LOG_INFO("User", "addFx VST3 '%s' to track %d (path=%s)",
                          label.c_str(), trackIndex, modulePath.c_str());
                 auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
                 chain.append(std::make_unique<vst3::VST3Effect>(modulePath, classID));
                 markDirty();
-            }});
+            }));
         }
     }
 #endif
 
-    items.push_back({"Add Audio Effect", nullptr, false, true, std::move(fxItems)});
+    items.push_back(submenu("Add Audio Effect", std::move(fxItems)));
 
     // MIDI effects submenu
-    std::vector<ui::ContextMenu::Item> midiItems;
+    std::vector<MenuEntry> midiItems;
     auto addMidiItem = [&](const char* label, auto factory) {
-        midiItems.push_back({label, [this, trackIndex, label, factory]() {
+        midiItems.push_back(item(label, [this, trackIndex, label, factory]() {
             auto& chain = m_audioEngine.midiEffectChain(trackIndex);
             chain.addEffect(factory());
             int slot = chain.count() - 1;
@@ -1436,7 +1446,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                     m_audioEngine.midiEffectChain(trackIndex).addEffect(factory());
                     markDirty();
                 }, ""});
-        }});
+        }));
     };
     addMidiItem("Arpeggiator", [](){ return std::make_unique<midi::Arpeggiator>(); });
     addMidiItem("Chord",       [](){ return std::make_unique<midi::Chord>(); });
@@ -1446,36 +1456,36 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addMidiItem("Random",      [](){ return std::make_unique<midi::MidiRandom>(); });
     addMidiItem("Pitch",       [](){ return std::make_unique<midi::MidiPitch>(); });
     addMidiItem("LFO",         [](){ return std::make_unique<midi::LFO>(); });
-    items.push_back({"Add MIDI Effect", nullptr, false, true, std::move(midiItems)});
+    items.push_back(submenu("Add MIDI Effect", std::move(midiItems)));
 
     // Record quantize submenu
     auto curRQ = track.recordQuantize;
-    std::vector<ui::ContextMenu::Item> rqItems;
-    rqItems.push_back({"None", [this, trackIndex, curRQ]() {
+    std::vector<MenuEntry> rqItems;
+    rqItems.push_back(itemEn("None", [this, trackIndex, curRQ]() {
         m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::None;
         m_undoManager.push({"Change Record Quantize",
             [this, trackIndex, curRQ]{ m_project.track(trackIndex).recordQuantize = curRQ; },
             [this, trackIndex]{ m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::None; },
             ""});
         markDirty();
-    }, false, curRQ != audio::QuantizeMode::None});
-    rqItems.push_back({"Beat", [this, trackIndex, curRQ]() {
+    }, curRQ != audio::QuantizeMode::None));
+    rqItems.push_back(itemEn("Beat", [this, trackIndex, curRQ]() {
         m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBeat;
         m_undoManager.push({"Change Record Quantize",
             [this, trackIndex, curRQ]{ m_project.track(trackIndex).recordQuantize = curRQ; },
             [this, trackIndex]{ m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBeat; },
             ""});
         markDirty();
-    }, false, curRQ != audio::QuantizeMode::NextBeat});
-    rqItems.push_back({"Bar", [this, trackIndex, curRQ]() {
+    }, curRQ != audio::QuantizeMode::NextBeat));
+    rqItems.push_back(itemEn("Bar", [this, trackIndex, curRQ]() {
         m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBar;
         m_undoManager.push({"Change Record Quantize",
             [this, trackIndex, curRQ]{ m_project.track(trackIndex).recordQuantize = curRQ; },
             [this, trackIndex]{ m_project.track(trackIndex).recordQuantize = audio::QuantizeMode::NextBar; },
             ""});
         markDirty();
-    }, false, curRQ != audio::QuantizeMode::NextBar});
-    items.push_back({"Record Quantize", nullptr, false, true, std::move(rqItems)});
+    }, curRQ != audio::QuantizeMode::NextBar));
+    items.push_back(submenu("Record Quantize", std::move(rqItems)));
 
 #ifdef YAWN_HAS_VST3
     // Open VST3 Editor for instrument
@@ -1486,9 +1496,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             std::string edTitle = std::string(vsti->name()) + " - Track " + std::to_string(trackIndex + 1);
             std::string modPath = vsti->modulePath();
             std::string clsID = vsti->classIDString();
-            items.push_back({"Open VST3 Instrument Editor", [this, vsti, edTitle, modPath, clsID]() {
+            items.push_back(item("Open VST3 Instrument Editor", [this, vsti, edTitle, modPath, clsID]() {
                 openVST3Editor(vsti->instance(), modPath, clsID, edTitle);
-            }});
+            }));
         }
     }
     // Open VST3 Editor for effects in chain
@@ -1501,9 +1511,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 std::string edTitle = fxName + " - Track " + std::to_string(trackIndex + 1);
                 std::string modPath = fx->modulePath();
                 std::string clsID = fx->classIDString();
-                items.push_back({"Open Editor: " + fxName, [this, fx, edTitle, modPath, clsID]() {
+                items.push_back(item("Open Editor: " + fxName, [this, fx, edTitle, modPath, clsID]() {
                     openVST3Editor(fx->instance(), modPath, clsID, edTitle);
-                }});
+                }));
             }
         }
     }
@@ -1514,7 +1524,8 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     // handled uniformly by LayerStack instead of the v1 paintOverlay
     // + hand-rolled escape/click dispatch.
     bool canDelete = m_project.numTracks() > 1;
-    items.push_back({"Delete Track", [this, trackIndex]() {
+    items.push_back(separator());
+    items.push_back(itemEn("Delete Track", [this, trackIndex]() {
         ui::fw2::ConfirmDialog::promptCustom(
             "Delete Track",
             "This will stop playback and delete the track. Continue?",
@@ -1549,7 +1560,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 m_detailPanel->clear();
                 markDirty();
             });   // promptCustom
-    }, true, canDelete});
+    }, canDelete));
 
     // Clear-automation entry on the track header. Wipes the
     // arrangement-level lanes AND every per-clip envelope on this
@@ -1577,7 +1588,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             const bool curOverdub = trk.midiOverdub;
             std::string label = "MIDI Overdub: ";
             label += curOverdub ? "On" : "Off";
-            items.push_back({label.c_str(),
+            items.push_back(item(label,
                 [this, trackIndex, curOverdub]() {
                     if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
                     m_project.track(trackIndex).midiOverdub = !curOverdub;
@@ -1593,11 +1604,11 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                             markDirty();
                         }, ""});
                     markDirty();
-                }});
+                }));
         }
 
         if (hasAny) {
-            items.push_back({"Clear Track Automation",
+            items.push_back(item("Clear Track Automation",
                 [this, trackIndex]() {
                     if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
                     // Snapshot for undo: track lanes + every slot's
@@ -1625,12 +1636,11 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                             markDirty();
                         }, ""});
                     markDirty();
-                }});
+                }));
         }
     }
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
-                                 ui::fw::Point{mx, my});
+    ui::fw2::ContextMenu::show(std::move(items), ui::fw2::Point{mx, my});
 }
 
 void App::stampVisualLaunch(int track, int scene) {
@@ -2115,7 +2125,14 @@ void App::pollVisualKnobAutomation() {
 }
 
 void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my) {
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    auto itemEn = [](std::string label, std::function<void()> action, bool enabled) {
+        MenuEntry e = item(std::move(label), std::move(action));
+        e.enabled = enabled;
+        return e;
+    };
+    std::vector<MenuEntry> items;
     auto* slot = m_project.getSlot(trackIndex, sceneIndex);
     bool hasClip = slot && !slot->empty();
     bool hasClipboard = m_clipboard.type != ClipboardData::Type::None;
@@ -2127,7 +2144,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     if (isVisualTrack) {
         const bool hasVisualClip = slot && slot->visualClip;
         const char* label = hasVisualClip ? "Replace Shader…" : "Load Shader…";
-        items.push_back({label, [this, trackIndex, sceneIndex]() {
+        items.push_back(item(label, [this, trackIndex, sceneIndex]() {
             m_pendingShaderTrack = trackIndex;
             m_pendingShaderScene = sceneIndex;
             static SDL_DialogFileFilter filter{"Fragment shaders", "frag;glsl;fs"};
@@ -2155,13 +2172,13 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 &filter, 1,
                 /*default_location*/ nullptr,
                 /*allow_many*/ false);
-        }, false, true});
+        }));
 
         // "New Shader…" — prompts for a name, writes a minimal
         // Shadertoy-compatible template to <project>/shaders/<name>.frag,
         // and assigns it to this clip. Requires a saved project so the
         // file has somewhere to land.
-        items.push_back({"New Shader…",
+        items.push_back(item("New Shader…",
             [this, trackIndex, sceneIndex]() {
                 if (m_projectPath.empty()) {
                     LOG_WARN("Shader",
@@ -2224,13 +2241,13 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         }
                         markDirty();
                     });
-            }, false, true});
+            }));
 
         // "Fork Shader" — duplicate the current shader file to a new
         // <stem>_fork_N.frag so the user can edit it without touching
         // shaders shared by other clips.
         if (hasVisualClip && !slot->visualClip->firstShaderPath().empty()) {
-            items.push_back({"Fork Shader",
+            items.push_back(item("Fork Shader",
                 [this, trackIndex, sceneIndex]() {
                     if (m_projectPath.empty()) {
                         LOG_WARN("Shader",
@@ -2276,7 +2293,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             s->visualClip->audioSource);
                     }
                     markDirty();
-                }, false, true});
+                }));
         }
 
         // "Localize Shader" — copy an external/bundled shader into
@@ -2287,7 +2304,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             const bool alreadyLocal =
                 sp.compare(0, 8, "shaders/") == 0;
             if (!alreadyLocal) {
-                items.push_back({"Localize Shader",
+                items.push_back(item("Localize Shader",
                     [this, trackIndex, sceneIndex]() {
                         if (m_projectPath.empty()) {
                             LOG_WARN("Shader",
@@ -2307,13 +2324,13 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                                 s->visualClip->audioSource);
                         }
                         markDirty();
-                    }, false, true});
+                    }));
             }
         }
 
         // "Set Video…" — opens a file picker, kicks off the ffmpeg
         // transcode, and drops the imported .mp4 path into this clip.
-        items.push_back({"Set Video…",
+        items.push_back(item("Set Video…",
             [this, trackIndex, sceneIndex]() {
                 if (m_projectPath.empty()) {
                     // Videos transcode into <project>/media/, so the
@@ -2343,7 +2360,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     },
                     this, m_mainWindow.getHandle(),
                     &filter, 1, nullptr, false);
-            }, false, true});
+            }));
 
         // "Live Input ▸" — submenu listing discovered devices + a
         // Custom URL… fallback + Clear when the clip is already live.
@@ -2375,19 +2392,18 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 markDirty();
             };
 
-            std::vector<ui::ContextMenu::Item> liveItems;
+            std::vector<MenuEntry> liveItems;
 
             auto devices = visual::enumerateLiveInputDevices();
             for (auto& d : devices) {
                 std::string url = d.url;
-                liveItems.push_back({d.label,
-                    [applyLiveUrl, url]{ applyLiveUrl(url); },
-                    false, true});
+                liveItems.push_back(item(d.label,
+                    [applyLiveUrl, url]{ applyLiveUrl(url); }));
             }
             if (!devices.empty()) {
-                liveItems.push_back({"", nullptr, true, false}); // separator
+                liveItems.push_back(separator());
             }
-            liveItems.push_back({"Custom URL…",
+            liveItems.push_back(item("Custom URL…",
                 [this, trackIndex, sceneIndex, applyLiveUrl]() {
                     auto* s0 = m_project.getSlot(trackIndex, sceneIndex);
                     std::string initial;
@@ -2399,12 +2415,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             SDL_StopTextInput(m_mainWindow.getHandle());
                             applyLiveUrl(url);
                         });
-                }, false, true});
+                }));
 
             // Clear action is only meaningful when the clip is already
             // configured for live input.
             if (hasVisualClip && slot->visualClip->liveInput) {
-                liveItems.push_back({"Clear Live Input",
+                liveItems.push_back(item("Clear Live Input",
                     [this, trackIndex, sceneIndex]() {
                         auto* s = m_project.getSlot(trackIndex, sceneIndex);
                         if (!s || !s->visualClip) return;
@@ -2413,14 +2429,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         if (m_project.track(trackIndex).defaultScene == sceneIndex)
                             m_visualEngine.setLayerLiveInput(trackIndex, "");
                         markDirty();
-                    }, false, true});
+                    }));
             }
 
-            ui::ContextMenu::Item liveEntry;
-            liveEntry.label   = "Live Input";
-            liveEntry.enabled = true;
-            liveEntry.submenu = std::move(liveItems);
-            items.push_back(std::move(liveEntry));
+            items.push_back(submenu("Live Input", std::move(liveItems)));
         }
 
         // "Set Model…" — pick a .glb / .gltf. On success we localize
@@ -2431,7 +2443,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             const bool hasModel = hasVisualClip &&
                                    !slot->visualClip->modelPath.empty();
             const char* label = hasModel ? "Change Model…" : "Set Model…";
-            items.push_back({label,
+            items.push_back(item(label,
                 [this, trackIndex, sceneIndex]() {
                     m_pendingModelTrack = trackIndex;
                     m_pendingModelScene = sceneIndex;
@@ -2476,10 +2488,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         },
                         this, m_mainWindow.getHandle(),
                         &filter, 1, nullptr, false);
-                }, false, true});
+                }));
 
             if (hasModel) {
-                items.push_back({"Clear Model",
+                items.push_back(item("Clear Model",
                     [this, trackIndex, sceneIndex]() {
                         auto* s = m_project.getSlot(trackIndex, sceneIndex);
                         if (!s || !s->visualClip) return;
@@ -2493,7 +2505,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             m_visualEngine.setLayerSceneScript(trackIndex, "");
                         }
                         markDirty();
-                    }, false, true});
+                    }));
             }
 
             // "Set Scene Script…" — only offered when the clip has a
@@ -2503,7 +2515,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 const bool hasScript = !slot->visualClip->scenePath.empty();
                 const char* sLabel = hasScript ? "Change Scene Script…"
                                                  : "Set Scene Script…";
-                items.push_back({sLabel,
+                items.push_back(item(sLabel,
                     [this, trackIndex, sceneIndex]() {
                         m_pendingSceneTrack = trackIndex;
                         m_pendingSceneScene = sceneIndex;
@@ -2531,10 +2543,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             },
                             this, m_mainWindow.getHandle(),
                             &filter, 1, nullptr, false);
-                    }, false, true});
+                    }));
 
                 if (hasScript) {
-                    items.push_back({"Clear Scene Script",
+                    items.push_back(item("Clear Scene Script",
                         [this, trackIndex, sceneIndex]() {
                             auto* s = m_project.getSlot(trackIndex, sceneIndex);
                             if (!s || !s->visualClip) return;
@@ -2542,7 +2554,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             if (m_project.track(trackIndex).defaultScene == sceneIndex)
                                 m_visualEngine.setLayerSceneScript(trackIndex, "");
                             markDirty();
-                        }, false, true});
+                        }));
                 }
             }
         }
@@ -2558,10 +2570,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 s->visualClip->lengthBeats = bars * 4.0;
                 markDirty();
             };
-            std::vector<ui::ContextMenu::Item> lenItems;
+            std::vector<MenuEntry> lenItems;
             auto addLen = [&](const char* label, int bars) {
-                lenItems.push_back({label, [setLen, bars]{ setLen(bars); },
-                                       false, curBars != bars});
+                lenItems.push_back(itemEn(label, [setLen, bars]{ setLen(bars); },
+                                       curBars != bars));
             };
             addLen("1 bar",   1);
             addLen("2 bars",  2);
@@ -2569,8 +2581,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addLen("8 bars",  8);
             addLen("16 bars", 16);
             addLen("32 bars", 32);
-            items.push_back({"Clip Length", nullptr, false, true,
-                              std::move(lenItems)});
+            items.push_back(submenu("Clip Length", std::move(lenItems)));
         }
 
         // "Send to Arrangement" — clone this visual clip onto the
@@ -2579,7 +2590,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         // clips live. Uses the session clip's lengthBeats as the
         // duration; they can resize afterwards on the arrangement.
         if (hasVisualClip) {
-            items.push_back({"Send to Arrangement",
+            items.push_back(item("Send to Arrangement",
                 [this, trackIndex, sceneIndex]() {
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s || !s->visualClip) return;
@@ -2598,7 +2609,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     m_project.track(trackIndex).sortArrangementClips();
                     m_project.track(trackIndex).arrangementActive = true;
                     markDirty();
-                }, false, true});
+                }));
         }
 
         // "Re-import Video" — delete cached transcode and rerun ffmpeg.
@@ -2607,7 +2618,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         if (slot && slot->visualClip &&
             !slot->visualClip->videoSourcePath.empty()) {
             std::string src = slot->visualClip->videoSourcePath;
-            items.push_back({"Re-import Video", [this, trackIndex, sceneIndex, src]() {
+            items.push_back(item("Re-import Video", [this, trackIndex, sceneIndex, src]() {
                 if (m_projectPath.empty()) return;
                 // Delete the cached files so the importer actually re-runs.
                 std::filesystem::path mediaDir = m_projectPath / "media";
@@ -2617,7 +2628,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     std::filesystem::remove(mediaDir / (id + ext), ec);
                 }
                 startVideoImport(trackIndex, sceneIndex, src);
-            }, false, true});
+            }));
         }
 
         // Video-only: loop length + playback rate submenus. Only useful
@@ -2638,11 +2649,11 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             };
 
             // Loop Length submenu.
-            std::vector<ui::ContextMenu::Item> loopItems;
+            std::vector<MenuEntry> loopItems;
             auto addLoop = [&](const char* label, int bars) {
-                loopItems.push_back({label,
+                loopItems.push_back(itemEn(label,
                     [applyTiming, curRate, bars]{ applyTiming(bars, curRate); },
-                    false, curBars != bars});
+                    curBars != bars));
             };
             addLoop("Free (native rate)", 0);
             addLoop("1/2 bar", 0); // placeholder — overwritten below
@@ -2652,28 +2663,28 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addLoop("4 bars", 4);
             addLoop("8 bars", 8);
             addLoop("16 bars",16);
-            items.push_back({"Video Loop", nullptr, false, true, std::move(loopItems)});
+            items.push_back(submenu("Video Loop", std::move(loopItems)));
 
             // Playback Rate submenu (F.3).
-            std::vector<ui::ContextMenu::Item> rateItems;
+            std::vector<MenuEntry> rateItems;
             auto addRate = [&](const char* label, float rate) {
-                rateItems.push_back({label,
+                rateItems.push_back(itemEn(label,
                     [applyTiming, curBars, rate]{ applyTiming(curBars, rate); },
-                    false, std::abs(curRate - rate) > 0.001f});
+                    std::abs(curRate - rate) > 0.001f));
             };
             addRate("0.25×", 0.25f);
             addRate("0.5×",  0.5f);
             addRate("1× (normal)", 1.0f);
             addRate("2×",    2.0f);
             addRate("4×",    4.0f);
-            items.push_back({"Video Rate", nullptr, false, true, std::move(rateItems)});
+            items.push_back(submenu("Video Rate", std::move(rateItems)));
 
             // In/Out trim submenu — picks a sub-range of the source.
             const float curIn  = slot->visualClip->videoIn;
             const float curOut = slot->visualClip->videoOut;
-            std::vector<ui::ContextMenu::Item> trimItems;
+            std::vector<MenuEntry> trimItems;
             auto addTrim = [&](const char* label, float inF, float outF) {
-                trimItems.push_back({label,
+                trimItems.push_back(itemEn(label,
                     [this, trackIndex, sceneIndex, inF, outF]() {
                         auto* s = m_project.getSlot(trackIndex, sceneIndex);
                         if (!s || !s->visualClip) return;
@@ -2683,9 +2694,8 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             m_visualEngine.setLayerVideoTrim(trackIndex, inF, outF);
                         markDirty();
                     },
-                    false,
                     !(std::abs(curIn - inF) < 0.005f &&
-                      std::abs(curOut - outF) < 0.005f)});
+                      std::abs(curOut - outF) < 0.005f)));
             };
             addTrim("Full (0–100%)",         0.00f, 1.00f);
             addTrim("First half (0–50%)",    0.00f, 0.50f);
@@ -2693,14 +2703,14 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addTrim("Middle (25–75%)",       0.25f, 0.75f);
             addTrim("First quarter (0–25%)", 0.00f, 0.25f);
             addTrim("Last quarter (75–100%)",0.75f, 1.00f);
-            items.push_back({"Video Trim", nullptr, false, true, std::move(trimItems)});
+            items.push_back(submenu("Video Trim", std::move(trimItems)));
 
-            items.push_back({"", nullptr, true}); // separator
+            items.push_back(separator());
         }
 
         // "Set Text…" — edits the string that gets rasterised to iChannel1.
         if (slot && slot->visualClip) {
-            items.push_back({"Set Text…",
+            items.push_back(item("Set Text…",
                 [this, trackIndex, sceneIndex]() {
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s || !s->visualClip) return;
@@ -2718,12 +2728,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                                 m_visualEngine.setLayerText(trackIndex, txt);
                             markDirty();
                         });
-                }, false, true});
+                }));
         }
 
         // Audio source submenu — what track's level drives iAudioLevel.
         if (slot && slot->visualClip) {
-            std::vector<ui::ContextMenu::Item> srcItems;
+            std::vector<MenuEntry> srcItems;
             const int curSource = slot->visualClip->audioSource;
             auto reassign = [this, trackIndex, sceneIndex](int newSrc) {
                 auto* s = m_project.getSlot(trackIndex, sceneIndex);
@@ -2735,19 +2745,19 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     m_visualEngine.setLayerAudioSource(trackIndex, newSrc);
                 markDirty();
             };
-            srcItems.push_back({"Master", [reassign]{ reassign(-1); },
-                                false, curSource != -1});
-            srcItems.push_back({"", nullptr, true}); // separator
+            srcItems.push_back(itemEn("Master", [reassign]{ reassign(-1); },
+                                curSource != -1));
+            srcItems.push_back(separator());
             for (int t = 0; t < m_project.numTracks(); ++t) {
                 if (m_project.track(t).type == Track::Type::Visual) continue;
                 std::string label = "Track " + std::to_string(t + 1) + ": "
                                      + m_project.track(t).name;
-                srcItems.push_back({label, [reassign, t]{ reassign(t); },
-                                     false, curSource != t});
+                srcItems.push_back(itemEn(label, [reassign, t]{ reassign(t); },
+                                     curSource != t));
             }
-            items.push_back({"Audio Source", nullptr, false, true, std::move(srcItems)});
+            items.push_back(submenu("Audio Source", std::move(srcItems)));
         }
-        items.push_back({"", nullptr, true}); // separator
+        items.push_back(separator());
     }
 
     // "Send to Arrangement" for audio/MIDI session clips — mirrors the
@@ -2758,7 +2768,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     const bool canSendAudio = slot && slot->audioClip && slot->audioClip->buffer;
     const bool canSendMidi  = slot && slot->midiClip;
     if (canSendAudio || canSendMidi) {
-        items.push_back({"Send to Arrangement",
+        items.push_back(item("Send to Arrangement",
             [this, trackIndex, sceneIndex]() {
                 auto* s = m_project.getSlot(trackIndex, sceneIndex);
                 if (!s) return;
@@ -2796,11 +2806,11 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         audio::SetTrackArrActiveMsg{trackIndex, true});
                 }
                 markDirty();
-            }, false, true});
-        items.push_back({"", nullptr, true}); // separator
+            }));
+        items.push_back(separator());
     }
 
-    items.push_back({"Copy", [this, trackIndex, sceneIndex]() {
+    items.push_back(itemEn("Copy", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && s->audioClip) {
             m_clipboard.clear();
@@ -2811,9 +2821,9 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             m_clipboard.type = ClipboardData::Type::Midi;
             m_clipboard.midiClip = s->midiClip->clone();
         }
-    }, false, hasClip});
+    }, hasClip));
 
-    items.push_back({"Cut", [this, trackIndex, sceneIndex]() {
+    items.push_back(itemEn("Cut", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && s->audioClip) {
             auto backup = s->audioClip->clone();
@@ -2852,9 +2862,9 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                               m_project.graveyardSlotClips(*s2); markDirty(); }
                 }, ""});
         }
-    }, false, hasClip});
+    }, hasClip));
 
-    items.push_back({"Paste", [this, trackIndex, sceneIndex]() {
+    items.push_back(itemEn("Paste", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (!s) return;
         std::shared_ptr<audio::Clip> oldAudio;
@@ -2916,9 +2926,9 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     markDirty();
                 }, ""});
         }
-    }, false, hasClipboard});
+    }, hasClipboard));
 
-    items.push_back({"Duplicate", [this, trackIndex, sceneIndex]() {
+    items.push_back(itemEn("Duplicate", [this, trackIndex, sceneIndex]() {
         auto* src = m_project.getSlot(trackIndex, sceneIndex);
         if (!src || src->empty()) return;
         for (int s = sceneIndex + 1; s < m_project.numScenes(); ++s) {
@@ -2949,31 +2959,31 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 break;
             }
         }
-    }, false, hasClip});
+    }, hasClip));
 
-    items.push_back({"", nullptr, true}); // separator
+    items.push_back(separator());
 
     // Launch quantize submenu
     auto* slotForQ = m_project.getSlot(trackIndex, sceneIndex);
     auto curLQ = slotForQ ? slotForQ->launchQuantize : audio::QuantizeMode::NextBar;
-    std::vector<ui::ContextMenu::Item> lqItems;
-    lqItems.push_back({"None", [this, trackIndex, sceneIndex]() {
+    std::vector<MenuEntry> lqItems;
+    lqItems.push_back(itemEn("None", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s) s->launchQuantize = audio::QuantizeMode::None;
-    }, false, curLQ != audio::QuantizeMode::None});
-    lqItems.push_back({"Beat", [this, trackIndex, sceneIndex]() {
+    }, curLQ != audio::QuantizeMode::None));
+    lqItems.push_back(itemEn("Beat", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s) s->launchQuantize = audio::QuantizeMode::NextBeat;
-    }, false, curLQ != audio::QuantizeMode::NextBeat});
-    lqItems.push_back({"Bar", [this, trackIndex, sceneIndex]() {
+    }, curLQ != audio::QuantizeMode::NextBeat));
+    lqItems.push_back(itemEn("Bar", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s) s->launchQuantize = audio::QuantizeMode::NextBar;
-    }, false, curLQ != audio::QuantizeMode::NextBar});
-    items.push_back({"Launch Quantize", nullptr, false, true, std::move(lqItems)});
+    }, curLQ != audio::QuantizeMode::NextBar));
+    items.push_back(submenu("Launch Quantize", std::move(lqItems)));
 
-    items.push_back({"", nullptr, true}); // separator
+    items.push_back(separator());
 
-    items.push_back({"Delete", [this, trackIndex, sceneIndex]() {
+    items.push_back(itemEn("Delete", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && !s->empty()) {
             std::shared_ptr<audio::Clip> oldAudio;
@@ -3004,19 +3014,19 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     markDirty();
                 }, ""});
         }
-    }, false, hasClip});
+    }, hasClip));
 
-    items.push_back({"Rename", [this, trackIndex, sceneIndex]() {
+    items.push_back(itemEn("Rename", [this, trackIndex, sceneIndex]() {
         // TODO: open rename dialog
         (void)trackIndex; (void)sceneIndex;
-    }, false, hasClip});
+    }, hasClip));
 
     // Save a MIDI clip into the loop library so it shows up in the
     // Browser's Loops tab. Prompts for a name (default = clip name),
     // auto-categorizes, writes the .mid, and indexes the result inline
     // so the tab updates without waiting for a rescan.
     if (slot && slot->midiClip) {
-        items.push_back({"Save to Loop Library…", [this, trackIndex, sceneIndex]() {
+        items.push_back(item("Save to Loop Library…", [this, trackIndex, sceneIndex]() {
             auto* s = m_project.getSlot(trackIndex, sceneIndex);
             if (!s || !s->midiClip) return;
             std::string def = s->midiClip->name();
@@ -3073,10 +3083,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     m_toastManager.show("Saved \"" + r.name + "\" to loops", 2.0f,
                                         ui::ToastManager::Severity::Info);
                 });
-        }, false, true});
+        }));
     }
 
-    items.push_back({"", nullptr, true}); // separator
+    items.push_back(separator());
 
     // Record length setting — per-slot. Clicking this slot to start a
     // recording uses this length (0 = unlimited). Does nothing once
@@ -3086,20 +3096,20 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         int curRL = rlSlot ? rlSlot->recordLengthBars : 0;
         std::string rlLabel = "Record Length: ";
         rlLabel += (curRL == 0) ? "Unlimited" : (std::to_string(curRL) + (curRL == 1 ? " Bar" : " Bars"));
-        std::vector<ui::ContextMenu::Item> rlItems;
+        std::vector<MenuEntry> rlItems;
         auto setRL = [this, trackIndex, sceneIndex](int bars) {
             auto* s = m_project.getSlot(trackIndex, sceneIndex);
             if (s) s->recordLengthBars = bars;
         };
         auto addRLItem = [&](const char* label, int bars) {
-            rlItems.push_back({label, [this, setRL, curRL, bars]() {
+            rlItems.push_back(itemEn(label, [this, setRL, curRL, bars]() {
                 setRL(bars);
                 m_undoManager.push({"Change Record Length",
                     [setRL, curRL]{ setRL(curRL); },
                     [setRL, bars]{ setRL(bars); },
                     ""});
                 markDirty();
-            }, false, curRL != bars});
+            }, curRL != bars));
         };
         addRLItem("Unlimited", 0);
         addRLItem("1 Bar", 1);
@@ -3107,8 +3117,8 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         addRLItem("4 Bars", 4);
         addRLItem("8 Bars", 8);
         addRLItem("16 Bars", 16);
-        rlItems.push_back({"", nullptr, true}); // separator
-        rlItems.push_back({"Custom...", [this, setRL, curRL]() {
+        rlItems.push_back(separator());
+        rlItems.push_back(item("Custom...", [this, setRL, curRL]() {
             std::string def = (curRL > 0) ? std::to_string(curRL) : "4";
             SDL_StartTextInput(m_mainWindow.getHandle());
             m_textInputDialog.prompt("Record Length (bars)", def,
@@ -3124,14 +3134,14 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         ""});
                     markDirty();
                 });
-        }});
-        items.push_back({rlLabel.c_str(), nullptr, false, true, std::move(rlItems)});
+        }));
+        items.push_back(submenu(rlLabel, std::move(rlItems)));
 
         // Loop-on-playback toggle for future recordings into this slot.
         const bool curLoop = rlSlot ? rlSlot->recordLoop : true;
         std::string loopLabel = "Record Loop: ";
         loopLabel += curLoop ? "On" : "Off";
-        items.push_back({loopLabel.c_str(), [this, trackIndex, sceneIndex, curLoop]() {
+        items.push_back(item(loopLabel, [this, trackIndex, sceneIndex, curLoop]() {
             auto* s = m_project.getSlot(trackIndex, sceneIndex);
             if (!s) return;
             s->recordLoop = !curLoop;
@@ -3145,7 +3155,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     if (ss) ss->recordLoop = !curLoop;
                 }, ""});
             markDirty();
-        }});
+        }));
     }
 
     // Per-clip automation-record toggle — disables recording into
@@ -3162,7 +3172,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             const bool curDisabled = slotForLock->autoRecordDisabled;
             std::string label = "Auto-Rec: ";
             label += curDisabled ? "Disabled (this clip)" : "Enabled";
-            items.push_back({label.c_str(),
+            items.push_back(item(label,
                 [this, trackIndex, sceneIndex, curDisabled]() {
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s) return;
@@ -3190,7 +3200,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             markDirty();
                         }, ""});
                     markDirty();
-                }});
+                }));
         }
     }
 
@@ -3202,7 +3212,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         const bool hasClipAuto = slotForAuto &&
                                    !slotForAuto->clipAutomation.empty();
         if (hasClipAuto) {
-            items.push_back({"Clear Clip Automation",
+            items.push_back(item("Clear Clip Automation",
                 [this, trackIndex, sceneIndex]() {
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s) return;
@@ -3220,11 +3230,11 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                             markDirty();
                         }, ""});
                     markDirty();
-                }});
+                }));
         }
     }
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+    ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }
 
@@ -3459,7 +3469,9 @@ void App::showShaderLibraryMenu(float mx, float my) {
     m_shaderLibrary.refresh();
 
     const auto& entries = m_shaderLibrary.entries();
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    std::vector<MenuEntry> items;
 
     // The "+ Add Pass" menu only adds *effects* — passes that sample
     // iPrev and process the previous output. "Sources" (standalone
@@ -3473,7 +3485,7 @@ void App::showShaderLibraryMenu(float mx, float my) {
     for (const auto& e : entries) if (isEffectish(e.category)) { anyEffect = true; break; }
 
     if (entries.empty() || !anyEffect) {
-        items.push_back({"(no chainable effects found)", nullptr, false, false});
+        items.push_back(header("(no chainable effects found)"));
     } else {
         // Group by category — Project then Effects, in that order.
         // Insert separator + heading rows so the menu reads like a
@@ -3483,12 +3495,12 @@ void App::showShaderLibraryMenu(float mx, float my) {
             if (!isEffectish(e.category)) continue;
             if (e.category != lastCat) {
                 if (!lastCat.empty())
-                    items.push_back({"", nullptr, true, false}); // separator
-                items.push_back({"── " + e.category + " ──", nullptr, false, false});
+                    items.push_back(separator());
+                items.push_back(header("── " + e.category + " ──"));
                 lastCat = e.category;
             }
             std::string path = e.absolutePath;
-            items.push_back({e.label, [this, path]() {
+            items.push_back(item(e.label, [this, path]() {
                 if (m_selectedTrack < 0 ||
                     m_selectedTrack >= m_project.numTracks()) return;
                 auto& trk = m_project.track(m_selectedTrack);
@@ -3516,11 +3528,11 @@ void App::showShaderLibraryMenu(float mx, float my) {
                 }
                 markDirty();
                 updateDetailForSelectedTrack();
-            }, false, true});
+            }));
         }
     }
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+    ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }
 
@@ -3601,12 +3613,19 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
         markDirty();
     };
 
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    auto itemEn = [](std::string label, std::function<void()> action, bool enabled) {
+        MenuEntry e = item(std::move(label), std::move(action));
+        e.enabled = enabled;
+        return e;
+    };
+    std::vector<MenuEntry> items;
     // Header row — disabled, just shows what we're mapping.
     {
         std::string title = "Map '" + target.paramName + "' to:";
-        items.push_back({title, nullptr, false, false});
-        items.push_back({"", nullptr, true});  // separator
+        items.push_back(header(title));
+        items.push_back(separator());
     }
 
     // 8 macros — show "Macro N" + custom label if any. Currently
@@ -3617,12 +3636,11 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
                              + std::to_string(i + 1);
         if (!macros.labels[i].empty())
             label += ": " + macros.labels[i];
-        items.push_back({label, [setMapping, i]() { setMapping(i); },
-                          false, true});
+        items.push_back(item(label, [setMapping, i]() { setMapping(i); }));
     }
 
     if (currentMacro >= 0) {
-        items.push_back({"", nullptr, true});  // separator
+        items.push_back(separator());
 
         // Sub-range section. Header shows the live range (lets the
         // user verify in one glance without typing). The five action
@@ -3632,10 +3650,10 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
             char rangeLabel[64];
             std::snprintf(rangeLabel, sizeof(rangeLabel),
                            "Range: %.2f .. %.2f", currentMin, currentMax);
-            items.push_back({rangeLabel, nullptr, false, false});
+            items.push_back(header(rangeLabel));
         }
 
-        items.push_back({"Set min…", [this, findMapping]() {
+        items.push_back(item("Set min…", [this, findMapping]() {
             auto* m = findMapping();
             if (!m) return;
             char def[16];
@@ -3649,9 +3667,9 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
                     catch (...) { return; }
                     markDirty();
                 });
-        }, false, true});
+        }));
 
-        items.push_back({"Set max…", [this, findMapping]() {
+        items.push_back(item("Set max…", [this, findMapping]() {
             auto* m = findMapping();
             if (!m) return;
             char def[16];
@@ -3665,38 +3683,37 @@ void App::showMacroMappingMenu(const MacroTarget& target, float mx, float my) {
                     catch (...) { return; }
                     markDirty();
                 });
-        }, false, true});
+        }));
 
-        items.push_back({"Invert range",
+        items.push_back(itemEn("Invert range",
             [this, findMapping]() {
                 auto* m = findMapping();
                 if (!m) return;
                 std::swap(m->rangeMin, m->rangeMax);
                 markDirty();
             },
-            false,
             // Only meaningful when min != max — disable on a
             // pinched mapping so a stray click can't no-op visibly.
-            std::abs(currentMax - currentMin) > 1e-6f});
+            std::abs(currentMax - currentMin) > 1e-6f));
 
-        items.push_back({"Reset range (0..1)",
+        items.push_back(itemEn("Reset range (0..1)",
             [this, findMapping]() {
                 auto* m = findMapping();
                 if (!m) return;
                 m->rangeMin = 0.0f;
                 m->rangeMax = 1.0f;
                 markDirty();
-            }, false,
+            },
             // Disabled when already at the default — same logic the
             // LFO menu uses for its preset checkmarks.
             std::abs(currentMin) > 1e-6f ||
-            std::abs(currentMax - 1.0f) > 1e-6f});
+            std::abs(currentMax - 1.0f) > 1e-6f));
 
-        items.push_back({"", nullptr, true});  // separator
-        items.push_back({"Unmap", [unmap]() { unmap(); }, false, true});
+        items.push_back(separator());
+        items.push_back(item("Unmap", [unmap]() { unmap(); }));
     }
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+    ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }
 
@@ -3748,12 +3765,19 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
         }
     };
 
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    auto itemEn = [](std::string label, std::function<void()> action, bool enabled) {
+        MenuEntry e = item(std::move(label), std::move(action));
+        e.enabled = enabled;
+        return e;
+    };
+    std::vector<MenuEntry> items;
     char title[32];
     std::snprintf(title, sizeof(title), "Knob %c",
                    static_cast<char>('A' + knobIdx));
-    items.push_back({title, nullptr, false, false});  // header (disabled)
-    items.push_back({"", nullptr, true});  // separator
+    items.push_back(header(title));
+    items.push_back(separator());
 
     // MIDI Learn / Remove Mapping — routes a MIDI CC to this knob.
     {
@@ -3766,83 +3790,83 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
         const bool learning = m_midiLearnManager.isLearning() &&
                               m_midiLearnManager.learnTarget() == tgt;
         if (learning) {
-            items.push_back({"Cancel MIDI Learn", [this]() {
+            items.push_back(item("Cancel MIDI Learn", [this]() {
                 m_midiLearnManager.cancelLearn();
-            }, false, true});
+            }));
         } else if (mapped) {
             std::string label = "MIDI: " + mappedLabel + "  (click to re-learn)";
-            items.push_back({label, [this, tgt]() {
+            items.push_back(item(label, [this, tgt]() {
                 m_midiLearnManager.startLearn(tgt, 0.0f, 1.0f);
-            }, false, true});
-            items.push_back({"Remove MIDI Mapping", [this, tgt]() {
+            }));
+            items.push_back(item("Remove MIDI Mapping", [this, tgt]() {
                 m_midiLearnManager.removeByTarget(tgt);
-            }, false, true});
+            }));
         } else {
-            items.push_back({"MIDI Learn…", [this, tgt]() {
+            items.push_back(item("MIDI Learn…", [this, tgt]() {
                 m_midiLearnManager.startLearn(tgt, 0.0f, 1.0f);
-            }, false, true});
+            }));
         }
-        items.push_back({"", nullptr, true});
+        items.push_back(separator());
     }
 
-    items.push_back({"-- LFO --", nullptr, false, false});
+    items.push_back(header("-- LFO --"));
 
     // On/off toggle — shown checked when disabled so the active state stays.
-    items.push_back({cur->enabled ? "Disable LFO" : "Enable LFO",
+    items.push_back(item(cur->enabled ? "Disable LFO" : "Enable LFO",
         [apply, snapshot]() mutable {
             snapshot.enabled = !snapshot.enabled;
             apply(snapshot);
-        }, false, true});
+        }));
 
-    items.push_back({"", nullptr, true});
+    items.push_back(separator());
 
     // Shape submenu.
-    std::vector<ui::ContextMenu::Item> shapeItems;
+    std::vector<MenuEntry> shapeItems;
     const char* shapeNames[] = {"Sine", "Triangle", "Saw", "Square", "Sample & Hold"};
     for (int s = 0; s < 5; ++s) {
-        shapeItems.push_back({shapeNames[s],
+        shapeItems.push_back(itemEn(shapeNames[s],
             [apply, snapshot, s]() mutable {
                 snapshot.shape = static_cast<visual::VisualLFO::Shape>(s);
                 snapshot.enabled = true;
                 apply(snapshot);
-            }, false, static_cast<int>(cur->shape) != s});
+            }, static_cast<int>(cur->shape) != s));
     }
-    items.push_back({"Shape", nullptr, false, true, std::move(shapeItems)});
+    items.push_back(submenu("Shape", std::move(shapeItems)));
 
     // Rate submenu (beats per cycle).
-    std::vector<ui::ContextMenu::Item> rateItems;
+    std::vector<MenuEntry> rateItems;
     struct RatePreset { const char* label; float beats; };
     static const RatePreset rates[] = {
         {"1/16",   0.25f}, {"1/8",   0.5f}, {"1/4",   1.0f}, {"1/2",   2.0f},
         {"1 bar",  4.0f},  {"2 bars",8.0f}, {"4 bars", 16.0f},
     };
     for (const auto& rp : rates) {
-        rateItems.push_back({rp.label,
+        rateItems.push_back(itemEn(rp.label,
             [apply, snapshot, rp]() mutable {
                 snapshot.rate = rp.beats;
                 snapshot.sync = true;
                 snapshot.enabled = true;
                 apply(snapshot);
-            }, false, std::abs(cur->rate - rp.beats) > 0.001f});
+            }, std::abs(cur->rate - rp.beats) > 0.001f));
     }
-    items.push_back({"Rate", nullptr, false, true, std::move(rateItems)});
+    items.push_back(submenu("Rate", std::move(rateItems)));
 
     // Depth submenu.
-    std::vector<ui::ContextMenu::Item> depthItems;
+    std::vector<MenuEntry> depthItems;
     static const float depths[] = {0.1f, 0.25f, 0.5f, 0.75f, 1.0f};
     static const char* depthLabels[] = {"10%", "25%", "50%", "75%", "100%"};
     for (int d = 0; d < 5; ++d) {
         float dv = depths[d];
-        depthItems.push_back({depthLabels[d],
+        depthItems.push_back(itemEn(depthLabels[d],
             [apply, snapshot, dv]() mutable {
                 snapshot.depth = dv;
                 snapshot.enabled = true;
                 apply(snapshot);
-            }, false, std::abs(cur->depth - dv) > 0.001f});
+            }, std::abs(cur->depth - dv) > 0.001f));
     }
-    items.push_back({"Depth", nullptr, false, true, std::move(depthItems)});
+    items.push_back(submenu("Depth", std::move(depthItems)));
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+    ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }
 
@@ -4037,10 +4061,17 @@ void App::showLfoTargetMenu(int track, int chainSlot, float mx, float my) {
 }
 
 void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    auto itemEn = [](std::string label, std::function<void()> action, bool enabled) {
+        MenuEntry e = item(std::move(label), std::move(action));
+        e.enabled = enabled;
+        return e;
+    };
+    std::vector<MenuEntry> items;
     bool canDelete = m_project.numScenes() > 1;
 
-    items.push_back({"Insert Scene", [this, sceneIndex]() {
+    items.push_back(item("Insert Scene", [this, sceneIndex]() {
         m_project.insertScene(sceneIndex);
         markDirty();
         m_undoManager.push({"Insert Scene",
@@ -4052,9 +4083,9 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                 m_project.insertScene(sceneIndex);
                 markDirty();
             }, ""});
-    }});
+    }));
 
-    items.push_back({"Duplicate Scene", [this, sceneIndex]() {
+    items.push_back(item("Duplicate Scene", [this, sceneIndex]() {
         m_project.duplicateScene(sceneIndex);
         markDirty();
         int dst = sceneIndex + 1;
@@ -4067,9 +4098,9 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                 m_project.duplicateScene(sceneIndex);
                 markDirty();
             }, ""});
-    }});
+    }));
 
-    items.push_back({"Delete Scene", [this, sceneIndex]() {
+    items.push_back(itemEn("Delete Scene", [this, sceneIndex]() {
         // Capture all clip data for undo
         struct SlotBackup {
             std::unique_ptr<audio::Clip> audioClip;
@@ -4125,9 +4156,9 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                 m_project.deleteScene(sceneIndex);
                 markDirty();
             }, ""});
-    }, false, canDelete});
+    }, canDelete));
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+    ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }
 
@@ -4137,17 +4168,24 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
     auto& clips = m_project.track(trackIndex).arrangementClips;
     if (clipIdx < 0 || clipIdx >= static_cast<int>(clips.size())) return;
 
-    std::vector<ui::ContextMenu::Item> items;
+    using namespace ui::fw2::Menu;
+    using ui::fw2::MenuEntry;
+    auto itemEn = [](std::string label, std::function<void()> action, bool enabled) {
+        MenuEntry e = item(std::move(label), std::move(action));
+        e.enabled = enabled;
+        return e;
+    };
+    std::vector<MenuEntry> items;
 
-    items.push_back({"Copy", [this, trackIndex, clipIdx]() {
+    items.push_back(item("Copy", [this, trackIndex, clipIdx]() {
         auto& cs = m_project.track(trackIndex).arrangementClips;
         if (clipIdx >= 0 && clipIdx < static_cast<int>(cs.size())) {
             m_arrangementClipboard = cs[clipIdx];
             m_arrangementClipboardValid = true;
         }
-    }, false, true});
+    }));
 
-    items.push_back({"Cut", [this, trackIndex, clipIdx]() {
+    items.push_back(item("Cut", [this, trackIndex, clipIdx]() {
         auto& cs = m_project.track(trackIndex).arrangementClips;
         if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
         m_arrangementClipboard      = cs[clipIdx];
@@ -4155,7 +4193,7 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
         // Reuse panel's delete path so selection + undo stay consistent.
         m_arrangementPanel->setSelectedClip(trackIndex, clipIdx);
         m_arrangementPanel->handleAppKey(SDLK_DELETE, /*ctrl=*/false);
-    }, false, true});
+    }));
 
     // Paste: enabled only if the clipboard holds something compatible
     // with this track's type (audio→Audio, midi→Midi, visual→Visual).
@@ -4164,7 +4202,7 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
         (trkType == Track::Type::Audio  && m_arrangementClipboard.type == ArrangementClip::Type::Audio)  ||
         (trkType == Track::Type::Midi   && m_arrangementClipboard.type == ArrangementClip::Type::Midi)   ||
         (trkType == Track::Type::Visual && m_arrangementClipboard.type == ArrangementClip::Type::Visual));
-    items.push_back({"Paste", [this, trackIndex]() {
+    items.push_back(itemEn("Paste", [this, trackIndex]() {
         if (!m_arrangementClipboardValid) return;
         ArrangementClip ac = m_arrangementClipboard;
         ac.startBeat = m_audioEngine.transport().positionInBeats();
@@ -4178,21 +4216,21 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
                 audio::SetTrackArrActiveMsg{trackIndex, true});
         }
         markDirty();
-    }, false, canPaste});
+    }, canPaste));
 
-    items.push_back({"", nullptr, true}); // separator
+    items.push_back(separator());
 
-    items.push_back({"Duplicate", [this, trackIndex, clipIdx]() {
+    items.push_back(item("Duplicate", [this, trackIndex, clipIdx]() {
         m_arrangementPanel->setSelectedClip(trackIndex, clipIdx);
         m_arrangementPanel->handleAppKey(SDLK_D, /*ctrl=*/true);
-    }, false, true});
+    }));
 
-    items.push_back({"Delete", [this, trackIndex, clipIdx]() {
+    items.push_back(item("Delete", [this, trackIndex, clipIdx]() {
         m_arrangementPanel->setSelectedClip(trackIndex, clipIdx);
         m_arrangementPanel->handleAppKey(SDLK_DELETE, /*ctrl=*/false);
-    }, false, true});
+    }));
 
-    ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+    ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }
 
@@ -4835,9 +4873,11 @@ bool App::init() {
             return nullptr;
         };
 
-        std::vector<ui::ContextMenu::Item> fxItems;
+        using namespace ui::fw2::Menu;
+        using ui::fw2::MenuEntry;
+        std::vector<MenuEntry> fxItems;
         auto addFx = [&](const char* label, auto factory) {
-            fxItems.push_back({label, [this, label, factory, target, bus, resolveChain]() {
+            fxItems.push_back(item(label, [this, label, factory, target, bus, resolveChain]() {
                 auto* chain = resolveChain();
                 if (!chain) return;
                 chain->append(factory());
@@ -4859,7 +4899,7 @@ bool App::init() {
                 m_showDetailPanel = true;
                 m_detailPanel->setOpen(true);
                 m_detailPanel->clear(); // force rebuild
-            }});
+            }));
         };
         addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
         addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
@@ -4887,13 +4927,14 @@ bool App::init() {
 
 #ifdef YAWN_HAS_VST3
         if (m_vst3Scanner && !m_vst3Scanner->effects().empty()) {
-            fxItems.push_back({"── VST3 ──", nullptr, true});
+            fxItems.push_back(separator());
+            fxItems.push_back(header("── VST3 ──"));
             for (auto& info : m_vst3Scanner->effects()) {
                 std::string vlabel = info.name;
                 if (!info.vendor.empty()) vlabel += " (" + info.vendor + ")";
                 std::string modulePath = info.modulePath;
                 std::string classID = info.classIDString;
-                fxItems.push_back({vlabel, [this, modulePath, classID, target, bus, resolveChain]() {
+                fxItems.push_back(item(vlabel, [this, modulePath, classID, target, bus, resolveChain]() {
                     auto* chain = resolveChain();
                     if (!chain) return;
                     chain->append(std::make_unique<vst3::VST3Effect>(modulePath, classID));
@@ -4903,12 +4944,12 @@ bool App::init() {
                     m_showDetailPanel = true;
                     m_detailPanel->setOpen(true);
                     m_detailPanel->clear();
-                }});
+                }));
             }
         }
 #endif
 
-        ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(fxItems)),
+        ui::fw2::ContextMenu::show(std::move(fxItems),
                                      ui::fw::Point{mx, my});
     };
 
@@ -5479,12 +5520,14 @@ bool App::init() {
             deviceName = fx->name();
         }
         auto presets = PresetManager::listPresetsForDevice(deviceId);
-        std::vector<ui::ContextMenu::Item> items;
+        using namespace ui::fw2::Menu;
+        using ui::fw2::MenuEntry;
+        std::vector<MenuEntry> items;
 
         // Add "Save Preset..." item
         auto target = m_detailTarget;
         int bus = m_detailReturnBus;
-        items.push_back({"Save Preset...", [this, type, chainIndex, deviceId, deviceName, target, bus]() {
+        items.push_back(item("Save Preset...", [this, type, chainIndex, deviceId, deviceName, target, bus]() {
             SDL_StartTextInput(m_mainWindow.getHandle());
             m_textInputDialog.prompt("Save Preset", "My Preset",
                 [this, type, chainIndex, deviceId, deviceName, target, bus](const std::string& name) {
@@ -5518,18 +5561,18 @@ bool App::init() {
                         if (m_libraryScanner) m_libraryScanner->scanPresets();
                     }
                 });
-        }});
+        }));
 
         // Separator if there are presets
         if (!presets.empty()) {
-            items.push_back({"", nullptr, true}); // separator
+            items.push_back(separator());
         }
 
         // Add each preset as a loadable item
         for (const auto& preset : presets) {
             std::filesystem::path path = preset.filePath;
             std::string pName = preset.name;
-            items.push_back({preset.name,
+            items.push_back(item(preset.name,
                 [this, type, chainIndex, path, pName, target, bus]() {
                     bool ok = false;
                     if (type == ui::fw2::DetailPanelWidget::DeviceType::Instrument) {
@@ -5553,10 +5596,10 @@ bool App::init() {
                         LOG_INFO("Preset", "Loaded '%s'", pName.c_str());
                     }
                 }
-            });
+            ));
         }
 
-        ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+        ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
     });
 
@@ -5728,19 +5771,20 @@ bool App::init() {
     m_detailPanel->setOnDrumPadFxMenu(
         [this](instruments::DrumRack* dr, int note, float sx, float sy) {
             if (!dr) return;
-            using Item = ui::ContextMenu::Item;
-            std::vector<Item> items;
+            using namespace ui::fw2::Menu;
+            using ui::fw2::MenuEntry;
+            std::vector<MenuEntry> items;
 
             // "Add Pad FX →" submenu — every audio effect plus
             // every loaded VST3 effect.
-            std::vector<Item> addItems;
+            std::vector<MenuEntry> addItems;
             auto addFx = [this, dr, note, &addItems](const char* label,
                             std::function<std::unique_ptr<effects::AudioEffect>()> make) {
-                addItems.push_back({label, [this, dr, note, make]() {
+                addItems.push_back(item(label, [this, dr, note, make]() {
                     auto* chain = dr->padFxChain(note);
                     if (chain) chain->append(make());
                     LOG_INFO("User", "DrumRack pad %d → add fx", note);
-                }});
+                }));
             };
             addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
             addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
@@ -5765,31 +5809,31 @@ bool App::init() {
             addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
             addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
             addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
-            items.push_back({"Add Pad FX", nullptr, false, true, std::move(addItems)});
+            items.push_back(submenu("Add Pad FX", std::move(addItems)));
 
             // Remove submenu — only when the pad has a chain with
             // at least one effect on it.
             auto* existing = dr->padFxChainOrNull(note);
             if (existing && existing->count() > 0) {
-                std::vector<Item> remItems;
+                std::vector<MenuEntry> remItems;
                 for (int i = 0; i < existing->count(); ++i) {
                     auto* fx = existing->effectAt(i);
                     if (!fx) continue;
                     std::string label = fx->name();
                     int slot = i;
-                    remItems.push_back({label, [this, dr, note, slot]() {
+                    remItems.push_back(item(label, [this, dr, note, slot]() {
                         auto* chain = dr->padFxChain(note);
                         if (chain) chain->remove(slot);
                         LOG_INFO("User", "DrumRack pad %d → remove fx slot %d", note, slot);
-                    }});
+                    }));
                 }
-                items.push_back({"Remove Pad FX", nullptr, false, true, std::move(remItems)});
-                items.push_back({"Clear All Pad FX", [dr, note]() {
+                items.push_back(submenu("Remove Pad FX", std::move(remItems)));
+                items.push_back(item("Clear All Pad FX", [dr, note]() {
                     dr->clearPadFx(note);
-                }});
+                }));
             }
 
-            ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+            ui::fw2::ContextMenu::show(std::move(items),
                                          ui::fw::Point{sx, sy});
         });
 
@@ -5803,19 +5847,20 @@ bool App::init() {
         [this](instruments::InstrumentRack* ir, int chainIdx,
                   float sx, float sy) {
             if (!ir || chainIdx < 0 || chainIdx >= ir->chainCount()) return;
-            using Item = ui::ContextMenu::Item;
-            std::vector<Item> items;
+            using namespace ui::fw2::Menu;
+            using ui::fw2::MenuEntry;
+            std::vector<MenuEntry> items;
 
             // "Change Instrument →" submenu — swaps the chain's
             // nested instrument for any of the available types.
             // InstrumentRack is intentionally absent so users can't
             // nest a rack inside itself (would confuse the outer-
             // rack tick-rebuild fingerprint logic).
-            std::vector<Item> swapItems;
+            std::vector<MenuEntry> swapItems;
             auto addSwap = [this, ir, chainIdx, &swapItems](
                     const char* label,
                     std::function<std::unique_ptr<instruments::Instrument>()> make) {
-                swapItems.push_back({label, [this, ir, chainIdx, make]() {
+                swapItems.push_back(item(label, [this, ir, chainIdx, make]() {
                     auto inst = make();
                     if (!inst) return;
                     // setInstrument() on the engine inits the
@@ -5845,7 +5890,7 @@ bool App::init() {
                     // sees the new instrument's knobs without having
                     // to click the track again.
                     updateDetailForSelectedTrack();
-                }});
+                }));
             };
             addSwap("SubSynth",        [](){ return std::make_unique<instruments::SubtractiveSynth>(); });
             addSwap("FM Synth",        [](){ return std::make_unique<instruments::FMSynth>(); });
@@ -5861,19 +5906,18 @@ bool App::init() {
             addSwap("String Machine",  [](){ return std::make_unique<instruments::StringMachine>(); });
             addSwap("Drawbar Organ",   [](){ return std::make_unique<instruments::DrawbarOrgan>(); });
             addSwap("Electric Piano",  [](){ return std::make_unique<instruments::ElectricPiano>(); });
-            items.push_back({"Change Instrument", nullptr, false, true,
-                              std::move(swapItems)});
-            items.push_back({"", nullptr, true}); // separator
+            items.push_back(submenu("Change Instrument", std::move(swapItems)));
+            items.push_back(separator());
 
-            std::vector<Item> addItems;
+            std::vector<MenuEntry> addItems;
             auto addFx = [this, ir, chainIdx, &addItems](const char* label,
                             std::function<std::unique_ptr<effects::AudioEffect>()> make) {
-                addItems.push_back({label, [this, ir, chainIdx, make]() {
+                addItems.push_back(item(label, [this, ir, chainIdx, make]() {
                     auto* chain = ir->chainFxChain(chainIdx);
                     if (chain) chain->append(make());
                     LOG_INFO("User", "InstrumentRack chain %d → add fx",
                               chainIdx);
-                }});
+                }));
             };
             addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
             addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
@@ -5898,34 +5942,32 @@ bool App::init() {
             addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
             addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
             addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
-            items.push_back({"Add Chain FX", nullptr, false, true,
-                             std::move(addItems)});
+            items.push_back(submenu("Add Chain FX", std::move(addItems)));
 
             auto* existing = ir->chainFxChainOrNull(chainIdx);
             if (existing && existing->count() > 0) {
-                std::vector<Item> remItems;
+                std::vector<MenuEntry> remItems;
                 for (int i = 0; i < existing->count(); ++i) {
                     auto* fx = existing->effectAt(i);
                     if (!fx) continue;
                     std::string label = fx->name();
                     int slot = i;
-                    remItems.push_back({label, [this, ir, chainIdx, slot]() {
+                    remItems.push_back(item(label, [this, ir, chainIdx, slot]() {
                         auto* chain = ir->chainFxChain(chainIdx);
                         if (chain) chain->remove(slot);
                         LOG_INFO("User", "InstrumentRack chain %d → "
                                           "remove fx slot %d",
                                   chainIdx, slot);
-                    }});
+                    }));
                 }
-                items.push_back({"Remove Chain FX", nullptr, false, true,
-                                  std::move(remItems)});
-                items.push_back({"Clear All Chain FX",
+                items.push_back(submenu("Remove Chain FX", std::move(remItems)));
+                items.push_back(item("Clear All Chain FX",
                                   [ir, chainIdx]() {
                     ir->clearChainFx(chainIdx);
-                }});
+                }));
             }
 
-            ui::fw2::ContextMenu::show(ui::fw2::v1ItemsToFw2(std::move(items)),
+            ui::fw2::ContextMenu::show(std::move(items),
                                          ui::fw::Point{sx, sy});
         });
 

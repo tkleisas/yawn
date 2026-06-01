@@ -11,7 +11,6 @@
 #include "ui/panels/DetailPanelWidget.h"
 #include "ui/panels/PianoRollPanel.h"
 #include "ui/VirtualKeyboard.h"
-#include "ui/ContextMenu.h"
 // v1 AboutDialog retired — fw2 About is inline in the menu handler.
 // v1 ConfirmDialogWidget retired — fw2::ConfirmDialog lives on
 // LayerStack::Modal (include "ui/framework/v2/Dialog.h" to use it).

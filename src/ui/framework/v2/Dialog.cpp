@@ -177,8 +177,12 @@ void DialogManager::layoutBody(UIContext& ctx) {
     float h = (m_state.spec.height > 0.0f) ? m_state.spec.height : contentH;
     h = std::max(h, 120.0f);
 
-    // Centre in viewport.
+    // Centre in viewport, clamped so the dialog never exceeds the screen.
+    // A too-tall dialog keeps its title + buttons pinned and scrolls the
+    // message region (see msgRect below); a too-wide dialog clips to body.
     const Rect& v = ctx.viewport;
+    h = std::min(h, v.h * 0.92f);
+    w = std::min(w, v.w * 0.96f);
     m_state.bounds = {
         v.x + (v.w - w) * 0.5f,
         v.y + (v.h - h) * 0.5f,
@@ -205,6 +209,30 @@ void DialogManager::layoutBody(UIContext& ctx) {
     for (size_t i = 0; i < revRects.size(); ++i) {
         m_state.buttonRects[revRects.size() - 1 - i] = revRects[i];
     }
+
+    // Message scroll region — between the title (top) and the button
+    // row (bottom). When the dialog was clamped to the viewport and the
+    // message is taller than this region, it scrolls (title + buttons
+    // stay pinned). The painter clips to this rect and offsets by
+    // scrollOffset; onScroll/onKey adjust it.
+    float msgTop = m_state.bounds.y + padY;
+    if (m_state.spec.iconTextureId != 0 && m_state.spec.iconSize > 0.0f)
+        msgTop += m_state.spec.iconSize + rowGap;
+    if (!m_state.spec.title.empty())
+        msgTop += measureLineH(ctx, titleSize) + rowGap;
+    const float msgBottom = m_state.spec.buttons.empty()
+                                ? (m_state.bounds.y + m_state.bounds.h - padY)
+                                : (rowY - rowGap);
+    m_state.msgRect = { m_state.bounds.x, msgTop,
+                        m_state.bounds.w, std::max(0.0f, msgBottom - msgTop) };
+    m_state.msgContentH = static_cast<float>(lines.size()) * lineH;
+    clampScroll();
+}
+
+void DialogManager::clampScroll() {
+    const float maxS = m_state.scrollMax();
+    if (m_state.scrollOffset < 0.0f)  m_state.scrollOffset = 0.0f;
+    if (m_state.scrollOffset > maxS)  m_state.scrollOffset = maxS;
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -231,7 +259,8 @@ void DialogManager::pushEntry(UIContext& ctx) {
     entry.onMouseDown = [this](MouseEvent& e)     { return onMouseDown(e); };
     entry.onMouseUp   = [this](MouseEvent& e)     { return onMouseUp(e);   };
     entry.onMouseMove = [this](MouseMoveEvent& e) { return onMouseMove(e); };
-    entry.onKey       = [this](KeyEvent& e)       { return onKey(e);       };
+    entry.onScroll    = [this](ScrollEvent& e)    { return onScroll(e);    };
+    entry.onKey       = [this](KeyEvent& e)       { return onKey(e);        };
     entry.onEscape    = [this]()                  { onEscape(); };
     entry.onDismiss   = [this]() {
         // LayerStack removed the entry. Two sources:
@@ -282,8 +311,34 @@ bool DialogManager::onMouseMove(MouseMoveEvent& e) {
     return true;
 }
 
+bool DialogManager::onScroll(ScrollEvent& e) {
+    if (m_state.scrollMax() <= 0.0f) return false;
+    // dy > 0 = wheel up (content moves down → offset decreases),
+    // matching ScrollView's convention.
+    m_state.scrollOffset -= e.dy * 40.0f;
+    clampScroll();
+    return true;
+}
+
 bool DialogManager::onKey(KeyEvent& e) {
     if (e.consumed) return false;
+    // Keyboard scrolling when the message overflows. Guarded so a
+    // non-scrolling dialog still lets Enter/Escape through unchanged.
+    if (m_state.scrollMax() > 0.0f) {
+        switch (e.key) {
+            case Key::PageDown:
+                m_state.scrollOffset += m_state.msgRect.h * 0.9f; clampScroll(); return true;
+            case Key::PageUp:
+                m_state.scrollOffset -= m_state.msgRect.h * 0.9f; clampScroll(); return true;
+            case Key::Down:
+                m_state.scrollOffset += 30.0f; clampScroll(); return true;
+            case Key::Up:
+                m_state.scrollOffset -= 30.0f; clampScroll(); return true;
+            case Key::Home: m_state.scrollOffset = 0.0f; return true;
+            case Key::End:  m_state.scrollOffset = m_state.scrollMax(); return true;
+            default: break;
+        }
+    }
     switch (e.key) {
         case Key::Escape:
             onEscape();

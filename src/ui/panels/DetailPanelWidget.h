@@ -60,9 +60,6 @@
 #include "midi/LFO.h"
 #include "midi/MidiMapping.h"
 #include "automation/AutomationLane.h"
-#ifndef YAWN_TEST_BUILD
-#include "ui/ContextMenu.h"
-#endif
 #include <string>
 #include <vector>
 #include <functional>
@@ -637,6 +634,7 @@ public:
 
                 if (!setupAudioEffectDisplay(dw, fx, ref))
                     configureDeviceWidget(dw, ref);
+                dw->setPresetName(fx->currentPresetName());
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
@@ -812,6 +810,7 @@ public:
                 if (!setupMidiEffectDisplay(dw, fx, ref))
                     configureDeviceWidget(dw, ref);
                 wireHeaderCallbacks(dw, ref);
+                dw->setPresetName(fx->currentPresetName());
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
@@ -837,6 +836,7 @@ public:
             if (!setupInstrumentDisplay(dw, inst, ref))
                 configureDeviceWidget(dw, ref);
             wireHeaderCallbacks(dw, ref);
+            dw->setPresetName(inst->currentPresetName());
 
             snapPoints.push_back(xPos);
             xPos += dw->preferredWidth() + kDeviceGap;
@@ -867,6 +867,7 @@ public:
 
                 if (!setupAudioEffectDisplay(dw, fx, ref))
                     configureDeviceWidget(dw, ref);
+                dw->setPresetName(fx->currentPresetName());
 
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;

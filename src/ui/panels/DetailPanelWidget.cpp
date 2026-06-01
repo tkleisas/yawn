@@ -6,7 +6,7 @@
 #include "../Renderer.h"
 #include "../Font.h"
 #include "../../util/Logger.h"
-#include "ui/framework/v2/V1MenuBridge.h"
+#include "ui/framework/v2/ContextMenu.h"
 
 namespace yawn {
 namespace ui {
@@ -561,52 +561,36 @@ void DetailPanelWidget::openDeviceMidiLearnMenu(float mx, float my,
                                                  const automation::AutomationTarget& target,
                                                  float paramMin, float paramMax,
                                                  std::function<void()> resetAction) {
-    using Item = ::yawn::ui::ContextMenu::Item;
-    std::vector<Item> items;
+    std::vector<MenuEntry> items;
 
     bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
     bool isLearning = m_learnManager && m_learnManager->isLearning() &&
                       m_learnManager->learnTarget() == target;
 
     if (isLearning) {
-        Item cancelItem;
-        cancelItem.label = "Cancel Learn";
-        cancelItem.action = [this]() {
+        items.push_back(Menu::item("Cancel Learn", [this]() {
             if (m_learnManager) m_learnManager->cancelLearn();
-        };
-        items.push_back(std::move(cancelItem));
+        }));
     } else {
-        Item learnItem;
-        learnItem.label = "MIDI Learn";
-        learnItem.action = [this, target, paramMin, paramMax]() {
-            if (m_learnManager)
-                m_learnManager->startLearn(target, paramMin, paramMax);
-        };
-        items.push_back(std::move(learnItem));
+        items.push_back(Menu::item("MIDI Learn",
+            [this, target, paramMin, paramMax]() {
+                if (m_learnManager)
+                    m_learnManager->startLearn(target, paramMin, paramMax);
+            }));
     }
 
     if (hasMapping) {
         auto* mapping = m_learnManager->findByTarget(target);
-        Item removeItem;
-        removeItem.label = "Remove " + mapping->label();
-        removeItem.action = [this, target]() {
-            if (m_learnManager) m_learnManager->removeByTarget(target);
-        };
-        items.push_back(std::move(removeItem));
+        items.push_back(Menu::item("Remove " + mapping->label(),
+            [this, target]() {
+                if (m_learnManager) m_learnManager->removeByTarget(target);
+            }));
     }
 
-    Item sep;
-    sep.separator = true;
-    items.push_back(std::move(sep));
+    items.push_back(Menu::separator());
+    items.push_back(Menu::item("Reset to Default", std::move(resetAction)));
 
-    Item resetItem;
-    resetItem.label = "Reset to Default";
-    resetItem.action = std::move(resetAction);
-    items.push_back(std::move(resetItem));
-
-    ContextMenu::show(
-        v1ItemsToFw2(std::move(items)),
-        Point{mx, my});
+    ContextMenu::show(std::move(items), Point{mx, my});
 }
 
 } // namespace fw2

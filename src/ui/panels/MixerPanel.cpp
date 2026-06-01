@@ -11,7 +11,7 @@
 #include "midi/MidiEngine.h"
 #include "../Renderer.h"
 #include "../Font.h"
-#include "ui/framework/v2/V1MenuBridge.h"
+#include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Theme.h"
 
 namespace yawn {
@@ -332,38 +332,30 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
                                     float paramMin, float paramMax,
                                     std::function<void()> resetAction,
                                     const ::yawn::MacroTarget& macroTarget) {
-    using Item = ::yawn::ui::ContextMenu::Item;
-    std::vector<Item> items;
+    std::vector<MenuEntry> items;
 
     bool hasMapping = m_learnManager && m_learnManager->findByTarget(target) != nullptr;
     bool isLearning = m_learnManager && m_learnManager->isLearning() &&
                       m_learnManager->learnTarget() == target;
 
     if (isLearning) {
-        Item cancelItem;
-        cancelItem.label = "Cancel Learn";
-        cancelItem.action = [this]() {
+        items.push_back(Menu::item("Cancel Learn", [this]() {
             if (m_learnManager) m_learnManager->cancelLearn();
-        };
-        items.push_back(std::move(cancelItem));
+        }));
     } else {
-        Item learnItem;
-        learnItem.label = "MIDI Learn";
-        learnItem.action = [this, target, paramMin, paramMax]() {
-            if (m_learnManager)
-                m_learnManager->startLearn(target, paramMin, paramMax);
-        };
-        items.push_back(std::move(learnItem));
+        items.push_back(Menu::item("MIDI Learn",
+            [this, target, paramMin, paramMax]() {
+                if (m_learnManager)
+                    m_learnManager->startLearn(target, paramMin, paramMax);
+            }));
     }
 
     if (hasMapping) {
         auto* mapping = m_learnManager->findByTarget(target);
-        Item removeItem;
-        removeItem.label = "Remove " + mapping->label();
-        removeItem.action = [this, target]() {
-            if (m_learnManager) m_learnManager->removeByTarget(target);
-        };
-        items.push_back(std::move(removeItem));
+        items.push_back(Menu::item("Remove " + mapping->label(),
+            [this, target]() {
+                if (m_learnManager) m_learnManager->removeByTarget(target);
+            }));
     }
 
     // Macro mapping section — only injected when the caller supplied a
@@ -384,14 +376,8 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
         for (const auto& mm : macros.mappings)
             if (matches(mm)) { currentMacro = mm.macroIdx; break; }
 
-        Item sep;
-        sep.separator = true;
-        items.push_back(std::move(sep));
-
-        Item header;
-        header.label   = "Map to:";
-        header.enabled = false;
-        items.push_back(std::move(header));
+        items.push_back(Menu::separator());
+        items.push_back(Menu::header("Map to:"));
 
         for (int i = 0; i < ::yawn::MacroDevice::kNumMacros; ++i) {
             std::string label =
@@ -399,9 +385,7 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
                 + std::to_string(i + 1);
             if (!macros.labels[i].empty())
                 label += ": " + macros.labels[i];
-            Item it;
-            it.label = std::move(label);
-            it.action = [this, t, i, macroTarget]() {
+            items.push_back(Menu::item(std::move(label), [this, t, i, macroTarget]() {
                 if (!m_project) return;
                 auto& chain = m_project->track(t).macros.mappings;
                 chain.erase(std::remove_if(chain.begin(), chain.end(),
@@ -414,14 +398,11 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
                 nm.macroIdx = i;
                 nm.target   = macroTarget;
                 chain.push_back(std::move(nm));
-            };
-            items.push_back(std::move(it));
+            }));
         }
 
         if (currentMacro >= 0) {
-            Item unmap;
-            unmap.label = "Unmap from macro";
-            unmap.action = [this, t, macroTarget]() {
+            items.push_back(Menu::item("Unmap from macro", [this, t, macroTarget]() {
                 if (!m_project) return;
                 auto& chain = m_project->track(t).macros.mappings;
                 chain.erase(std::remove_if(chain.begin(), chain.end(),
@@ -430,22 +411,14 @@ void MixerPanel::openMidiLearnMenu(float mx, float my,
                                m.target.index     == macroTarget.index &&
                                m.target.paramName == macroTarget.paramName;
                     }), chain.end());
-            };
-            items.push_back(std::move(unmap));
+            }));
         }
     }
 
-    Item sep;
-    sep.separator = true;
-    items.push_back(std::move(sep));
+    items.push_back(Menu::separator());
+    items.push_back(Menu::item("Reset to Default", std::move(resetAction)));
 
-    Item resetItem;
-    resetItem.label = "Reset to Default";
-    resetItem.action = std::move(resetAction);
-    items.push_back(std::move(resetItem));
-
-    ContextMenu::show(v1ItemsToFw2(std::move(items)),
-                      Point{mx, my});
+    ContextMenu::show(std::move(items), Point{mx, my});
 }
 
 void MixerPanel::setupStripCallbacks(int t) {

@@ -20,6 +20,7 @@
 #include "ui/Renderer.h"
 #endif
 
+#include <cmath>
 #include <functional>
 #include <string>
 #include <utility>
@@ -163,7 +164,9 @@ public:
                                   kFsSmall, Color{200, 100, 100, 255});
         }
 
-        // Preset drop-down
+        // Preset drop-down. The button auto-sizes to the label, but when
+        // clamped to the strip width a long preset name overflows — clip
+        // it to the button and billboard-scroll it (pause, slide, pause).
         {
             const Color pbBg  = {55, 55, 68, 255};
             const Color pbBrd = {100, 100, 120, 255};
@@ -173,9 +176,30 @@ public:
                               m_presetBtn.w, m_presetBtn.h, pbBrd);
             if (tm) {
                 const std::string label = presetButtonLabel();
-                tm->drawText(r, label,
-                              m_presetBtn.x + 4, m_expandBtn.y,
-                              kFsSmall, Color{200, 200, 210, 255});
+                const Color tc{200, 200, 210, 255};
+                const float tx     = m_presetBtn.x + 4;
+                const float availW = m_presetBtn.w - 8.0f;
+                const float labelW = tm->textWidth(label, kFsSmall);
+                if (labelW <= availW || availW <= 0.0f) {
+                    m_presetMarqueeFrame = 0.0f;
+                    tm->drawText(r, label, tx, m_expandBtn.y, kFsSmall, tc);
+                } else {
+                    r.pushClip(m_presetBtn.x + 2, m_presetBtn.y,
+                               m_presetBtn.w - 4, m_presetBtn.h);
+                    constexpr float kPauseFrames = 60.0f;  // ~1s at 60 Hz
+                    constexpr float kPxPerFrame  = 0.5f;   // ~30 px/s
+                    const float maxOff   = labelW - availW + 8.0f;
+                    const float scrollFr = maxOff / kPxPerFrame;
+                    const float totalFr  = scrollFr + 2.0f * kPauseFrames;
+                    const float t = std::fmod(m_presetMarqueeFrame, totalFr);
+                    float off;
+                    if (t < kPauseFrames)                 off = 0.0f;
+                    else if (t < kPauseFrames + scrollFr) off = (t - kPauseFrames) * kPxPerFrame;
+                    else                                  off = maxOff;
+                    tm->drawText(r, label, tx - off, m_expandBtn.y, kFsSmall, tc);
+                    r.popClip();
+                    m_presetMarqueeFrame += 1.0f;
+                }
             }
         }
     }
@@ -237,6 +261,7 @@ private:
     Rect m_bypassBtn{};
     Rect m_removeBtn{};
     Rect m_presetBtn{};
+    float m_presetMarqueeFrame = 0.0f;  // billboard scroll for long preset names
 
     std::string presetButtonLabel() const {
         const char* pLabel = m_presetName.empty() ? "Preset" : m_presetName.c_str();
