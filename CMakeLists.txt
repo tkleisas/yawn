@@ -253,8 +253,12 @@ if(YAWN_HAS_BASIC_PITCH)
         PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/basicpitch
         PRIVATE ${eigen_SOURCE_DIR} ${ORT_INCLUDE_DIR})
     target_link_libraries(basicpitch PRIVATE ${ORT_SHARED_LIB})
-    # Vendored third-party code — silence its warnings.
-    if(NOT MSVC)
+    # Vendored third-party code — silence its warnings. /bigobj on MSVC:
+    # the embedded 230 KB model array + Eigen Tensor TUs blow the default
+    # object-section limit (the main exe already uses it).
+    if(MSVC)
+        target_compile_options(basicpitch PRIVATE /w /bigobj)
+    else()
         target_compile_options(basicpitch PRIVATE -w)
     endif()
 endif()
@@ -574,8 +578,19 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 if(YAWN_HAS_BASIC_PITCH)
     target_link_libraries(${PROJECT_NAME} PRIVATE basicpitch ${ORT_SHARED_LIB})
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_BASIC_PITCH=1)
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        BUILD_RPATH "${ORT_LIB_DIR}")
+    if(WIN32)
+        # Windows has no rpath — the ONNX Runtime DLL must sit next to the
+        # exe. Copy it post-build (works for the multi-config VS layout).
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_RUNTIME_LIB}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            VERBATIM)
+    else()
+        # Dev builds run from the build tree — point the loader at the
+        # fetched .so. A distribution step would copy it beside the binary.
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            BUILD_RPATH "${ORT_LIB_DIR}")
+    endif()
 endif()
 
 if(YAWN_HAS_VIDEO)
