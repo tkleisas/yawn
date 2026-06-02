@@ -16,6 +16,14 @@
 #include "demucs_api.h"   // demucs::separate (third_party/demucs)
 // Process spawn/kill for the cancellable curl download.
 #ifdef _WIN32
+// <windows.h> defines min/max macros that break std::min/std::max — keep
+// them out (NOMINMAX) and trim the header (WIN32_LEAN_AND_MEAN).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #else
 #include <csignal>
