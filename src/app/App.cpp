@@ -6882,7 +6882,13 @@ void App::handleKeyEvent(const SDL_Event& event) {
             if (m_displayPlaying) {
                 m_audioEngine.sendCommand(audio::TransportStopMsg{});
             } else {
-                // Re-launch default clips before starting transport
+                // Re-launch default clips before starting transport.
+                // Pressing the global Play means "start from the top, now",
+                // so launch immediately (QuantizeMode::None) in phase with
+                // the transport. Per-clip launchQuantize is for launching a
+                // clip *live* during playback (come in on the next bar) — it
+                // must not defer the audio behind the playhead on the Play
+                // gesture (that was the "drums come in half a bar late" bug).
                 for (int t = 0; t < m_project.numTracks(); ++t) {
                     int ds = m_project.track(t).defaultScene;
                     if (ds < 0 || ds >= m_project.numScenes()) continue;
@@ -6890,10 +6896,10 @@ void App::handleKeyEvent(const SDL_Event& event) {
                     if (!slot) continue;
                     if (slot->audioClip)
                         m_audioEngine.sendCommand(audio::LaunchClipMsg{t, ds, slot->audioClip.get(),
-                            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                            audio::QuantizeMode::None, &slot->clipAutomation, slot->followAction});
                     else if (slot->midiClip)
                         m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{t, ds, slot->midiClip.get(),
-                            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                            audio::QuantizeMode::None, &slot->clipAutomation, slot->followAction});
                     else if (slot->visualClip) {
                         launchVisualClipData(t, *slot->visualClip,
                                               slot->visualClip->firstShaderPath());

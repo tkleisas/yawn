@@ -45,6 +45,39 @@ TEST_F(MidiClipEngineTest, LaunchClipMakesTrackActive) {
     EXPECT_FALSE(m_engine.isTrackPlaying(1));
 }
 
+// Regression: a clip queued with NextBar quantize must fire at the downbeat
+// when playback starts, not inherit a stale boundary reference from a prior
+// playback and wait an extra bar (symptom: "drums come in late / the audio
+// trails the transport playhead" after pressing Play). The fix re-arms the
+// quantize-boundary detection on play start (AudioEngine's TransportPlayMsg
+// now calls resetQuantizeCheck()); this verifies the engine-level mechanism.
+TEST_F(MidiClipEngineTest, ResetQuantizeCheckFiresQueuedClipAtPlayStart) {
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    clip.addNote({0.0, 1.0, 60, 0, 51200, 0, 0, 0, 0});
+
+    m_transport.play();
+    m_transport.setPositionInSamples(0);   // play from the top (a bar boundary)
+
+    // Prime m_lastQuantizeCheck inside bar 0, the way a prior playback that
+    // stopped near the start leaves it (no pending clip yet, so this call
+    // just records the position).
+    m_engine.checkAndFirePending();
+
+    // Queue a NextBar-quantized clip, still inside bar 0.
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::NextBar);
+    m_engine.checkAndFirePending();
+    // Stale boundary reference (bar 0 == bar 0) makes the launch defer —
+    // this is exactly the bug: the clip stays queued at the downbeat.
+    EXPECT_FALSE(m_engine.isTrackPlaying(0));
+
+    // The fix: re-arm boundary detection at play start → the queued clip
+    // fires immediately at the downbeat instead of waiting a full bar.
+    m_engine.resetQuantizeCheck();
+    m_engine.checkAndFirePending();
+    EXPECT_TRUE(m_engine.isTrackPlaying(0));
+}
+
 TEST_F(MidiClipEngineTest, StopClipDeactivatesTrack) {
     MidiClip clip;
     clip.setLengthBeats(4.0);
