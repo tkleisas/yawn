@@ -1,7 +1,8 @@
 #pragma once
 
 // StemSeparation — Demucs v4 four-stem separation (drums/bass/other/vocals)
-// via the `demucs` ONNX lib. The ~170 MB model is downloaded on demand
+// via the `demucs` ONNX lib. The ~170 MB model is loaded from a copy bundled
+// beside the binary (release package) if present, else downloaded on demand
 // (curl) into ~/.yawn/models/. Heavy (minutes on CPU) — separate() is meant
 // to run on a worker thread; it reports progress and polls a cancel flag.
 // When YAWN_HAS_STEM_SEPARATION is off, available() is false and separate()
@@ -20,9 +21,12 @@ namespace transcribe {
 // True when stem separation was compiled in.
 bool stemSeparationAvailable();
 
-// Absolute path to the cached model (~/.yawn/models/htdemucs_4s.onnx).
+// Absolute path to the model the app will load: a copy bundled beside the
+// binary (release package) if present, otherwise the on-demand download
+// cache (~/.yawn/models/htdemucs_4s.onnx).
 std::string stemModelPath();
-// True if the model file is already present (and the expected size).
+// True if a usable model file (expected size) is already present — bundled
+// or cached — so no download is needed.
 bool stemModelPresent();
 
 struct StemOutput {

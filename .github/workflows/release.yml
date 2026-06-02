@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual trigger: builds + uploads the packaged artifacts (incl. the
+  # bundled model + ONNX Runtime) for inspection WITHOUT publishing a
+  # GitHub release — the `release` job is gated to tag pushes only.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -86,7 +90,7 @@ jobs:
         run: pip install jinja2
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
@@ -114,6 +118,13 @@ jobs:
           }
           Get-ChildItem build/bin/Release/*.dll -ErrorAction SilentlyContinue |
             Copy-Item -Destination $dir/
+          # Bundle the Demucs stem-separation model so the app is self-
+          # contained (onnxruntime.dll is already copied via *.dll above).
+          New-Item -ItemType Directory -Path "$dir/models" -Force | Out-Null
+          $modelUrl = 'https://github.com/tkleisas/yawn/releases/download/models-v1/htdemucs_4s.onnx'
+          Invoke-WebRequest -Uri $modelUrl -OutFile "$dir/models/htdemucs_4s.onnx" -UseBasicParsing
+          $sz = (Get-Item "$dir/models/htdemucs_4s.onnx").Length
+          if ($sz -ne 170681491) { throw "Model size mismatch: $sz (expected 170681491)" }
           if ($env:FFMPEG_ROOT -and (Test-Path "$env:FFMPEG_ROOT\bin")) {
             Copy-Item "$env:FFMPEG_ROOT\bin\*.dll" $dir/ -ErrorAction SilentlyContinue
             foreach ($exe in 'ffmpeg.exe','ffprobe.exe') {
@@ -140,6 +151,19 @@ jobs:
           if [ -d build/bin/scripts ]; then
             cp -r build/bin/scripts "$dir/"
           fi
+          # Bundle the ONNX Runtime shared lib beside the binary (its rpath
+          # includes $ORIGIN) so stem separation / Basic Pitch run from the
+          # package; -P preserves the libonnxruntime.so.1 -> .so.1.20.1 chain.
+          find build/_deps -path '*onnxruntime*/lib/libonnxruntime.so*' -print0 \
+            | xargs -0 cp -P -t "$dir/"
+          # Bundle the Demucs stem-separation model (self-contained app).
+          mkdir -p "$dir/models"
+          curl -L -f -sS -o "$dir/models/htdemucs_4s.onnx" \
+            "https://github.com/tkleisas/yawn/releases/download/models-v1/htdemucs_4s.onnx"
+          sz=$(stat -c%s "$dir/models/htdemucs_4s.onnx")
+          if [ "$sz" != "170681491" ]; then
+            echo "Model size mismatch: $sz (expected 170681491)"; exit 1
+          fi
           tar czf "YAWN-${version}-linux.tar.gz" "$dir"
 
       - name: Upload artifact
@@ -150,6 +174,9 @@ jobs:
 
   release:
     needs: build
+    # Only publish a GitHub release for real tag pushes; workflow_dispatch
+    # runs the build job for artifact inspection but skips publishing.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     name: Create Release
 
