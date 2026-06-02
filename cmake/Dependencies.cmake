@@ -234,11 +234,15 @@ option(YAWN_HAS_NAM "Enable Neural Amp Modeler (.nam) inference" ON)
 # — it pulls a prebuilt ONNX Runtime (Linux x64 only for now). See the
 # basicpitch static lib in CMakeLists.txt and third_party/basicpitch/.
 option(YAWN_HAS_BASIC_PITCH "Enable Basic Pitch audio-to-MIDI (ONNX Runtime, Linux x64)" OFF)
+# Stem separation via Demucs v4 (ONNX Runtime). Off by default; shares the
+# prebuilt ONNX Runtime + Eigen with Basic Pitch. Model is downloaded on
+# demand (not bundled). See the demucs static lib + third_party/demucs/.
+option(YAWN_HAS_STEM_SEPARATION "Enable Demucs v4 stem separation (ONNX Runtime)" OFF)
 
-# Eigen — shared by NAM and Basic Pitch. NAM uses placeholders::lastN
-# (Eigen master, not 3.4.0); Basic Pitch additionally uses the
-# unsupported Tensor module. Fetch the headers once if either is on.
-if(YAWN_HAS_NAM OR YAWN_HAS_BASIC_PITCH)
+# Eigen — shared by NAM, Basic Pitch, and stem separation. NAM uses
+# placeholders::lastN (Eigen master, not 3.4.0); the ONNX features also use
+# the unsupported Tensor module. Fetch the headers once if any is on.
+if(YAWN_HAS_NAM OR YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
     FetchContent_Declare(
         eigen
         GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
@@ -273,18 +277,20 @@ if(YAWN_HAS_NAM)
     endif()
 endif()
 
-# ONNX Runtime (prebuilt) — inference engine for Basic Pitch. We grab the
-# official prebuilt release for the platform and locate its include/ +
-# lib/ (the archive nests everything under a versioned subdir).
+# ONNX Runtime (prebuilt) — inference engine shared by Basic Pitch and
+# Demucs stem separation. We grab the official prebuilt release for the
+# platform and locate its include/ + lib/ (the archive nests everything
+# under a versioned subdir).
 #   * Linux x64 : .tgz, link + run libonnxruntime.so (rpath).
 #   * Windows x64: .zip, link onnxruntime.lib, run onnxruntime.dll (copied
 #                  next to the exe — Windows has no rpath).
 # macOS is intentionally not wired (no test machine) — disable there.
-if(YAWN_HAS_BASIC_PITCH)
+if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
     if(APPLE)
-        message(WARNING "YAWN_HAS_BASIC_PITCH: macOS is not wired/tested — "
-                        "disabling on this platform.")
+        message(WARNING "ONNX features (Basic Pitch / stem separation): macOS "
+                        "is not wired/tested — disabling on this platform.")
         set(YAWN_HAS_BASIC_PITCH OFF CACHE BOOL "" FORCE)
+        set(YAWN_HAS_STEM_SEPARATION OFF CACHE BOOL "" FORCE)
     else()
         set(_ort_ver 1.20.1)
         if(WIN32)
@@ -327,11 +333,12 @@ if(YAWN_HAS_BASIC_PITCH)
             else()
                 set(ORT_RUNTIME_LIB ${ORT_SHARED_LIB})
             endif()
-            message(STATUS "Basic Pitch: ONNX Runtime at ${ORT_LIB_DIR}")
+            message(STATUS "ONNX Runtime at ${ORT_LIB_DIR}")
         else()
-            message(WARNING "YAWN_HAS_BASIC_PITCH on but ONNX Runtime headers/lib "
-                            "not found under ${onnxruntime_SOURCE_DIR} — disabling.")
+            message(WARNING "ONNX feature on but ONNX Runtime headers/lib not "
+                            "found under ${onnxruntime_SOURCE_DIR} — disabling.")
             set(YAWN_HAS_BASIC_PITCH OFF CACHE BOOL "" FORCE)
+            set(YAWN_HAS_STEM_SEPARATION OFF CACHE BOOL "" FORCE)
         endif()
     endif()
 endif()

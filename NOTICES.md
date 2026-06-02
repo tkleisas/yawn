@@ -103,6 +103,24 @@ Both licenses are compatible with YAWN's MIT license.
 
 ---
 
+## Stem Separation Model
+
+### Demucs v4 (htdemucs) — downloaded on demand
+
+The four-stem separation model (`Separate Stems`, gated on
+`YAWN_HAS_STEM_SEPARATION`).
+
+- **Model:** Meta's [Demucs v4 hybrid transformer](https://github.com/facebookresearch/demucs)
+  (`htdemucs`, 4-source: drums/bass/other/vocals), exported to a single
+  self-contained ONNX via the [sevagh/demucs.onnx](https://github.com/sevagh/demucs.onnx)
+  converter. **License: MIT** (Demucs).
+- **Distribution:** ~170 MB — **not bundled**. Downloaded on first use (via
+  `curl`) from the YAWN GitHub release `models-v1` into `~/.yawn/models/`.
+- **C++ inference:** adapted from sevagh/demucs.onnx (MIT) — see
+  `third_party/demucs/LICENSE`. Runs on ONNX Runtime (below).
+
+---
+
 ## Source-Code Dependencies
 
 Code dependencies are vendored by CMake's FetchContent and live
@@ -123,6 +141,7 @@ under `build/_deps/`. Each carries its own LICENSE file:
 - **NeuralAmpModelerCore** — MIT — https://github.com/sdatkinson/NeuralAmpModelerCore
 - **ONNX Runtime** — MIT — https://github.com/microsoft/onnxruntime (prebuilt, behind `YAWN_HAS_BASIC_PITCH`)
 - **basicpitch.cpp** — MIT — https://github.com/sevagh/basicpitch.cpp (vendored + adapted in `third_party/basicpitch/`)
+- **demucs.onnx** — MIT — https://github.com/sevagh/demucs.onnx (vendored + adapted in `third_party/demucs/`)
 - **tinygltf** — MIT — https://github.com/syoyo/tinygltf
 - **Ableton Link** — GPL 2 — https://github.com/Ableton/link
 - **VST3 SDK** — GPL 3 / Steinberg dual — https://github.com/steinbergmedia/vst3sdk

@@ -2819,6 +2819,17 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
         items.push_back(separator());
     }
 
+    // "Separate Stems" — Demucs v4 four-stem separation onto 4 new audio
+    // tracks. Only shown when the feature is compiled in. Downloads the
+    // ~170 MB model on first use; runs on a worker thread (Esc to cancel).
+    if (canSendAudio && transcribe::stemSeparationAvailable()) {
+        items.push_back(item("Separate Stems (Demucs)",
+            [this, trackIndex, sceneIndex]() {
+                startStemSeparation(trackIndex, sceneIndex);
+            }));
+        items.push_back(separator());
+    }
+
     items.push_back(itemEn("Copy", [this, trackIndex, sceneIndex]() {
         auto* s = m_project.getSlot(trackIndex, sceneIndex);
         if (s && s->audioClip) {
@@ -6839,6 +6850,15 @@ void App::handleKeyEvent(const SDL_Event& event) {
 
     switch (event.key.key) {
         case SDLK_ESCAPE:
+            // ESC cancels an in-flight stem-separation job first (it's a
+            // multi-minute background task with no other cancel affordance).
+            if (m_pendingStem && m_pendingStem->active.load() &&
+                !m_pendingStem->done.load()) {
+                m_pendingStem->cancel.store(true);
+                m_toastManager.show("Cancelling stem separation…", 2.0f,
+                                    ui::ToastManager::Severity::Info);
+                break;
+            }
             // ESC exits fullscreen on the visual output if
             // that's what's currently going on; otherwise it
             // keeps its menu/quit behaviour.
@@ -7996,6 +8016,27 @@ void App::update() {
         }
     }
 
+    // Poll the Demucs stem-separation worker (one at a time). On completion
+    // apply on the main thread (track creation); otherwise toast progress
+    // at 25% buckets so the user sees movement on a multi-minute job.
+    if (m_pendingStem && m_pendingStem->active.load()) {
+        PendingStem* ps = m_pendingStem.get();
+        if (ps->done.load(std::memory_order_acquire)) {
+            applyStemResult();
+        } else {
+            const int pct = static_cast<int>(ps->fraction.load() * 100.0f);
+            const int bucket = pct / 25;
+            if (bucket != ps->lastBucket) {
+                ps->lastBucket = bucket;
+                const char* phase = ps->phase.load() == 0 ? "Downloading model"
+                                                          : "Separating stems";
+                m_toastManager.show(
+                    std::string(phase) + ": " + std::to_string(pct) + "%",
+                    1.8f, ui::ToastManager::Severity::Info);
+            }
+        }
+    }
+
     // Pull any fresh MIDI CC values for visual-knob targets off the bus
     // and apply them to the layer + the track-level macro device.
     // Audio thread writes, UI thread reads once per frame. Hardware
@@ -9071,6 +9112,87 @@ void App::startExportRender(const std::string& filePath) {
         }
         progress.done.store(true);
     }).detach();
+}
+
+void App::startStemSeparation(int trackIndex, int sceneIndex) {
+    if (!transcribe::stemSeparationAvailable()) return;
+    if (m_pendingStem && m_pendingStem->active.load() && !m_pendingStem->done.load()) {
+        m_toastManager.show("Stem separation already running…", 2.0f,
+                            ui::ToastManager::Severity::Info);
+        return;
+    }
+    auto* slot = m_project.getSlot(trackIndex, sceneIndex);
+    if (!slot || !slot->audioClip || !slot->audioClip->buffer) return;
+
+    // Keep the source buffer alive for the worker via shared_ptr; both the
+    // engine and the worker only READ it, so concurrent access is safe.
+    std::shared_ptr<audio::AudioBuffer> buf = slot->audioClip->buffer;
+    const double sr = m_audioEngine.sampleRate();
+    const std::string base = slot->audioClip->name.empty()
+                             ? "Audio" : slot->audioClip->name;
+
+    m_pendingStem = std::make_unique<PendingStem>();
+    m_pendingStem->active.store(true);
+    m_pendingStem->trackIndex = trackIndex;
+    m_pendingStem->sceneIndex = sceneIndex;
+    m_pendingStem->baseName   = base;
+    PendingStem* ps = m_pendingStem.get();
+
+    m_toastManager.show(
+        transcribe::stemModelPresent()
+            ? "Stem separation started (a few minutes on CPU; Esc to cancel)…"
+            : "Stem separation: downloading model (~170 MB), then separating…",
+        4.0f, ui::ToastManager::Severity::Info);
+
+    std::thread([this, ps, buf, sr]() {
+        transcribe::StemProgress prog =
+            [ps](const std::string& phase, float frac) {
+                ps->phase.store(phase == "download" ? 0 : 1);
+                ps->fraction.store(frac);
+            };
+        transcribe::StemOutput out =
+            transcribe::separateStems(*buf, sr, prog, ps->cancel);
+        ps->output = std::move(out);
+        ps->done.store(true, std::memory_order_release);
+    }).detach();
+}
+
+void App::applyStemResult() {
+    if (!m_pendingStem) return;
+    PendingStem& ps = *m_pendingStem;
+    const transcribe::StemOutput& out = ps.output;
+
+    if (out.cancelled) {
+        m_toastManager.show("Stem separation cancelled", 2.5f,
+                            ui::ToastManager::Severity::Info);
+    } else if (!out.ok) {
+        m_toastManager.show(
+            "Stem separation failed: " +
+                (out.error.empty() ? std::string("unknown") : out.error),
+            4.0f, ui::ToastManager::Severity::Warn);
+    } else {
+        int created = 0;
+        for (size_t s = 0; s < out.stems.size(); ++s) {
+            if (!out.stems[s]) continue;
+            const int idx = m_project.numTracks();
+            const std::string name = ps.baseName + " " + out.names[s];
+            m_project.addTrack(name, Track::Type::Audio);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
+            auto clip = std::make_unique<audio::Clip>();
+            clip->name   = name;
+            clip->buffer = out.stems[s];
+            m_project.setClip(idx, ps.sceneIndex, std::move(clip));
+            ++created;
+        }
+        // Make the engine aware of the new tracks + their clips.
+        syncTracksToEngine();
+        markDirty();
+        m_toastManager.show(
+            "Stems ready: " + std::to_string(created) + " new tracks (" +
+                ps.baseName + ")",
+            4.0f, ui::ToastManager::Severity::Info);
+    }
+    m_pendingStem.reset();
 }
 
 void App::startPresetGeneration(float alienRatio, bool selectedDeviceOnly) {

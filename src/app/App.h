@@ -41,6 +41,7 @@
 #include "util/FileIO.h"
 #include "util/AppSettings.h"
 #include "util/UndoManager.h"
+#include "transcribe/StemSeparation.h"
 #include "util/IconLoader.h"
 #include <vector>
 #include <memory>
@@ -231,6 +232,11 @@ private:
     // batch to the currently-selected track's instrument.
     void startPresetGeneration(float alienRatio, bool selectedDeviceOnly);
     void startExportRender(const std::string& filePath);
+    // Demucs stem separation: kick off a worker for the audio clip at
+    // (track, scene); applyStemResult() runs on the main thread from
+    // update() when the worker finishes (creates 4 stem tracks).
+    void startStemSeparation(int trackIndex, int sceneIndex);
+    void applyStemResult();
     void syncTracksToEngine();
     void setupDefaultTracks();
     // Load an IR file into a ConvolutionReverb effect (read via
@@ -439,6 +445,24 @@ private:
     // Target slot for the pending "Set Scene Script…" file dialog.
     int m_pendingSceneTrack = -1;
     int m_pendingSceneScene = -1;
+
+    // In-flight Demucs stem-separation job (one at a time). The worker
+    // thread fills `output` then sets `done` (release); update() reads it
+    // (acquire) on the main thread and applies it. `cancel` is polled by
+    // the worker; `phase`/`fraction` drive progress toasts.
+    struct PendingStem {
+        std::atomic<bool>  active{false};
+        std::atomic<bool>  done{false};
+        std::atomic<bool>  cancel{false};
+        std::atomic<int>   phase{0};        // 0 = download, 1 = separate
+        std::atomic<float> fraction{0.0f};
+        transcribe::StemOutput output;       // valid once done == true
+        int trackIndex = 0;
+        int sceneIndex = 0;
+        std::string baseName;
+        int lastBucket = -1;                 // main-thread: last progress toast bucket
+    };
+    std::unique_ptr<PendingStem> m_pendingStem;
 
     // Active video imports (transcoding in the background via ffmpeg).
     struct PendingVideoImport {

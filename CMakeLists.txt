@@ -265,6 +265,32 @@ if(YAWN_HAS_BASIC_PITCH)
     endif()
 endif()
 
+# Demucs v4 stem separation — vendored MIT C++ port adapted from
+# sevagh/demucs.onnx (third_party/demucs/). C++17 static lib (Eigen +
+# ONNX Runtime); a plain-struct facade (demucs_api.h) keeps Eigen/ORT out
+# of the rest of YAWN. The ~170 MB model is NOT bundled — it's downloaded
+# on demand at runtime (see src/transcribe/StemSeparation.cpp).
+if(YAWN_HAS_STEM_SEPARATION)
+    add_library(demucs STATIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/demucs/dsp.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/demucs/model_apply.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/demucs/model_inference.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/demucs/demucs_api.cpp)
+    set_target_properties(demucs PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(demucs
+        PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/demucs
+        PRIVATE ${eigen_SOURCE_DIR} ${ORT_INCLUDE_DIR})
+    target_link_libraries(demucs PRIVATE ${ORT_SHARED_LIB})
+    if(MSVC)
+        target_compile_options(demucs PRIVATE /W0 /bigobj)
+    else()
+        target_compile_options(demucs PRIVATE -w)
+    endif()
+endif()
+
 # Collect sources
 file(GLOB_RECURSE YAWN_SOURCES
     src/*.cpp
@@ -573,13 +599,19 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     lua54
 )
 
-# Basic Pitch audio-to-MIDI — link the C++20 static lib + its ONNX
-# Runtime, define the feature flag, and point the runtime loader at the
-# fetched ORT .so via rpath (dev builds run from the build tree; a
-# distribution step would copy libonnxruntime.so beside the binary).
+# ONNX features (Basic Pitch audio-to-MIDI + Demucs stem separation) —
+# link each feature's static lib under its own flag, then wire the shared
+# ONNX Runtime once.
 if(YAWN_HAS_BASIC_PITCH)
-    target_link_libraries(${PROJECT_NAME} PRIVATE basicpitch ${ORT_SHARED_LIB})
+    target_link_libraries(${PROJECT_NAME} PRIVATE basicpitch)
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_BASIC_PITCH=1)
+endif()
+if(YAWN_HAS_STEM_SEPARATION)
+    target_link_libraries(${PROJECT_NAME} PRIVATE demucs)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_STEM_SEPARATION=1)
+endif()
+if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${ORT_SHARED_LIB})
     if(WIN32)
         # Windows has no rpath — the ONNX Runtime DLL must sit next to the
         # exe. Copy it post-build (works for the multi-config VS layout).
