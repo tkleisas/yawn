@@ -1244,6 +1244,16 @@ void AudioEngine::processCommands() {
 
             if constexpr (std::is_same_v<T, TransportPlayMsg>) {
                 m_transport.play();
+                // Re-arm quantize-boundary detection at play-start. Otherwise
+                // m_lastQuantizeCheck carries a stale value from the previous
+                // playback, and the first post-play block's "are we at a new
+                // bar?" test can fail to recognize the current position as a
+                // boundary — so a clip launched/queued as part of the Play
+                // gesture waits an extra bar before its audio starts (it
+                // trails the transport playhead). Same re-arm the count-in →
+                // play transition already does.
+                m_clipEngine.resetQuantizeCheck();
+                m_midiClipEngine.resetQuantizeCheck();
             }
             else if constexpr (std::is_same_v<T, TransportStopMsg>) {
                 // Finalize all active recordings before stopping transport
