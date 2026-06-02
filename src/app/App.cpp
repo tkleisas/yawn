@@ -8017,24 +8017,11 @@ void App::update() {
     }
 
     // Poll the Demucs stem-separation worker (one at a time). On completion
-    // apply on the main thread (track creation); otherwise toast progress
-    // at 25% buckets so the user sees movement on a multi-minute job.
-    if (m_pendingStem && m_pendingStem->active.load()) {
-        PendingStem* ps = m_pendingStem.get();
-        if (ps->done.load(std::memory_order_acquire)) {
-            applyStemResult();
-        } else {
-            const int pct = static_cast<int>(ps->fraction.load() * 100.0f);
-            const int bucket = pct / 25;
-            if (bucket != ps->lastBucket) {
-                ps->lastBucket = bucket;
-                const char* phase = ps->phase.load() == 0 ? "Downloading model"
-                                                          : "Separating stems";
-                m_toastManager.show(
-                    std::string(phase) + ": " + std::to_string(pct) + "%",
-                    1.8f, ui::ToastManager::Severity::Info);
-            }
-        }
+    // apply on the main thread (track creation). Live progress is drawn as
+    // an overlay in render() from the atomic fraction.
+    if (m_pendingStem && m_pendingStem->active.load() &&
+        m_pendingStem->done.load(std::memory_order_acquire)) {
+        applyStemResult();
     }
 
     // Pull any fresh MIDI CC values for visual-knob targets off the bus
@@ -8525,6 +8512,41 @@ void App::render() {
     // Toasts draw last so they float above every dialog/panel.
     m_toastManager.render(m_renderer, m_font,
                           m_mainWindow.getWidth(), m_mainWindow.getHeight());
+
+    // Live stem-separation progress overlay (centered box + bar). Drawn
+    // from the worker's atomic progress; Esc cancels (see key handler).
+    if (m_pendingStem && m_pendingStem->active.load() &&
+        !m_pendingStem->done.load()) {
+        const auto* ps = m_pendingStem.get();
+        const float sw = static_cast<float>(w), sh = static_cast<float>(h);
+        const float bw = 380.0f, bh = 96.0f;
+        const float bx = (sw - bw) * 0.5f, by = (sh - bh) * 0.5f;
+        m_renderer.drawRect(bx - 2, by - 2, bw + 4, bh + 4, ui::Color{0, 0, 0, 180});
+        m_renderer.drawRect(bx, by, bw, bh, ui::Color{38, 38, 46, 255});
+        m_renderer.drawRectOutline(bx, by, bw, bh, ui::Color{95, 95, 115, 255}, 1.0f);
+
+        const float sc  = 13.0f / ui::Theme::kFontSize;
+        const int   pct = static_cast<int>(ps->fraction.load() * 100.0f);
+        const char* phase = ps->phase.load() == 0 ? "Downloading model\xE2\x80\xA6"
+                                                   : "Separating stems\xE2\x80\xA6";
+        m_font.drawText(m_renderer, phase, bx + 16, by + 14, sc,
+                        ui::Color{225, 225, 235, 255});
+
+        const float barX = bx + 16, barY = by + 44, barW = bw - 32, barH = 16;
+        m_renderer.drawRect(barX, barY, barW, barH, ui::Color{22, 22, 28, 255});
+        m_renderer.drawRect(barX, barY, barW * static_cast<float>(pct) / 100.0f,
+                            barH, ui::Color{80, 160, 225, 255});
+        m_renderer.drawRectOutline(barX, barY, barW, barH, ui::Color{70, 70, 85, 255}, 1.0f);
+
+        char pbuf[16];
+        std::snprintf(pbuf, sizeof(pbuf), "%d%%", pct);
+        m_font.drawText(m_renderer, pbuf, barX, barY + barH + 6, sc,
+                        ui::Color{185, 190, 200, 255});
+        const char* hint = "Esc to cancel";
+        m_font.drawText(m_renderer, hint,
+                        barX + barW - m_font.textWidth(hint, sc),
+                        barY + barH + 6, sc, ui::Color{150, 155, 165, 255});
+    }
 
     // v2 floating UI — modal scrim first (only when a modal is open),
     // then all layer entries in bottom-up z-order. Empty in practice
@@ -9171,25 +9193,52 @@ void App::applyStemResult() {
                 (out.error.empty() ? std::string("unknown") : out.error),
             4.0f, ui::ToastManager::Severity::Warn);
     } else {
-        int created = 0;
+        // Snapshot the stems (shared_ptr buffers) so undo/redo can recreate
+        // the tracks. createTracks appends one audio track per stem with
+        // the stem buffer as its scene clip.
+        auto buffers = std::make_shared<std::vector<std::shared_ptr<audio::AudioBuffer>>>();
+        auto names   = std::make_shared<std::vector<std::string>>();
         for (size_t s = 0; s < out.stems.size(); ++s) {
             if (!out.stems[s]) continue;
-            const int idx = m_project.numTracks();
-            const std::string name = ps.baseName + " " + out.names[s];
-            m_project.addTrack(name, Track::Type::Audio);
-            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
-            auto clip = std::make_unique<audio::Clip>();
-            clip->name   = name;
-            clip->buffer = out.stems[s];
-            m_project.setClip(idx, ps.sceneIndex, std::move(clip));
-            ++created;
+            buffers->push_back(out.stems[s]);
+            names->push_back(out.names[s]);
         }
-        // Make the engine aware of the new tracks + their clips.
-        syncTracksToEngine();
-        markDirty();
+        const std::string base  = ps.baseName;
+        const int         scene = ps.sceneIndex;
+        const int         count = static_cast<int>(buffers->size());
+
+        auto createTracks = [this, buffers, names, base, scene]() {
+            for (size_t s = 0; s < buffers->size(); ++s) {
+                const int idx = m_project.numTracks();
+                const std::string name = base + " " + (*names)[s];
+                m_project.addTrack(name, Track::Type::Audio);
+                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
+                auto clip = std::make_unique<audio::Clip>();
+                clip->name   = name;
+                clip->buffer = (*buffers)[s];
+                m_project.setClip(idx, scene, std::move(clip));
+            }
+            syncTracksToEngine();   // engine learns the new tracks + clips
+            markDirty();
+        };
+
+        createTracks();
+
+        // Undoable: drop the `count` tracks we appended (they're the last
+        // N — same assumption as the Add-Track undo). Redo recreates them.
+        m_undoManager.push({
+            "Separate Stems",
+            [this, count]() {
+                for (int i = 0; i < count && m_project.numTracks() > 0; ++i)
+                    m_project.removeLastTrack();
+                syncTracksToEngine();
+                markDirty();
+            },
+            createTracks,
+            ""});
+
         m_toastManager.show(
-            "Stems ready: " + std::to_string(created) + " new tracks (" +
-                ps.baseName + ")",
+            "Stems ready: " + std::to_string(count) + " new tracks (" + base + ")",
             4.0f, ui::ToastManager::Severity::Info);
     }
     m_pendingStem.reset();

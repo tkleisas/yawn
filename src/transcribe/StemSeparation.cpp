@@ -10,9 +10,26 @@
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
+#include <vector>
 
 #ifdef YAWN_HAS_STEM_SEPARATION
 #include "demucs_api.h"   // demucs::separate (third_party/demucs)
+// Process spawn/kill for the cancellable curl download.
+#ifdef _WIN32
+// <windows.h> defines min/max macros that break std::min/std::max — keep
+// them out (NOMINMAX) and trim the header (WIN32_LEAN_AND_MEAN).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #endif
 
 namespace yawn {
@@ -32,21 +49,44 @@ std::filesystem::path homeDir() {
 
 std::filesystem::path modelDir() { return homeDir() / ".yawn" / "models"; }
 
-// Linear resample a single channel from inRate to outRate.
-std::vector<float> resampleLinear(const std::vector<float>& in,
-                                  double inRate, double outRate) {
+// Windowed-sinc (Lanczos) resampler with downsample anti-aliasing. The
+// lowpass cutoff tracks the lower of the two Nyquists, so downsampling
+// (e.g. 48k → 44.1k) doesn't alias; quality is well above plain linear.
+std::vector<float> resample(const std::vector<float>& in,
+                            double inRate, double outRate) {
     if (in.empty() || inRate <= 0 || outRate <= 0) return {};
     if (std::abs(inRate - outRate) < 1e-6) return in;
-    const double ratio = inRate / outRate;             // in samples per out sample
-    const int inN = static_cast<int>(in.size());
-    const int outN = static_cast<int>(std::floor(in.size() / ratio));
-    std::vector<float> out(std::max(0, outN));
-    for (int i = 0; i < outN; ++i) {
-        const double pos = i * ratio;
-        const int i0 = static_cast<int>(pos);
-        const int i1 = std::min(i0 + 1, inN - 1);
-        const float frac = static_cast<float>(pos - i0);
-        out[i] = in[i0] + (in[i1] - in[i0]) * frac;
+
+    constexpr double kPi = 3.14159265358979323846;     // (M_PI isn't portable on MSVC)
+    constexpr int    lobes = 8;                          // Lanczos lobes → quality/cost
+    const int    inN   = static_cast<int>(in.size());
+    const double ratio = inRate / outRate;               // input samples per output sample
+    const int    outN  = static_cast<int>(std::floor(in.size() / ratio));
+    if (outN <= 0) return {};
+
+    // Cutoff in cycles per input-sample: input Nyquist when upsampling,
+    // the (lower) output Nyquist when downsampling.
+    const double cutoff    = std::min(1.0, outRate / inRate);
+    const double halfWidth = lobes / cutoff;             // kernel half-width, input samples
+
+    auto sinc = [kPi](double x) {
+        return x == 0.0 ? 1.0 : std::sin(kPi * x) / (kPi * x);
+    };
+
+    std::vector<float> out(outN, 0.0f);
+    for (int j = 0; j < outN; ++j) {
+        const double center = j * ratio;                 // position in input samples
+        const int i0 = static_cast<int>(std::ceil(center - halfWidth));
+        const int i1 = static_cast<int>(std::floor(center + halfWidth));
+        double acc = 0.0, wsum = 0.0;
+        for (int i = i0; i <= i1; ++i) {
+            const double t = center - i;                 // distance, input samples
+            const double w = sinc(cutoff * t) * sinc(t / halfWidth);  // lowpass × Lanczos window
+            const int idx = std::clamp(i, 0, inN - 1);
+            acc  += in[idx] * w;
+            wsum += w;
+        }
+        out[j] = static_cast<float>(wsum != 0.0 ? acc / wsum : 0.0);
     }
     return out;
 }
@@ -74,11 +114,12 @@ bool stemModelPresent() {
 #ifdef YAWN_HAS_STEM_SEPARATION
 namespace {
 
-// Download the model with curl (no HTTP client in yawn). curl ships on
-// Linux + Windows 10+. Runs curl in a side thread while we poll the
-// partial file size for a progress %; not cancellable mid-download (it's
-// a one-time fetch). Returns true on success.
-bool ensureModel(const StemProgress& progress) {
+// Download the model with curl (no HTTP client in yawn; curl ships on
+// Linux + Windows 10+). Spawns curl as a *killable child process* so the
+// download is cancellable mid-flight, polling `cancel` + reporting a
+// progress % from the partial file size. Returns true on success; on
+// cancel returns false with `cancel` already set (caller maps to cancelled).
+bool ensureModel(const StemProgress& progress, std::atomic<bool>& cancel) {
     if (stemModelPresent()) return true;
 
     std::error_code ec;
@@ -87,30 +128,76 @@ bool ensureModel(const StemProgress& progress) {
     const std::string tmp  = dest + ".part";
     std::filesystem::remove(tmp, ec);
 
-    // -L follow redirects, -f fail on HTTP error, -s silent (we show our
-    // own progress), -o output.
-    const std::string cmd =
-        "curl -L -f -s -o \"" + tmp + "\" \"" + std::string(kModelUrl) + "\"";
-
-    std::atomic<bool> done{false};
-    std::atomic<int>  rc{-1};
-    std::thread dl([&]() { rc.store(std::system(cmd.c_str())); done.store(true); });
-
-    while (!done.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    auto pollProgress = [&]() {
         std::error_code e2;
         const auto sz = std::filesystem::file_size(tmp, e2);
         const float frac = e2 ? 0.0f
                               : std::min(1.0f, static_cast<float>(sz) /
                                                    static_cast<float>(kModelSize));
         if (progress) progress("download", frac);
-    }
-    dl.join();
+    };
 
-    if (rc.load() != 0) {
+    bool cancelled = false;
+    bool success   = false;
+
+#ifdef _WIN32
+    // -L follow redirects, -f fail on HTTP error, -s silent.
+    std::string cmd = "curl -L -f -s -o \"" + tmp + "\" \"" +
+                      std::string(kModelUrl) + "\"";
+    std::vector<char> cmdbuf(cmd.begin(), cmd.end());
+    cmdbuf.push_back('\0');
+    STARTUPINFOA si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessA(nullptr, cmdbuf.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        LOG_ERROR("Stems", "Failed to launch curl. Is curl on PATH?");
+        return false;
+    }
+    for (;;) {
+        if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
+        if (cancel.load()) {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            cancelled = true;
+            break;
+        }
+        pollProgress();
+        Sleep(250);
+    }
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    success = !cancelled && code == 0;
+#else
+    const pid_t pid = fork();
+    if (pid == 0) {
+        // child: exec curl silently.
+        execlp("curl", "curl", "-L", "-f", "-s", "-o", tmp.c_str(),
+               kModelUrl, static_cast<char*>(nullptr));
+        _exit(127);  // exec failed (curl not found)
+    }
+    if (pid < 0) { LOG_ERROR("Stems", "fork failed for curl"); return false; }
+    int status = 0;
+    for (;;) {
+        const pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid || r < 0) break;
+        if (cancel.load()) {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            cancelled = true;
+            break;
+        }
+        pollProgress();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    success = !cancelled && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
+
+    if (cancelled) { std::filesystem::remove(tmp, ec); return false; }
+    if (!success) {
         std::filesystem::remove(tmp, ec);
-        LOG_ERROR("Stems", "Model download failed (curl rc=%d). Is curl installed?",
-                  rc.load());
+        LOG_ERROR("Stems", "Model download failed (curl). Is curl installed + reachable?");
         return false;
     }
     // Integrity: size must match the known asset.
@@ -139,7 +226,7 @@ StemOutput separateStems(const audio::AudioBuffer& buffer, double sampleRate,
         return result;
     }
 
-    if (!ensureModel(progress)) {
+    if (!ensureModel(progress, cancel)) {
         if (cancel.load()) { result.cancelled = true; }
         else result.error = "model download failed";
         return result;
@@ -153,8 +240,8 @@ StemOutput separateStems(const audio::AudioBuffer& buffer, double sampleRate,
         srcR[i] = buffer.sample(nCh > 1 ? 1 : 0, i);
     }
     const double modelRate = static_cast<double>(demucs::kSampleRate);
-    std::vector<float> inL = resampleLinear(srcL, sampleRate, modelRate);
-    std::vector<float> inR = resampleLinear(srcR, sampleRate, modelRate);
+    std::vector<float> inL = resample(srcL, sampleRate, modelRate);
+    std::vector<float> inR = resample(srcR, sampleRate, modelRate);
     const int inN = static_cast<int>(std::min(inL.size(), inR.size()));
     if (inN <= 0) { result.error = "resample failed"; return result; }
 
@@ -174,9 +261,9 @@ StemOutput separateStems(const audio::AudioBuffer& buffer, double sampleRate,
     // Resample each stem back to the source rate and pack into AudioBuffers.
     for (int s = 0; s < demucs::kNumStems; ++s) {
         std::vector<float> outL =
-            resampleLinear(stems.stems[s].left, modelRate, sampleRate);
+            resample(stems.stems[s].left, modelRate, sampleRate);
         std::vector<float> outR =
-            resampleLinear(stems.stems[s].right, modelRate, sampleRate);
+            resample(stems.stems[s].right, modelRate, sampleRate);
         const int outN = static_cast<int>(std::min(outL.size(), outR.size()));
         auto buf = std::make_shared<audio::AudioBuffer>(2, std::max(1, outN));
         float* dl = buf->channelData(0);
