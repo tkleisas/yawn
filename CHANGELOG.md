@@ -6,6 +6,7 @@
 
 | Version | Summary |
 |---|---|
+| **v0.75.1** | Fix: session clips now start in phase with the transport on Play — pressing Play launched the default clips on their NextBar quantize grid (deferred behind a stale boundary check), so the audio came in late and trailed the playhead by a constant offset; now they start immediately at the downbeat. Also: README slimmed and split into `docs/` (this CHANGELOG added) |
 | **v0.75.0** | Self-contained releases — the Demucs model + ONNX Runtime are now bundled in the release package, so stem separation works offline out of the box (the repo stays lean; the model is fetched at CI build time, never committed) |
 | **v0.74.1** | Stem-separation polish — live progress bar, cancellable download, windowed-sinc resampling, undo on the created tracks |
 | **v0.74.0** | Demucs v4 four-stem separation (drums / bass / other / vocals) via ONNX Runtime |
