@@ -41,13 +41,42 @@ constexpr const char* kModelUrl =
     "https://github.com/tkleisas/yawn/releases/download/models-v1/htdemucs_4s.onnx";
 constexpr std::uintmax_t kModelSize = 170681491;  // bytes, for an integrity check
 
+constexpr const char* kModelFile = "htdemucs_4s.onnx";
+
 std::filesystem::path homeDir() {
     if (const char* h = std::getenv("HOME"); h && *h) return h;        // Linux/macOS
     if (const char* u = std::getenv("USERPROFILE"); u && *u) return u;  // Windows
     return std::filesystem::temp_directory_path();
 }
 
-std::filesystem::path modelDir() { return homeDir() / ".yawn" / "models"; }
+// On-demand download cache (~/.yawn/models/) — also the download target.
+std::filesystem::path cacheModelPath() {
+    return homeDir() / ".yawn" / "models" / kModelFile;
+}
+
+// Bundled-with-the-app copy: a `models/` dir beside the binary's working
+// directory, shipped inside the release package. Mirrors how the rest of
+// YAWN resolves bundled resources (current_path()/assets, .../assets/nam).
+std::filesystem::path bundledModelPath() {
+    std::error_code ec;
+    const auto cwd = std::filesystem::current_path(ec);
+    if (ec) return {};
+    return cwd / "models" / kModelFile;
+}
+
+bool isModelFile(const std::filesystem::path& p) {
+    std::error_code ec;
+    return !p.empty() && std::filesystem::exists(p, ec) &&
+           std::filesystem::file_size(p, ec) == kModelSize;
+}
+
+// The model the app actually loads: the bundled copy wins; otherwise the
+// download cache (present after a prior on-demand download).
+std::filesystem::path resolvedModelPath() {
+    const auto bundled = bundledModelPath();
+    if (isModelFile(bundled)) return bundled;
+    return cacheModelPath();
+}
 
 // Windowed-sinc (Lanczos) resampler with downsample anti-aliasing. The
 // lowpass cutoff tracks the lower of the two Nyquists, so downsampling
@@ -101,14 +130,11 @@ bool stemSeparationAvailable() {
 }
 
 std::string stemModelPath() {
-    return (modelDir() / "htdemucs_4s.onnx").string();
+    return resolvedModelPath().string();
 }
 
 bool stemModelPresent() {
-    std::error_code ec;
-    const auto p = stemModelPath();
-    if (!std::filesystem::exists(p, ec)) return false;
-    return std::filesystem::file_size(p, ec) == kModelSize;
+    return isModelFile(resolvedModelPath());
 }
 
 #ifdef YAWN_HAS_STEM_SEPARATION
@@ -120,11 +146,11 @@ namespace {
 // progress % from the partial file size. Returns true on success; on
 // cancel returns false with `cancel` already set (caller maps to cancelled).
 bool ensureModel(const StemProgress& progress, std::atomic<bool>& cancel) {
-    if (stemModelPresent()) return true;
+    if (stemModelPresent()) return true;   // bundled or already cached
 
     std::error_code ec;
-    std::filesystem::create_directories(modelDir(), ec);
-    const std::string dest = stemModelPath();
+    const std::string dest = cacheModelPath().string();   // always download to cache
+    std::filesystem::create_directories(cacheModelPath().parent_path(), ec);
     const std::string tmp  = dest + ".part";
     std::filesystem::remove(tmp, ec);
 

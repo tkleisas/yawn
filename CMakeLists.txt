@@ -620,10 +620,11 @@ if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
                 "${ORT_RUNTIME_LIB}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
             VERBATIM)
     else()
-        # Dev builds run from the build tree — point the loader at the
-        # fetched .so. A distribution step would copy it beside the binary.
+        # Dev builds run from the build tree (find the fetched .so via its
+        # absolute path); the release package ships libonnxruntime.so beside
+        # the binary, so $ORIGIN lets the packaged binary find it there too.
         set_target_properties(${PROJECT_NAME} PROPERTIES
-            BUILD_RPATH "${ORT_LIB_DIR}")
+            BUILD_RPATH "${ORT_LIB_DIR};$ORIGIN")
     endif()
 endif()
 
