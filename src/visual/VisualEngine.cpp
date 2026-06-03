@@ -1852,6 +1852,13 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     //   • Scene script    → the script's tick() callback returns a
     //     list of transforms, one draw call per entry, accumulating
     //     into the FBO with the shared depth buffer.
+    //
+    // Clock: the model animation (beginFrame) and the scene script
+    // (in.time) run off the same `preWall` the shaders use for iTime.
+    // For arrangement-launched layers preWall is transport-derived, so
+    // scrubbing the playhead seeks skeletal animation + scene scripts in
+    // lockstep with the shaders; session launches use wall-clock (the
+    // live-performance feel). No separate clock to keep in sync.
     if (L.modelRenderer && L.modelRenderer->hasModel()) {
         auto readParam = [&](const char* name, float fallback) -> float {
             for (const auto& p : L.params) {

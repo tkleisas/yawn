@@ -602,6 +602,28 @@ Because the script's per-instance transforms sit in the same shader
 pipeline, every existing iChannel2 post-processing shader (including
 `25_model_audio_glow.frag`) works on top of a Lua-driven scene.
 
+### Timing & scrubbing
+
+Shaders (`iTime`), skeletal model animation, and scene scripts (`ctx.time`)
+all run off the **same per-layer clock**:
+
+- **Session-launched** clips use a free-running **wall clock** from launch
+  — the live-performance feel (relaunch restarts at 0).
+- **Arrangement-launched** clips use a **transport-derived** clock
+  (`(transportBeat − clipStart) × 60/BPM`). Because shaders, animation, and
+  scene scripts share it, **scrubbing the playhead seeks all of them
+  together** — drag backward and the skeletal walk, the scene script, and
+  the shader all rewind in lockstep. (`ctx.beat` is the raw transport beat,
+  handy for bar-synced logic.)
+
+### Two meanings of "scene"
+
+- A **session scene** is a *row* of the session grid — the clips that
+  launch together when you click the scene label.
+- A **scene script** (this section) is a per-clip Lua program that drives
+  multiple instances of a 3D model. They're unrelated; "scene script"
+  always refers to the Lua 3D one.
+
 ## Output window & fullscreen
 
 A secondary SDL3 window hosts the compositor output. It's hidden on
