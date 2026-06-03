@@ -337,6 +337,12 @@ private:
     bool m_showDetailPanel = false;
     int m_selectedTrack = 0;
     int m_selectedScene = 0;
+
+    // Debounced settings save (e.g. piano-roll draw velocity changes during
+    // a drag) — m_settingsDirty set on change, flushed in update() once it's
+    // been stable for a short while, so a drag isn't a write storm.
+    bool m_settingsDirty    = false;
+    int  m_settingsDirtyAge = 0;
     // The scene chosen as the target row for the next session-record
     // gesture, set when the user presses Record on the transport. -1
     // when transport recording is not armed. Drives the red record-

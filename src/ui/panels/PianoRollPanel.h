@@ -67,7 +67,6 @@ public:
     static constexpr float kClipOpsW    = 44.0f;
     static constexpr float kVelLaneH   = 60.0f;
     static constexpr int   kNPitch      = 128;
-    static constexpr uint16_t kDefVel   = 32512;
 
     // ─── Drum mode ──────────────────────────────────────────────────
     // When the panel hosts a clip on a DrumSynth track, only the 8
@@ -235,6 +234,20 @@ public:
     void setOnReplaceClip(ReplaceClipCallback cb) { m_onReplaceClip = std::move(cb); }
 
     void setTransport(const audio::Transport* t) { m_transport = t; }
+
+    // Default velocity for notes drawn on the grid (1..127). Settable via
+    // the toolbar Vel control and persisted by App; also "follows" the
+    // last note velocity the user drags in the velocity lane.
+    void setDrawVelocity(int vel7) {
+        int v = std::clamp(vel7, 1, 127);
+        m_drawVelocity = static_cast<uint16_t>(v) << 9;
+    }
+    int  drawVelocity() const {
+        return std::clamp(static_cast<int>(m_drawVelocity >> 9), 1, 127);
+    }
+    void setOnDrawVelocityChanged(std::function<void(int)> cb) {
+        m_onDrawVelocityChanged = std::move(cb);
+    }
 
     void setPlayBeat(double beat, bool playing) {
         m_playBeat = beat;
@@ -466,6 +479,7 @@ private:
         } else {
             hitNote.velocity = newVel;
         }
+        noteVelocityEdited(newVel);   // last-set becomes the new default
 
         m_velDragging = true;
         m_velDragNoteIdx = hitIdx;
@@ -483,6 +497,18 @@ private:
     // ─── Toolbar click ──────────────────────────────────────────────────
 
     bool handleToolbarClick(MouseEvent& e) {
+        // Default-velocity control — drag up/down to set new-note velocity
+        // (custom-drawn; the panel's mouse SM handles the drag, an fw2 knob
+        // can't capture-drag through this panel).
+        if (e.x >= m_velCtrlRect.x && e.x < m_velCtrlRect.x + m_velCtrlRect.w &&
+            e.y >= m_velCtrlRect.y && e.y < m_velCtrlRect.y + m_velCtrlRect.h) {
+            m_velCtrlDragging   = true;
+            m_velCtrlStartY     = e.y;
+            m_velCtrlStartVel16 = m_drawVelocity;
+            captureMouse();
+            return true;
+        }
+
         // All toolbar buttons are fw2 widgets. Dispatch the fw2 event
         // directly with child-local lx/ly; the widget's gesture SM
         // handles capture via fw2::Widget::captureMouse().
@@ -817,7 +843,7 @@ private:
         n.startBeat = beat;
         n.duration  = snapVal();
         n.pitch     = static_cast<uint8_t>(pitch);
-        n.velocity  = kDefVel;
+        n.velocity  = m_drawVelocity;
         bool extended = false;
         editClip([&](midi::MidiClip& c) {
             c.addNote(n);
@@ -1008,6 +1034,21 @@ private:
     bool  m_velDragging = false;
     int   m_velDragNoteIdx = -1;
     float m_velDragStartVel = 0;
+
+    // Default new-note velocity (16-bit; ~100/127 by default) + the
+    // toolbar control that drags it.
+    uint16_t m_drawVelocity      = static_cast<uint16_t>(100) << 9;
+    Rect     m_velCtrlRect{};
+    bool     m_velCtrlDragging   = false;
+    float    m_velCtrlStartY     = 0.0f;
+    int      m_velCtrlStartVel16 = 0;
+    std::function<void(int)> m_onDrawVelocityChanged;
+
+    // "Follow last set": a velocity-lane edit becomes the new default.
+    void noteVelocityEdited(uint16_t vel16) {
+        m_drawVelocity = vel16;
+        if (m_onDrawVelocityChanged) m_onDrawVelocityChanged(drawVelocity());
+    }
 
     // Drum mode flag — toggled by App.cpp when the active clip's
     // track has a DrumSynth instrument. See setDrumMode() above.

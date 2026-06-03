@@ -4799,6 +4799,15 @@ bool App::init() {
     buildWidgetTree();
     // v1 m_aboutDialog retired — fw2 About dialog is text-only for now.
     m_pianoRoll->setTransport(&m_audioEngine.transport());
+    // Default new-note velocity: seed from saved settings, persist (debounced
+    // via m_settingsDirty) when the user drags the toolbar Vel control or a
+    // note's velocity bar.
+    m_pianoRoll->setDrawVelocity(m_settings.pianoRollVelocity);
+    m_pianoRoll->setOnDrawVelocityChanged([this](int vel7) {
+        m_settings.pianoRollVelocity = vel7;
+        m_settingsDirty = true;
+        m_settingsDirtyAge = 0;
+    });
     // Piano-roll structural edits never mutate the live clip in place
     // (that races the audio thread's note scan → UAF). They clone, edit
     // the clone, and ask us to swap it in atomically.
@@ -8048,6 +8057,14 @@ void App::processEvents() {
 }
 
 void App::update() {
+    // Debounced settings flush — save ~0.75 s after the last change so a
+    // velocity drag doesn't write the settings file every frame.
+    if (m_settingsDirty && ++m_settingsDirtyAge > 45) {
+        util::AppSettings::save(m_settings);
+        m_settingsDirty = false;
+        m_settingsDirtyAge = 0;
+    }
+
     // Generate model-library thumbnails for the Models browser tab at a
     // safe point (frame start, no active 2D batch) — ensureModelThumbnail
     // switches to the output GL context to render. Budget a couple per

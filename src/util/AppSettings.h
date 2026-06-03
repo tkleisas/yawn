@@ -25,6 +25,7 @@ struct AppSettings {
     int bufferSize = 256;
     int defaultLaunchQuantize = 2; // 0=None, 1=Beat, 2=Bar
     int defaultRecordQuantize = 2;
+    int pianoRollVelocity = 100;   // default new-note velocity (1..127)
     std::vector<int> enabledMidiInputs;
     std::vector<int> enabledMidiOutputs;
 
@@ -91,6 +92,7 @@ struct AppSettings {
                 for (auto& v : j["enabledMidiOutputs"])
                     s.enabledMidiOutputs.push_back(v.get<int>());
             }
+            s.pianoRollVelocity = j.value("pianoRollVelocity", 100);
             s.metronomeVolume = j.value("metronomeVolume", 0.7f);
             s.metronomeMode = j.value("metronomeMode", 0);
             s.countInBars = j.value("countInBars", 0);
@@ -117,6 +119,7 @@ struct AppSettings {
             j["defaultRecordQuantize"] = s.defaultRecordQuantize;
             j["enabledMidiInputs"] = s.enabledMidiInputs;
             j["enabledMidiOutputs"] = s.enabledMidiOutputs;
+            j["pianoRollVelocity"] = s.pianoRollVelocity;
             j["metronomeVolume"] = s.metronomeVolume;
             j["metronomeMode"] = s.metronomeMode;
             j["countInBars"] = s.countInBars;
