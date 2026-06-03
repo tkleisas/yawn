@@ -125,6 +125,46 @@ TEST_F(SceneScriptTest, NoCameraLeavesItAuto) {
     EXPECT_FALSE(cam.explicitCam);   // no camera returned → auto-frame
 }
 
+#ifdef YAWN_BUNDLED_SCRIPTS_DIR
+// Load + run the scripts we actually ship, so a Lua syntax error or a
+// drift from the engine contract is caught in CI rather than in the app.
+TEST_F(SceneScriptTest, BundledMultiModelOrbitScript) {
+    M3DSceneScript s;
+    ASSERT_TRUE(s.load(std::string(YAWN_BUNDLED_SCRIPTS_DIR) +
+                       "/multi_model_orbit.lua")) << s.error();
+    M3DSceneScript::Inputs in;
+    in.knobs[0] = 0.5f;   // knob A (camera distance)
+    std::vector<M3DInstance> out;
+    M3DCamera cam;
+    ASSERT_TRUE(s.tick(in, out, &cam)) << s.error();
+
+    ASSERT_EQ(out.size(), 3u);                 // SLOTS = 3
+    EXPECT_EQ(out[0].model, 0);                // one model per slot
+    EXPECT_EQ(out[1].model, 1);
+    EXPECT_EQ(out[2].model, 2);
+    EXPECT_NEAR(out[0].emissive, 0.15f, 1e-4f); // baseline glow (no kick)
+    EXPECT_TRUE(cam.explicitCam);              // returns an orbit camera
+    EXPECT_FLOAT_EQ(cam.fov, 50.0f);
+}
+
+TEST_F(SceneScriptTest, BundledLegacyScriptsStillParse) {
+    M3DSceneScript::Inputs in;
+    std::vector<M3DInstance> out;
+
+    M3DSceneScript ring;
+    ASSERT_TRUE(ring.load(std::string(YAWN_BUNDLED_SCRIPTS_DIR) +
+                          "/kick_ring.lua")) << ring.error();
+    ASSERT_TRUE(ring.tick(in, out));
+    EXPECT_EQ(out.size(), 8u);                 // ring of 8
+
+    M3DSceneScript stat;
+    ASSERT_TRUE(stat.load(std::string(YAWN_BUNDLED_SCRIPTS_DIR) +
+                          "/static_demo.lua")) << stat.error();
+    ASSERT_TRUE(stat.tick(in, out));
+    EXPECT_EQ(out.size(), 1u);
+}
+#endif
+
 TEST_F(SceneScriptTest, BackwardCompatListOfTransforms) {
     // The pre-v2 contract: a list of {position, rotation, scale} tables.
     M3DSceneScript s;

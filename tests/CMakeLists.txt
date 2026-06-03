@@ -18,6 +18,7 @@ if(YAWN_HAS_MODEL3D)
     target_compile_definitions(yawn_tests PRIVATE
         YAWN_TINYGLTF_SAMPLE_DIR="${tinygltf_SOURCE_DIR}/models"
         YAWN_BUNDLED_MODELS_DIR="${CMAKE_SOURCE_DIR}/assets/examples/3d"
+        YAWN_BUNDLED_SCRIPTS_DIR="${CMAKE_SOURCE_DIR}/assets/examples/scripts"
     )
 endif()
 

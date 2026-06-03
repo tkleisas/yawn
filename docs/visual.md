@@ -528,6 +528,11 @@ hot-reloads automatically.
 - `static_demo.lua` — minimal template: one instance, slow Y-spin.
 - `kick_ring.lua`   — ring of eight copies around the origin, whole
   ring rotating, each copy scaled by the kick envelope.
+- `multi_model_orbit.lua` — **scene-v2 showcase**: a 3-slot arc that
+  draws a different model per slot (`model` index; clamps to 0 with a
+  single model), each tinted its own hue, bouncing on its audio band and
+  flashing emissive on the kick, all under a returned orbiting camera
+  (knob A = distance, knob B = spin).
 
 Because the script's per-instance transforms sit in the same shader
 pipeline, every existing iChannel2 post-processing shader (including
