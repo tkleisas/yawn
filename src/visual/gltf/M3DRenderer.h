@@ -67,6 +67,10 @@ public:
     // selects the camera — auto-frame when cam.explicitCam is false.
     void beginFrame(float animTime = 0.0f, const M3DCamera& cam = M3DCamera{});
     void drawInstance(const M3DInstance& inst);
+    // Draw a whole instance list. Instances of a *static* (non-skinned)
+    // model are batched into a single GPU-instanced draw call; skinned
+    // models fall back to one drawInstance() per entry (per-instance pose).
+    void drawInstances(const std::vector<M3DInstance>& instances);
     void endFrame();
 
     // Animation-clip selection for model 0 (the simple single-model case).
@@ -146,6 +150,8 @@ private:
 
     void uploadModel(const M3DModel& src, Model& dst);
     void destroyModel(Model& m);
+    // Bind one mesh's material uniforms + textures (shared by both draw paths).
+    void applyMaterial(const Model& mdl, const GLMesh& gm);
     // Evaluate `m`'s pose + joint matrices for (clip, animTime), skipping
     // the work if it matches the cached evaluation.
     void evaluatePose(Model& m, int clip, float animTime);
@@ -185,6 +191,13 @@ private:
     GLint  m_locAlphaCutoff  = -1;
     GLint  m_locCameraPos    = -1;
     GLint  m_locLightInt     = -1;
+    GLint  m_locViewProj     = -1;
+    GLint  m_locInstanced    = -1;
+
+    // Shared per-instance attribute buffer for the GPU-instanced path
+    // (locations 5..10: mat4 model, vec4 colorEmis, float opacity).
+    GLuint m_instanceVBO = 0;
+    static constexpr int kInstanceFloats = 21;   // 16 + 4 + 1
 
     std::vector<Model> m_models;
 

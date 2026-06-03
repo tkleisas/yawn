@@ -27,20 +27,35 @@ namespace {
 // scripts can colour and glow individual instances. Full PBR / normal-map
 // material support lands in a later phase.
 
+// Two model-matrix paths, chosen by uInstanced:
+//   0 → uModel/uMVP uniforms + per-draw instance uniforms (skinned/animated
+//       and single-draw path — unchanged behaviour).
+//   1 → per-instance vertex attributes (locations 5..10) + uViewProj, for
+//       GPU-instanced static models (one draw for N copies).
 constexpr const char* kVertexSrc =
     "#version 330 core\n"
-    "layout(location=0) in vec3  aPos;\n"
-    "layout(location=1) in vec3  aNormal;\n"
-    "layout(location=2) in vec2  aUV;\n"
-    "layout(location=3) in uvec4 aJoints;\n"
-    "layout(location=4) in vec4  aWeights;\n"
+    "layout(location=0)  in vec3  aPos;\n"
+    "layout(location=1)  in vec3  aNormal;\n"
+    "layout(location=2)  in vec2  aUV;\n"
+    "layout(location=3)  in uvec4 aJoints;\n"
+    "layout(location=4)  in vec4  aWeights;\n"
+    "layout(location=5)  in mat4  aInstanceModel;\n"   // occupies 5,6,7,8
+    "layout(location=9)  in vec4  aColorEmis;\n"        // rgb + emissive
+    "layout(location=10) in float aOpacity;\n"
     "uniform mat4  uMVP;\n"
     "uniform mat4  uModel;\n"
+    "uniform mat4  uViewProj;\n"
     "uniform int   uIsSkinned;\n"
+    "uniform int   uInstanced;\n"
     "uniform mat4  uJointMatrices[128];\n"
+    "uniform vec3  uInstanceColor;\n"
+    "uniform float uInstanceEmissive;\n"
+    "uniform float uInstanceOpacity;\n"
     "out vec3 vWorldNormal;\n"
     "out vec3 vWorldPos;\n"
     "out vec2 vUV;\n"
+    "out vec4 vColorEmis;\n"
+    "out float vOpacity;\n"
     "void main() {\n"
     "    vec4 local;\n"
     "    vec3 nrm;\n"
@@ -56,11 +71,15 @@ constexpr const char* kVertexSrc =
     "        local = vec4(aPos, 1.0);\n"
     "        nrm   = aNormal;\n"
     "    }\n"
-    "    vec4 world   = uModel * local;\n"
+    "    mat4 M = (uInstanced != 0) ? aInstanceModel : uModel;\n"
+    "    vec4 world   = M * local;\n"
     "    vWorldPos    = world.xyz;\n"
-    "    vWorldNormal = mat3(uModel) * nrm;\n"
+    "    vWorldNormal = mat3(M) * nrm;\n"
     "    vUV          = aUV;\n"
-    "    gl_Position  = uMVP * local;\n"
+    "    vColorEmis = (uInstanced != 0) ? aColorEmis\n"
+    "                                   : vec4(uInstanceColor, uInstanceEmissive);\n"
+    "    vOpacity   = (uInstanced != 0) ? aOpacity : uInstanceOpacity;\n"
+    "    gl_Position = (uInstanced != 0) ? (uViewProj * world) : (uMVP * local);\n"
     "}\n";
 
 // PBR-lite: base color + metallic/roughness (Blinn-Phong specular, view-
@@ -72,6 +91,8 @@ constexpr const char* kFragmentSrc =
     "in vec3 vWorldNormal;\n"
     "in vec3 vWorldPos;\n"
     "in vec2 vUV;\n"
+    "in vec4 vColorEmis;\n"   // per-instance rgb + emissive
+    "in float vOpacity;\n"
     "uniform vec4 uBaseColor;\n"
     "uniform sampler2D uBaseTex;       uniform int uHasTex;\n"
     "uniform float uMetallic;          uniform float uRoughness;\n"
@@ -82,13 +103,11 @@ constexpr const char* kFragmentSrc =
     "uniform int uAlphaMask;           uniform float uAlphaCutoff;\n"
     "uniform vec3 uLightDir;           uniform vec3 uAmbient;  uniform float uLightInt;\n"
     "uniform vec3 uCameraPos;\n"
-    "uniform vec3 uInstanceColor;      uniform float uInstanceEmissive;\n"
-    "uniform float uInstanceOpacity;\n"
     "out vec4 fragColor;\n"
     "void main() {\n"
     "    vec4 base = uBaseColor;\n"
     "    if (uHasTex != 0) base *= texture(uBaseTex, vUV);\n"
-    "    base.rgb *= uInstanceColor;\n"
+    "    base.rgb *= vColorEmis.rgb;\n"
     "    float metallic = uMetallic, rough = uRoughness;\n"
     "    if (uHasMR != 0) { vec4 mr = texture(uMRTex, vUV); rough *= mr.g; metallic *= mr.b; }\n"
     "    rough = clamp(rough, 0.04, 1.0);\n"
@@ -109,8 +128,8 @@ constexpr const char* kFragmentSrc =
     "    float spec   = (NdotL > 0.0) ? pow(NdotH, shin) * (1.0 - rough) : 0.0;\n"
     "    vec3 lit = (diffuse * NdotL + specCol * spec * (0.5 + metallic)) * uLightInt;\n"
     "    vec3 ambient = base.rgb * uAmbient * occ;\n"
-    "    vec3 color = ambient + lit + emis + base.rgb * uInstanceEmissive;\n"
-    "    float alpha = base.a * uInstanceOpacity;\n"
+    "    vec3 color = ambient + lit + emis + base.rgb * vColorEmis.a;\n"
+    "    float alpha = base.a * vOpacity;\n"
     "    if (uAlphaMask != 0 && alpha < uAlphaCutoff) discard;\n"
     "    fragColor = vec4(color, alpha);\n"
     "}\n";
@@ -207,6 +226,7 @@ M3DRenderer::~M3DRenderer() { clear(); }
 void M3DRenderer::clear() {
     for (auto& m : m_models) destroyModel(m);
     m_models.clear();
+    if (m_instanceVBO) { glDeleteBuffers(1, &m_instanceVBO); m_instanceVBO = 0; }
     destroyProgram();
     destroyFBO();
 }
@@ -277,9 +297,26 @@ bool M3DRenderer::init() {
     m_locAlphaCutoff  = glGetUniformLocation(m_program, "uAlphaCutoff");
     m_locCameraPos    = glGetUniformLocation(m_program, "uCameraPos");
     m_locLightInt     = glGetUniformLocation(m_program, "uLightInt");
+    m_locViewProj     = glGetUniformLocation(m_program, "uViewProj");
+    m_locInstanced    = glGetUniformLocation(m_program, "uInstanced");
     m_locJointMats    = glGetUniformLocation(m_program, "uJointMatrices[0]");
     if (m_locJointMats < 0) m_locJointMats =
         glGetUniformLocation(m_program, "uJointMatrices");
+
+    // Shared per-instance attribute buffer for the instanced path. Seed
+    // one identity element so the non-instanced path (which still has the
+    // divisor-1 attributes bound in every VAO) reads valid data at index 0.
+    glGenBuffers(1, &m_instanceVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+    {
+        float seed[kInstanceFloats] = {0};
+        seed[0] = seed[5] = seed[10] = seed[15] = 1.0f;   // identity model
+        seed[16] = seed[17] = seed[18] = 1.0f;            // white color
+        seed[19] = 0.0f;                                  // emissive
+        seed[20] = 1.0f;                                  // opacity
+        glBufferData(GL_ARRAY_BUFFER, sizeof(seed), seed, GL_DYNAMIC_DRAW);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     glGenTextures(1, &m_colorTex);
     glBindTexture(GL_TEXTURE_2D, m_colorTex);
@@ -385,6 +422,25 @@ void M3DRenderer::uploadModel(const M3DModel& model, Model& dst) {
         glEnableVertexAttribArray(4);
         glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(M3DVertex),
                               reinterpret_cast<void*>(offsetof(M3DVertex, weights)));
+
+        // Per-instance attributes from the shared instance VBO (divisor 1):
+        // locations 5..8 = mat4 model, 9 = vec4 (rgb + emissive), 10 = opacity.
+        glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+        const GLsizei iStride = kInstanceFloats * sizeof(float);
+        for (int c = 0; c < 4; ++c) {
+            glEnableVertexAttribArray(5 + c);
+            glVertexAttribPointer(5 + c, 4, GL_FLOAT, GL_FALSE, iStride,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(c * 4 * sizeof(float))));
+            glVertexAttribDivisor(5 + c, 1);
+        }
+        glEnableVertexAttribArray(9);
+        glVertexAttribPointer(9, 4, GL_FLOAT, GL_FALSE, iStride,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(16 * sizeof(float))));
+        glVertexAttribDivisor(9, 1);
+        glEnableVertexAttribArray(10);
+        glVertexAttribPointer(10, 1, GL_FLOAT, GL_FALSE, iStride,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(20 * sizeof(float))));
+        glVertexAttribDivisor(10, 1);
 
         gm.indexCount    = static_cast<GLsizei>(src.indices.size());
         gm.materialIndex = src.materialIndex;
@@ -651,6 +707,9 @@ void M3DRenderer::beginFrame(float animTime, const M3DCamera& cam) {
     if (m_locLightInt >= 0)  glUniform1f(m_locLightInt, m_lightIntensity);
     if (m_locCameraPos >= 0)
         glUniform3f(m_locCameraPos, m_cameraEye[0], m_cameraEye[1], m_cameraEye[2]);
+    if (m_locViewProj >= 0)
+        glUniformMatrix4fv(m_locViewProj, 1, GL_FALSE, m_viewProj.data());
+    if (m_locInstanced >= 0) glUniform1i(m_locInstanced, 0);
 }
 
 void M3DRenderer::setLighting(const float dir[3], const float ambient[3],
@@ -666,6 +725,7 @@ void M3DRenderer::drawInstance(const M3DInstance& inst) {
     if (mi < 0 || mi >= static_cast<int>(m_models.size())) mi = 0;
     Model& mdl = m_models[mi];
     if (mdl.meshes.empty()) return;
+    if (m_locInstanced >= 0) glUniform1i(m_locInstanced, 0);   // uniform path
 
     const int   clip = (inst.animClip >= 0) ? inst.animClip : mdl.activeClip;
     const float at   = (inst.animTime >= 0.0f) ? inst.animTime : m_frameAnimTime;
@@ -703,40 +763,113 @@ void M3DRenderer::drawInstance(const M3DInstance& inst) {
                                 reinterpret_cast<const float*>(mats.data()));
         }
 
-        // Material (defaults = plain white, fully rough dielectric).
-        GLMaterial mat;
-        if (gm.materialIndex >= 0 &&
-            gm.materialIndex < static_cast<int>(mdl.materials.size()))
-            mat = mdl.materials[gm.materialIndex];
-
-        if (m_locBaseColor >= 0) glUniform4fv(m_locBaseColor, 1, mat.baseColor);
-        if (m_locMetallic  >= 0) glUniform1f(m_locMetallic,  mat.metallic);
-        if (m_locRoughness >= 0) glUniform1f(m_locRoughness, mat.roughness);
-        if (m_locEmissiveFac >= 0)
-            glUniform3f(m_locEmissiveFac, mat.emissive[0], mat.emissive[1], mat.emissive[2]);
-        if (m_locEmissiveStr >= 0) glUniform1f(m_locEmissiveStr, mat.emissiveStrength);
-        if (m_locOcclStr     >= 0) glUniform1f(m_locOcclStr, mat.occlStrength);
-        if (m_locAlphaMask   >= 0) glUniform1i(m_locAlphaMask, mat.alphaMask);
-        if (m_locAlphaCutoff >= 0) glUniform1f(m_locAlphaCutoff, mat.alphaCutoff);
-
-        // Bind material textures across units 0..3 (0 unbound = "no map").
-        auto bindTex = [&](int idx, int unit, GLint sampLoc, GLint hasLoc) {
-            GLuint tex = (idx >= 0 && idx < static_cast<int>(mdl.textures.size()))
-                         ? mdl.textures[idx] : 0;
-            glActiveTexture(GL_TEXTURE0 + unit);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            if (sampLoc >= 0) glUniform1i(sampLoc, unit);
-            if (hasLoc  >= 0) glUniform1i(hasLoc,  tex ? 1 : 0);
-        };
-        bindTex(mat.texture,         0, m_locBaseTex,     m_locHasTex);
-        bindTex(mat.mrTexture,       1, m_locMRTex,       m_locHasMR);
-        bindTex(mat.emissiveTexture, 2, m_locEmissiveTex, m_locHasEmissive);
-        bindTex(mat.occlTexture,     3, m_locOcclTex,     m_locHasOccl);
-
+        applyMaterial(mdl, gm);
         glBindVertexArray(gm.vao);
         glDrawElements(GL_TRIANGLES, gm.indexCount, GL_UNSIGNED_INT, nullptr);
     }
     glActiveTexture(GL_TEXTURE0);   // leave unit 0 active (renderer convention)
+}
+
+// Set the material uniforms + bind the 4 material textures for one mesh.
+// Shared by the uniform (drawInstance) and instanced (drawInstances) paths.
+void M3DRenderer::applyMaterial(const Model& mdl, const GLMesh& gm) {
+    GLMaterial mat;   // defaults = plain white, fully rough dielectric
+    if (gm.materialIndex >= 0 &&
+        gm.materialIndex < static_cast<int>(mdl.materials.size()))
+        mat = mdl.materials[gm.materialIndex];
+
+    if (m_locBaseColor >= 0) glUniform4fv(m_locBaseColor, 1, mat.baseColor);
+    if (m_locMetallic  >= 0) glUniform1f(m_locMetallic,  mat.metallic);
+    if (m_locRoughness >= 0) glUniform1f(m_locRoughness, mat.roughness);
+    if (m_locEmissiveFac >= 0)
+        glUniform3f(m_locEmissiveFac, mat.emissive[0], mat.emissive[1], mat.emissive[2]);
+    if (m_locEmissiveStr >= 0) glUniform1f(m_locEmissiveStr, mat.emissiveStrength);
+    if (m_locOcclStr     >= 0) glUniform1f(m_locOcclStr, mat.occlStrength);
+    if (m_locAlphaMask   >= 0) glUniform1i(m_locAlphaMask, mat.alphaMask);
+    if (m_locAlphaCutoff >= 0) glUniform1f(m_locAlphaCutoff, mat.alphaCutoff);
+
+    auto bindTex = [&](int idx, int unit, GLint sampLoc, GLint hasLoc) {
+        GLuint tex = (idx >= 0 && idx < static_cast<int>(mdl.textures.size()))
+                     ? mdl.textures[idx] : 0;
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        if (sampLoc >= 0) glUniform1i(sampLoc, unit);
+        if (hasLoc  >= 0) glUniform1i(hasLoc,  tex ? 1 : 0);
+    };
+    bindTex(mat.texture,         0, m_locBaseTex,     m_locHasTex);
+    bindTex(mat.mrTexture,       1, m_locMRTex,       m_locHasMR);
+    bindTex(mat.emissiveTexture, 2, m_locEmissiveTex, m_locHasEmissive);
+    bindTex(mat.occlTexture,     3, m_locOcclTex,     m_locHasOccl);
+}
+
+// Draw an instance list: static models batch into one glDrawElementsInstanced
+// per mesh; skinned models fall back to the per-instance uniform path (their
+// pose is per-instance, so they can't share an instance buffer).
+void M3DRenderer::drawInstances(const std::vector<M3DInstance>& instances) {
+    if (!m_fbo || !m_program || m_models.empty() || instances.empty()) return;
+
+    std::vector<std::vector<const M3DInstance*>> byModel(m_models.size());
+    for (const auto& in : instances) {
+        int mi = in.model;
+        if (mi < 0 || mi >= static_cast<int>(m_models.size())) mi = 0;
+        byModel[mi].push_back(&in);
+    }
+
+    for (size_t mi = 0; mi < m_models.size(); ++mi) {
+        auto& group = byModel[mi];
+        if (group.empty()) continue;
+        Model& mdl = m_models[mi];
+        if (mdl.meshes.empty()) continue;
+
+        bool hasSkin = false;
+        for (const auto& gm : mdl.meshes)
+            if (gm.skinIndex >= 0) { hasSkin = true; break; }
+
+        if (hasSkin) {
+            // Per-instance pose → no batching; use the uniform path.
+            for (const auto* in : group) drawInstance(*in);
+            continue;
+        }
+
+        // Static model → pack the group into the instance buffer and issue
+        // one instanced draw per mesh.
+        const Mat4 normMat = multiply(
+            scale(mdl.autoScale, mdl.autoScale, mdl.autoScale),
+            translation(mdl.autoOffset[0], mdl.autoOffset[1], mdl.autoOffset[2]));
+        std::vector<float> buf;
+        buf.reserve(group.size() * kInstanceFloats);
+        for (const auto* in : group) {
+            Mat4 userT = multiply(
+                translation(in->position[0], in->position[1], in->position[2]),
+                multiply(
+                    eulerXYZDegrees(in->rotationDeg[0], in->rotationDeg[1], in->rotationDeg[2]),
+                    scale(in->scale * in->scale3[0],
+                          in->scale * in->scale3[1],
+                          in->scale * in->scale3[2])));
+            Mat4 m = multiply(userT, normMat);
+            for (int k = 0; k < 16; ++k) buf.push_back(m[k]);
+            buf.push_back(in->color[0]); buf.push_back(in->color[1]);
+            buf.push_back(in->color[2]); buf.push_back(in->emissive);
+            buf.push_back(in->opacity);
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(buf.size() * sizeof(float)),
+                     buf.data(), GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        if (m_locInstanced >= 0) glUniform1i(m_locInstanced, 1);
+        if (m_locIsSkinned >= 0) glUniform1i(m_locIsSkinned, 0);
+        const GLsizei n = static_cast<GLsizei>(group.size());
+        for (const auto& gm : mdl.meshes) {
+            applyMaterial(mdl, gm);
+            glBindVertexArray(gm.vao);
+            glDrawElementsInstanced(GL_TRIANGLES, gm.indexCount,
+                                    GL_UNSIGNED_INT, nullptr, n);
+        }
+        if (m_locInstanced >= 0) glUniform1i(m_locInstanced, 0);
+    }
+    glActiveTexture(GL_TEXTURE0);
 }
 
 void M3DRenderer::endFrame() {
@@ -767,6 +900,8 @@ void M3DRenderer::setModel(const M3DModel&) {}
 void M3DRenderer::render(const M3DInstance&) {}
 void M3DRenderer::beginFrame(float, const M3DCamera&) {}
 void M3DRenderer::drawInstance(const M3DInstance&) {}
+void M3DRenderer::drawInstances(const std::vector<M3DInstance>&) {}
+void M3DRenderer::applyMaterial(const Model&, const GLMesh&) {}
 void M3DRenderer::endFrame() {}
 void M3DRenderer::setLighting(const float[3], const float[3], float) {}
 bool M3DRenderer::hasModel() const { return false; }

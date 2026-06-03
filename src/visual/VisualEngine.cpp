@@ -1905,9 +1905,7 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
                     static_cast<float>(M3DRenderer::kWidth) / M3DRenderer::kHeight);
 
             L.modelRenderer->beginFrame(static_cast<float>(preWall), cam);
-            for (const auto& inst : instances) {
-                L.modelRenderer->drawInstance(inst);
-            }
+            L.modelRenderer->drawInstances(instances);
             L.modelRenderer->endFrame();
         } else {
             // Static path — integrate spin and read @range uniforms.
