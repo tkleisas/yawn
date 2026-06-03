@@ -507,6 +507,12 @@ is normalized to ~unit size independently, so you compose a scene by
 positioning and scaling unit-sized pieces.) **Clear Extra Models**
 removes the extras.
 
+**Performance.** Instances of a *static* (non-animated) model are batched
+into a single GPU-instanced draw call, so a scene can emit hundreds or
+thousands of copies cheaply. Skinned/animated models fall back to one
+draw per instance (their pose is per-instance), so prefer static models
+for very high instance counts.
+
 The contract is one global function:
 
 ```lua
