@@ -100,7 +100,17 @@ private:
 
     struct GLMaterial {
         float baseColor[4] = { 1, 1, 1, 1 };
-        int   texture      = -1;   // into the model's textures, -1 = none
+        int   texture      = -1;   // base color, into the model's textures
+        float metallic     = 1.0f;
+        float roughness    = 1.0f;
+        int   mrTexture    = -1;   // metallic(B)/roughness(G)
+        float emissive[3]  = { 0, 0, 0 };
+        float emissiveStrength = 1.0f;
+        int   emissiveTexture  = -1;
+        int   occlTexture  = -1;   // ambient occlusion (R)
+        float occlStrength = 1.0f;
+        int   alphaMask    = 0;    // 1 = MASK (discard below cutoff)
+        float alphaCutoff  = 0.5f;
     };
 
     // Live pose (per node): TRS currently in effect this frame.
@@ -159,12 +169,41 @@ private:
     GLint  m_locInstColor    = -1;
     GLint  m_locInstEmissive = -1;
     GLint  m_locInstOpacity  = -1;
+    // PBR-lite material + lighting uniforms.
+    GLint  m_locMetallic     = -1;
+    GLint  m_locRoughness    = -1;
+    GLint  m_locMRTex        = -1;
+    GLint  m_locHasMR        = -1;
+    GLint  m_locEmissiveFac  = -1;
+    GLint  m_locEmissiveStr  = -1;
+    GLint  m_locEmissiveTex  = -1;
+    GLint  m_locHasEmissive  = -1;
+    GLint  m_locOcclTex      = -1;
+    GLint  m_locHasOccl      = -1;
+    GLint  m_locOcclStr      = -1;
+    GLint  m_locAlphaMask    = -1;
+    GLint  m_locAlphaCutoff  = -1;
+    GLint  m_locCameraPos    = -1;
+    GLint  m_locLightInt     = -1;
 
     std::vector<Model> m_models;
 
     // Per-frame state set in beginFrame().
-    m3d::Mat4 m_viewProj   = m3d::identity();
+    m3d::Mat4 m_viewProj    = m3d::identity();
     float     m_frameAnimTime = 0.0f;
+    float     m_cameraEye[3] = { 0.0f, 0.0f, 2.5f };
+
+    // Lighting rig (settable via setLighting; defaults match the
+    // historical fixed look). Direction points *toward* the scene.
+    float m_lightDir[3]   = { -0.5f, -0.7f, -0.5f };
+    float m_ambient[3]    = {  0.2f,  0.2f,  0.22f };
+    float m_lightIntensity = 1.0f;
+
+public:
+    // Configure the directional light + ambient + intensity for the next
+    // frame(s). Called by the engine from @range light uniforms.
+    void setLighting(const float dir[3], const float ambient[3],
+                     float intensity);
 };
 
 } // namespace visual

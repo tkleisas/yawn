@@ -447,6 +447,9 @@ corresponding control:
 | `fov`                            | Camera field of view. **0 = auto-frame** (default); > 0 switches to a free camera | degrees |
 | `cameraPosX` / `cameraPosY` / `cameraPosZ` | Free-camera eye position (only when `fov` > 0) | world units |
 | `cameraTargetX` / `cameraTargetY` / `cameraTargetZ` | Free-camera look-at point (only when `fov` > 0) | world units |
+| `lightYaw` / `lightPitch` | Directional-light azimuth / elevation | degrees |
+| `lightAmbient` | Ambient fill level | 0..1 |
+| `lightIntensity` | Key-light intensity | 0..3 (1 = default) |
 
 Because they're plain `@range` uniforms, A–H knobs, LFOs, MIDI learn,
 and clip automation all work on them with zero extra wiring. Map a
@@ -460,6 +463,32 @@ camera; dial it up to fly a free camera (e.g. orbit the model by driving
 example: same transform controls plus `iKick`-driven bloom and
 low/mid/high band tinting. Drop it on any model clip and the object
 pulses with the music out of the box.
+
+### Materials
+
+Models are shaded with a **PBR-lite** material read straight from the
+glTF — no setup needed:
+
+- **Base colour** (factor × texture) × the per-instance `color`.
+- **Metallic / roughness** (factors × the packed MR texture) drive a
+  view-dependent specular highlight — higher metallic tints the highlight
+  toward the base colour, lower roughness tightens it. (There's no
+  image-based lighting yet, so the diffuse base stays lit rather than
+  going black on metals.)
+- **Emissive** (factor × texture × `KHR_materials_emissive_strength`)
+  adds glow on top of lighting — the headline VJ look. It composes with
+  the per-instance `emissive` a scene script sets.
+- **Ambient occlusion** (R channel) darkens crevices in the ambient term.
+- **Alpha**: `MASK` materials discard below their cutoff; `BLEND`
+  materials use straight alpha (instances also fade via `opacity`).
+
+Lighting is a single directional key + ambient fill, driven by the
+`lightYaw` / `lightPitch` / `lightAmbient` / `lightIntensity` uniforms
+above (so a slow `lightYaw` LFO sweeps the light across the model).
+
+> Normal maps (needs a tangent pipeline) and a custom per-mesh material
+> shader hook are a later phase; the material above ignores normal/tangent
+> textures for now.
 
 ### Lua scene scripts
 

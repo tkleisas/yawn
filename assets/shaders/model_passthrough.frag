@@ -32,6 +32,14 @@ uniform float cameraTargetX; // @range -5..5 default=0
 uniform float cameraTargetY; // @range -5..5 default=0
 uniform float cameraTargetZ; // @range -5..5 default=0
 
+// Lighting (also read by the engine, fed to the model's lit shader).
+// yaw/pitch place the directional light; ambient is fill; intensity
+// scales the key light. Map A..H knobs / LFOs for live light moves.
+uniform float lightYaw;       // @range -180..180 default=45
+uniform float lightPitch;     // @range 0..90 default=45
+uniform float lightAmbient;   // @range 0..1 default=0.2
+uniform float lightIntensity; // @range 0..3 default=1
+
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     fragColor = texture(iChannel2, uv);

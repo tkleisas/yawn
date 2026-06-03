@@ -39,46 +39,82 @@ constexpr const char* kVertexSrc =
     "uniform int   uIsSkinned;\n"
     "uniform mat4  uJointMatrices[128];\n"
     "out vec3 vWorldNormal;\n"
+    "out vec3 vWorldPos;\n"
     "out vec2 vUV;\n"
     "void main() {\n"
+    "    vec4 local;\n"
+    "    vec3 nrm;\n"
     "    if (uIsSkinned != 0) {\n"
     "        mat4 skin =\n"
     "            aWeights.x * uJointMatrices[int(aJoints.x)] +\n"
     "            aWeights.y * uJointMatrices[int(aJoints.y)] +\n"
     "            aWeights.z * uJointMatrices[int(aJoints.z)] +\n"
     "            aWeights.w * uJointMatrices[int(aJoints.w)];\n"
-    "        vec4 posed = skin * vec4(aPos, 1.0);\n"
-    "        vWorldNormal = mat3(uModel) * (mat3(skin) * aNormal);\n"
-    "        gl_Position  = uMVP * posed;\n"
+    "        local = skin * vec4(aPos, 1.0);\n"
+    "        nrm   = mat3(skin) * aNormal;\n"
     "    } else {\n"
-    "        vWorldNormal = mat3(uModel) * aNormal;\n"
-    "        gl_Position  = uMVP * vec4(aPos, 1.0);\n"
+    "        local = vec4(aPos, 1.0);\n"
+    "        nrm   = aNormal;\n"
     "    }\n"
-    "    vUV = aUV;\n"
+    "    vec4 world   = uModel * local;\n"
+    "    vWorldPos    = world.xyz;\n"
+    "    vWorldNormal = mat3(uModel) * nrm;\n"
+    "    vUV          = aUV;\n"
+    "    gl_Position  = uMVP * local;\n"
     "}\n";
 
+// PBR-lite: base color + metallic/roughness (Blinn-Phong specular, view-
+// dependent), emissive (factor × texture × strength), ambient occlusion,
+// alpha MASK, plus per-instance tint/emissive/opacity. Normal mapping and
+// a full Cook-Torrance BRDF are a later phase.
 constexpr const char* kFragmentSrc =
     "#version 330 core\n"
     "in vec3 vWorldNormal;\n"
+    "in vec3 vWorldPos;\n"
     "in vec2 vUV;\n"
     "uniform vec4 uBaseColor;\n"
-    "uniform sampler2D uBaseTex;\n"
-    "uniform int uHasTex;\n"
-    "uniform vec3 uLightDir;\n"
-    "uniform vec3 uAmbient;\n"
-    "uniform vec3 uInstanceColor;\n"
-    "uniform float uInstanceEmissive;\n"
+    "uniform sampler2D uBaseTex;       uniform int uHasTex;\n"
+    "uniform float uMetallic;          uniform float uRoughness;\n"
+    "uniform sampler2D uMRTex;         uniform int uHasMR;\n"
+    "uniform vec3 uEmissiveFac;        uniform float uEmissiveStr;\n"
+    "uniform sampler2D uEmissiveTex;   uniform int uHasEmissive;\n"
+    "uniform sampler2D uOcclTex;       uniform int uHasOccl;  uniform float uOcclStr;\n"
+    "uniform int uAlphaMask;           uniform float uAlphaCutoff;\n"
+    "uniform vec3 uLightDir;           uniform vec3 uAmbient;  uniform float uLightInt;\n"
+    "uniform vec3 uCameraPos;\n"
+    "uniform vec3 uInstanceColor;      uniform float uInstanceEmissive;\n"
     "uniform float uInstanceOpacity;\n"
     "out vec4 fragColor;\n"
     "void main() {\n"
-    "    vec3 n = normalize(vWorldNormal);\n"
-    "    float diff = max(dot(n, -normalize(uLightDir)), 0.0);\n"
     "    vec4 base = uBaseColor;\n"
     "    if (uHasTex != 0) base *= texture(uBaseTex, vUV);\n"
-    "    vec3 tinted = base.rgb * uInstanceColor;\n"
-    "    vec3 lit  = tinted * (diff + uAmbient);\n"
-    "    vec3 glow = tinted * uInstanceEmissive;\n"
-    "    fragColor = vec4(lit + glow, base.a * uInstanceOpacity);\n"
+    "    base.rgb *= uInstanceColor;\n"
+    "    float metallic = uMetallic, rough = uRoughness;\n"
+    "    if (uHasMR != 0) { vec4 mr = texture(uMRTex, vUV); rough *= mr.g; metallic *= mr.b; }\n"
+    "    rough = clamp(rough, 0.04, 1.0);\n"
+    "    float occ = 1.0;\n"
+    "    if (uHasOccl != 0) occ = mix(1.0, texture(uOcclTex, vUV).r, uOcclStr);\n"
+    "    vec3 emis = uEmissiveFac * uEmissiveStr;\n"
+    "    if (uHasEmissive != 0) emis *= texture(uEmissiveTex, vUV).rgb;\n"
+    "    vec3 N = normalize(vWorldNormal);\n"
+    "    vec3 L = -normalize(uLightDir);\n"
+    "    vec3 V = normalize(uCameraPos - vWorldPos);\n"
+    "    vec3 H = normalize(L + V);\n"
+    "    float NdotL = max(dot(N, L), 0.0);\n"
+    "    float NdotH = max(dot(N, H), 0.0);\n"
+    "    // No IBL here, so keep full base diffuse (a physical (1-metallic)\n"
+    "    "  "factor would render metals black) and treat metallic/roughness as\n"
+    "    "  "specular character instead.\n"
+    "    vec3 diffuse = base.rgb;\n"
+    "    vec3 specCol = mix(vec3(0.04), base.rgb, metallic);\n"
+    "    float shin   = mix(8.0, 256.0, 1.0 - rough);\n"
+    "    float spec   = (NdotL > 0.0) ? pow(NdotH, shin) * (1.0 - rough) : 0.0;\n"
+    "    vec3 lit = (diffuse * NdotL + specCol * spec * (0.5 + metallic)) * uLightInt;\n"
+    "    vec3 ambient = base.rgb * uAmbient * occ;\n"
+    "    vec3 color = ambient + lit + emis + base.rgb * uInstanceEmissive;\n"
+    "    float alpha = base.a * uInstanceOpacity;\n"
+    "    if (uAlphaMask != 0 && alpha < uAlphaCutoff) discard;\n"
+    "    fragColor = vec4(color, alpha);\n"
     "}\n";
 
 // ── Animation helpers ─────────────────────────────────────────────────────
@@ -228,6 +264,21 @@ bool M3DRenderer::init() {
     m_locInstColor    = glGetUniformLocation(m_program, "uInstanceColor");
     m_locInstEmissive = glGetUniformLocation(m_program, "uInstanceEmissive");
     m_locInstOpacity  = glGetUniformLocation(m_program, "uInstanceOpacity");
+    m_locMetallic     = glGetUniformLocation(m_program, "uMetallic");
+    m_locRoughness    = glGetUniformLocation(m_program, "uRoughness");
+    m_locMRTex        = glGetUniformLocation(m_program, "uMRTex");
+    m_locHasMR        = glGetUniformLocation(m_program, "uHasMR");
+    m_locEmissiveFac  = glGetUniformLocation(m_program, "uEmissiveFac");
+    m_locEmissiveStr  = glGetUniformLocation(m_program, "uEmissiveStr");
+    m_locEmissiveTex  = glGetUniformLocation(m_program, "uEmissiveTex");
+    m_locHasEmissive  = glGetUniformLocation(m_program, "uHasEmissive");
+    m_locOcclTex      = glGetUniformLocation(m_program, "uOcclTex");
+    m_locHasOccl      = glGetUniformLocation(m_program, "uHasOccl");
+    m_locOcclStr      = glGetUniformLocation(m_program, "uOcclStr");
+    m_locAlphaMask    = glGetUniformLocation(m_program, "uAlphaMask");
+    m_locAlphaCutoff  = glGetUniformLocation(m_program, "uAlphaCutoff");
+    m_locCameraPos    = glGetUniformLocation(m_program, "uCameraPos");
+    m_locLightInt     = glGetUniformLocation(m_program, "uLightInt");
     m_locJointMats    = glGetUniformLocation(m_program, "uJointMatrices[0]");
     if (m_locJointMats < 0) m_locJointMats =
         glGetUniformLocation(m_program, "uJointMatrices");
@@ -287,9 +338,20 @@ void M3DRenderer::uploadModel(const M3DModel& model, Model& dst) {
 
     dst.materials.resize(model.materialCount());
     for (int i = 0; i < model.materialCount(); ++i) {
-        const auto& m = model.material(i);
-        for (int c = 0; c < 4; ++c) dst.materials[i].baseColor[c] = m.baseColorFactor[c];
-        dst.materials[i].texture = m.baseColorTexture;
+        const auto& m  = model.material(i);
+        auto&       gm = dst.materials[i];
+        for (int c = 0; c < 4; ++c) gm.baseColor[c] = m.baseColorFactor[c];
+        gm.texture          = m.baseColorTexture;
+        gm.metallic         = m.metallicFactor;
+        gm.roughness        = m.roughnessFactor;
+        gm.mrTexture        = m.metallicRoughnessTexture;
+        for (int c = 0; c < 3; ++c) gm.emissive[c] = m.emissiveFactor[c];
+        gm.emissiveStrength = m.emissiveStrength;
+        gm.emissiveTexture  = m.emissiveTexture;
+        gm.occlTexture      = m.occlusionTexture;
+        gm.occlStrength     = m.occlusionStrength;
+        gm.alphaMask        = (m.alphaMode == M3DMaterial::AlphaMode::Mask) ? 1 : 0;
+        gm.alphaCutoff      = m.alphaCutoff;
     }
 
     dst.meshes.resize(model.meshCount());
@@ -566,9 +628,11 @@ void M3DRenderer::beginFrame(float animTime, const M3DCamera& cam) {
         view = lookAt(cam.pos[0], cam.pos[1], cam.pos[2],
                       cam.target[0], cam.target[1], cam.target[2], upx, upy, upz);
         proj = perspective(fov * 3.14159265f / 180.0f, aspect, 0.05f, 200.0f);
+        m_cameraEye[0] = cam.pos[0]; m_cameraEye[1] = cam.pos[1]; m_cameraEye[2] = cam.pos[2];
     } else {
         view = lookAt(0.0f, 0.0f, 2.5f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
         proj = perspective(45.0f * 3.14159265f / 180.0f, aspect, 0.1f, 100.0f);
+        m_cameraEye[0] = 0.0f; m_cameraEye[1] = 0.0f; m_cameraEye[2] = 2.5f;
     }
     m_viewProj = multiply(proj, view);
 
@@ -582,8 +646,19 @@ void M3DRenderer::beginFrame(float animTime, const M3DCamera& cam) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(m_program);
-    if (m_locLightDir >= 0) glUniform3f(m_locLightDir, -0.5f, -0.7f, -0.5f);
-    if (m_locAmbient  >= 0) glUniform3f(m_locAmbient,   0.2f,  0.2f,  0.22f);
+    if (m_locLightDir >= 0)
+        glUniform3f(m_locLightDir, m_lightDir[0], m_lightDir[1], m_lightDir[2]);
+    if (m_locAmbient  >= 0)
+        glUniform3f(m_locAmbient, m_ambient[0], m_ambient[1], m_ambient[2]);
+    if (m_locLightInt >= 0)  glUniform1f(m_locLightInt, m_lightIntensity);
+    if (m_locCameraPos >= 0)
+        glUniform3f(m_locCameraPos, m_cameraEye[0], m_cameraEye[1], m_cameraEye[2]);
+}
+
+void M3DRenderer::setLighting(const float dir[3], const float ambient[3],
+                              float intensity) {
+    for (int i = 0; i < 3; ++i) { m_lightDir[i] = dir[i]; m_ambient[i] = ambient[i]; }
+    m_lightIntensity = intensity;
 }
 
 void M3DRenderer::drawInstance(const M3DInstance& inst) {
@@ -630,27 +705,40 @@ void M3DRenderer::drawInstance(const M3DInstance& inst) {
                                 reinterpret_cast<const float*>(mats.data()));
         }
 
-        float baseColor[4] = { 1, 1, 1, 1 };
-        int   texIdx       = -1;
+        // Material (defaults = plain white, fully rough dielectric).
+        GLMaterial mat;
         if (gm.materialIndex >= 0 &&
-            gm.materialIndex < static_cast<int>(mdl.materials.size())) {
-            const auto& m = mdl.materials[gm.materialIndex];
-            std::memcpy(baseColor, m.baseColor, sizeof(baseColor));
-            texIdx = m.texture;
-        }
-        if (m_locBaseColor >= 0) glUniform4fv(m_locBaseColor, 1, baseColor);
+            gm.materialIndex < static_cast<int>(mdl.materials.size()))
+            mat = mdl.materials[gm.materialIndex];
 
-        GLuint boundTex = 0;
-        if (texIdx >= 0 && texIdx < static_cast<int>(mdl.textures.size()))
-            boundTex = mdl.textures[texIdx];
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, boundTex);
-        if (m_locBaseTex >= 0) glUniform1i(m_locBaseTex, 0);
-        if (m_locHasTex  >= 0) glUniform1i(m_locHasTex, boundTex ? 1 : 0);
+        if (m_locBaseColor >= 0) glUniform4fv(m_locBaseColor, 1, mat.baseColor);
+        if (m_locMetallic  >= 0) glUniform1f(m_locMetallic,  mat.metallic);
+        if (m_locRoughness >= 0) glUniform1f(m_locRoughness, mat.roughness);
+        if (m_locEmissiveFac >= 0)
+            glUniform3f(m_locEmissiveFac, mat.emissive[0], mat.emissive[1], mat.emissive[2]);
+        if (m_locEmissiveStr >= 0) glUniform1f(m_locEmissiveStr, mat.emissiveStrength);
+        if (m_locOcclStr     >= 0) glUniform1f(m_locOcclStr, mat.occlStrength);
+        if (m_locAlphaMask   >= 0) glUniform1i(m_locAlphaMask, mat.alphaMask);
+        if (m_locAlphaCutoff >= 0) glUniform1f(m_locAlphaCutoff, mat.alphaCutoff);
+
+        // Bind material textures across units 0..3 (0 unbound = "no map").
+        auto bindTex = [&](int idx, int unit, GLint sampLoc, GLint hasLoc) {
+            GLuint tex = (idx >= 0 && idx < static_cast<int>(mdl.textures.size()))
+                         ? mdl.textures[idx] : 0;
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            if (sampLoc >= 0) glUniform1i(sampLoc, unit);
+            if (hasLoc  >= 0) glUniform1i(hasLoc,  tex ? 1 : 0);
+        };
+        bindTex(mat.texture,         0, m_locBaseTex,     m_locHasTex);
+        bindTex(mat.mrTexture,       1, m_locMRTex,       m_locHasMR);
+        bindTex(mat.emissiveTexture, 2, m_locEmissiveTex, m_locHasEmissive);
+        bindTex(mat.occlTexture,     3, m_locOcclTex,     m_locHasOccl);
 
         glBindVertexArray(gm.vao);
         glDrawElements(GL_TRIANGLES, gm.indexCount, GL_UNSIGNED_INT, nullptr);
     }
+    glActiveTexture(GL_TEXTURE0);   // leave unit 0 active (renderer convention)
 }
 
 void M3DRenderer::endFrame() {
@@ -682,6 +770,7 @@ void M3DRenderer::render(const M3DInstance&) {}
 void M3DRenderer::beginFrame(float, const M3DCamera&) {}
 void M3DRenderer::drawInstance(const M3DInstance&) {}
 void M3DRenderer::endFrame() {}
+void M3DRenderer::setLighting(const float[3], const float[3], float) {}
 bool M3DRenderer::hasModel() const { return false; }
 void M3DRenderer::setAnimationClip(int) {}
 int  M3DRenderer::animationClip()  const { return -1; }
