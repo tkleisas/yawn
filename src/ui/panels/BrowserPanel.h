@@ -470,7 +470,10 @@ private:
     static constexpr float kTabPad = 16.0f; // horizontal padding per tab
 
     Tab m_activeTab = Tab::Files;
-    float m_tabWidths[5] = {55, 55, 55, 55, 55}; // computed in render
+    // Sized to the tab count so adding a Tab can't overflow it (the
+    // previous fixed [5] overflowed when the Models tab was added,
+    // corrupting the next member). Values are computed in render().
+    float m_tabWidths[static_cast<int>(Tab::COUNT)] = {};
 
     // Files, Presets and Loops tabs — fw2 widgets; bounds driven by our render().
     BrowserFilesTab     m_filesTab;
