@@ -91,6 +91,7 @@ public:
     BrowserPresetsTab&   presetsTab() { return m_presetsTab; }
     BrowserMidiLoopsTab& loopsTab()   { return m_loopsTab; }
     BrowserModelsTab&    modelsTab()  { return m_modelsTab; }
+    Tab                  activeTab() const { return m_activeTab; }
     void setLibraryDatabase(library::LibraryDatabase* db) {
         m_filesTab.setDatabase(db);
         m_presetsTab.setDatabase(db);

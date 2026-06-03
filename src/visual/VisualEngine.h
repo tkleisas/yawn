@@ -144,6 +144,14 @@ public:
     int  layerAnimationCount(int track) const;
     std::string layerAnimationName(int track, int index) const;
 
+    // ── Model-library thumbnails (Models browser tab) ──
+    // ensureModelThumbnail renders `resolvedPath` once into a cached
+    // GL texture (in the output context; safe to call from a frame-start
+    // hook, NOT mid-2D-render). cachedModelThumbnail is a render-time
+    // lookup that returns the cached texture or 0 if not generated yet.
+    GLuint ensureModelThumbnail(const std::string& resolvedPath);
+    GLuint cachedModelThumbnail(const std::string& resolvedPath) const;
+
     // Pick the clock driving iTime / animTime / video frame advance on
     // a layer. Session-grid clips default to wall-clock (iTime starts
     // at 0 on launch, advances with real time). Arrangement-placed
@@ -472,6 +480,17 @@ private:
         GLuint feedbackTex = 0;
     };
     std::unordered_map<int, Layer> m_layers;
+
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    // Model-library thumbnail cache: a single M3DRenderer reused to render
+    // each model once, blitted down into a per-path texture. Lives in the
+    // output GL context (resources shared with the main UI context, so the
+    // browser can draw these textures).
+    std::unique_ptr<M3DRenderer>          m_thumbRenderer;
+    std::unordered_map<std::string, GLuint> m_thumbCache;
+    static constexpr int kThumbW = 160;
+    static constexpr int kThumbH = 120;
+#endif
 
     // ── Post-process effect ────────────────────────────────────────────
     struct PostEffect {

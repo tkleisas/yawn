@@ -313,6 +313,11 @@ void VisualEngine::shutdown() {
             }
         }
         if (m_audioTex) { glDeleteTextures(1, &m_audioTex); m_audioTex = 0; }
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+        for (auto& [p, tex] : m_thumbCache) if (tex) glDeleteTextures(1, &tex);
+        m_thumbCache.clear();
+        if (m_thumbRenderer) { m_thumbRenderer->clear(); m_thumbRenderer.reset(); }
+#endif
     }
     if (m_outputContext) {
         SDL_GL_DestroyContext(m_outputContext);
@@ -1216,6 +1221,77 @@ std::string VisualEngine::layerAnimationName(int track, int index) const {
 #endif
     (void)track; (void)index;
     return {};
+}
+
+GLuint VisualEngine::ensureModelThumbnail(const std::string& path) {
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    if (path.empty() || !m_outputWindow || !m_outputContext) return 0;
+    auto it = m_thumbCache.find(path);
+    if (it != m_thumbCache.end()) return it->second;
+
+    ContextScope scope(m_outputWindow, m_outputContext);
+
+    if (!m_thumbRenderer) {
+        m_thumbRenderer = std::make_unique<M3DRenderer>();
+        if (!m_thumbRenderer->init()) {
+            m_thumbRenderer.reset();
+            m_thumbCache[path] = 0;
+            return 0;
+        }
+    }
+    M3DModel cpu;
+    if (!cpu.load(path)) { m_thumbCache[path] = 0; return 0; }
+    m_thumbRenderer->setModel(cpu);
+    m_thumbRenderer->beginFrame(0.0f, M3DCamera{});   // auto-frame the model
+    m_thumbRenderer->drawInstance(M3DInstance{});
+    m_thumbRenderer->endFrame();
+
+    // Downscale-blit the model render into a small per-path texture.
+    GLuint dstTex = 0;
+    glGenTextures(1, &dstTex);
+    glBindTexture(GL_TEXTURE_2D, dstTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kThumbW, kThumbH, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    GLuint srcFbo = 0, dstFbo = 0;
+    glGenFramebuffers(1, &srcFbo);
+    glGenFramebuffers(1, &dstFbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, m_thumbRenderer->colorTexture(), 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, dstTex, 0);
+    // Flip V (the source FBO is bottom-up; the UI draws textures top-down).
+    glBlitFramebuffer(0, 0, M3DRenderer::kWidth, M3DRenderer::kHeight,
+                      0, kThumbH, kThumbW, 0,
+                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &srcFbo);
+    glDeleteFramebuffers(1, &dstFbo);
+
+    m_thumbCache[path] = dstTex;
+    return dstTex;
+#else
+    (void)path;
+    return 0;
+#endif
+}
+
+GLuint VisualEngine::cachedModelThumbnail(const std::string& path) const {
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    auto it = m_thumbCache.find(path);
+    return (it != m_thumbCache.end()) ? it->second : 0;
+#else
+    (void)path;
+    return 0;
+#endif
 }
 
 void VisualEngine::clearLayer(int track) {
