@@ -332,6 +332,16 @@ bool PianoRollPanel::onMouseMove(MouseMoveEvent& e) {
                 m_clip->note(m_velDragNoteIdx).velocity = newVel;
             }
         }
+        noteVelocityEdited(newVel);   // last-dragged velocity → new default
+        return true;
+    }
+
+    // Toolbar default-velocity control drag (vertical): up = louder.
+    if (m_velCtrlDragging) {
+        float dy = m_velCtrlStartY - my;
+        int v16 = m_velCtrlStartVel16 + static_cast<int>(dy * 512.0f);
+        m_drawVelocity = static_cast<uint16_t>(std::clamp(v16, 512, 65535));
+        if (m_onDrawVelocityChanged) m_onDrawVelocityChanged(drawVelocity());
         return true;
     }
 
@@ -420,6 +430,11 @@ bool PianoRollPanel::onMouseUp(MouseEvent& e) {
     if (m_velDragging) {
         m_velDragging = false;
         m_velDragNoteIdx = -1;
+        releaseMouse();
+        return true;
+    }
+    if (m_velCtrlDragging) {
+        m_velCtrlDragging = false;
         releaseMouse();
         return true;
     }
@@ -659,6 +674,27 @@ void PianoRollPanel::renderToolbar(UIContext& ctx) {
     m_velBtn.layout(Rect{x, tbY + 2, kVelBtnW, btnH}, ctx);
     m_velBtn.render(ctx);
     x += kVelBtnW + gap;
+
+    // Default new-note velocity — drag up/down to set (custom-drawn; the
+    // panel's mouse SM handles it via handleToolbarClick/onMouseMove).
+    {
+        const float vcW = 56.0f;
+        m_velCtrlRect = Rect{x, tbY + 2, vcW, btnH};
+        r.drawRect(x, tbY + 2, vcW, btnH, Color{40, 44, 52, 255});
+        const int vel7 = drawVelocity();
+        const float frac = vel7 / 127.0f;
+        r.drawRect(x, tbY + 2 + btnH * (1.0f - frac), vcW, btnH * frac,
+                   Color{60, 90, 140, 200});
+        r.drawRectOutline(x, tbY + 2, vcW, btnH, Color{85, 95, 115, 255}, 1.0f);
+        char vbuf[16];
+        std::snprintf(vbuf, sizeof(vbuf), "Vel %d", vel7);
+        const float vfs = theme().metrics.fontSizeSmall;
+        const float vtw = tm.textWidth(vbuf, vfs);
+        tm.drawText(r, vbuf, x + (vcW - vtw) * 0.5f,
+                    tbY + 2 + (btnH - tm.lineHeight(vfs)) * 0.5f, vfs,
+                    ::yawn::ui::Theme::textPrimary);
+        x += vcW + gap;
+    }
 
     m_followBtn.setState(m_followPlayhead, ValueChangeSource::Automation);
     m_followBtn.layout(Rect{x, tbY + 2, kFollowBtnW, btnH}, ctx);
