@@ -407,6 +407,12 @@ straight out and declares the transform uniforms (see below) so the
 custom-knob row of the Visual Params panel immediately gives you
 position / rotation / spin / scale controls.
 
+Or use the **Models** tab in the browser: it lists the bundled example
+models plus anything you drop in `~/.yawn/models3d`, and **double-click**
+assigns the model to the selected visual clip. (Live rendered thumbnails
+for each model are a planned follow-up; the list currently shows names
+with a generic 3D glyph.)
+
 ### Loading and localization
 
 Models go through the same project-local copy pattern as shaders: the

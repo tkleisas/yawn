@@ -3464,6 +3464,43 @@ void App::removeModelFromClip(int track, int scene, int listIndex) {
     markDirty();
 }
 
+void App::assignModelFromLibrary(const std::string& sourcePath) {
+    const int t = m_selectedTrack, s = m_selectedScene;
+    if (t < 0 || t >= m_project.numTracks() || s < 0) {
+        m_toastManager.show("Select a visual clip slot first", 2.5f,
+                            ui::ToastManager::Severity::Info);
+        return;
+    }
+    if (m_project.track(t).type != Track::Type::Visual) {
+        m_toastManager.show("Select a Visual track to assign a model", 2.5f,
+                            ui::ToastManager::Severity::Info);
+        return;
+    }
+    auto* slot = m_project.getSlot(t, s);
+    if (!slot) return;
+    if (!slot->visualClip)
+        slot->visualClip = std::make_unique<visual::VisualClip>();
+    auto& vc = *slot->visualClip;
+    std::string stored = localizeModel(sourcePath);
+    if (stored.empty()) return;
+    // Set as the primary model (replace), clearing the other iChannel2
+    // sources — mirrors Set Model….
+    vc.modelPath       = stored;
+    vc.modelSourcePath = sourcePath;
+    vc.videoPath.clear();
+    vc.thumbnailPath.clear();
+    vc.liveInput = false;
+    vc.liveUrl.clear();
+    if (vc.name.empty())
+        vc.name = std::filesystem::path(sourcePath).stem().string();
+    if (vc.colorIndex == 0)
+        vc.colorIndex = m_project.track(t).colorIndex;
+    reloadVisualClipModels(t, s);
+    m_toastManager.show("Assigned model: " + vc.name, 2.0f,
+                        ui::ToastManager::Severity::Info);
+    markDirty();
+}
+
 std::string App::localizeScene(const std::string& sourcePath) {
     if (sourcePath.empty()) return sourcePath;
     if (m_projectPath.empty()) {
@@ -5365,6 +5402,22 @@ bool App::init() {
 
         // Start background scan
         m_libraryScanner->startFullScan();
+    }
+
+    // ── Models tab (independent of the loop DB) ──
+    {
+        std::vector<std::string> dirs;
+        dirs.push_back((std::filesystem::current_path() / "assets" / "examples" / "3d").string());
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        std::error_code mec;
+        std::filesystem::path userModels =
+            std::filesystem::path(home ? home : ".") / ".yawn" / "models3d";
+        std::filesystem::create_directories(userModels, mec);
+        dirs.push_back(userModels.string());
+        m_browserPanel->modelsTab().setLibraryDirs(dirs, /*bundledCount*/1);
+        m_browserPanel->modelsTab().setOnAssign(
+            [this](const std::string& absPath) { assignModelFromLibrary(absPath); });
     }
 
     // Apply metronome settings from saved preferences
