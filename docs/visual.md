@@ -580,6 +580,17 @@ hot-reloads automatically.
   from `ctx.notes`, laid out left→right by pitch, spinning + shrinking +
   fading by age, hue by pitch class, emissive flash on the hit. Play a
   drum pattern on any track and watch them pop.
+- `audio_bars.lua` — a spectrum-style row of bars (low→high across the
+  row), scaled vertically (per-axis `scale`) and flashing on the kick.
+- `spin_helix.lua` — a turning vertical helix of copies breathing with
+  the audio level. Both are static-instanced, so they stay cheap.
+
+### Animation (rigged models)
+
+For a model with glTF animation clips, right-click the **playing** visual
+clip → **Animation** to pick which clip plays and a **Speed** multiplier
+(0.25×–4×). Both persist with the clip. (A scene script can still override
+animation per instance via the `anim` field — see above.)
 
 Because the script's per-instance transforms sit in the same shader
 pipeline, every existing iChannel2 post-processing shader (including

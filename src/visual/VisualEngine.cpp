@@ -1176,14 +1176,46 @@ bool VisualEngine::setLayerModel(int track, const std::string& path,
         return false;
     }
     L.modelRenderer->setModels(models);
+    L.modelRenderer->setAnimationClip(L.modelAnimClip);
     L.modelPath    = path;
     L.modelListKey = key;
     return true;
 #else
-    (void)track; (void)path;
+    (void)track; (void)path; (void)extraResolved;
     LOG_WARN("Visual", "3D model support disabled at build time");
     return false;
 #endif
+}
+
+void VisualEngine::setLayerAnimation(int track, int clip, float speed) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    L.modelAnimClip  = clip;
+    L.modelAnimSpeed = (speed > 0.0f) ? speed : 0.0f;
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    if (L.modelRenderer) L.modelRenderer->setAnimationClip(clip);
+#endif
+}
+
+int VisualEngine::layerAnimationCount(int track) const {
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    auto it = m_layers.find(track);
+    if (it != m_layers.end() && it->second.modelRenderer)
+        return it->second.modelRenderer->animationCount();
+#endif
+    (void)track;
+    return 0;
+}
+
+std::string VisualEngine::layerAnimationName(int track, int index) const {
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    auto it = m_layers.find(track);
+    if (it != m_layers.end() && it->second.modelRenderer)
+        return it->second.modelRenderer->animationName(index);
+#endif
+    (void)track; (void)index;
+    return {};
 }
 
 void VisualEngine::clearLayer(int track) {
@@ -1904,7 +1936,8 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
                     instances,
                     static_cast<float>(M3DRenderer::kWidth) / M3DRenderer::kHeight);
 
-            L.modelRenderer->beginFrame(static_cast<float>(preWall), cam);
+            L.modelRenderer->beginFrame(
+                static_cast<float>(preWall * L.modelAnimSpeed), cam);
             L.modelRenderer->drawInstances(instances);
             L.modelRenderer->endFrame();
         } else {
@@ -1926,7 +1959,8 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             inst.scale          = readParam("modelScale", 1.0f);
             // begin/draw/end form so wall-clock time drives skeletal
             // animation on rigged models even without a scene script.
-            L.modelRenderer->beginFrame(static_cast<float>(preWall), cameraFromUniforms());
+            L.modelRenderer->beginFrame(
+                static_cast<float>(preWall * L.modelAnimSpeed), cameraFromUniforms());
             L.modelRenderer->drawInstance(inst);
             L.modelRenderer->endFrame();
         }

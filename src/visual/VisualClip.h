@@ -139,6 +139,12 @@ struct VisualClip {
     // @range-uniform path runs.
     std::string scenePath;        // project-relative or absolute
 
+    // Animation (rigged/skinned models): which glTF animation clip plays
+    // (0 = first) and a playback-speed multiplier on the model's animation
+    // clock. Ignored by static models / scenes that set per-instance anim.
+    int   animClip  = 0;
+    float animSpeed = 1.0f;
+
     std::unique_ptr<VisualClip> clone() const {
         auto c = std::make_unique<VisualClip>();
         c->source        = source;
@@ -161,6 +167,8 @@ struct VisualClip {
         c->extraModelPaths       = extraModelPaths;
         c->extraModelSourcePaths = extraModelSourcePaths;
         c->scenePath       = scenePath;
+        c->animClip        = animClip;
+        c->animSpeed       = animSpeed;
         return c;
     }
 };

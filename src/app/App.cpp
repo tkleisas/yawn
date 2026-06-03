@@ -1707,6 +1707,7 @@ void App::launchVisualClipData(int track,
             if (!p.empty()) extraResolved.push_back(resolveModelPath(p));
         m_visualEngine.setLayerModel(track,
             resolveModelPath(vc.modelPath), extraResolved);
+        m_visualEngine.setLayerAnimation(track, vc.animClip, vc.animSpeed);
         m_visualEngine.setLayerSceneScript(track,
             resolveScenePath(vc.scenePath));
     } else if (vc.liveInput && !vc.liveUrl.empty()) {
@@ -2530,6 +2531,51 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                                 m_visualEngine.setLayerSceneScript(trackIndex, "");
                             markDirty();
                         }));
+                }
+            }
+
+            // "Animation" submenu — clip + speed for a rigged model. Only
+            // for the live clip (we read the loaded layer's animation list)
+            // and only when the model actually has animation clips.
+            if (hasModel &&
+                m_project.track(trackIndex).defaultScene == sceneIndex) {
+                const int nAnim = m_visualEngine.layerAnimationCount(trackIndex);
+                if (nAnim > 0) {
+                    std::vector<MenuEntry> aItems;
+                    const int curClip = slot->visualClip->animClip;
+                    for (int i = 0; i < nAnim; ++i) {
+                        std::string nm = m_visualEngine.layerAnimationName(trackIndex, i);
+                        if (nm.empty()) nm = "Clip " + std::to_string(i);
+                        aItems.push_back(radio("anim", nm, i == curClip,
+                            [this, trackIndex, sceneIndex, i]() {
+                                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                                if (!s || !s->visualClip) return;
+                                s->visualClip->animClip = i;
+                                m_visualEngine.setLayerAnimation(trackIndex, i,
+                                    s->visualClip->animSpeed);
+                                markDirty();
+                            }));
+                    }
+                    aItems.push_back(separator());
+                    const float curSpeed = slot->visualClip->animSpeed;
+                    const float speeds[]  = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+                    const char* slabels[] = { "0.25x", "0.5x", "1x", "2x", "4x" };
+                    std::vector<MenuEntry> sItems;
+                    for (int k = 0; k < 5; ++k) {
+                        const float sp = speeds[k];
+                        sItems.push_back(radio("animspd", slabels[k],
+                            std::fabs(curSpeed - sp) < 1e-3f,
+                            [this, trackIndex, sceneIndex, sp]() {
+                                auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                                if (!s || !s->visualClip) return;
+                                s->visualClip->animSpeed = sp;
+                                m_visualEngine.setLayerAnimation(trackIndex,
+                                    s->visualClip->animClip, sp);
+                                markDirty();
+                            }));
+                    }
+                    aItems.push_back(submenu("Speed", std::move(sItems)));
+                    items.push_back(submenu("Animation", std::move(aItems)));
                 }
             }
         }
