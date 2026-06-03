@@ -517,9 +517,13 @@ uniform multiplier; a `{sx,sy,sz}` table is per-axis. `anim.time` lets
 you **stagger** an animation across instances (e.g. 50 walkers each at a
 different phase instead of marching in lockstep). The optional second
 return's `camera` overrides the `@range` camera uniforms for that frame
-— omit it to keep knob/LFO/automation camera control. Returning `nil` or
-an empty table `{}` skips the draw this frame — handy for gating on
-`ctx.audio.kick > 0.5`.
+— omit it to keep knob/LFO/automation camera control. If a script
+supplies **no** camera at all (no returned `camera` and `fov` left at 0),
+the engine **auto-frames the bounding box of the instances** it emitted,
+so a scene that spreads pieces out (a ring, a row) stays on-screen by
+default instead of clipping against the single-model auto camera.
+Returning `nil` or an empty table `{}` skips the draw this frame — handy
+for gating on `ctx.audio.kick > 0.5`.
 
 The Lua sandbox exposes the standard `math`, `table`, `string`, and
 `utf8` libraries. `io`, `os`, `package`, and `debug` are intentionally

@@ -1,15 +1,16 @@
 -- Scene v2 + MIDI: spawn a copy of the model for each recent note-on,
--- laid out left→right by pitch, spinning + shrinking + fading as it ages,
--- and flashing emissive on the hit. Play notes or run a drum pattern on
--- ANY track and watch them pop. Drop on a clip with a model, then
--- Set Scene Script… → this file.
+-- arranged on a centred ring by pitch-class (so drums, bass, and leads
+-- all stay framed — low drum pitches don't pile up off-screen), popping
+-- big on the hit then spinning, shrinking, and fading as they age.
+--
+-- Play notes or a drum pattern on ANY track. Drop on a clip with a
+-- model, then Set Scene Script… → this file.
 --
 -- ctx.notes = recent note-ons (all tracks): each entry has
 --   { track, channel, pitch, vel (0..1), age (seconds) }.
--- They live ~4s in ctx.notes; this script fades them out sooner.
 
 local LIFETIME = 1.2   -- seconds a spawned note stays visible
-local SPREAD   = 4.0   -- X spread across the MIDI range (C2..C7)
+local RING     = 1.3   -- ring radius in unit-sphere space
 
 local function hsv(h, s, v)
     local i = math.floor(h * 6)
@@ -28,18 +29,26 @@ function tick(ctx)
     local out = {}
     for _, n in ipairs(ctx.notes) do
         if n.age < LIFETIME then
-            local life = 1.0 - n.age / LIFETIME            -- 1 → 0 over its life
-            local x    = ((n.pitch - 36) / 60 - 0.5) * SPREAD
-            local r, g, b = hsv((n.pitch % 12) / 12, 0.75, 1.0)
+            local life = 1.0 - n.age / LIFETIME          -- 1 → 0 over its life
+            local pc   = n.pitch % 12                    -- pitch class → angle
+            local a    = (pc / 12) * 2 * math.pi
+            local oct  = math.floor(n.pitch / 12) - 5    -- octave → depth
+            local pop  = 1.0 + 0.6 * life * life         -- snap big on the hit
+            local r, g, b = hsv(pc / 12, 0.75, 1.0)
             out[#out + 1] = {
-                -- model = n.pitch % 3,   -- uncomment for per-pitch shapes
-                position = { x, (n.vel - 0.5) * 1.5, 0 },
-                rotation = { 0, n.age * 360, 0 },          -- spin as it ages
-                scale    = (0.25 + 0.5 * n.vel) * life,    -- louder = bigger
-                color    = { r, g, b },                    -- hue by pitch class
-                emissive = 1.5 * life * life,              -- bright on hit, fades fast
+                position = { RING * math.cos(a),
+                             RING * math.sin(a),
+                             oct * 0.35 },
+                rotation = { 0, n.age * 360, 0 },         -- spin as it ages
+                scale    = (0.18 + 0.32 * n.vel) * life * pop,
+                color    = { r, g, b },                   -- hue by pitch class
+                emissive = 1.6 * life * life,             -- bright on hit, fades fast
             }
         end
     end
-    return out
+
+    -- Pull the camera back far enough to frame the whole ring head-on.
+    return out, {
+        camera = { pos = { 0, 0, 4.2 }, target = { 0, 0, 0 }, fov = 55 }
+    }
 end

@@ -1726,6 +1726,52 @@ void VisualEngine::updateAudioTexture() {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+namespace {
+// When a scene script supplies neither a returned camera nor camera
+// uniforms, frame the bounding box of the instances it emitted. The
+// renderer's plain auto-camera frames a single unit model at the origin,
+// which clips anything a script spreads out (a ring, a row of drums);
+// this keeps "drop a scene script, see your stuff" true by default.
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+M3DCamera autoFrameInstances(const std::vector<M3DInstance>& insts,
+                             float aspect) {
+    M3DCamera cam;                       // explicitCam = false (auto)
+    if (insts.empty()) return cam;
+    float mn[3] = {  1e30f,  1e30f,  1e30f };
+    float mx[3] = { -1e30f, -1e30f, -1e30f };
+    for (const auto& in : insts) {
+        const float s = std::max(in.scale3[0],
+                                 std::max(in.scale3[1], in.scale3[2]));
+        float r = 0.6f * in.scale * s;   // unit-model half-extent ~0.5 + margin
+        if (r < 0.05f) r = 0.05f;
+        for (int k = 0; k < 3; ++k) {
+            mn[k] = std::min(mn[k], in.position[k] - r);
+            mx[k] = std::max(mx[k], in.position[k] + r);
+        }
+    }
+    const float cx = 0.5f * (mn[0] + mx[0]);
+    const float cy = 0.5f * (mn[1] + mx[1]);
+    const float cz = 0.5f * (mn[2] + mx[2]);
+    const float ex = 0.5f * (mx[0] - mn[0]);
+    const float ey = 0.5f * (mx[1] - mn[1]);
+    const float ez = 0.5f * (mx[2] - mn[2]);
+    const float kPi = 3.14159265f;
+    const float fov = 50.0f;
+    const float halfV = fov * 0.5f * kPi / 180.0f;
+    const float halfH = std::atan(std::tan(halfV) * aspect);
+    const float distV = ey / std::max(1e-3f, std::tan(halfV));
+    const float distH = ex / std::max(1e-3f, std::tan(halfH));
+    float dist = std::max(distV, distH) + ez;
+    dist = dist * 1.15f + 0.5f;          // margin + near clearance
+    cam.explicitCam = true;
+    cam.fov = fov;
+    cam.target[0] = cx; cam.target[1] = cy; cam.target[2] = cz;
+    cam.pos[0]    = cx; cam.pos[1]    = cy; cam.pos[2]    = cz + dist;
+    return cam;
+}
+#endif
+} // namespace
+
 // ── Per-layer render ───────────────────────────────────────────────────────
 
 void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
@@ -1833,6 +1879,13 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             M3DCamera cam = cameraFromUniforms();
             // A camera returned by the script overrides the uniform one.
             L.sceneScript->tick(in, instances, &cam);
+
+            // No explicit camera (script + uniforms both silent) → frame
+            // whatever the script spread out, so it's on-screen by default.
+            if (!cam.explicitCam)
+                cam = autoFrameInstances(
+                    instances,
+                    static_cast<float>(M3DRenderer::kWidth) / M3DRenderer::kHeight);
 
             L.modelRenderer->beginFrame(static_cast<float>(preWall), cam);
             for (const auto& inst : instances) {
