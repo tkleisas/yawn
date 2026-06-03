@@ -2,6 +2,7 @@
 #include "util/Logger.h"
 #include "midi/LFO.h"
 #include "visual/VisualModBus.h"
+#include "visual/VisualNoteBus.h"
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -934,6 +935,21 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             ti.beatsPerBar = m_transport.beatsPerBar();
             ti.beatDenominator = m_transport.denominator();
             m_midiEffectChains[t].process(m_trackMidiBuffers[t], nf, ti);
+        }
+
+        // Publish note-ons to the visual note bus (lock-free) so scene
+        // scripts can react to what this track is playing — post MIDI-FX
+        // so arpeggiator/chord-generated notes are included. Cheap; the
+        // visual thread drains it each frame (see VisualEngine::tick).
+        {
+            const auto& mb = m_trackMidiBuffers[t];
+            for (int i = 0; i < mb.count(); ++i) {
+                const auto& msg = mb[i];
+                if (msg.isNoteOn())
+                    visual::VisualNoteBus::instance().push(
+                        static_cast<uint8_t>(t), msg.channel, msg.note,
+                        msg.velocity7());
+            }
         }
 
         // Render instrument into track buffer (adds to existing audio)

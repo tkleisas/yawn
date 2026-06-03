@@ -1,5 +1,6 @@
 #include "visual/VisualEngine.h"
 #include "visual/VisualEngineAPI.h"
+#include "visual/VisualNoteBus.h"
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
 #include "visual/gltf/M3DModel.h"
 #include "visual/gltf/M3DRenderer.h"
@@ -1725,6 +1726,52 @@ void VisualEngine::updateAudioTexture() {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+namespace {
+// When a scene script supplies neither a returned camera nor camera
+// uniforms, frame the bounding box of the instances it emitted. The
+// renderer's plain auto-camera frames a single unit model at the origin,
+// which clips anything a script spreads out (a ring, a row of drums);
+// this keeps "drop a scene script, see your stuff" true by default.
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+M3DCamera autoFrameInstances(const std::vector<M3DInstance>& insts,
+                             float aspect) {
+    M3DCamera cam;                       // explicitCam = false (auto)
+    if (insts.empty()) return cam;
+    float mn[3] = {  1e30f,  1e30f,  1e30f };
+    float mx[3] = { -1e30f, -1e30f, -1e30f };
+    for (const auto& in : insts) {
+        const float s = std::max(in.scale3[0],
+                                 std::max(in.scale3[1], in.scale3[2]));
+        float r = 0.6f * in.scale * s;   // unit-model half-extent ~0.5 + margin
+        if (r < 0.05f) r = 0.05f;
+        for (int k = 0; k < 3; ++k) {
+            mn[k] = std::min(mn[k], in.position[k] - r);
+            mx[k] = std::max(mx[k], in.position[k] + r);
+        }
+    }
+    const float cx = 0.5f * (mn[0] + mx[0]);
+    const float cy = 0.5f * (mn[1] + mx[1]);
+    const float cz = 0.5f * (mn[2] + mx[2]);
+    const float ex = 0.5f * (mx[0] - mn[0]);
+    const float ey = 0.5f * (mx[1] - mn[1]);
+    const float ez = 0.5f * (mx[2] - mn[2]);
+    const float kPi = 3.14159265f;
+    const float fov = 50.0f;
+    const float halfV = fov * 0.5f * kPi / 180.0f;
+    const float halfH = std::atan(std::tan(halfV) * aspect);
+    const float distV = ey / std::max(1e-3f, std::tan(halfV));
+    const float distH = ex / std::max(1e-3f, std::tan(halfH));
+    float dist = std::max(distV, distH) + ez;
+    dist = dist * 1.15f + 0.5f;          // margin + near clearance
+    cam.explicitCam = true;
+    cam.fov = fov;
+    cam.target[0] = cx; cam.target[1] = cy; cam.target[2] = cz;
+    cam.pos[0]    = cx; cam.pos[1]    = cy; cam.pos[2]    = cz + dist;
+    return cam;
+}
+#endif
+} // namespace
+
 // ── Per-layer render ───────────────────────────────────────────────────────
 
 void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
@@ -1813,11 +1860,32 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             in.kick       = audioKick;
             for (int i = 0; i < 8; ++i) in.knobs[i] = L.knobDisplayValues[i];
 
+            // Recent note-ons → ctx.notes, aged against this frame.
+            in.notes.clear();
+            in.notes.reserve(m_recentNotes.size());
+            for (const auto& rn : m_recentNotes) {
+                M3DSceneScript::Note n;
+                n.track   = rn.track;
+                n.channel = rn.channel;
+                n.pitch   = rn.pitch;
+                n.vel     = rn.vel;
+                n.age     = std::chrono::duration<float>(
+                                m_noteFrameNow - rn.on).count();
+                in.notes.push_back(n);
+            }
+
             static thread_local std::vector<M3DInstance> instances;
             instances.clear();
             M3DCamera cam = cameraFromUniforms();
             // A camera returned by the script overrides the uniform one.
             L.sceneScript->tick(in, instances, &cam);
+
+            // No explicit camera (script + uniforms both silent) → frame
+            // whatever the script spread out, so it's on-screen by default.
+            if (!cam.explicitCam)
+                cam = autoFrameInstances(
+                    instances,
+                    static_cast<float>(M3DRenderer::kWidth) / M3DRenderer::kHeight);
 
             L.modelRenderer->beginFrame(static_cast<float>(preWall), cam);
             for (const auto& inst : instances) {
@@ -2163,12 +2231,45 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     ++L.frameCounter;
 }
 
+void VisualEngine::drainNoteBus() {
+    m_noteFrameNow = std::chrono::steady_clock::now();
+
+    VisualNoteEvent ev;
+    while (VisualNoteBus::instance().pop(ev)) {
+        m_recentNotes.push_back({ ev.track, ev.channel, ev.pitch,
+                                  ev.vel7 / 127.0f, m_noteFrameNow });
+    }
+
+    // Prune notes older than the window. Appended in time order, so the
+    // stale entries form a prefix.
+    const auto cutoff = m_noteFrameNow -
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(kNoteWindowSeconds));
+    size_t firstKept = 0;
+    while (firstKept < m_recentNotes.size() &&
+           m_recentNotes[firstKept].on < cutoff)
+        ++firstKept;
+    if (firstKept > 0)
+        m_recentNotes.erase(m_recentNotes.begin(),
+                            m_recentNotes.begin() + firstKept);
+
+    // Hard cap (backstop against a flood) — keep the newest.
+    if (m_recentNotes.size() > kMaxRecentNotes)
+        m_recentNotes.erase(m_recentNotes.begin(),
+                            m_recentNotes.begin() +
+                            (m_recentNotes.size() - kMaxRecentNotes));
+}
+
 // ── tick (orchestrates all layers + composite) ────────────────────────────
 
 void VisualEngine::tick(double transportSeconds, double transportBeats, bool playing) {
     if (!m_initialized || !m_outputVisible || !m_outputWindow) return;
 
     ContextScope scope(m_outputWindow, m_outputContext);
+
+    // Drain MIDI note-ons published by the audio thread (lock-free) into
+    // the aged recent-notes list that feeds scene scripts' ctx.notes.
+    drainNoteBus();
 
     // Build ordered list of active layers (track idx ascending = bottom→top).
     std::vector<int> trackOrder;

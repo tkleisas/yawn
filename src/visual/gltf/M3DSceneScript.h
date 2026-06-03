@@ -18,6 +18,9 @@
 //     --   ctx.audio.low / mid / high (float)
 //     --   ctx.audio.kick  (float, peak-triggered, decays)
 //     --   ctx.knobs.A ..  ctx.knobs.H    (floats, 0..1)
+//     --   ctx.notes  — array of recent note-ons (all tracks), each
+//     --                { track, channel, pitch, vel (0..1), age (sec) },
+//     --                newest last. Filter by pitch/track, fade by age.
 //     return { { model    = 0,            -- index into the clip's model list
 //                position = {x, y, z},
 //                rotation = {x, y, z},     -- euler XYZ degrees
@@ -55,6 +58,15 @@ namespace visual {
 
 class M3DSceneScript {
 public:
+    // A recent note-on, surfaced to the script as one entry in ctx.notes.
+    struct Note {
+        int   track   = 0;
+        int   channel = 0;
+        int   pitch   = 0;
+        float vel     = 0.0f;   // 0..1
+        float age     = 0.0f;   // seconds since the note fired
+    };
+
     struct Inputs {
         float time        = 0.0f;
         float beat        = 0.0f;
@@ -65,6 +77,9 @@ public:
         float audioHigh   = 0.0f;
         float kick        = 0.0f;
         float knobs[8]    = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        // Recent note-ons (all tracks), newest last. The script filters
+        // by track/channel/pitch and fades by age. See VisualNoteBus.
+        std::vector<Note> notes;
     };
 
     M3DSceneScript() = default;

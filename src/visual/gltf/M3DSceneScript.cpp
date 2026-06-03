@@ -43,6 +43,20 @@ void pushContext(lua_State* L, const M3DSceneScript::Inputs& in) {
         lua_rawseti(L, -2, i + 1);
     }
     lua_setfield(L, -2, "knobs");
+
+    // ctx.notes — array (1..N) of { track, channel, pitch, vel, age }.
+    lua_createtable(L, static_cast<int>(in.notes.size()), 0);
+    for (size_t i = 0; i < in.notes.size(); ++i) {
+        const auto& n = in.notes[i];
+        lua_createtable(L, 0, 5);
+        lua_pushinteger(L, n.track);   lua_setfield(L, -2, "track");
+        lua_pushinteger(L, n.channel); lua_setfield(L, -2, "channel");
+        lua_pushinteger(L, n.pitch);   lua_setfield(L, -2, "pitch");
+        lua_pushnumber(L, n.vel);      lua_setfield(L, -2, "vel");
+        lua_pushnumber(L, n.age);      lua_setfield(L, -2, "age");
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_setfield(L, -2, "notes");
 }
 
 // Read an optional numeric field, returning `fallback` if absent or

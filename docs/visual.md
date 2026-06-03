@@ -488,6 +488,10 @@ function tick(ctx)
     -- ctx.audio.level / low / mid / high  (floats)
     -- ctx.audio.kick   (float, peak-triggered, decays)
     -- ctx.knobs.A .. ctx.knobs.H  (floats, 0..1)
+    -- ctx.notes  — array of recent note-ons from ALL tracks, each
+    --              { track, channel, pitch, vel (0..1), age (seconds) },
+    --              newest last; they live ~4 s. Filter by track/pitch and
+    --              fade by age to react to drum hits / played notes.
     --
     -- Returns a list of instances — the engine draws the selected model
     -- once per entry, all accumulating into the same depth buffer. An
@@ -513,9 +517,13 @@ uniform multiplier; a `{sx,sy,sz}` table is per-axis. `anim.time` lets
 you **stagger** an animation across instances (e.g. 50 walkers each at a
 different phase instead of marching in lockstep). The optional second
 return's `camera` overrides the `@range` camera uniforms for that frame
-— omit it to keep knob/LFO/automation camera control. Returning `nil` or
-an empty table `{}` skips the draw this frame — handy for gating on
-`ctx.audio.kick > 0.5`.
+— omit it to keep knob/LFO/automation camera control. If a script
+supplies **no** camera at all (no returned `camera` and `fov` left at 0),
+the engine **auto-frames the bounding box of the instances** it emitted,
+so a scene that spreads pieces out (a ring, a row) stays on-screen by
+default instead of clipping against the single-model auto camera.
+Returning `nil` or an empty table `{}` skips the draw this frame — handy
+for gating on `ctx.audio.kick > 0.5`.
 
 The Lua sandbox exposes the standard `math`, `table`, `string`, and
 `utf8` libraries. `io`, `os`, `package`, and `debug` are intentionally
@@ -533,6 +541,10 @@ hot-reloads automatically.
   single model), each tinted its own hue, bouncing on its audio band and
   flashing emissive on the kick, all under a returned orbiting camera
   (knob A = distance, knob B = spin).
+- `note_burst.lua` — **MIDI-reactive**: spawns a copy per recent note-on
+  from `ctx.notes`, laid out left→right by pitch, spinning + shrinking +
+  fading by age, hue by pitch class, emissive flash on the hit. Play a
+  drum pattern on any track and watch them pop.
 
 Because the script's per-instance transforms sit in the same shader
 pipeline, every existing iChannel2 post-processing shader (including

@@ -19,6 +19,7 @@
 #include <glad/gl.h>
 
 #include "visual/VisualLFO.h"
+#include <cstdint>
 #include "visual/TextRasterizer.h"
 #include "visual/VideoDecoder.h"
 #include "visual/LiveVideoSource.h"
@@ -555,6 +556,22 @@ private:
     GLuint compileShaderProgram(const char* vertSrc, const char* fragSrc,
                                  const char* name);
     void updateAudioTexture();
+
+    // Drain the lock-free MIDI note bus once per frame into m_recentNotes,
+    // stamp the frame time, and age out / cap the list. Feeds ctx.notes.
+    void drainNoteBus();
+
+    // Recent note-ons (all tracks), surfaced to scene scripts as
+    // ctx.notes. Newest last; entries older than kNoteWindow are pruned.
+    struct RecentNote {
+        std::uint8_t track = 0, channel = 0, pitch = 0;
+        float        vel   = 0.0f;   // 0..1
+        std::chrono::steady_clock::time_point on{};
+    };
+    std::vector<RecentNote> m_recentNotes;
+    std::chrono::steady_clock::time_point m_noteFrameNow{};
+    static constexpr float kNoteWindowSeconds = 4.0f;
+    static constexpr size_t kMaxRecentNotes   = 256;
 
     SDL_Window*   m_outputWindow  = nullptr;
     SDL_GLContext m_outputContext = nullptr;

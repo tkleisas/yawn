@@ -125,6 +125,34 @@ TEST_F(SceneScriptTest, NoCameraLeavesItAuto) {
     EXPECT_FALSE(cam.explicitCam);   // no camera returned → auto-frame
 }
 
+TEST_F(SceneScriptTest, NotesAreVisibleToTheScript) {
+    M3DSceneScript s;
+    ASSERT_TRUE(s.load(writeScript(R"LUA(
+        function tick(ctx)
+          local out = {}
+          for _, n in ipairs(ctx.notes) do
+            out[#out + 1] = {
+              position = { n.pitch, n.vel, n.age },
+              model    = n.track,
+              opacity  = 1.0 - n.age,
+            }
+          end
+          return out
+        end)LUA")));
+
+    in.notes.push_back({ /*track*/2, /*channel*/0, /*pitch*/60, /*vel*/0.8f, /*age*/0.0f });
+    in.notes.push_back({ /*track*/0, /*channel*/9, /*pitch*/36, /*vel*/0.5f, /*age*/1.5f });
+
+    std::vector<M3DInstance> out;
+    ASSERT_TRUE(s.tick(in, out));
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_FLOAT_EQ(out[0].position[0], 60.0f);   // pitch
+    EXPECT_FLOAT_EQ(out[0].position[1], 0.8f);    // vel
+    EXPECT_EQ(out[0].model, 2);                   // track
+    EXPECT_FLOAT_EQ(out[1].position[0], 36.0f);
+    EXPECT_FLOAT_EQ(out[1].opacity, 1.0f - 1.5f); // age-faded
+}
+
 #ifdef YAWN_BUNDLED_SCRIPTS_DIR
 // Load + run the scripts we actually ship, so a Lua syntax error or a
 // drift from the engine contract is caught in CI rather than in the app.
@@ -145,6 +173,26 @@ TEST_F(SceneScriptTest, BundledMultiModelOrbitScript) {
     EXPECT_NEAR(out[0].emissive, 0.15f, 1e-4f); // baseline glow (no kick)
     EXPECT_TRUE(cam.explicitCam);              // returns an orbit camera
     EXPECT_FLOAT_EQ(cam.fov, 50.0f);
+}
+
+TEST_F(SceneScriptTest, BundledNoteBurstScript) {
+    M3DSceneScript s;
+    ASSERT_TRUE(s.load(std::string(YAWN_BUNDLED_SCRIPTS_DIR) +
+                       "/note_burst.lua")) << s.error();
+    std::vector<M3DInstance> out;
+
+    // No notes → nothing drawn.
+    ASSERT_TRUE(s.tick(in, out));
+    EXPECT_TRUE(out.empty());
+
+    // A fresh kick + a snare → two instances; an old note past LIFETIME
+    // is culled by the script.
+    in.notes.push_back({ 0, 9, 36, 1.0f, 0.0f });   // kick, fresh
+    in.notes.push_back({ 0, 9, 38, 0.7f, 0.2f });   // snare, recent
+    in.notes.push_back({ 0, 9, 42, 0.5f, 3.0f });   // old hat → culled
+    ASSERT_TRUE(s.tick(in, out));
+    EXPECT_EQ(out.size(), 2u);
+    EXPECT_GT(out[0].emissive, 0.0f);               // flashes on the hit
 }
 
 TEST_F(SceneScriptTest, BundledLegacyScriptsStillParse) {
