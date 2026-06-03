@@ -54,6 +54,8 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     c.extraModelPaths       = {"models/kick.glb", "models/snare.glb"};
     c.extraModelSourcePaths = {"/orig/kick.glb", "/orig/snare.glb"};
     c.scenePath        = "scripts/kick_ring.lua";
+    c.animClip         = 2;
+    c.animSpeed        = 0.5f;
 
     auto clone = c.clone();
     ASSERT_NE(clone, nullptr);
@@ -85,6 +87,8 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     EXPECT_EQ   (clone->extraModelPaths,       c.extraModelPaths);
     EXPECT_EQ   (clone->extraModelSourcePaths, c.extraModelSourcePaths);
     EXPECT_EQ   (clone->scenePath,       c.scenePath);
+    EXPECT_EQ   (clone->animClip,        c.animClip);
+    EXPECT_FLOAT_EQ(clone->animSpeed,    c.animSpeed);
 
     // modelList() = primary first, then non-empty extras.
     auto list = c.modelList();

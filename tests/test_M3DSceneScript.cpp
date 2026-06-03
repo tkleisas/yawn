@@ -195,6 +195,25 @@ TEST_F(SceneScriptTest, BundledNoteBurstScript) {
     EXPECT_GT(out[0].emissive, 0.0f);               // flashes on the hit
 }
 
+TEST_F(SceneScriptTest, BundledWorkflowScenes) {
+    std::vector<M3DInstance> out;
+
+    M3DSceneScript bars;
+    ASSERT_TRUE(bars.load(std::string(YAWN_BUNDLED_SCRIPTS_DIR) +
+                          "/audio_bars.lua")) << bars.error();
+    ASSERT_TRUE(bars.tick(in, out));
+    EXPECT_EQ(out.size(), 9u);
+    // Per-axis scale: bars are tall/thin (scale3, not uniform scale).
+    EXPECT_FLOAT_EQ(out[0].scale3[0], 0.25f);
+    EXPECT_NE(out[0].scale3[1], out[0].scale3[0]);
+
+    M3DSceneScript helix;
+    ASSERT_TRUE(helix.load(std::string(YAWN_BUNDLED_SCRIPTS_DIR) +
+                           "/spin_helix.lua")) << helix.error();
+    ASSERT_TRUE(helix.tick(in, out));
+    EXPECT_EQ(out.size(), 24u);
+}
+
 TEST_F(SceneScriptTest, BundledLegacyScriptsStillParse) {
     M3DSceneScript::Inputs in;
     std::vector<M3DInstance> out;

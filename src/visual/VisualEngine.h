@@ -138,6 +138,12 @@ public:
     bool setLayerModel(int track, const std::string& path,
                        const std::vector<std::string>& extraResolved = {});
 
+    // Select the layer model's animation clip + playback speed.
+    void setLayerAnimation(int track, int clip, float speed);
+    // Query the layer model's animation clips (for the UI menu).
+    int  layerAnimationCount(int track) const;
+    std::string layerAnimationName(int track, int index) const;
+
     // Pick the clock driving iTime / animTime / video frame advance on
     // a layer. Session-grid clips default to wall-clock (iTime starts
     // at 0 on launch, advances with real time). Arrangement-placed
@@ -378,6 +384,10 @@ private:
         // Cache key for the uploaded model set (primary + extras, joined)
         // so a re-launch with the same models skips the GL re-upload.
         std::string  modelListKey;
+        // Animation selection for the layer's model (clip index + speed
+        // multiplier on the model's animation clock).
+        int          modelAnimClip  = 0;
+        float        modelAnimSpeed = 1.0f;
         std::chrono::steady_clock::time_point videoLaunchTime =
             std::chrono::steady_clock::now();
         // Transport-locked loop: 0 = free-running. >0 = loop every N bars.
