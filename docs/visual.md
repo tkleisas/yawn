@@ -444,12 +444,17 @@ corresponding control:
 | `modelRotX` / `modelRotY` / `modelRotZ` | Static Euler rotation (applied Z·Y·X) | degrees |
 | `modelSpinX` / `modelSpinY` / `modelSpinZ` | Continuous auto-rotation speed, integrated by the engine each frame | degrees / second |
 | `modelScale`                     | Uniform scale multiplier on top of the auto-fit | dimensionless (1 = full auto-fit) |
+| `fov`                            | Camera field of view. **0 = auto-frame** (default); > 0 switches to a free camera | degrees |
+| `cameraPosX` / `cameraPosY` / `cameraPosZ` | Free-camera eye position (only when `fov` > 0) | world units |
+| `cameraTargetX` / `cameraTargetY` / `cameraTargetZ` | Free-camera look-at point (only when `fov` > 0) | world units |
 
 Because they're plain `@range` uniforms, A–H knobs, LFOs, MIDI learn,
 and clip automation all work on them with zero extra wiring. Map a
 saw-shaped LFO to `modelRotY` for a clean transport-synced spin, or
 point knob G at `modelScale` and let an envelope drive a breathing
-pulse on the kick.
+pulse on the kick. Leave `fov` at 0 to keep the historical auto-framed
+camera; dial it up to fly a free camera (e.g. orbit the model by driving
+`cameraPosX/Z` with a sine/cosine LFO pair).
 
 `assets/shaders/examples/25_model_audio_glow.frag` is a worked
 example: same transform controls plus `iKick`-driven bloom and
@@ -465,6 +470,14 @@ visual clip with a model assigned → **Set Scene Script…** → pick a
 `.lua` file. YAWN localizes it into `<project>/scripts/<stem>.lua` on
 load, same pattern as shaders and models.
 
+**Multiple models.** A clip can reference more than one model: with a
+model already set, right-click → **Add Model…** to append another. The
+scene script selects among them per instance via the `model` index —
+`0` = the primary model, `1` = the first added, and so on. (Each model
+is normalized to ~unit size independently, so you compose a scene by
+positioning and scaling unit-sized pieces.) **Clear Extra Models**
+removes the extras.
+
 The contract is one global function:
 
 ```lua
@@ -472,28 +485,37 @@ function tick(ctx)
     -- ctx.time         (float, wall-clock seconds)
     -- ctx.beat         (float, transport beat position)
     -- ctx.playing      (bool)
-    -- ctx.audio.level  (float, 0..1 smoothed)
-    -- ctx.audio.low    (float)
-    -- ctx.audio.mid    (float)
-    -- ctx.audio.high   (float)
+    -- ctx.audio.level / low / mid / high  (floats)
     -- ctx.audio.kick   (float, peak-triggered, decays)
     -- ctx.knobs.A .. ctx.knobs.H  (floats, 0..1)
     --
-    -- Returns a list of transforms — the engine draws the clip's
-    -- primary model once per entry, all accumulating into the same
-    -- depth buffer.
+    -- Returns a list of instances — the engine draws the selected model
+    -- once per entry, all accumulating into the same depth buffer. An
+    -- optional second return value carries scene-wide options (camera).
     return {
-        { position = {x, y, z},
+        { model    = 0,            -- which model (default 0)
+          position = {x, y, z},
           rotation = {x, y, z},    -- euler XYZ degrees
-          scale    = s },
+          scale    = s,            -- number, OR {sx, sy, sz} per-axis
+          color    = {r, g, b},    -- tint 0..1 (default white)
+          emissive = e,            -- additive glow (default 0)
+          opacity  = o,            -- 0..1 (default 1)
+          anim     = { clip = 1, time = t } },  -- per-instance animation
         -- … more instances …
-    }
+    },
+    { camera = { pos = {x, y, z}, target = {x, y, z}, fov = 50 } }
 end
 ```
 
-Missing table fields default to `position={0,0,0}, rotation={0,0,0},
-scale=1`. Returning `nil` or an empty table skips the draw this frame —
-handy for gating on `ctx.audio.kick > 0.5`.
+Every field is optional. Omitted appearance fields default to white /
+no glow / opaque / model 0 / uniform scale 1. A numeric `scale` is a
+uniform multiplier; a `{sx,sy,sz}` table is per-axis. `anim.time` lets
+you **stagger** an animation across instances (e.g. 50 walkers each at a
+different phase instead of marching in lockstep). The optional second
+return's `camera` overrides the `@range` camera uniforms for that frame
+— omit it to keep knob/LFO/automation camera control. Returning `nil` or
+an empty table `{}` skips the draw this frame — handy for gating on
+`ctx.audio.kick > 0.5`.
 
 The Lua sandbox exposes the standard `math`, `table`, `string`, and
 `utf8` libraries. `io`, `os`, `package`, and `debug` are intentionally

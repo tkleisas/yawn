@@ -23,16 +23,10 @@ namespace {
 
 // ── Shader source ─────────────────────────────────────────────────────────
 //
-// Minimal lit material: Lambert + ambient. Per-vertex world transform so
-// we can apply the user's Transform on top of the mesh's baked-in
-// hierarchy transform without re-uploading the VBO.
+// Lambert + ambient, plus per-instance tint / emissive / opacity so scene
+// scripts can colour and glow individual instances. Full PBR / normal-map
+// material support lands in a later phase.
 
-// Vertex shader supports both static (uIsSkinned=0) and skinned
-// (uIsSkinned=1) meshes. For skinned meshes, aPos/aNormal are in
-// mesh-LOCAL space and the joint-matrix blend places the vertex where
-// the animation wants it; the outer uMVP then handles camera + user
-// transform on top. Static meshes have their hierarchy already baked
-// into aPos and skip the joint blend entirely.
 constexpr const char* kVertexSrc =
     "#version 330 core\n"
     "layout(location=0) in vec3  aPos;\n"
@@ -72,25 +66,27 @@ constexpr const char* kFragmentSrc =
     "uniform int uHasTex;\n"
     "uniform vec3 uLightDir;\n"
     "uniform vec3 uAmbient;\n"
+    "uniform vec3 uInstanceColor;\n"
+    "uniform float uInstanceEmissive;\n"
+    "uniform float uInstanceOpacity;\n"
     "out vec4 fragColor;\n"
     "void main() {\n"
     "    vec3 n = normalize(vWorldNormal);\n"
     "    float diff = max(dot(n, -normalize(uLightDir)), 0.0);\n"
     "    vec4 base = uBaseColor;\n"
     "    if (uHasTex != 0) base *= texture(uBaseTex, vUV);\n"
-    "    vec3 col = base.rgb * (diff + uAmbient);\n"
-    "    fragColor = vec4(col, base.a);\n"
+    "    vec3 tinted = base.rgb * uInstanceColor;\n"
+    "    vec3 lit  = tinted * (diff + uAmbient);\n"
+    "    vec3 glow = tinted * uInstanceEmissive;\n"
+    "    fragColor = vec4(lit + glow, base.a * uInstanceOpacity);\n"
     "}\n";
 
 // ── Animation helpers ─────────────────────────────────────────────────────
 
-// Spherical linear interpolation between unit quaternions. Falls back
-// to nlerp on near-parallel pairs where sinθ is ill-conditioned.
 void slerpQuat(const float a[4], const float b[4], float t, float out[4]) {
     float ax = a[0], ay = a[1], az = a[2], aw = a[3];
     float bx = b[0], by = b[1], bz = b[2], bw = b[3];
     float dot = ax * bx + ay * by + az * bz + aw * bw;
-    // Shortest-arc correction.
     if (dot < 0.0f) { bx = -bx; by = -by; bz = -bz; bw = -bw; dot = -dot; }
     if (dot > 0.9995f) {
         out[0] = ax + t * (bx - ax);
@@ -112,9 +108,6 @@ void slerpQuat(const float a[4], const float b[4], float t, float out[4]) {
     if (len > 1e-6f) { out[0]/=len; out[1]/=len; out[2]/=len; out[3]/=len; }
 }
 
-// Find the two keyframes bracketing `t` inside a sampler's input
-// array. Returns { lo, hi, alpha } where alpha is the interpolation
-// factor in [0,1]. Edge-clamps to the endpoints outside the range.
 struct BracketResult { int lo, hi; float alpha; };
 BracketResult bracketKeyframes(const std::vector<float>& times, float t) {
     BracketResult r{0, 0, 0.0f};
@@ -124,8 +117,6 @@ BracketResult bracketKeyframes(const std::vector<float>& times, float t) {
         r.lo = r.hi = static_cast<int>(times.size()) - 1;
         return r;
     }
-    // Linear search — keyframe counts per channel are typically small
-    // (tens), so binary-search overhead isn't worth it.
     for (size_t i = 1; i < times.size(); ++i) {
         if (t < times[i]) {
             r.lo = static_cast<int>(i - 1);
@@ -180,8 +171,8 @@ GLuint linkProgram(GLuint vs, GLuint fs) {
 M3DRenderer::~M3DRenderer() { clear(); }
 
 void M3DRenderer::clear() {
-    destroyMeshes();
-    destroyTextures();
+    for (auto& m : m_models) destroyModel(m);
+    m_models.clear();
     destroyProgram();
     destroyFBO();
 }
@@ -189,31 +180,22 @@ void M3DRenderer::clear() {
 void M3DRenderer::destroyProgram() {
     if (m_program) { glDeleteProgram(m_program); m_program = 0; }
     m_locMVP = m_locModel = m_locBaseColor = m_locBaseTex =
-        m_locHasTex = m_locLightDir = m_locAmbient = -1;
+        m_locHasTex = m_locLightDir = m_locAmbient = m_locIsSkinned =
+        m_locJointMats = m_locInstColor = m_locInstEmissive =
+        m_locInstOpacity = -1;
 }
 
-void M3DRenderer::destroyMeshes() {
-    for (auto& m : m_meshes) {
-        if (m.vao) glDeleteVertexArrays(1, &m.vao);
-        if (m.vbo) glDeleteBuffers(1, &m.vbo);
-        if (m.ebo) glDeleteBuffers(1, &m.ebo);
+void M3DRenderer::destroyModel(Model& m) {
+    for (auto& gm : m.meshes) {
+        if (gm.vao) glDeleteVertexArrays(1, &gm.vao);
+        if (gm.vbo) glDeleteBuffers(1, &gm.vbo);
+        if (gm.ebo) glDeleteBuffers(1, &gm.ebo);
     }
-    m_meshes.clear();
-    m_materials.clear();
-    m_nodes.clear();
-    m_skins.clear();
-    m_animations.clear();
-    m_pose.clear();
-    m_jointMatrices.clear();
-    m_activeClip = -1;
-}
-
-void M3DRenderer::destroyTextures() {
-    if (!m_textures.empty()) {
-        glDeleteTextures(static_cast<GLsizei>(m_textures.size()),
-                          m_textures.data());
-        m_textures.clear();
+    if (!m.textures.empty()) {
+        glDeleteTextures(static_cast<GLsizei>(m.textures.size()),
+                          m.textures.data());
     }
+    m = Model{};
 }
 
 void M3DRenderer::destroyFBO() {
@@ -223,7 +205,6 @@ void M3DRenderer::destroyFBO() {
 }
 
 bool M3DRenderer::init() {
-    // Shader.
     GLuint vs = compileShader(GL_VERTEX_SHADER,   kVertexSrc,   "M3D vs");
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, kFragmentSrc, "M3D fs");
     if (!vs || !fs) {
@@ -236,21 +217,21 @@ bool M3DRenderer::init() {
     glDeleteShader(fs);
     if (!m_program) return false;
 
-    m_locMVP       = glGetUniformLocation(m_program, "uMVP");
-    m_locModel     = glGetUniformLocation(m_program, "uModel");
-    m_locBaseColor = glGetUniformLocation(m_program, "uBaseColor");
-    m_locBaseTex   = glGetUniformLocation(m_program, "uBaseTex");
-    m_locHasTex    = glGetUniformLocation(m_program, "uHasTex");
-    m_locLightDir  = glGetUniformLocation(m_program, "uLightDir");
-    m_locAmbient   = glGetUniformLocation(m_program, "uAmbient");
-    m_locIsSkinned = glGetUniformLocation(m_program, "uIsSkinned");
-    m_locJointMats = glGetUniformLocation(m_program, "uJointMatrices[0]");
+    m_locMVP          = glGetUniformLocation(m_program, "uMVP");
+    m_locModel        = glGetUniformLocation(m_program, "uModel");
+    m_locBaseColor    = glGetUniformLocation(m_program, "uBaseColor");
+    m_locBaseTex      = glGetUniformLocation(m_program, "uBaseTex");
+    m_locHasTex       = glGetUniformLocation(m_program, "uHasTex");
+    m_locLightDir     = glGetUniformLocation(m_program, "uLightDir");
+    m_locAmbient      = glGetUniformLocation(m_program, "uAmbient");
+    m_locIsSkinned    = glGetUniformLocation(m_program, "uIsSkinned");
+    m_locInstColor    = glGetUniformLocation(m_program, "uInstanceColor");
+    m_locInstEmissive = glGetUniformLocation(m_program, "uInstanceEmissive");
+    m_locInstOpacity  = glGetUniformLocation(m_program, "uInstanceOpacity");
+    m_locJointMats    = glGetUniformLocation(m_program, "uJointMatrices[0]");
     if (m_locJointMats < 0) m_locJointMats =
         glGetUniformLocation(m_program, "uJointMatrices");
 
-    // FBO with color + depth attachments. Depth as a renderbuffer (we
-    // never sample it), color as a texture so the outer shader pipeline
-    // can bind it as iChannel2.
     glGenTextures(1, &m_colorTex);
     glBindTexture(GL_TEXTURE_2D, m_colorTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kWidth, kHeight, 0,
@@ -284,15 +265,10 @@ bool M3DRenderer::init() {
 
 // ── Model upload ──────────────────────────────────────────────────────────
 
-void M3DRenderer::setModel(const M3DModel& model) {
-    destroyMeshes();
-    destroyTextures();
+void M3DRenderer::uploadModel(const M3DModel& model, Model& dst) {
     if (!model.isValid()) return;
 
-    // Textures — plain RGBA8, linear filtering, clamped. Mipmaps skipped
-    // to keep upload cheap; re-enable later if we hit aliasing issues on
-    // minified glyphs.
-    m_textures.resize(model.textureCount(), 0);
+    dst.textures.resize(model.textureCount(), 0);
     for (int i = 0; i < model.textureCount(); ++i) {
         const auto& t = model.texture(i);
         if (t.width <= 0 || t.height <= 0 || t.rgba.empty()) continue;
@@ -305,64 +281,50 @@ void M3DRenderer::setModel(const M3DModel& model) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        m_textures[i] = tex;
+        dst.textures[i] = tex;
     }
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    // Materials.
-    m_materials.resize(model.materialCount());
+    dst.materials.resize(model.materialCount());
     for (int i = 0; i < model.materialCount(); ++i) {
         const auto& m = model.material(i);
-        for (int c = 0; c < 4; ++c) m_materials[i].baseColor[c] = m.baseColorFactor[c];
-        m_materials[i].texture = m.baseColorTexture;
+        for (int c = 0; c < 4; ++c) dst.materials[i].baseColor[c] = m.baseColorFactor[c];
+        dst.materials[i].texture = m.baseColorTexture;
     }
 
-    // Meshes — upload each to its own VAO/VBO/EBO.
-    m_meshes.resize(model.meshCount());
+    dst.meshes.resize(model.meshCount());
     for (int i = 0; i < model.meshCount(); ++i) {
         const auto& src = model.mesh(i);
-        auto& gm = m_meshes[i];
+        auto& gm = dst.meshes[i];
 
         glGenVertexArrays(1, &gm.vao);
         glBindVertexArray(gm.vao);
-
         glGenBuffers(1, &gm.vbo);
         glBindBuffer(GL_ARRAY_BUFFER, gm.vbo);
         glBufferData(GL_ARRAY_BUFFER,
                       static_cast<GLsizeiptr>(src.vertices.size() * sizeof(M3DVertex)),
                       src.vertices.data(), GL_STATIC_DRAW);
-
         glGenBuffers(1, &gm.ebo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gm.ebo);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                       static_cast<GLsizeiptr>(src.indices.size() * sizeof(uint32_t)),
                       src.indices.data(), GL_STATIC_DRAW);
 
-        // pos
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-                                sizeof(M3DVertex),
-                                reinterpret_cast<void*>(offsetof(M3DVertex, px)));
-        // normal
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(M3DVertex),
+                              reinterpret_cast<void*>(offsetof(M3DVertex, px)));
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
-                                sizeof(M3DVertex),
-                                reinterpret_cast<void*>(offsetof(M3DVertex, nx)));
-        // uv
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(M3DVertex),
+                              reinterpret_cast<void*>(offsetof(M3DVertex, nx)));
         glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE,
-                                sizeof(M3DVertex),
-                                reinterpret_cast<void*>(offsetof(M3DVertex, u)));
-        // joints (uvec4) — integer attribute, bound with IPointer.
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(M3DVertex),
+                              reinterpret_cast<void*>(offsetof(M3DVertex, u)));
         glEnableVertexAttribArray(3);
-        glVertexAttribIPointer(3, 4, GL_UNSIGNED_SHORT,
-                                sizeof(M3DVertex),
-                                reinterpret_cast<void*>(offsetof(M3DVertex, joints)));
-        // weights (vec4)
+        glVertexAttribIPointer(3, 4, GL_UNSIGNED_SHORT, sizeof(M3DVertex),
+                               reinterpret_cast<void*>(offsetof(M3DVertex, joints)));
         glEnableVertexAttribArray(4);
-        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE,
-                                sizeof(M3DVertex),
-                                reinterpret_cast<void*>(offsetof(M3DVertex, weights)));
+        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(M3DVertex),
+                              reinterpret_cast<void*>(offsetof(M3DVertex, weights)));
 
         gm.indexCount    = static_cast<GLsizei>(src.indices.size());
         gm.materialIndex = src.materialIndex;
@@ -373,89 +335,108 @@ void M3DRenderer::setModel(const M3DModel& model) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
-    // Copy skeletal data CPU-side so beginFrame() can evaluate the
-    // animation and refresh joint matrices each tick. The M3DModel
-    // itself is discarded after setModel() — everything the renderer
-    // needs per-frame lives here.
-    m_nodes.assign(model.nodeCount(), M3DNode{});
-    for (int i = 0; i < model.nodeCount(); ++i) m_nodes[i] = model.node(i);
-    m_skins.assign(model.skinCount(), M3DSkin{});
-    for (int i = 0; i < model.skinCount(); ++i) m_skins[i] = model.skin(i);
-    m_animations.assign(model.animationCount(), M3DAnimation{});
+    dst.nodes.assign(model.nodeCount(), M3DNode{});
+    for (int i = 0; i < model.nodeCount(); ++i) dst.nodes[i] = model.node(i);
+    dst.skins.assign(model.skinCount(), M3DSkin{});
+    for (int i = 0; i < model.skinCount(); ++i) dst.skins[i] = model.skin(i);
+    dst.animations.assign(model.animationCount(), M3DAnimation{});
     for (int i = 0; i < model.animationCount(); ++i)
-        m_animations[i] = model.animation(i);
+        dst.animations[i] = model.animation(i);
 
-    // Seed the pose from each node's base TRS.
-    m_pose.assign(m_nodes.size(), NodePose{});
-    for (size_t i = 0; i < m_nodes.size(); ++i) {
-        for (int k = 0; k < 3; ++k) m_pose[i].translation[k] = m_nodes[i].translation[k];
-        for (int k = 0; k < 4; ++k) m_pose[i].rotation[k]    = m_nodes[i].rotation[k];
-        for (int k = 0; k < 3; ++k) m_pose[i].scale[k]       = m_nodes[i].scale[k];
+    dst.pose.assign(dst.nodes.size(), NodePose{});
+    for (size_t i = 0; i < dst.nodes.size(); ++i) {
+        for (int k = 0; k < 3; ++k) dst.pose[i].translation[k] = dst.nodes[i].translation[k];
+        for (int k = 0; k < 4; ++k) dst.pose[i].rotation[k]    = dst.nodes[i].rotation[k];
+        for (int k = 0; k < 3; ++k) dst.pose[i].scale[k]       = dst.nodes[i].scale[k];
     }
+    dst.jointMatrices.assign(dst.skins.size(),
+                             std::vector<m3d::Mat4>(kMaxJoints, m3d::identity()));
+    dst.activeClip = dst.animations.empty() ? -1 : 0;
+    dst.evalClip = -2;
+    dst.evalTime = -1e30f;
 
-    // Joint-matrix scratch: one per skin, kMaxJoints entries each
-    // (the shader's uniform array is fixed-size; unused trailing
-    // entries stay at identity).
-    m_jointMatrices.assign(m_skins.size(),
-                            std::vector<m3d::Mat4>(kMaxJoints, m3d::identity()));
-    m_activeClip = m_animations.empty() ? -1 : 0;
-
-    // Normalize: center the model at origin, then scale so the largest
-    // single-axis half-extent fits with a small margin inside the
-    // camera's visible half-height at z=0. A bounding-sphere fit would
-    // be conservative and leave a boxy model (like a duck) at ~60% of
-    // the frame; fitting to the largest half-extent instead gets us to
-    // ~90%, which reads as "full-frame" for most content.
+    // Normalize: centre at origin and scale the largest half-extent to
+    // ~90% of the auto-camera's visible half-height. Each model is fit
+    // independently so a scene script composes unit-sized pieces.
     const auto& b = model.bounds();
     if (b.valid) {
-        m_autoOffset[0] = -0.5f * (b.minCoord[0] + b.maxCoord[0]);
-        m_autoOffset[1] = -0.5f * (b.minCoord[1] + b.maxCoord[1]);
-        m_autoOffset[2] = -0.5f * (b.minCoord[2] + b.maxCoord[2]);
+        dst.autoOffset[0] = -0.5f * (b.minCoord[0] + b.maxCoord[0]);
+        dst.autoOffset[1] = -0.5f * (b.minCoord[1] + b.maxCoord[1]);
+        dst.autoOffset[2] = -0.5f * (b.minCoord[2] + b.maxCoord[2]);
         float hx = 0.5f * (b.maxCoord[0] - b.minCoord[0]);
         float hy = 0.5f * (b.maxCoord[1] - b.minCoord[1]);
         float hz = 0.5f * (b.maxCoord[2] - b.minCoord[2]);
         float maxHalf = std::max(hx, std::max(hy, hz));
         if (maxHalf < 1e-6f) maxHalf = 1.0f;
-        // Camera at z=2.5, FOV 45° → visible half-height ≈ 1.036. Scale
-        // the model so its largest axis reaches ~90% of that (0.93).
-        m_autoScale = 0.93f / maxHalf;
+        dst.autoScale = 0.93f / maxHalf;
     } else {
-        m_autoOffset[0] = m_autoOffset[1] = m_autoOffset[2] = 0.0f;
-        m_autoScale = 1.0f;
+        dst.autoOffset[0] = dst.autoOffset[1] = dst.autoOffset[2] = 0.0f;
+        dst.autoScale = 1.0f;
     }
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────
+void M3DRenderer::setModels(const std::vector<M3DModel>& models) {
+    for (auto& m : m_models) destroyModel(m);
+    m_models.clear();
+    m_models.reserve(models.size());
+    for (const auto& src : models) {
+        Model m;
+        uploadModel(src, m);
+        m_models.push_back(std::move(m));
+    }
+}
 
-void M3DRenderer::render(const Transform& xf) {
-    beginFrame(0.0f);
-    drawInstance(xf);
-    endFrame();
+void M3DRenderer::setModel(const M3DModel& model) {
+    std::vector<M3DModel> one;
+    one.push_back(model);   // copy — M3DModel is copyable
+    setModels(one);
+}
+
+bool M3DRenderer::hasModel() const {
+    return !m_models.empty() && !m_models[0].meshes.empty();
 }
 
 void M3DRenderer::setAnimationClip(int index) {
-    if (index < 0 || index >= static_cast<int>(m_animations.size())) {
-        m_activeClip = -1;
-        return;
-    }
-    m_activeClip = index;
+    if (m_models.empty()) return;
+    auto& m = m_models[0];
+    m.activeClip = (index < 0 || index >= static_cast<int>(m.animations.size()))
+                   ? -1 : index;
+    m.evalClip = -2;   // force re-eval
+}
+int M3DRenderer::animationClip() const {
+    return m_models.empty() ? -1 : m_models[0].activeClip;
+}
+int M3DRenderer::animationCount() const {
+    return m_models.empty() ? 0 : static_cast<int>(m_models[0].animations.size());
+}
+const std::string& M3DRenderer::animationName(int i) const {
+    static const std::string kEmpty;
+    if (m_models.empty() || i < 0 ||
+        i >= static_cast<int>(m_models[0].animations.size())) return kEmpty;
+    return m_models[0].animations[i].name;
+}
+float M3DRenderer::animationDuration(int i) const {
+    if (m_models.empty() || i < 0 ||
+        i >= static_cast<int>(m_models[0].animations.size())) return 0.0f;
+    return m_models[0].animations[i].duration;
 }
 
-void M3DRenderer::beginFrame(float animTime) {
-    if (!m_fbo || !m_program || m_meshes.empty()) return;
+// ── Pose evaluation ─────────────────────────────────────────────────────────
 
-    // ── Evaluate the active animation (if any) ─────────────────────────
-    // Reset pose to the base TRS so sampler evaluation is idempotent
-    // across re-runs with the same time.
-    for (size_t i = 0; i < m_pose.size(); ++i) {
-        for (int k = 0; k < 3; ++k) m_pose[i].translation[k] = m_nodes[i].translation[k];
-        for (int k = 0; k < 4; ++k) m_pose[i].rotation[k]    = m_nodes[i].rotation[k];
-        for (int k = 0; k < 3; ++k) m_pose[i].scale[k]       = m_nodes[i].scale[k];
+void M3DRenderer::evaluatePose(Model& m, int clip, float animTime) {
+    if (m.evalClip == clip && m.evalTime == animTime) return;   // cache hit
+    m.evalClip = clip;
+    m.evalTime = animTime;
+
+    // Reset pose to the base TRS (idempotent sampler evaluation).
+    for (size_t i = 0; i < m.pose.size(); ++i) {
+        for (int k = 0; k < 3; ++k) m.pose[i].translation[k] = m.nodes[i].translation[k];
+        for (int k = 0; k < 4; ++k) m.pose[i].rotation[k]    = m.nodes[i].rotation[k];
+        for (int k = 0; k < 3; ++k) m.pose[i].scale[k]       = m.nodes[i].scale[k];
     }
 
-    if (m_activeClip >= 0 &&
-        m_activeClip < static_cast<int>(m_animations.size())) {
-        const auto& anim = m_animations[m_activeClip];
+    if (clip >= 0 && clip < static_cast<int>(m.animations.size())) {
+        const auto& anim = m.animations[clip];
         float clipTime = animTime;
         if (anim.duration > 0.0f) {
             clipTime = std::fmod(animTime, anim.duration);
@@ -463,21 +444,14 @@ void M3DRenderer::beginFrame(float animTime) {
         }
         for (const auto& ch : anim.channels) {
             if (ch.targetNode < 0 ||
-                ch.targetNode >= static_cast<int>(m_pose.size())) continue;
+                ch.targetNode >= static_cast<int>(m.pose.size())) continue;
             if (ch.samplerIndex < 0 ||
                 ch.samplerIndex >= static_cast<int>(anim.samplers.size())) continue;
             const auto& s = anim.samplers[ch.samplerIndex];
             if (s.inputTimes.empty()) continue;
-
             auto br = bracketKeyframes(s.inputTimes, clipTime);
-
-            // Step and CubicSpline interpolation: for the MVP we treat
-            // Step as "use lo frame" and CubicSpline as Linear (full
-            // cubicspline support deferred — it's rare in hand-exported
-            // assets and the read would need to account for in/out
-            // tangents stored alongside values).
             using Interp = M3DAnimationSampler::Interpolation;
-            auto& pose = m_pose[ch.targetNode];
+            auto& pose = m.pose[ch.targetNode];
             switch (ch.path) {
                 case M3DAnimationChannel::Path::Translation: {
                     const float* lo = s.outputValues.data() + br.lo * 3;
@@ -506,25 +480,18 @@ void M3DRenderer::beginFrame(float animTime) {
                     break;
                 }
                 case M3DAnimationChannel::Path::Weights:
-                    // Morph target weights not consumed yet (deferred).
                     break;
             }
         }
     }
 
-    // ── Propagate the pose to world matrices via the node tree ─────────
-    // Build a parent-index array from children relationships so we can
-    // walk roots-first. We mark "unprocessed" as -2; nodes with no
-    // parent keep -1.
+    // Propagate pose → world matrices via the node tree.
     static thread_local std::vector<int> parent;
-    parent.assign(m_nodes.size(), -1);
-    for (size_t i = 0; i < m_nodes.size(); ++i) {
-        for (int c : m_nodes[i].children) {
-            if (c >= 0 && c < static_cast<int>(m_nodes.size())) {
+    parent.assign(m.nodes.size(), -1);
+    for (size_t i = 0; i < m.nodes.size(); ++i)
+        for (int c : m.nodes[i].children)
+            if (c >= 0 && c < static_cast<int>(m.nodes.size()))
                 parent[c] = static_cast<int>(i);
-            }
-        }
-    }
 
     auto localFromPose = [](const NodePose& p) {
         Mat4 T = translation(p.translation[0], p.translation[1], p.translation[2]);
@@ -534,119 +501,131 @@ void M3DRenderer::beginFrame(float animTime) {
         return multiply(T, multiply(R, S));
     };
 
-    // Simple topo walk: keep iterating until every node's world has
-    // been set. Bounded by hierarchy depth × node count in the worst
-    // case — fine for typical character rigs (<100 joints, depth ~10).
     static thread_local std::vector<char> done;
-    done.assign(m_nodes.size(), 0);
+    done.assign(m.nodes.size(), 0);
     bool progress = true;
     while (progress) {
         progress = false;
-        for (size_t i = 0; i < m_nodes.size(); ++i) {
+        for (size_t i = 0; i < m.nodes.size(); ++i) {
             if (done[i]) continue;
             int p = parent[i];
             if (p < 0) {
-                m_pose[i].world = localFromPose(m_pose[i]);
-                done[i] = 1;
-                progress = true;
+                m.pose[i].world = localFromPose(m.pose[i]);
+                done[i] = 1; progress = true;
             } else if (done[p]) {
-                m_pose[i].world = multiply(m_pose[p].world, localFromPose(m_pose[i]));
-                done[i] = 1;
-                progress = true;
+                m.pose[i].world = multiply(m.pose[p].world, localFromPose(m.pose[i]));
+                done[i] = 1; progress = true;
             }
         }
     }
 
-    // ── Build joint matrices per skin ──────────────────────────────────
-    for (size_t si = 0; si < m_skins.size(); ++si) {
-        const auto& skin = m_skins[si];
-        auto& mats = m_jointMatrices[si];
+    for (size_t si = 0; si < m.skins.size(); ++si) {
+        const auto& skin = m.skins[si];
+        auto& mats = m.jointMatrices[si];
         for (size_t j = 0; j < skin.joints.size() && j < kMaxJoints; ++j) {
             int node = skin.joints[j];
-            if (node < 0 || node >= static_cast<int>(m_pose.size())) {
+            if (node < 0 || node >= static_cast<int>(m.pose.size())) {
                 mats[j] = m3d::identity();
                 continue;
             }
-            // jointMatrix = jointWorld · inverseBindMatrix
-            // (the mesh vertices are in bind-space; the IBM takes them
-            // back to the joint's bind-pose local, and jointWorld
-            // places them in the joint's animated world position.)
             const auto& ibm = skin.inverseBindMatrices[j];
             Mat4 ibmMat;
             for (int k = 0; k < 16; ++k) ibmMat[k] = ibm[k];
-            mats[j] = multiply(m_pose[node].world, ibmMat);
+            mats[j] = multiply(m.pose[node].world, ibmMat);
         }
     }
+}
 
-    // ── GL state for this frame ────────────────────────────────────────
+// ── Rendering ─────────────────────────────────────────────────────────────
+
+void M3DRenderer::render(const M3DInstance& inst) {
+    beginFrame(0.0f);
+    drawInstance(inst);
+    endFrame();
+}
+
+void M3DRenderer::beginFrame(float animTime, const M3DCamera& cam) {
+    if (!m_fbo || !m_program || m_models.empty()) return;
+    m_frameAnimTime = animTime;
+
+    // Camera → view/projection.
+    Mat4 view, proj;
+    const float aspect = static_cast<float>(kWidth) / kHeight;
+    if (cam.explicitCam) {
+        // Guard a degenerate look direction (camera on the up axis).
+        float dir[3] = { cam.target[0] - cam.pos[0],
+                         cam.target[1] - cam.pos[1],
+                         cam.target[2] - cam.pos[2] };
+        float dl = std::sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+        float upx = 0.0f, upy = 1.0f, upz = 0.0f;
+        if (dl > 1e-6f) {
+            float c = std::fabs(dir[1] / dl);
+            if (c > 0.999f) { upx = 0.0f; upy = 0.0f; upz = 1.0f; }
+        }
+        float fov = (cam.fov > 1.0f && cam.fov < 179.0f) ? cam.fov : 50.0f;
+        view = lookAt(cam.pos[0], cam.pos[1], cam.pos[2],
+                      cam.target[0], cam.target[1], cam.target[2], upx, upy, upz);
+        proj = perspective(fov * 3.14159265f / 180.0f, aspect, 0.05f, 200.0f);
+    } else {
+        view = lookAt(0.0f, 0.0f, 2.5f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        proj = perspective(45.0f * 3.14159265f / 180.0f, aspect, 0.1f, 100.0f);
+    }
+    m_viewProj = multiply(proj, view);
+
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
     glViewport(0, 0, kWidth, kHeight);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(m_program);
-
-    // Light: angled from the upper-front-right. World space. Set once
-    // per frame — scene instances share the same lighting rig.
-    if (m_locLightDir >= 0)
-        glUniform3f(m_locLightDir, -0.5f, -0.7f, -0.5f);
-    if (m_locAmbient >= 0)
-        glUniform3f(m_locAmbient, 0.2f, 0.2f, 0.22f);
+    if (m_locLightDir >= 0) glUniform3f(m_locLightDir, -0.5f, -0.7f, -0.5f);
+    if (m_locAmbient  >= 0) glUniform3f(m_locAmbient,   0.2f,  0.2f,  0.22f);
 }
 
-void M3DRenderer::drawInstance(const Transform& xf) {
-    if (!m_fbo || !m_program || m_meshes.empty()) return;
+void M3DRenderer::drawInstance(const M3DInstance& inst) {
+    if (!m_fbo || !m_program || m_models.empty()) return;
 
-    // Composite model matrix:
-    //   1. Normalization:   translate by m_autoOffset, then scale by m_autoScale
-    //                        (puts the model centred at origin, fit to ~unit).
-    //   2. User transform:  T · R · uniformScale on top.
+    int mi = inst.model;
+    if (mi < 0 || mi >= static_cast<int>(m_models.size())) mi = 0;
+    Model& mdl = m_models[mi];
+    if (mdl.meshes.empty()) return;
+
+    const int   clip = (inst.animClip >= 0) ? inst.animClip : mdl.activeClip;
+    const float at   = (inst.animTime >= 0.0f) ? inst.animTime : m_frameAnimTime;
+    evaluatePose(mdl, clip, at);
+
     Mat4 normMat = multiply(
-        scale(m_autoScale, m_autoScale, m_autoScale),
-        translation(m_autoOffset[0], m_autoOffset[1], m_autoOffset[2]));
+        scale(mdl.autoScale, mdl.autoScale, mdl.autoScale),
+        translation(mdl.autoOffset[0], mdl.autoOffset[1], mdl.autoOffset[2]));
     Mat4 userT = multiply(
-        translation(xf.position[0], xf.position[1], xf.position[2]),
+        translation(inst.position[0], inst.position[1], inst.position[2]),
         multiply(
-            eulerXYZDegrees(xf.rotationDeg[0], xf.rotationDeg[1], xf.rotationDeg[2]),
-            scale(xf.scale, xf.scale, xf.scale)));
+            eulerXYZDegrees(inst.rotationDeg[0], inst.rotationDeg[1], inst.rotationDeg[2]),
+            scale(inst.scale * inst.scale3[0],
+                  inst.scale * inst.scale3[1],
+                  inst.scale * inst.scale3[2])));
     Mat4 outerModel = multiply(userT, normMat);
 
-    // Fixed camera at (0, 0, 2.5) looking at origin — works for any
-    // normalized model under 45° FOV with a comfortable margin.
-    Mat4 view = lookAt(0.0f, 0.0f, 2.5f,
-                        0.0f, 0.0f, 0.0f,
-                        0.0f, 1.0f, 0.0f);
-    Mat4 proj = perspective(45.0f * 3.14159265f / 180.0f,
-                              static_cast<float>(kWidth) / kHeight,
-                              0.1f, 100.0f);
-    Mat4 viewProj = multiply(proj, view);
+    if (m_locInstColor >= 0)
+        glUniform3f(m_locInstColor, inst.color[0], inst.color[1], inst.color[2]);
+    if (m_locInstEmissive >= 0) glUniform1f(m_locInstEmissive, inst.emissive);
+    if (m_locInstOpacity  >= 0) glUniform1f(m_locInstOpacity,  inst.opacity);
 
-    for (const auto& gm : m_meshes) {
-        // Static meshes had their hierarchy baked into vertices at
-        // load time, so the outer transform is all we layer on. Skinned
-        // meshes also use outerModel as the rigid outer positioning;
-        // the skinning blend in the vertex shader deals with the
-        // hierarchy internally via the uploaded joint matrices.
+    for (const auto& gm : mdl.meshes) {
         Mat4 model = outerModel;
-        Mat4 mvp   = multiply(viewProj, model);
+        Mat4 mvp   = multiply(m_viewProj, model);
+        if (m_locModel >= 0) glUniformMatrix4fv(m_locModel, 1, GL_FALSE, model.data());
+        if (m_locMVP   >= 0) glUniformMatrix4fv(m_locMVP,   1, GL_FALSE, mvp.data());
 
-        if (m_locModel >= 0)
-            glUniformMatrix4fv(m_locModel, 1, GL_FALSE, model.data());
-        if (m_locMVP >= 0)
-            glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, mvp.data());
-
-        // Skinning pathway: upload the mesh's skin's joint matrices
-        // and flag the shader. Skin index -1 = static mesh.
         const bool skinned = (gm.skinIndex >= 0 &&
-                               gm.skinIndex < static_cast<int>(m_jointMatrices.size()));
-        if (m_locIsSkinned >= 0)
-            glUniform1i(m_locIsSkinned, skinned ? 1 : 0);
+                              gm.skinIndex < static_cast<int>(mdl.jointMatrices.size()));
+        if (m_locIsSkinned >= 0) glUniform1i(m_locIsSkinned, skinned ? 1 : 0);
         if (skinned && m_locJointMats >= 0) {
-            const auto& mats = m_jointMatrices[gm.skinIndex];
-            // glUniformMatrix4fv can take an array stride directly —
-            // the Mat4 contract (std::array<float,16>) is contiguous.
+            const auto& mats = mdl.jointMatrices[gm.skinIndex];
             glUniformMatrix4fv(m_locJointMats, kMaxJoints, GL_FALSE,
                                 reinterpret_cast<const float*>(mats.data()));
         }
@@ -654,18 +633,16 @@ void M3DRenderer::drawInstance(const Transform& xf) {
         float baseColor[4] = { 1, 1, 1, 1 };
         int   texIdx       = -1;
         if (gm.materialIndex >= 0 &&
-            gm.materialIndex < static_cast<int>(m_materials.size())) {
-            const auto& m = m_materials[gm.materialIndex];
+            gm.materialIndex < static_cast<int>(mdl.materials.size())) {
+            const auto& m = mdl.materials[gm.materialIndex];
             std::memcpy(baseColor, m.baseColor, sizeof(baseColor));
             texIdx = m.texture;
         }
-        if (m_locBaseColor >= 0)
-            glUniform4fv(m_locBaseColor, 1, baseColor);
+        if (m_locBaseColor >= 0) glUniform4fv(m_locBaseColor, 1, baseColor);
 
         GLuint boundTex = 0;
-        if (texIdx >= 0 && texIdx < static_cast<int>(m_textures.size())) {
-            boundTex = m_textures[texIdx];
-        }
+        if (texIdx >= 0 && texIdx < static_cast<int>(mdl.textures.size()))
+            boundTex = mdl.textures[texIdx];
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, boundTex);
         if (m_locBaseTex >= 0) glUniform1i(m_locBaseTex, 0);
@@ -680,6 +657,7 @@ void M3DRenderer::endFrame() {
     glBindVertexArray(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
 }
 
 } // namespace visual
@@ -692,17 +670,26 @@ namespace visual {
 
 M3DRenderer::~M3DRenderer() {}
 void M3DRenderer::clear() {}
-void M3DRenderer::destroyProgram()  {}
-void M3DRenderer::destroyMeshes()   {}
-void M3DRenderer::destroyTextures() {}
-void M3DRenderer::destroyFBO()      {}
+void M3DRenderer::destroyProgram() {}
+void M3DRenderer::destroyFBO()     {}
+void M3DRenderer::destroyModel(Model&) {}
+void M3DRenderer::uploadModel(const M3DModel&, Model&) {}
+void M3DRenderer::evaluatePose(Model&, int, float) {}
 bool M3DRenderer::init() { return false; }
+void M3DRenderer::setModels(const std::vector<M3DModel>&) {}
 void M3DRenderer::setModel(const M3DModel&) {}
-void M3DRenderer::render(const Transform&) {}
-void M3DRenderer::beginFrame(float) {}
-void M3DRenderer::drawInstance(const Transform&) {}
+void M3DRenderer::render(const M3DInstance&) {}
+void M3DRenderer::beginFrame(float, const M3DCamera&) {}
+void M3DRenderer::drawInstance(const M3DInstance&) {}
 void M3DRenderer::endFrame() {}
+bool M3DRenderer::hasModel() const { return false; }
 void M3DRenderer::setAnimationClip(int) {}
+int  M3DRenderer::animationClip()  const { return -1; }
+int  M3DRenderer::animationCount() const { return 0; }
+const std::string& M3DRenderer::animationName(int) const {
+    static const std::string kEmpty; return kEmpty;
+}
+float M3DRenderer::animationDuration(int) const { return 0.0f; }
 
 } // namespace visual
 } // namespace yawn

@@ -131,7 +131,11 @@ public:
     // Attach or detach a 3D model to the layer. Mutually exclusive with
     // file video and live video — setting one tears down the others.
     // Empty path clears the model.
-    bool setLayerModel(int track, const std::string& path);
+    // `path` is the primary (resolved) model; `extraResolved` are the
+    // additional resolved model paths for a multi-model scene (index 0 in
+    // a scene script == primary, 1 == extraResolved[0], …).
+    bool setLayerModel(int track, const std::string& path,
+                       const std::vector<std::string>& extraResolved = {});
 
     // Pick the clock driving iTime / animTime / video frame advance on
     // a layer. Session-grid clips default to wall-clock (iTime starts
@@ -370,6 +374,9 @@ private:
         float        modelSpinAccum[3] = { 0.0f, 0.0f, 0.0f };
 #endif
         std::string  modelPath;
+        // Cache key for the uploaded model set (primary + extras, joined)
+        // so a re-launch with the same models skips the GL re-upload.
+        std::string  modelListKey;
         std::chrono::steady_clock::time_point videoLaunchTime =
             std::chrono::steady_clock::now();
         // Transport-locked loop: 0 = free-running. >0 = loop every N bars.

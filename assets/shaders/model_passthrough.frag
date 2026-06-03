@@ -19,6 +19,19 @@ uniform float modelSpinY;  // @range -360..360 default=0
 uniform float modelSpinZ;  // @range -360..360 default=0
 uniform float modelScale;  // @range 0.1..10 default=1
 
+// Camera. Like the model* uniforms above, these are read by the C++
+// engine (not used in GLSL here) and fed into M3DRenderer's camera.
+// fov = 0 means "auto-frame the model" (the historical behaviour); set
+// fov > 0 to switch to a free camera positioned by cameraPos*/cameraTarget*.
+// A scene script's `camera = {...}` return overrides these for that frame.
+uniform float fov;           // @range 0..120 default=0
+uniform float cameraPosX;    // @range -10..10 default=0
+uniform float cameraPosY;    // @range -10..10 default=0
+uniform float cameraPosZ;    // @range 0.5..20 default=3
+uniform float cameraTargetX; // @range -5..5 default=0
+uniform float cameraTargetY; // @range -5..5 default=0
+uniform float cameraTargetZ; // @range -5..5 default=0
+
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     fragColor = texture(iChannel2, uv);

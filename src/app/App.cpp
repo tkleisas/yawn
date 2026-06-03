@@ -1702,8 +1702,11 @@ void App::launchVisualClipData(int track,
     // either way; we skip the non-winning setters so we don't churn
     // decoder threads / uploads unnecessarily.
     if (!vc.modelPath.empty()) {
+        std::vector<std::string> extraResolved;
+        for (const auto& p : vc.extraModelPaths)
+            if (!p.empty()) extraResolved.push_back(resolveModelPath(p));
         m_visualEngine.setLayerModel(track,
-            resolveModelPath(vc.modelPath));
+            resolveModelPath(vc.modelPath), extraResolved);
         m_visualEngine.setLayerSceneScript(track,
             resolveScenePath(vc.scenePath));
     } else if (vc.liveInput && !vc.liveUrl.empty()) {
@@ -2454,8 +2457,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                                     self->m_project.track(ti).colorIndex;
                             }
                             if (self->m_project.track(ti).defaultScene == si) {
+                                std::vector<std::string> extra;
+                                for (const auto& p : s->visualClip->extraModelPaths)
+                                    if (!p.empty())
+                                        extra.push_back(self->resolveModelPath(p));
                                 self->m_visualEngine.setLayerModel(ti,
-                                    self->resolveModelPath(stored));
+                                    self->resolveModelPath(stored), extra);
                             }
                             self->markDirty();
                         },
@@ -2464,12 +2471,53 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 }));
 
             if (hasModel) {
+                // "Add Model…" — append a model to the scene's model list.
+                // A scene script selects among them by index (0 = primary).
+                items.push_back(item("Add Model…",
+                    [this, trackIndex, sceneIndex]() {
+                        m_pendingModelTrack = trackIndex;
+                        m_pendingModelScene = sceneIndex;
+                        static SDL_DialogFileFilter afilter{
+                            "3D models (.glb .gltf)", "glb;gltf"};
+                        SDL_ShowOpenFileDialog(
+                            [](void* ud, const char* const* filelist, int) {
+                                auto* self = static_cast<App*>(ud);
+                                if (!filelist || !filelist[0]) return;
+                                int ti = self->m_pendingModelTrack;
+                                int si = self->m_pendingModelScene;
+                                self->m_pendingModelTrack = -1;
+                                self->m_pendingModelScene = -1;
+                                if (ti < 0 || si < 0) return;
+                                auto* s = self->m_project.getSlot(ti, si);
+                                if (!s || !s->visualClip) return;
+                                std::string stored =
+                                    self->localizeModel(filelist[0]);
+                                if (stored.empty()) return;
+                                s->visualClip->extraModelPaths.push_back(stored);
+                                s->visualClip->extraModelSourcePaths.push_back(filelist[0]);
+                                if (self->m_project.track(ti).defaultScene == si) {
+                                    std::vector<std::string> extra;
+                                    for (const auto& p : s->visualClip->extraModelPaths)
+                                        if (!p.empty())
+                                            extra.push_back(self->resolveModelPath(p));
+                                    self->m_visualEngine.setLayerModel(ti,
+                                        self->resolveModelPath(s->visualClip->modelPath),
+                                        extra);
+                                }
+                                self->markDirty();
+                            },
+                            this, m_mainWindow.getHandle(),
+                            &afilter, 1, nullptr, false);
+                    }));
+
                 items.push_back(item("Clear Model",
                     [this, trackIndex, sceneIndex]() {
                         auto* s = m_project.getSlot(trackIndex, sceneIndex);
                         if (!s || !s->visualClip) return;
                         s->visualClip->modelPath.clear();
                         s->visualClip->modelSourcePath.clear();
+                        s->visualClip->extraModelPaths.clear();
+                        s->visualClip->extraModelSourcePaths.clear();
                         // Scene script is only meaningful with a model
                         // present — drop it too to keep state coherent.
                         s->visualClip->scenePath.clear();
@@ -2479,6 +2527,21 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         }
                         markDirty();
                     }));
+
+                if (!slot->visualClip->extraModelPaths.empty()) {
+                    items.push_back(item("Clear Extra Models",
+                        [this, trackIndex, sceneIndex]() {
+                            auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                            if (!s || !s->visualClip) return;
+                            s->visualClip->extraModelPaths.clear();
+                            s->visualClip->extraModelSourcePaths.clear();
+                            if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                                m_visualEngine.setLayerModel(trackIndex,
+                                    resolveModelPath(s->visualClip->modelPath));
+                            }
+                            markDirty();
+                        }));
+                }
             }
 
             // "Set Scene Script…" — only offered when the clip has a

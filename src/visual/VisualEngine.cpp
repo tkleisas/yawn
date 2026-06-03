@@ -1113,7 +1113,8 @@ void VisualEngine::setLayerTransportClock(int track, double clipStartBeat) {
     L.lastWallSeconds  = 0.0;
 }
 
-bool VisualEngine::setLayerModel(int track, const std::string& path) {
+bool VisualEngine::setLayerModel(int track, const std::string& path,
+                                 const std::vector<std::string>& extraResolved) {
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return false;
@@ -1130,21 +1131,41 @@ bool VisualEngine::setLayerModel(int track, const std::string& path) {
     if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
     L.liveUrl.clear();
 
-    // Same path already loaded → keep as-is (avoid churning the GL
-    // upload on every re-launch of the clip).
-    if (L.modelRenderer && L.modelPath == path && !path.empty())
+    // Cache key: the primary path plus every extra, joined. Same model
+    // set already loaded → keep as-is (avoid churning the GL upload on
+    // every re-launch of the clip).
+    std::string key = path;
+    for (const auto& e : extraResolved) { key += '\n'; key += e; }
+    if (L.modelRenderer && L.modelListKey == key && !path.empty())
         return true;
 
     if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
     L.modelPath.clear();
+    L.modelListKey.clear();
 
     if (path.empty()) return true;
 
-    M3DModel cpu;
-    if (!cpu.load(path)) {
-        LOG_WARN("Visual", "Layer %d: failed to load model %s (%s)",
-                  track, path.c_str(), cpu.error().c_str());
-        return false;
+    // Load the primary model (index 0) + any extras. A failed extra is
+    // skipped so one bad path doesn't take down the whole scene.
+    std::vector<M3DModel> models;
+    {
+        M3DModel primary;
+        if (!primary.load(path)) {
+            LOG_WARN("Visual", "Layer %d: failed to load model %s (%s)",
+                      track, path.c_str(), primary.error().c_str());
+            return false;
+        }
+        models.push_back(std::move(primary));
+    }
+    for (const auto& e : extraResolved) {
+        if (e.empty()) continue;
+        M3DModel m;
+        if (!m.load(e)) {
+            LOG_WARN("Visual", "Layer %d: failed to load extra model %s (%s)",
+                      track, e.c_str(), m.error().c_str());
+            continue;
+        }
+        models.push_back(std::move(m));
     }
 
     L.modelRenderer = std::make_unique<M3DRenderer>();
@@ -1153,8 +1174,9 @@ bool VisualEngine::setLayerModel(int track, const std::string& path) {
         L.modelRenderer.reset();
         return false;
     }
-    L.modelRenderer->setModel(cpu);
-    L.modelPath = path;
+    L.modelRenderer->setModels(models);
+    L.modelPath    = path;
+    L.modelListKey = key;
     return true;
 #else
     (void)track; (void)path;
@@ -1759,6 +1781,25 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             return fallback;
         };
 
+        // Camera from the @range uniforms. fov > 0 opts into a free
+        // camera positioned by cameraPos*/cameraTarget*; fov == 0 (the
+        // default) leaves explicitCam false → the renderer auto-frames.
+        auto cameraFromUniforms = [&]() -> M3DCamera {
+            M3DCamera cam;
+            float fov = readParam("fov", 0.0f);
+            if (fov > 0.0f) {
+                cam.explicitCam = true;
+                cam.fov       = fov;
+                cam.pos[0]    = readParam("cameraPosX", 0.0f);
+                cam.pos[1]    = readParam("cameraPosY", 0.0f);
+                cam.pos[2]    = readParam("cameraPosZ", 3.0f);
+                cam.target[0] = readParam("cameraTargetX", 0.0f);
+                cam.target[1] = readParam("cameraTargetY", 0.0f);
+                cam.target[2] = readParam("cameraTargetZ", 0.0f);
+            }
+            return cam;
+        };
+
         if (L.sceneScript) {
             L.sceneScript->pollHotReload();
             M3DSceneScript::Inputs in;
@@ -1772,11 +1813,13 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             in.kick       = audioKick;
             for (int i = 0; i < 8; ++i) in.knobs[i] = L.knobDisplayValues[i];
 
-            static thread_local std::vector<M3DTransform> instances;
+            static thread_local std::vector<M3DInstance> instances;
             instances.clear();
-            L.sceneScript->tick(in, instances);
+            M3DCamera cam = cameraFromUniforms();
+            // A camera returned by the script overrides the uniform one.
+            L.sceneScript->tick(in, instances, &cam);
 
-            L.modelRenderer->beginFrame(static_cast<float>(preWall));
+            L.modelRenderer->beginFrame(static_cast<float>(preWall), cam);
             for (const auto& inst : instances) {
                 L.modelRenderer->drawInstance(inst);
             }
@@ -1790,19 +1833,18 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             L.modelSpinAccum[1] = std::fmod(L.modelSpinAccum[1] + spinY * tDelta, 360.0f);
             L.modelSpinAccum[2] = std::fmod(L.modelSpinAccum[2] + spinZ * tDelta, 360.0f);
 
-            M3DRenderer::Transform xf;
-            xf.position[0]    = readParam("modelPosX", 0.0f);
-            xf.position[1]    = readParam("modelPosY", 0.0f);
-            xf.position[2]    = readParam("modelPosZ", 0.0f);
-            xf.rotationDeg[0] = readParam("modelRotX", 0.0f) + L.modelSpinAccum[0];
-            xf.rotationDeg[1] = readParam("modelRotY", 0.0f) + L.modelSpinAccum[1];
-            xf.rotationDeg[2] = readParam("modelRotZ", 0.0f) + L.modelSpinAccum[2];
-            xf.scale          = readParam("modelScale", 1.0f);
-            // Use the begin/draw/end form (rather than the convenience
-            // render(xf)) so wall-clock time drives skeletal animation
-            // on rigged models even without a scene script.
-            L.modelRenderer->beginFrame(static_cast<float>(preWall));
-            L.modelRenderer->drawInstance(xf);
+            M3DInstance inst;
+            inst.position[0]    = readParam("modelPosX", 0.0f);
+            inst.position[1]    = readParam("modelPosY", 0.0f);
+            inst.position[2]    = readParam("modelPosZ", 0.0f);
+            inst.rotationDeg[0] = readParam("modelRotX", 0.0f) + L.modelSpinAccum[0];
+            inst.rotationDeg[1] = readParam("modelRotY", 0.0f) + L.modelSpinAccum[1];
+            inst.rotationDeg[2] = readParam("modelRotZ", 0.0f) + L.modelSpinAccum[2];
+            inst.scale          = readParam("modelScale", 1.0f);
+            // begin/draw/end form so wall-clock time drives skeletal
+            // animation on rigged models even without a scene script.
+            L.modelRenderer->beginFrame(static_cast<float>(preWall), cameraFromUniforms());
+            L.modelRenderer->drawInstance(inst);
             L.modelRenderer->endFrame();
         }
     }

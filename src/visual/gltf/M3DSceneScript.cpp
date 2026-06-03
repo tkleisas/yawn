@@ -158,8 +158,68 @@ void M3DSceneScript::pollHotReload() {
 
 // ── tick() ────────────────────────────────────────────────────────────────
 
+namespace {
+
+// True if the table at `idx` carries any recognized instance field —
+// used to tell a single-instance shorthand ({position=...}) from an
+// empty list ({} = draw nothing).
+bool hasInstanceField(lua_State* L, int idx) {
+    static const char* kKeys[] = { "position", "rotation", "scale",
+                                   "model", "color", "emissive",
+                                   "opacity", "anim" };
+    for (const char* k : kKeys) {
+        lua_getfield(L, idx, k);
+        bool present = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        if (present) return true;
+    }
+    return false;
+}
+
+// Read one instance table (at absolute stack index `idx`) into `inst`.
+void readInstance(lua_State* L, int idx, M3DInstance& inst) {
+    float v[3] = { 0, 0, 0 };
+    if (readVec3Field(L, idx, "position", v)) {
+        inst.position[0] = v[0]; inst.position[1] = v[1]; inst.position[2] = v[2];
+    }
+    v[0] = v[1] = v[2] = 0;
+    if (readVec3Field(L, idx, "rotation", v)) {
+        inst.rotationDeg[0] = v[0]; inst.rotationDeg[1] = v[1]; inst.rotationDeg[2] = v[2];
+    }
+    // scale: a number → uniform; a table → per-axis multiplier.
+    lua_getfield(L, idx, "scale");
+    if (lua_type(L, -1) == LUA_TNUMBER) {
+        inst.scale = static_cast<float>(lua_tonumber(L, -1));
+    } else if (lua_istable(L, -1)) {
+        float s[3] = { 1, 1, 1 };
+        readVec3Field(L, idx, "scale", s);   // re-read named/indexed components
+        inst.scale3[0] = s[0]; inst.scale3[1] = s[1]; inst.scale3[2] = s[2];
+    }
+    lua_pop(L, 1);
+
+    float col[3] = { 1, 1, 1 };
+    if (readVec3Field(L, idx, "color", col)) {
+        inst.color[0] = col[0]; inst.color[1] = col[1]; inst.color[2] = col[2];
+    }
+    inst.emissive = readNumberField(L, idx, "emissive", 0.0f);
+    inst.opacity  = readNumberField(L, idx, "opacity",  1.0f);
+    inst.model    = static_cast<int>(readNumberField(L, idx, "model", 0.0f));
+
+    // anim = { clip = N, time = t } (both optional).
+    lua_getfield(L, idx, "anim");
+    if (lua_istable(L, -1)) {
+        int animIdx = lua_gettop(L);
+        inst.animClip = static_cast<int>(readNumberField(L, animIdx, "clip", -1.0f));
+        inst.animTime = readNumberField(L, animIdx, "time", -1.0f);
+    }
+    lua_pop(L, 1);
+}
+
+} // anonymous namespace
+
 bool M3DSceneScript::tick(const Inputs& in,
-                           std::vector<M3DTransform>& out) {
+                          std::vector<M3DInstance>& out,
+                          M3DCamera* outCamera) {
     out.clear();
     if (!m_L) return false;
 
@@ -172,67 +232,64 @@ bool M3DSceneScript::tick(const Inputs& in,
 
     pushContext(m_L, in);
 
-    if (lua_pcall(m_L, 1, 1, 0) != LUA_OK) {
+    // Two results: (1) the instance list, (2) optional scene options
+    // (currently just `camera`). Missing results come back as nil.
+    if (lua_pcall(m_L, 1, 2, 0) != LUA_OK) {
         m_error = lua_tostring(m_L, -1);
         LOG_WARN("M3DScene", "tick() error: %s", m_error.c_str());
         lua_pop(m_L, 1);
         return false;
     }
 
-    // Allowed returns:
-    //   (a) list of tables — drawn in order
-    //   (b) single table (treated as one-element list)
-    //   (c) nil / empty table — draw nothing
-    if (lua_isnil(m_L, -1)) {
+    const int optsIdx = lua_gettop(m_L);       // 2nd return (may be nil)
+    const int listIdx = optsIdx - 1;           // 1st return
+
+    // ── Camera (from the optional 2nd return's `camera` field) ──
+    if (outCamera && lua_istable(m_L, optsIdx)) {
+        lua_getfield(m_L, optsIdx, "camera");
+        if (lua_istable(m_L, -1)) {
+            int camIdx = lua_gettop(m_L);
+            readVec3Field(m_L, camIdx, "pos",    outCamera->pos);
+            readVec3Field(m_L, camIdx, "target", outCamera->target);
+            outCamera->fov = readNumberField(m_L, camIdx, "fov", outCamera->fov);
+            outCamera->explicitCam = true;
+        }
         lua_pop(m_L, 1);
-        return true;
     }
-    if (!lua_istable(m_L, -1)) {
+
+    // ── Instances (from the 1st return) ──
+    if (lua_isnil(m_L, listIdx)) {
+        lua_pop(m_L, 2);
+        m_error.clear();
+        return true;   // nil → draw nothing
+    }
+    if (!lua_istable(m_L, listIdx)) {
         m_error = "tick() must return a table (or list of tables)";
-        lua_pop(m_L, 1);
+        lua_pop(m_L, 2);
         return false;
     }
 
-    // Probe: is this a single transform (has numeric/table fields at
-    // keys 1..3 / position / scale / rotation) or a list of transforms?
-    // Heuristic — if index [1] is itself a table, treat as list.
-    lua_rawgeti(m_L, -1, 1);
-    bool isList = lua_istable(m_L, -1);
-    lua_pop(m_L, 1);
-
-    auto readOne = [&](int idx) {
-        M3DTransform xf;
-        // Position (defaults 0).
-        float v[3] = { 0, 0, 0 };
-        if (readVec3Field(m_L, idx, "position", v)) {
-            xf.position[0] = v[0]; xf.position[1] = v[1]; xf.position[2] = v[2];
-        }
-        // Rotation (euler XYZ degrees; defaults 0).
-        v[0] = v[1] = v[2] = 0;
-        if (readVec3Field(m_L, idx, "rotation", v)) {
-            xf.rotationDeg[0] = v[0];
-            xf.rotationDeg[1] = v[1];
-            xf.rotationDeg[2] = v[2];
-        }
-        // Scale (uniform scalar). Default 1.
-        xf.scale = readNumberField(m_L, idx, "scale", 1.0f);
-        out.push_back(xf);
-    };
-
-    if (!isList) {
-        readOne(lua_gettop(m_L));
-    } else {
-        int top = lua_gettop(m_L);
-        lua_pushnil(m_L);
-        while (lua_next(m_L, top) != 0) {
+    const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(m_L, listIdx));
+    if (n >= 1) {
+        // List form — iterate the array part in order.
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_rawgeti(m_L, listIdx, i);
             if (lua_istable(m_L, -1)) {
-                readOne(lua_gettop(m_L));
+                M3DInstance inst;
+                readInstance(m_L, lua_gettop(m_L), inst);
+                out.push_back(inst);
             }
             lua_pop(m_L, 1);
         }
+    } else if (hasInstanceField(m_L, listIdx)) {
+        // Single-instance shorthand (no array part but instance fields).
+        M3DInstance inst;
+        readInstance(m_L, listIdx, inst);
+        out.push_back(inst);
     }
-    lua_pop(m_L, 1);  // the top-level returned table
+    // else: empty table → draw nothing.
 
+    lua_pop(m_L, 2);   // list + opts
     m_error.clear();
     return true;
 }
