@@ -409,9 +409,9 @@ position / rotation / spin / scale controls.
 
 Or use the **Models** tab in the browser: it lists the bundled example
 models plus anything you drop in `~/.yawn/models3d`, and **double-click**
-assigns the model to the selected visual clip. (Live rendered thumbnails
-for each model are a planned follow-up; the list currently shows names
-with a generic 3D glyph.)
+assigns the model to the selected visual clip. Each row shows a **live
+rendered thumbnail** of the model (generated once, lazily, the first time
+the tab is shown; a generic glyph stands in until it's ready).
 
 ### Loading and localization
 

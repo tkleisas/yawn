@@ -5418,6 +5418,11 @@ bool App::init() {
         m_browserPanel->modelsTab().setLibraryDirs(dirs, /*bundledCount*/1);
         m_browserPanel->modelsTab().setOnAssign(
             [this](const std::string& absPath) { assignModelFromLibrary(absPath); });
+        // Render-time cache lookup; generation runs at frame-start (update()).
+        m_browserPanel->modelsTab().setThumbnailLookup(
+            [this](const std::string& p) -> unsigned {
+                return m_visualEngine.cachedModelThumbnail(p);
+            });
     }
 
     // Apply metronome settings from saved preferences
@@ -8043,6 +8048,20 @@ void App::processEvents() {
 }
 
 void App::update() {
+    // Generate model-library thumbnails for the Models browser tab at a
+    // safe point (frame start, no active 2D batch) — ensureModelThumbnail
+    // switches to the output GL context to render. Budget a couple per
+    // frame so the first reveal doesn't hitch with many models.
+    if (m_browserPanel &&
+        m_browserPanel->activeTab() == ui::fw2::BrowserPanel::Tab::Models) {
+        int budget = 2;
+        for (const auto& e : m_browserPanel->modelsTab().entries()) {
+            if (m_visualEngine.cachedModelThumbnail(e.path) != 0) continue;
+            m_visualEngine.ensureModelThumbnail(e.path);
+            if (--budget <= 0) break;
+        }
+    }
+
     // Background preset generation finished → toast the result on the
     // UI thread (the worker can't safely touch the toast manager).
     if (m_genFinished.exchange(false)) {
