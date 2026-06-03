@@ -509,6 +509,9 @@ private:
     void addModelToClip(int track, int scene, const std::string& sourcePath);
     void removeModelFromClip(int track, int scene, int listIndex);
     void reloadVisualClipModels(int track, int scene);
+    // Assign a library model to the selected visual clip (Models browser
+    // tab double-click) — sets it as the clip's primary model.
+    void assignModelFromLibrary(const std::string& sourcePath);
 
     // Scene-script helpers — same contract as the shader/model pair
     // but write into <project>/scripts/ and resolve "scripts/..." .

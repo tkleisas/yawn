@@ -31,6 +31,7 @@
 #include "BrowserFilesTab.h"
 #include "BrowserPresetsTab.h"
 #include "BrowserMidiLoopsTab.h"
+#include "BrowserModelsTab.h"
 #include <vector>
 #include <string>
 #include <cstdio>
@@ -42,7 +43,7 @@ namespace fw2 {
 
 class BrowserPanel : public Widget {
 public:
-    enum class Tab { Files = 0, Presets, Loops, Clip, Midi, COUNT };
+    enum class Tab { Files = 0, Presets, Loops, Models, Clip, Midi, COUNT };
 
     BrowserPanel() {
         initFollowActionWidgets();
@@ -89,6 +90,7 @@ public:
     BrowserFilesTab&     filesTab()   { return m_filesTab; }
     BrowserPresetsTab&   presetsTab() { return m_presetsTab; }
     BrowserMidiLoopsTab& loopsTab()   { return m_loopsTab; }
+    BrowserModelsTab&    modelsTab()  { return m_modelsTab; }
     void setLibraryDatabase(library::LibraryDatabase* db) {
         m_filesTab.setDatabase(db);
         m_presetsTab.setDatabase(db);
@@ -233,6 +235,9 @@ protected:
         if (m_activeTab == Tab::Loops) {
             return m_loopsTab.dispatchMouseDown(e);
         }
+        if (m_activeTab == Tab::Models) {
+            return m_modelsTab.dispatchMouseDown(e);
+        }
 
         // Clip tab: follow action widgets.
         // v2 dropdowns handle their open-state via LayerStack; when a
@@ -301,6 +306,9 @@ protected:
         if (m_activeTab == Tab::Loops) {
             return m_loopsTab.dispatchMouseMove(e);
         }
+        if (m_activeTab == Tab::Models) {
+            return m_modelsTab.dispatchMouseMove(e);
+        }
         // fw2 drag in progress — forward translated events to the
         // captured widget via its local coordinates.
         // `cap != this` guards against the "panel self-captured →
@@ -333,6 +341,9 @@ protected:
         if (m_activeTab == Tab::Loops) {
             return m_loopsTab.dispatchMouseUp(e);
         }
+        if (m_activeTab == Tab::Models) {
+            return m_modelsTab.dispatchMouseUp(e);
+        }
         // fw2 drag release — dispatch to captured widget; its own
         // gesture SM releases capture internally. Same `cap != this`
         // guard as the move handler above.
@@ -361,6 +372,9 @@ protected:
         }
         if (m_activeTab == Tab::Loops) {
             return m_loopsTab.dispatchScroll(e);
+        }
+        if (m_activeTab == Tab::Models) {
+            return m_modelsTab.dispatchScroll(e);
         }
         // v2 dropdowns route wheel events to their popup automatically
         // when open (LayerStack dispatch). No per-panel glue needed.
@@ -392,7 +406,7 @@ public:
         // Tab font — use theme metrics so it tracks the UI font-scale
         // preference like the rest of the v2 chrome.
         const float tabFontSize = theme().metrics.fontSize;
-        static const char* tabNames[] = {"Files", "Presets", "Loops", "Clip", "MIDI"};
+        static const char* tabNames[] = {"Files", "Presets", "Loops", "Models", "Clip", "MIDI"};
         // Compute tab widths from text
         for (int i = 0; i < static_cast<int>(Tab::COUNT); ++i)
             m_tabWidths[i] = tm.textWidth(tabNames[i], tabFontSize) + kTabPad;
@@ -424,6 +438,11 @@ public:
             m_presetsTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
             m_presetsTab.render(ctx);
             break;
+        case Tab::Models:
+            m_modelsTab.measure(Constraints::tight(w, bodyH), ctx);
+            m_modelsTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
+            m_modelsTab.render(ctx);
+            break;
         case Tab::Loops:
             m_loopsTab.measure(Constraints::tight(w, bodyH), ctx);
             m_loopsTab.layout(Rect{x, bodyY, w, bodyH}, ctx);
@@ -451,12 +470,16 @@ private:
     static constexpr float kTabPad = 16.0f; // horizontal padding per tab
 
     Tab m_activeTab = Tab::Files;
-    float m_tabWidths[5] = {55, 55, 55, 55, 55}; // computed in render
+    // Sized to the tab count so adding a Tab can't overflow it (the
+    // previous fixed [5] overflowed when the Models tab was added,
+    // corrupting the next member). Values are computed in render().
+    float m_tabWidths[static_cast<int>(Tab::COUNT)] = {};
 
     // Files, Presets and Loops tabs — fw2 widgets; bounds driven by our render().
     BrowserFilesTab     m_filesTab;
     BrowserPresetsTab   m_presetsTab;
     BrowserMidiLoopsTab m_loopsTab;
+    BrowserModelsTab    m_modelsTab;
 
     // MIDI monitor state
     midi::MidiMonitorBuffer* m_midiMonitor = nullptr;
