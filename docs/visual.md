@@ -488,6 +488,10 @@ function tick(ctx)
     -- ctx.audio.level / low / mid / high  (floats)
     -- ctx.audio.kick   (float, peak-triggered, decays)
     -- ctx.knobs.A .. ctx.knobs.H  (floats, 0..1)
+    -- ctx.notes  — array of recent note-ons from ALL tracks, each
+    --              { track, channel, pitch, vel (0..1), age (seconds) },
+    --              newest last; they live ~4 s. Filter by track/pitch and
+    --              fade by age to react to drum hits / played notes.
     --
     -- Returns a list of instances — the engine draws the selected model
     -- once per entry, all accumulating into the same depth buffer. An
@@ -533,6 +537,10 @@ hot-reloads automatically.
   single model), each tinted its own hue, bouncing on its audio band and
   flashing emissive on the kick, all under a returned orbiting camera
   (knob A = distance, knob B = spin).
+- `note_burst.lua` — **MIDI-reactive**: spawns a copy per recent note-on
+  from `ctx.notes`, laid out left→right by pitch, spinning + shrinking +
+  fading by age, hue by pitch class, emissive flash on the hit. Play a
+  drum pattern on any track and watch them pop.
 
 Because the script's per-instance transforms sit in the same shader
 pipeline, every existing iChannel2 post-processing shader (including

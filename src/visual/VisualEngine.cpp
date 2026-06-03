@@ -1,5 +1,6 @@
 #include "visual/VisualEngine.h"
 #include "visual/VisualEngineAPI.h"
+#include "visual/VisualNoteBus.h"
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
 #include "visual/gltf/M3DModel.h"
 #include "visual/gltf/M3DRenderer.h"
@@ -1813,6 +1814,20 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             in.kick       = audioKick;
             for (int i = 0; i < 8; ++i) in.knobs[i] = L.knobDisplayValues[i];
 
+            // Recent note-ons → ctx.notes, aged against this frame.
+            in.notes.clear();
+            in.notes.reserve(m_recentNotes.size());
+            for (const auto& rn : m_recentNotes) {
+                M3DSceneScript::Note n;
+                n.track   = rn.track;
+                n.channel = rn.channel;
+                n.pitch   = rn.pitch;
+                n.vel     = rn.vel;
+                n.age     = std::chrono::duration<float>(
+                                m_noteFrameNow - rn.on).count();
+                in.notes.push_back(n);
+            }
+
             static thread_local std::vector<M3DInstance> instances;
             instances.clear();
             M3DCamera cam = cameraFromUniforms();
@@ -2163,12 +2178,45 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     ++L.frameCounter;
 }
 
+void VisualEngine::drainNoteBus() {
+    m_noteFrameNow = std::chrono::steady_clock::now();
+
+    VisualNoteEvent ev;
+    while (VisualNoteBus::instance().pop(ev)) {
+        m_recentNotes.push_back({ ev.track, ev.channel, ev.pitch,
+                                  ev.vel7 / 127.0f, m_noteFrameNow });
+    }
+
+    // Prune notes older than the window. Appended in time order, so the
+    // stale entries form a prefix.
+    const auto cutoff = m_noteFrameNow -
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(kNoteWindowSeconds));
+    size_t firstKept = 0;
+    while (firstKept < m_recentNotes.size() &&
+           m_recentNotes[firstKept].on < cutoff)
+        ++firstKept;
+    if (firstKept > 0)
+        m_recentNotes.erase(m_recentNotes.begin(),
+                            m_recentNotes.begin() + firstKept);
+
+    // Hard cap (backstop against a flood) — keep the newest.
+    if (m_recentNotes.size() > kMaxRecentNotes)
+        m_recentNotes.erase(m_recentNotes.begin(),
+                            m_recentNotes.begin() +
+                            (m_recentNotes.size() - kMaxRecentNotes));
+}
+
 // ── tick (orchestrates all layers + composite) ────────────────────────────
 
 void VisualEngine::tick(double transportSeconds, double transportBeats, bool playing) {
     if (!m_initialized || !m_outputVisible || !m_outputWindow) return;
 
     ContextScope scope(m_outputWindow, m_outputContext);
+
+    // Drain MIDI note-ons published by the audio thread (lock-free) into
+    // the aged recent-notes list that feeds scene scripts' ctx.notes.
+    drainNoteBus();
 
     // Build ordered list of active layers (track idx ascending = bottom→top).
     std::vector<int> trackOrder;
