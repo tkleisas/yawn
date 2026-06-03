@@ -414,7 +414,31 @@ bool M3DModel::load(const std::string& path) {
         for (size_t i = 0; i < 4 && i < pbr.baseColorFactor.size(); ++i) {
             mat.baseColorFactor[i] = static_cast<float>(pbr.baseColorFactor[i]);
         }
-        mat.baseColorTexture = pbr.baseColorTexture.index;
+        mat.baseColorTexture          = pbr.baseColorTexture.index;
+        mat.metallicFactor            = static_cast<float>(pbr.metallicFactor);
+        mat.roughnessFactor           = static_cast<float>(pbr.roughnessFactor);
+        mat.metallicRoughnessTexture  = pbr.metallicRoughnessTexture.index;
+
+        for (size_t i = 0; i < 3 && i < gMat.emissiveFactor.size(); ++i)
+            mat.emissiveFactor[i] = static_cast<float>(gMat.emissiveFactor[i]);
+        mat.emissiveTexture  = gMat.emissiveTexture.index;
+        // KHR_materials_emissive_strength (optional) scales emissive > 1.
+        auto esIt = gMat.extensions.find("KHR_materials_emissive_strength");
+        if (esIt != gMat.extensions.end() && esIt->second.IsObject() &&
+            esIt->second.Has("emissiveStrength")) {
+            mat.emissiveStrength = static_cast<float>(
+                esIt->second.Get("emissiveStrength").GetNumberAsDouble());
+        }
+
+        mat.occlusionTexture  = gMat.occlusionTexture.index;
+        mat.occlusionStrength = static_cast<float>(gMat.occlusionTexture.strength);
+
+        if (gMat.alphaMode == "MASK")       mat.alphaMode = M3DMaterial::AlphaMode::Mask;
+        else if (gMat.alphaMode == "BLEND") mat.alphaMode = M3DMaterial::AlphaMode::Blend;
+        else                                mat.alphaMode = M3DMaterial::AlphaMode::Opaque;
+        mat.alphaCutoff = static_cast<float>(gMat.alphaCutoff);
+        mat.doubleSided = gMat.doubleSided;
+
         m_materials.push_back(mat);
     }
 

@@ -107,8 +107,30 @@ struct M3DTexture {
 };
 
 struct M3DMaterial {
+    enum class AlphaMode { Opaque, Mask, Blend };
+
     std::array<float, 4> baseColorFactor{ 1.0f, 1.0f, 1.0f, 1.0f };
-    int                  baseColorTexture = -1;  // into M3DModel::textures
+    int                  baseColorTexture = -1;   // into M3DModel::textures
+
+    // PBR metallic-roughness. The combined texture packs roughness in G
+    // and metallic in B (glTF convention).
+    float                metallicFactor  = 1.0f;
+    float                roughnessFactor = 1.0f;
+    int                  metallicRoughnessTexture = -1;
+
+    // Emissive — the headline glow channel for VJ work.
+    std::array<float, 3> emissiveFactor{ 0.0f, 0.0f, 0.0f };
+    int                  emissiveTexture = -1;
+    float                emissiveStrength = 1.0f;   // KHR_materials_emissive_strength
+
+    // Ambient occlusion (R channel).
+    int                  occlusionTexture  = -1;
+    float                occlusionStrength = 1.0f;
+
+    // Alpha handling.
+    AlphaMode            alphaMode   = AlphaMode::Opaque;
+    float                alphaCutoff = 0.5f;
+    bool                 doubleSided = false;
 };
 
 // Axis-aligned bounds computed from the world-space vertex positions of

@@ -1847,6 +1847,23 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             return cam;
         };
 
+        // Lighting from @range uniforms (default rig matches the old fixed
+        // look). yaw/pitch place the directional light; ambient + intensity
+        // scale fill + key. A–H knobs / LFOs / automation drive them.
+        {
+            const float d2r   = 3.14159265f / 180.0f;
+            const float yaw   = readParam("lightYaw",   45.0f) * d2r;
+            const float pitch = readParam("lightPitch", 45.0f) * d2r;
+            const float amb   = readParam("lightAmbient",   0.2f);
+            const float inten = readParam("lightIntensity", 1.0f);
+            const float lx = std::cos(pitch) * std::sin(yaw);
+            const float ly = std::sin(pitch);
+            const float lz = std::cos(pitch) * std::cos(yaw);
+            const float dir[3]     = { -lx, -ly, -lz };          // toward the scene
+            const float ambient[3] = { amb, amb, amb * 1.1f };   // faint cool tint
+            L.modelRenderer->setLighting(dir, ambient, inten);
+        }
+
         if (L.sceneScript) {
             L.sceneScript->pollHotReload();
             M3DSceneScript::Inputs in;

@@ -158,4 +158,74 @@ TEST(M3DModelTest, FoxSkinJointsAreValidNodes) {
     }
 }
 
+// ── PBR material parsing (Phase 3) ───────────────────────────────────────
+// Synthesised glTF (data-URI buffer) with a known material so the new
+// emissive / metallic / roughness / alpha fields are pinned, independent
+// of any shipped asset (the bundled samples carry no PBR material).
+
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+namespace {
+std::string base64(const std::vector<uint8_t>& d) {
+    static const char* T =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string o; int val = 0, bits = -6;
+    for (uint8_t c : d) {
+        val = (val << 8) + c; bits += 8;
+        while (bits >= 0) { o += T[(val >> bits) & 0x3F]; bits -= 6; }
+    }
+    if (bits > -6) o += T[((val << 8) >> (bits + 8)) & 0x3F];
+    while (o.size() % 4) o += '=';
+    return o;
+}
+} // namespace
+
+TEST(M3DModelTest, ParsesPbrMaterialFields) {
+    std::vector<uint8_t> buf;
+    auto pushF   = [&](float v)    { uint8_t b[4]; std::memcpy(b, &v, 4); buf.insert(buf.end(), b, b + 4); };
+    auto pushU16 = [&](uint16_t v) { uint8_t b[2]; std::memcpy(b, &v, 2); buf.insert(buf.end(), b, b + 2); };
+    const float pos[9] = { 0,0,0, 1,0,0, 0,1,0 };
+    for (float v : pos) pushF(v);
+    pushU16(0); pushU16(1); pushU16(2);
+
+    const std::string gltf =
+        std::string("{\"asset\":{\"version\":\"2.0\"},")
+        + "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        + "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},"
+          "\"indices\":1,\"material\":0}]}],"
+        + "\"materials\":[{\"pbrMetallicRoughness\":{"
+          "\"baseColorFactor\":[0.2,0.4,0.6,1.0],"
+          "\"metallicFactor\":0.25,\"roughnessFactor\":0.75},"
+          "\"emissiveFactor\":[1.0,0.5,0.0],"
+          "\"alphaMode\":\"MASK\",\"alphaCutoff\":0.3,\"doubleSided\":true}],"
+        + "\"buffers\":[{\"uri\":\"data:application/octet-stream;base64,"
+          + base64(buf) + "\",\"byteLength\":" + std::to_string(buf.size()) + "}],"
+        + "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36,\"target\":34962},"
+          "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6,\"target\":34963}],"
+        + "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,"
+          "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]},"
+          "{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}]}";
+
+    auto p = std::filesystem::temp_directory_path() / "yawn_pbr_mat_test.gltf";
+    { std::ofstream f(p); f << gltf; }
+    M3DModel model;
+    ASSERT_TRUE(model.load(p.string())) << model.error();
+    std::error_code ec; std::filesystem::remove(p, ec);
+
+    ASSERT_GE(model.materialCount(), 1);
+    const auto& m = model.material(0);
+    EXPECT_FLOAT_EQ(m.metallicFactor,  0.25f);
+    EXPECT_FLOAT_EQ(m.roughnessFactor, 0.75f);
+    EXPECT_FLOAT_EQ(m.emissiveFactor[0], 1.0f);
+    EXPECT_FLOAT_EQ(m.emissiveFactor[1], 0.5f);
+    EXPECT_FLOAT_EQ(m.emissiveFactor[2], 0.0f);
+    EXPECT_EQ(m.alphaMode, M3DMaterial::AlphaMode::Mask);
+    EXPECT_FLOAT_EQ(m.alphaCutoff, 0.3f);
+    EXPECT_TRUE(m.doubleSided);
+}
+
 #endif // YAWN_HAS_MODEL3D
