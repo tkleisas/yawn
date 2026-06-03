@@ -496,6 +496,20 @@ private:
     std::string localizeModel(const std::string& sourcePath);
     std::string resolveModelPath(const std::string& storedPath) const;
 
+    // Multi-model scene helpers. A visual clip's model list is the
+    // primary `modelPath` (index 0) followed by `extraModelPaths`.
+    //   addModelToClip:     localize + append; the first added model
+    //                       becomes the primary (clears the other
+    //                       iChannel2 sources, seeds name/colour).
+    //   removeModelFromClip: drop list index N; if the primary goes, the
+    //                       next model is promoted to primary.
+    //   reloadVisualClipModels: re-upload the layer's model set if this
+    //                       clip is the track's launched scene.
+    // All mark the project dirty and refresh the engine.
+    void addModelToClip(int track, int scene, const std::string& sourcePath);
+    void removeModelFromClip(int track, int scene, int listIndex);
+    void reloadVisualClipModels(int track, int scene);
+
     // Scene-script helpers — same contract as the shader/model pair
     // but write into <project>/scripts/ and resolve "scripts/..." .
     std::string localizeScene(const std::string& sourcePath);

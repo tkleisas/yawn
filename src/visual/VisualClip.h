@@ -114,6 +114,25 @@ struct VisualClip {
     std::string modelPath;        // project-relative or absolute
     std::string modelSourcePath;  // original path the user imported from
 
+    // Additional models for multi-model scenes. A scene script selects
+    // among them by index: model 0 = the primary `modelPath` above,
+    // model 1 = extraModelPaths[0], model 2 = extraModelPaths[1], …
+    // Only meaningful with a scene script (the static single-model path
+    // always draws model 0).
+    std::vector<std::string> extraModelPaths;
+    std::vector<std::string> extraModelSourcePaths;
+
+    // Ordered list of referenced model paths: primary first, then extras
+    // (empty entries skipped). The list index == the `model` index a
+    // scene script uses.
+    std::vector<std::string> modelList() const {
+        std::vector<std::string> out;
+        if (!modelPath.empty()) out.push_back(modelPath);
+        for (const auto& p : extraModelPaths)
+            if (!p.empty()) out.push_back(p);
+        return out;
+    }
+
     // Optional Lua scene script. When non-empty and a model is loaded,
     // the engine calls script.tick() each frame to get the list of
     // transforms used for this layer's model; otherwise the static
@@ -139,6 +158,8 @@ struct VisualClip {
         c->liveUrl         = liveUrl;
         c->modelPath       = modelPath;
         c->modelSourcePath = modelSourcePath;
+        c->extraModelPaths       = extraModelPaths;
+        c->extraModelSourcePaths = extraModelSourcePaths;
         c->scenePath       = scenePath;
         return c;
     }
