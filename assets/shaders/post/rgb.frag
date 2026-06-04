@@ -11,5 +11,5 @@ uniform float b; // @range 0..2 default=1.0
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     vec3 c = texture(iPrev, uv).rgb;
-    fragColor = vec4(c.r * r, c.g * g, c.b * b, 1.0);
+    fragColor = vec4(c.r * r, c.g * g, c.b * b, texture(iPrev, uv).a);
 }

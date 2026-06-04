@@ -15,11 +15,13 @@ uniform float decay; // @range 0..0.98 default=0.85
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
-    vec3 cur  = texture(iPrev, uv).rgb;
-    vec3 prev = texture(iFeedback, uv).rgb;
+    vec4 cur  = texture(iPrev, uv);
+    vec4 prev = texture(iFeedback, uv);
     // max() keeps the current frame at full strength while showing
     // wherever the decaying echo is brighter — gives crisp, punchy
     // trails. (mix() would smear the current frame into the trail
-    // and fade everything together, less echo-like.)
-    fragColor = vec4(max(cur, prev * decay), 1.0);
+    // and fade everything together, less echo-like.) Alpha trails the
+    // same way so the echo stays transparent over lower layers.
+    fragColor = vec4(max(cur.rgb, prev.rgb * decay),
+                     max(cur.a,   prev.a   * decay));
 }

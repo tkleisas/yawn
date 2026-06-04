@@ -38,5 +38,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     hsv.y = clamp(hsv.y * saturation, 0.0, 1.0);
     hsv.z = max(hsv.z * value, 0.0);                 // brightness gain
 
-    fragColor = vec4(hsv2rgb(hsv), 1.0);
+    fragColor = vec4(hsv2rgb(hsv), texture(iPrev, uv).a);
 }

@@ -11,5 +11,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     vec3 c = texture(iPrev, uv).rgb;
     c = (c - 0.5) * contrast + 0.5 + brightness;
-    fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    fragColor = vec4(clamp(c, 0.0, 1.0), texture(iPrev, uv).a);
 }

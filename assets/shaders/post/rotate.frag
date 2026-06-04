@@ -1,5 +1,5 @@
 // Rotate — spins iPrev around the frame center. Pixels rotated outside
-// the unit square clamp to black so the previous stage's edges don't
+// the unit square become transparent so the previous stage's edges don't
 // tile back into view. `angle` is in turns (1.0 = a full rotation);
 // `auto_spin` adds an iTime-driven rate in turns/sec for hands-free
 // animation when the macro device isn't wired up yet.
@@ -21,7 +21,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 q = r / vec2(aspect, 1.0) + 0.5;
 
     if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColor = vec4(0.0);   // transparent: don't tile, don't blank lower layers
     } else {
         fragColor = texture(iPrev, q);
     }

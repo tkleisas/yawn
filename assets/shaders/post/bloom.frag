@@ -22,5 +22,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         }
     }
     vec3 glow = (sum / 25.0) * intensity;
-    fragColor = vec4(base + glow, 1.0);
+    fragColor = vec4(base + glow, texture(iPrev, uv).a);
 }

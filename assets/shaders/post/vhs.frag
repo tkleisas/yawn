@@ -47,5 +47,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     float dim = 1.0 - 0.15 * intensity * mod(scan, 2.0);
     c *= dim;
 
-    fragColor = vec4(c, 1.0);
+    fragColor = vec4(c, texture(iPrev, sampleUV).a);
 }

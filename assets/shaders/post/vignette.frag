@@ -9,5 +9,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec3 col = texture(iPrev, uv).rgb;
     float d = distance(uv, vec2(0.5));
     float vign = 1.0 - smoothstep(0.5 - softness * 0.5, 0.8, d) * strength;
-    fragColor = vec4(col * vign, 1.0);
+    fragColor = vec4(col * vign, texture(iPrev, uv).a);
 }

@@ -12,5 +12,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     float r = texture(iPrev, uv + center * s).r;
     float g = texture(iPrev, uv).g;
     float b = texture(iPrev, uv - center * s).b;
-    fragColor = vec4(r, g, b, 1.0);
+    fragColor = vec4(r, g, b, texture(iPrev, uv).a);
 }
