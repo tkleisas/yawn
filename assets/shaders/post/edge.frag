@@ -33,5 +33,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     if (g < threshold) g = 0.0;
     g = clamp(g, 0.0, 1.0);
 
-    fragColor = vec4(vec3(g), 1.0);
+    // Alpha = max(edge, source alpha): edges stay visible just outside an
+    // opaque region while flat transparent areas pass lower layers through.
+    fragColor = vec4(vec3(g), max(g, texture(iPrev, uv).a));
 }

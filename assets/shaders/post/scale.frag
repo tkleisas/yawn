@@ -1,5 +1,5 @@
 // Scale — uniform zoom around the frame center. Pixels sampled outside
-// the unit square clamp to black so zooming out doesn't tile the
+// the unit square become transparent so zooming out doesn't tile the
 // previous stage's edges back into view.
 // MIT License.
 
@@ -10,7 +10,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 p = (uv - 0.5) / max(zoom, 0.001) + 0.5;
 
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColor = vec4(0.0);   // transparent: don't tile, don't blank lower layers
     } else {
         fragColor = texture(iPrev, p);
     }

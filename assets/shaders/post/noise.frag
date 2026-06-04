@@ -28,5 +28,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
                         hash(p + vec2(t * 0.7,  t * 1.3))) - 0.5;
     vec3  n     = mix(vec3(nMono), nCol, color);
 
-    fragColor = vec4(clamp(c + n * amount * 2.0, 0.0, 1.0), 1.0);
+    fragColor = vec4(clamp(c + n * amount * 2.0, 0.0, 1.0), texture(iPrev, uv).a);
 }

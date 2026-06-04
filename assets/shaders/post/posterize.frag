@@ -16,5 +16,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     // count instead of darkening towards (n-1)/n.
     c = floor(c * (n - 1.0) + 0.5) / (n - 1.0);
 
-    fragColor = vec4(c, 1.0);
+    fragColor = vec4(c, texture(iPrev, uv).a);
 }

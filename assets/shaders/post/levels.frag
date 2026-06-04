@@ -20,5 +20,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     c = clamp(c, 0.0, 1.0);
     c = pow(c, vec3(1.0 / max(gamma, 0.001)));
 
-    fragColor = vec4(c, 1.0);
+    fragColor = vec4(c, texture(iPrev, uv).a);
 }

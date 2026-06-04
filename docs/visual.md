@@ -278,6 +278,23 @@ Post-FX effects receive the same Shadertoy-style uniforms as layer
 shaders (minus the knob row), and pick up master audio automatically
 when the chain is non-empty.
 
+The same effect shaders can also be chained onto a single clip as
+per-track passes. **In that role the effect's output alpha becomes the
+layer's compositing alpha** (`α = trackVolume × outputAlpha`), so an
+effect that writes `vec4(col, 1.0)` forces its whole layer opaque and
+hides every track below it. To stay layerable, sample and pass through
+the source alpha instead of hardcoding `1.0`:
+
+```glsl
+fragColor = vec4(processed, texture(iPrev, uv).a);
+```
+
+On the global chain the composited frame is already opaque, so passing
+the source alpha through is a no-op there — the same shader is correct in
+both roles. All bundled effects follow this; `rotate`/`scale` leave
+out-of-bounds pixels fully transparent rather than opaque black so a
+rotated/zoomed layer doesn't blank the layers beneath it.
+
 ## Text on `iChannel1`
 
 Each visual clip has an optional `text` string. YAWN rasterises it with
