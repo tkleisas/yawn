@@ -265,10 +265,17 @@ if(YAWN_HAS_NAM OR YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
 endif()
 
 if(YAWN_HAS_NAM)
+    # Pinned to v0.5.3 (the release that introduced the A2 architecture:
+    # wavenet/a2_fast, slimmable, and SlimmableContainer). Pinning a tag
+    # instead of tracking the moving `main` keeps A2 support locked in and
+    # makes clean/CI builds reproducible. This core is a superset loader:
+    # it parses both A1 captures (generic WaveNet/LSTM/…) and A2 captures
+    # (A2-shaped WaveNet → optimised A2FastModel via NAM_ENABLE_A2_FAST).
+    # Bump deliberately when adopting a newer NAM release.
     FetchContent_Declare(
         neural_amp_modeler_core
         GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
-        GIT_TAG        main
+        GIT_TAG        v0.5.3
         GIT_SHALLOW    TRUE
     )
     FetchContent_GetProperties(neural_amp_modeler_core)
