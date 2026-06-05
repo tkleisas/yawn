@@ -502,7 +502,7 @@ int AudioEngine::paCallback(
     const void* inputBuffer,
     void* outputBuffer,
     unsigned long framesPerBuffer,
-    const PaStreamCallbackTimeInfo* /*timeInfo*/,
+    const PaStreamCallbackTimeInfo* timeInfo,
     PaStreamCallbackFlags statusFlags,
     void* userData)
 {
@@ -528,11 +528,29 @@ int AudioEngine::paCallback(
     // output buffer; ask PA to keep going rather than crash.
     if (!engine || !output) return paContinue;
 
+    // Stash the measured ADC→DAC latency for this buffer (round-trip)
+    // and the output-side latency. Cheap relaxed stores; pollLatencyLog
+    // on the main thread reads + logs them periodically. If input and
+    // output are different devices on independent clocks, round-trip
+    // creeps up over time — this is how we see it.
+    if (timeInfo) {
+        engine->m_measuredRoundTripSec.store(
+            timeInfo->outputBufferDacTime - timeInfo->inputBufferAdcTime,
+            std::memory_order_relaxed);
+        engine->m_measuredOutputLatencySec.store(
+            timeInfo->outputBufferDacTime - timeInfo->currentTime,
+            std::memory_order_relaxed);
+    }
+
     // Record xrun / device-failure status flags so higher layers can
     // surface them (e.g. auto-suspend on repeated paOutputUnderflow).
-    if (statusFlags != 0)
+    if (statusFlags != 0) {
         engine->m_callbackStatusFlags.fetch_or(static_cast<uint32_t>(statusFlags),
                                                 std::memory_order_relaxed);
+        // Count real under/overruns for the periodic latency log.
+        if (statusFlags & (paInputOverflow | paOutputUnderflow))
+            engine->m_xrunCount.fetch_add(1, std::memory_order_relaxed);
+    }
 
     // Suspended: output silence and skip all processing. start()/stop()
     // toggle m_running; the flag is read with acquire ordering to pair
@@ -554,6 +572,29 @@ int AudioEngine::paCallback(
         return paContinue;
     }
     return paContinue;
+}
+
+void AudioEngine::pollLatencyLog() {
+    using namespace std::chrono;
+    const auto now = steady_clock::now();
+    // First call logs immediately; thereafter throttle to ~2 s so the
+    // log shows a readable time-series of monitoring latency.
+    if (m_lastLatencyLog != steady_clock::time_point{} &&
+        now - m_lastLatencyLog < seconds(2))
+        return;
+    m_lastLatencyLog = now;
+    if (!m_stream) return;
+
+    const double cpuPct = Pa_GetStreamCpuLoad(m_stream) * 100.0;
+    const double rtMs   = m_measuredRoundTripSec.load(std::memory_order_relaxed) * 1000.0;
+    const double outMs  = m_measuredOutputLatencySec.load(std::memory_order_relaxed) * 1000.0;
+    const uint64_t xruns = m_xrunCount.load(std::memory_order_relaxed);
+    LOG_INFO("AudioLatency",
+             "cpu=%.1f%% roundtrip=%.2fms out=%.2fms xruns=%llu sr=%.0f buf=%d",
+             cpuPct, rtMs, outMs,
+             static_cast<unsigned long long>(xruns),
+             m_config.sampleRate,
+             static_cast<int>(m_config.framesPerBuffer));
 }
 
 void AudioEngine::processAudio(const float* input, float* output, unsigned long numFrames) {

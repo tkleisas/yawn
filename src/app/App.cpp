@@ -6298,6 +6298,10 @@ void App::run() {
         processEvents();
         update();
         render();
+        // Periodic monitoring-latency log line (self-throttled to ~2 s).
+        // Surfaces cpu load, measured ADC→DAC round-trip latency, and
+        // xrun count so latency drift over time is visible in the log.
+        m_audioEngine.pollLatencyLog();
     }
 }
 

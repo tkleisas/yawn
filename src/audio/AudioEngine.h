@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <chrono>
 
 namespace yawn {
 namespace audio {
@@ -129,6 +130,20 @@ public:
 
     // CPU load as reported by PortAudio (0.0 – 1.0)
     double cpuLoad() const { return m_stream ? Pa_GetStreamCpuLoad(m_stream) : 0.0; }
+
+    // Measured input→output latency (ms) from the PA callback's time
+    // info — the actual ADC→DAC delay for the live-monitoring path. With
+    // input and output on independent device clocks this drifts upward
+    // over time; watching it in the log confirms clock-domain drift.
+    double measuredRoundTripMs() const {
+        return m_measuredRoundTripSec.load(std::memory_order_relaxed) * 1000.0;
+    }
+
+    // Call once per main-loop frame. Self-throttled: writes a periodic
+    // "AudioLatency" log line (cpu load, measured round-trip / output
+    // latency, xrun flags) every ~2 s so latency drift is visible in the
+    // log file. Cheap and a no-op between intervals.
+    void pollLatencyLog();
 
     // True when the PA stream is live. False after handleDeviceLost()
     // or shutdown() — callers should treat this as "needs re-init".
@@ -520,6 +535,20 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<uint32_t> m_callbackStatusFlags{0};
     bool m_paInitialized = false;
+
+    // Live-monitoring latency measured in the PA callback from its
+    // PaStreamCallbackTimeInfo: round-trip = outputBufferDacTime −
+    // inputBufferAdcTime, output = outputBufferDacTime − currentTime.
+    // Relaxed atomics (single writer = audio thread, single reader =
+    // pollLatencyLog on the main thread). m_lastLatencyLog throttles
+    // the periodic log line.
+    std::atomic<double> m_measuredRoundTripSec{0.0};
+    std::atomic<double> m_measuredOutputLatencySec{0.0};
+    std::chrono::steady_clock::time_point m_lastLatencyLog{};
+    // Cumulative under/overrun count since start — incremented in the
+    // callback, logged by pollLatencyLog. A rising count alongside
+    // rising round-trip latency is the signature of clock-domain drift.
+    std::atomic<uint64_t> m_xrunCount{0};
 
     // Per-channel input peak (read-and-reset by UI). Sized to
     // kMaxInputPeakChannels rather than m_config.inputChannels so the
