@@ -535,6 +535,27 @@ void FwPreferencesDialog::layoutAndRenderAudioTab(UIContext& ctx, Rect content) 
     placeAndRender(m_inputDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
     y += rowH + kRowGap;
 
+    // Clock-drift warning — different physical devices for input and
+    // output run on independent hardware clocks, so live-monitoring
+    // latency slowly grows over time (the OS bridges them with an
+    // adaptive resampler). Shown only when both are explicitly chosen
+    // and differ; using one device for both avoids it entirely.
+    if (m_state.selectedInputDevice >= 0 &&
+        m_state.selectedOutputDevice >= 0 &&
+        m_state.selectedInputDevice != m_state.selectedOutputDevice) {
+        auto& r  = *ctx.renderer;
+        auto& tm = *ctx.textMetrics;
+        const float textH = tm.lineHeight(textScale);
+        const ::yawn::ui::Color warn{230, 170, 60};
+        tm.drawText(r, "Input and output are different devices.",
+                    content.x, y, textScale, warn);
+        y += textH;
+        tm.drawText(r, "Their clocks drift - monitoring latency may grow over "
+                       "time. Use one device for both to avoid it.",
+                    content.x, y, textScale, warn);
+        y += textH + kRowGap;
+    }
+
     drawLabeledRow(ctx, "Sample Rate", Rect{content.x, y, dropX - content.x, rowH}, textScale);
     placeAndRender(m_sampleRateDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
     y += rowH + kRowGap;

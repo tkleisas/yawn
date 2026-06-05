@@ -4,6 +4,7 @@
 #include "visual/VisualModBus.h"
 #include "visual/VisualNoteBus.h"
 #include <cstring>
+#include <cstdio>
 #include <cmath>
 #include <algorithm>
 
@@ -393,6 +394,22 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     } else {
         LOG_INFO("Audio", "No audio input device (recording disabled)");
     }
+
+    // Different physical devices for input and output → independent
+    // hardware clocks. Even at a matched nominal rate they drift, so
+    // live-monitoring latency slowly grows over time (the OS bridges the
+    // two clock domains with an adaptive resampler below us). Flag it so
+    // the UI can warn; the drift-free setup is one device for both.
+    m_inOutDevicesDiffer = m_hasInputDevice &&
+                           (inputParams.device != outputParams.device);
+    if (m_inOutDevicesDiffer) {
+        LOG_WARN("Audio",
+                 "Input and output are DIFFERENT devices (in='%s', out='%s') — "
+                 "independent clocks drift, so monitoring latency can grow over "
+                 "time. Use one device for both in+out to avoid it.",
+                 Pa_GetDeviceInfo(inputParams.device)->name, devInfo->name);
+    }
+
     // Read the post-truth rate (m_config.sampleRate, after Pa_GetStreamInfo
     // sync). Earlier this read config.sampleRate (the parameter) which
     // would lie when the override or the stream renegotiated the rate.
@@ -586,12 +603,30 @@ void AudioEngine::pollLatencyLog() {
     if (!m_stream) return;
 
     const double cpuPct = Pa_GetStreamCpuLoad(m_stream) * 100.0;
-    const double rtMs   = m_measuredRoundTripSec.load(std::memory_order_relaxed) * 1000.0;
-    const double outMs  = m_measuredOutputLatencySec.load(std::memory_order_relaxed) * 1000.0;
     const uint64_t xruns = m_xrunCount.load(std::memory_order_relaxed);
+
+    // Negotiated stream latency from PortAudio — real, non-negative, and
+    // available on every backend. This is the baseline monitoring
+    // latency (input + output). Use this rather than the per-callback
+    // ADC/DAC timestamps, which the PulseAudio/PipeWire backend doesn't
+    // populate meaningfully (it yields negative deltas).
+    double inMs = 0.0, outMs = 0.0;
+    if (const PaStreamInfo* si = Pa_GetStreamInfo(m_stream)) {
+        inMs  = si->inputLatency  * 1000.0;
+        outMs = si->outputLatency * 1000.0;
+    }
+
+    // Per-callback ADC→DAC round-trip — meaningful only on backends that
+    // fill the time info (ALSA/CoreAudio/ASIO); show "n/a" where it's
+    // unreliable (negative) instead of logging noise.
+    const double cbMs = m_measuredRoundTripSec.load(std::memory_order_relaxed) * 1000.0;
+    char cb[24];
+    if (cbMs >= 0.0) std::snprintf(cb, sizeof cb, "%.2fms", cbMs);
+    else             std::snprintf(cb, sizeof cb, "n/a");
+
     LOG_INFO("AudioLatency",
-             "cpu=%.1f%% roundtrip=%.2fms out=%.2fms xruns=%llu sr=%.0f buf=%d",
-             cpuPct, rtMs, outMs,
+             "cpu=%.1f%% in=%.2fms out=%.2fms io=%.2fms cb=%s xruns=%llu sr=%.0f buf=%d",
+             cpuPct, inMs, outMs, inMs + outMs, cb,
              static_cast<unsigned long long>(xruns),
              m_config.sampleRate,
              static_cast<int>(m_config.framesPerBuffer));

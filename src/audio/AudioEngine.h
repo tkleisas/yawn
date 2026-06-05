@@ -131,6 +131,11 @@ public:
     // CPU load as reported by PortAudio (0.0 – 1.0)
     double cpuLoad() const { return m_stream ? Pa_GetStreamCpuLoad(m_stream) : 0.0; }
 
+    // True when the open stream uses different physical devices for input
+    // and output — independent clocks that drift, so live-monitoring
+    // latency can grow over time. The UI surfaces this as a warning.
+    bool inputOutputDevicesDiffer() const { return m_inOutDevicesDiffer; }
+
     // Measured input→output latency (ms) from the PA callback's time
     // info — the actual ADC→DAC delay for the live-monitoring path. With
     // input and output on independent device clocks this drifts upward
@@ -545,6 +550,9 @@ private:
     std::atomic<double> m_measuredRoundTripSec{0.0};
     std::atomic<double> m_measuredOutputLatencySec{0.0};
     std::chrono::steady_clock::time_point m_lastLatencyLog{};
+    // Set on stream open: input and output are different physical devices
+    // (independent clocks → latency drift). Surfaced via the getter above.
+    bool m_inOutDevicesDiffer = false;
     // Cumulative under/overrun count since start — incremented in the
     // callback, logged by pollLatencyLog. A rising count alongside
     // rising round-trip latency is the signature of clock-domain drift.
