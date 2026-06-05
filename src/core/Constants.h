@@ -29,8 +29,12 @@ static constexpr int kDefaultNumTracks = 5;
 static constexpr int kDefaultNumScenes = 4;
 
 // Default audio sample rate — referenced by all audio/midi/instrument
-// classes as their initial m_sampleRate value. Transport.h also defines
-// kDefaultSampleRate in its own namespace for backward compatibility.
-static constexpr double kDefaultSampleRate = 44100.0;
+// classes as their initial m_sampleRate value (the engine re-queries the
+// device's actual rate on open and re-inits, so this is only the pre-open
+// fallback). 48 kHz matches modern hardware: PipeWire/CoreAudio graphs,
+// USB interfaces, and NAM captures are 48 k native, so defaulting to 44.1
+// forced an OS-level 44.1↔48 resampler (extra latency + CPU). Transport.h
+// defines kDefaultSampleRate in its own namespace too — keep them in sync.
+static constexpr double kDefaultSampleRate = 48000.0;
 
 } // namespace yawn

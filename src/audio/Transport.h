@@ -12,7 +12,9 @@ namespace audio {
 class Transport {
 public:
     static constexpr double kDefaultBPM = 120.0;
-    static constexpr double kDefaultSampleRate = 44100.0;
+    // 48 kHz default — matches modern hardware (PipeWire/USB interfaces)
+    // and NAM's native rate; kept in sync with core/Constants.h.
+    static constexpr double kDefaultSampleRate = 48000.0;
     static constexpr int kDefaultNumerator = 4;
     static constexpr int kDefaultDenominator = 4;
 

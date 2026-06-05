@@ -40,7 +40,7 @@ public:
     struct State {
         int selectedOutputDevice = -1;
         int selectedInputDevice  = -1;
-        double sampleRate        = 44100.0;
+        double sampleRate        = 48000.0;  // matches kDefaultSampleRate
         int bufferSize           = 256;
         audio::QuantizeMode defaultLaunchQuantize = audio::QuantizeMode::NextBar;
         audio::QuantizeMode defaultRecordQuantize = audio::QuantizeMode::NextBar;
