@@ -67,6 +67,11 @@ private:
 
     int    m_streamIndex = -1;
     int    m_frameCount  = 0;
+    // Native source dimensions the sws scaler was built for. Most assets
+    // are transcoded to kWidth×kHeight, but we must scale from the codec's
+    // actual size — otherwise sws reads out of bounds on any other size.
+    int    m_srcWidth    = 0;
+    int    m_srcHeight   = 0;
     double m_fps         = 30.0;
     int    m_lastDecodedFrame = -2;
     bool   m_opened      = false;

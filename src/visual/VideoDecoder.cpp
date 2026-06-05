@@ -41,6 +41,8 @@ void VideoDecoder::close() {
     if (m_fmt)    { avformat_close_input(&m_fmt); m_fmt = nullptr; }
     m_streamIndex = -1;
     m_frameCount  = 0;
+    m_srcWidth    = 0;
+    m_srcHeight   = 0;
     m_fps         = 30.0;
     m_lastDecodedFrame = -2;
     m_opened      = false;
@@ -110,9 +112,15 @@ bool VideoDecoder::open(const std::string& path) {
     m_packet = av_packet_alloc();
     if (!m_frame || !m_rgba || !m_packet) { close(); return false; }
 
-    // Scaler: decoder's native pixel format → RGBA8.
+    // Scaler: decoder's native size + pixel format → kWidth×kHeight RGBA8.
+    // The SOURCE dimensions must be the codec's real frame size (most
+    // assets are transcoded to 640×360, but live/odd-sized sources are
+    // not). Using kWidth/kHeight as the source made sws read past the
+    // frame's row strides for any other size — an out-of-bounds read.
+    m_srcWidth  = (m_codec->width  > 0) ? m_codec->width  : kWidth;
+    m_srcHeight = (m_codec->height > 0) ? m_codec->height : kHeight;
     m_sws = sws_getContext(
-        kWidth, kHeight, m_codec->pix_fmt,
+        m_srcWidth, m_srcHeight, m_codec->pix_fmt,
         kWidth, kHeight, AV_PIX_FMT_RGBA,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
     if (!m_sws) {
@@ -180,8 +188,12 @@ bool VideoDecoder::decodeFrame(int frameIndex, uint8_t* outRGBA) {
                 // Convert to RGBA and copy into the caller's buffer.
                 uint8_t* dstSlice[1]  = { outRGBA };
                 int      dstStride[1] = { kWidth * 4 };
+                // srcSliceH must be the SOURCE height (rows of m_frame to
+                // read), not the destination height — sws scales it down
+                // to kHeight via the context. Passing kHeight here would
+                // read the wrong number of source rows.
                 sws_scale(m_sws, m_frame->data, m_frame->linesize,
-                          0, kHeight, dstSlice, dstStride);
+                          0, m_srcHeight, dstSlice, dstStride);
                 m_lastDecodedFrame = got;
                 return true;
             }
