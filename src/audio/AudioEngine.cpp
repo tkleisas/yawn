@@ -7,6 +7,27 @@
 #include <cmath>
 #include <algorithm>
 
+// ── Denormal flushing on the audio thread ──────────────────────────
+// Recursive DSP (NAM/WaveNet, filters, reverbs) produces denormal
+// floats as signals decay into silence. Without flush-to-zero the CPU
+// traps to microcode (~10–100× slower) on every denormal op, so the
+// per-block cost creeps up during quiet passages until the callback
+// overruns its deadline — heard as growing live-monitoring latency
+// (the audio server enlarges its buffer to cope). MXCSR is per-thread,
+// so this is set on the PortAudio callback thread (see paCallback).
+// x86 (SSE2+) only; other arches no-op for now.
+#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64) \
+    || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+  #include <xmmintrin.h>  // _MM_SET_FLUSH_ZERO_MODE (SSE)
+  #include <pmmintrin.h>  // _MM_SET_DENORMALS_ZERO_MODE (DAZ constants)
+  #define YAWN_AUDIO_FLUSH_DENORMALS() do {               \
+      _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);         \
+      _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON); \
+  } while (0)
+#else
+  #define YAWN_AUDIO_FLUSH_DENORMALS() ((void)0)
+#endif
+
 #if defined(_WIN32)
 // PortAudio WASAPI extensions (PaWasapi_IsLoopback for tagging
 // loopback capture devices in enumerateDevices). Header lives in
@@ -485,6 +506,11 @@ int AudioEngine::paCallback(
     PaStreamCallbackFlags statusFlags,
     void* userData)
 {
+    // Flush denormals to zero for the whole callback. Cheap (a couple of
+    // MXCSR writes), idempotent, and must run on THIS (audio) thread —
+    // see the YAWN_AUDIO_FLUSH_DENORMALS comment at the top of the file.
+    YAWN_AUDIO_FLUSH_DENORMALS();
+
     auto* engine = static_cast<AudioEngine*>(userData);
     auto* output = static_cast<float*>(outputBuffer);
     auto* input = static_cast<const float*>(inputBuffer);
