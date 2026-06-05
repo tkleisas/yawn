@@ -50,6 +50,14 @@ public:
     void setOnLoadRequest(std::function<void()> cb)  { m_onLoadRequest  = std::move(cb); }
     void setOnClearRequest(std::function<void()> cb) { m_onClearRequest = std::move(cb); }
 
+    // "Lite" CPU-saver toggle. `lite` is the current state; `enabled`
+    // is whether the loaded model is slimmable (toggle greys out when
+    // false). The callback fires only when the toggle is enabled.
+    void setLiteState(bool lite, bool enabled) {
+        m_lite = lite; m_liteEnabled = enabled;
+    }
+    void setOnToggleLite(std::function<void()> cb) { m_onToggleLite = std::move(cb); }
+
     Size onMeasure(Constraints c, UIContext&) override {
         return c.constrain({preferredBodyWidth(), c.maxH});
     }
@@ -75,6 +83,43 @@ public:
         if (tm)
             tm->drawText(r, "NAM", m_bounds.x + pad, m_bounds.y + 4,
                           titleFs, Color{180, 180, 200, 255});
+
+        // ── "Lite" CPU-saver toggle (title row, right-aligned) ──
+        // Maps to nam::SlimmableModel::SetSlimmableSize (0 = lite, 1 =
+        // full). Greyed/disabled when the loaded model isn't slimmable
+        // (every A1 capture); amber when Lite is active.
+        {
+            const float lw = 50.0f;
+            m_liteBtnRect = { m_bounds.x + m_bounds.w - lw - pad,
+                              m_bounds.y + 4, lw, titleFs };
+            Color bg, outline, txt;
+            if (!m_liteEnabled) {
+                bg = Color{28, 28, 34, 255};
+                outline = Color{55, 55, 64, 255};
+                txt = Color{105, 105, 118, 255};
+            } else if (m_lite) {
+                bg = Color{92, 70, 26, 255};
+                outline = Color{210, 165, 70, 255};
+                txt = Color{255, 224, 150, 255};
+            } else {
+                bg = m_liteBtnHover ? Color{55, 55, 70, 255}
+                                    : Color{40, 40, 50, 255};
+                outline = Color{90, 90, 110, 255};
+                txt = Color{215, 215, 228, 255};
+            }
+            r.drawRect(m_liteBtnRect.x, m_liteBtnRect.y,
+                        m_liteBtnRect.w, m_liteBtnRect.h, bg);
+            r.drawRectOutline(m_liteBtnRect.x, m_liteBtnRect.y,
+                               m_liteBtnRect.w, m_liteBtnRect.h, outline);
+            if (tm) {
+                const float bfs = 9.0f * (48.0f / 26.0f);
+                const float tw  = tm->textWidth("Lite", bfs);
+                tm->drawText(r, "Lite",
+                              m_liteBtnRect.x + (m_liteBtnRect.w - tw) * 0.5f,
+                              m_liteBtnRect.y + (m_liteBtnRect.h - bfs) * 0.5f - 1.0f,
+                              bfs, txt);
+            }
+        }
 
         // ── Filename row ──
         // Marquee-scroll long filenames so users with long
@@ -152,6 +197,12 @@ public:
 
     bool onMouseDown(MouseEvent& e) override {
         if (e.button != MouseButton::Left) return false;
+        if (hit(m_liteBtnRect, e)) {
+            // Consume the click either way so it doesn't fall through;
+            // only toggle when the model actually supports slimming.
+            if (m_liteEnabled && m_onToggleLite) m_onToggleLite();
+            return true;
+        }
         if (hit(m_loadBtnRect, e)) {
             if (m_onLoadRequest) m_onLoadRequest();
             return true;
@@ -165,6 +216,7 @@ public:
     bool onMouseMove(MouseMoveEvent& e) override {
         m_loadBtnHover  = hitMove(m_loadBtnRect,  e);
         m_clearBtnHover = hitMove(m_clearBtnRect, e);
+        m_liteBtnHover  = hitMove(m_liteBtnRect,  e);
         return false;
     }
 #endif
@@ -203,9 +255,13 @@ private:
     std::function<void(int, float)> m_onParamChange;
     std::function<void()>           m_onLoadRequest;
     std::function<void()>           m_onClearRequest;
+    std::function<void()>           m_onToggleLite;
 
-    Rect m_loadBtnRect{}, m_clearBtnRect{};
+    Rect m_loadBtnRect{}, m_clearBtnRect{}, m_liteBtnRect{};
     bool m_loadBtnHover = false, m_clearBtnHover = false;
+    bool m_liteBtnHover = false;
+    bool m_lite = false;          // current Lite state (mirror of effect)
+    bool m_liteEnabled = false;   // model is slimmable → toggle active
 
     // Marquee animation state for long filenames. Reset to 0 on
     // model-name change (setModelName) so a freshly loaded short

@@ -81,12 +81,30 @@ public:
     const std::string& modelPath() const;
     bool               hasModel() const;
 
+    // ── Slimmable size ("Lite" CPU-saver) ───────────────────────────
+    // Some NAM models (SlimmableWavenet / SlimmableContainer — e.g. the
+    // A2 captures) implement nam::SlimmableModel and can trade quality
+    // for CPU at runtime. setLite(true) pins the model to its minimum
+    // size (SetSlimmableSize 0.0); false restores full size (1.0). The
+    // preference is remembered and re-applied on each model load. It's
+    // a no-op on models that aren't slimmable (all A1 captures), and
+    // isSlimmable() reports whether the loaded model supports it so the
+    // UI can grey the toggle. Call from the control/UI thread (same as
+    // setModelPath) — SetSlimmableSize is thread-safe but not RT-safe.
+    void setLite(bool lite);
+    bool lite() const { return m_lite; }
+    bool isSlimmable() const;
+
     nlohmann::json saveExtraState(const std::filesystem::path& assetDir) const override;
     void loadExtraState(const nlohmann::json& state,
                          const std::filesystem::path& assetDir) override;
 
 private:
     float m_params[kParamCount] = {0.0f, 0.0f, 1.0f};
+
+    // User's Lite (CPU-saver) preference. Persisted; applied to the
+    // loaded model when it's slimmable. See setLite().
+    bool m_lite = false;
 
     // PIMPL — the impl struct holds NAM-specific state (a
     // std::unique_ptr<nam::DSP>, scratch buffers) when YAWN_HAS_NAM

@@ -2336,6 +2336,7 @@ private:
                 if (m_onLoadNamModel) m_onLoadNamModel(na);
             });
             disp->setOnClearRequest([na]() { na->setModelPath(""); });
+            disp->setOnToggleLite([na]() { na->setLite(!na->lite()); });
             dw->setCustomBody(disp);
             configureDeviceWidget(dw, ref);
             m_displayUpdaters.push_back([disp, na]() {
@@ -2345,6 +2346,7 @@ private:
                 if (slash != std::string::npos) base = p.substr(slash + 1);
                 disp->setModelName(base);
                 disp->setLoadedFlag(na->hasModel());
+                disp->setLiteState(na->lite(), na->isSlimmable());
             });
             return true;
         }

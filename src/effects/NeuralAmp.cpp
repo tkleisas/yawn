@@ -21,6 +21,7 @@
 #ifdef YAWN_HAS_NAM
 #include <NAM/dsp.h>
 #include <NAM/get_dsp.h>
+#include <NAM/slimmable.h>
 #endif
 
 namespace yawn {
@@ -55,6 +56,13 @@ struct NeuralAmp::Impl {
     // a device that loads models every few seconds at most, fine.
     std::atomic<nam::DSP*>                 dspPtr{nullptr};
     std::vector<std::unique_ptr<nam::DSP>> retiredDsps;
+
+    // Non-owning view of the active DSP as a SlimmableModel, or null if
+    // the loaded model isn't slimmable. Points into the same object as
+    // dspPtr; updated on every swap in setModelPath. Touched only on the
+    // control thread (setLite / isSlimmable / setModelPath) — the audio
+    // thread never reads it, so no atomic needed.
+    nam::SlimmableModel*                   slimmablePtr = nullptr;
 
     // Working buffers for the NAM call. NAM expects per-channel
     // arrays of NAM_SAMPLE (= float here, since the nam target was
@@ -211,6 +219,7 @@ void NeuralAmp::setModelPath(const std::string& path) {
 
     if (path.empty()) {
         retireOldDsp();
+        m_impl->slimmablePtr = nullptr;
         return;
     }
     try {
@@ -231,6 +240,16 @@ void NeuralAmp::setModelPath(const std::string& path) {
             // on the UI / loader thread — happens BEFORE we
             // publish the new pointer to the audio thread.
             newDsp->Reset(m_impl->sampleRate, m_impl->maxBlockSize);
+
+            // Detect slimmable models (A2 SlimmableWavenet /
+            // SlimmableContainer) and apply the user's Lite preference
+            // BEFORE prewarm so the correct (lite/full) submodel is the
+            // one that settles. dynamic_cast cross-casts via RTTI; it's
+            // null for fixed-size models (every A1 capture).
+            nam::SlimmableModel* slim =
+                dynamic_cast<nam::SlimmableModel*>(newDsp.get());
+            if (slim) slim->SetSlimmableSize(m_lite ? 0.0 : 1.0);
+
             newDsp->prewarm();
 
             // Atomic publish: swap the new fully-prepared DSP into
@@ -239,8 +258,11 @@ void NeuralAmp::setModelPath(const std::string& path) {
             // retiredDsps for destruction on the NEXT load.
             nam::DSP* old = m_impl->dspPtr.exchange(
                 newDsp.release(), std::memory_order_acq_rel);
+            m_impl->slimmablePtr = slim;
             if (old) m_impl->retiredDsps.emplace_back(old);
-            LOG_INFO("NeuralAmp", "Loaded NAM model: %s", path.c_str());
+            LOG_INFO("NeuralAmp",
+                     "Loaded NAM model: %s (slimmable=%d lite=%d)",
+                     path.c_str(), slim ? 1 : 0, m_lite ? 1 : 0);
         } else {
             LOG_WARN("NeuralAmp",
                      "nam::get_dsp returned null for %s", path.c_str());
@@ -259,6 +281,29 @@ void NeuralAmp::setModelPath(const std::string& path) {
 #endif
 }
 
+void NeuralAmp::setLite(bool lite) {
+    m_lite = lite;
+#ifdef YAWN_HAS_NAM
+    // Apply immediately to the live model if it's slimmable. Safe from
+    // the control thread: SetSlimmableSize locks + resets the target
+    // submodel, then atomically swaps the active index the audio thread
+    // reads. It's thread-safe but NOT real-time safe, so it must never
+    // be called from the audio thread — this path is control-thread only.
+    if (m_impl->slimmablePtr)
+        m_impl->slimmablePtr->SetSlimmableSize(m_lite ? 0.0 : 1.0);
+    LOG_INFO("NeuralAmp", "setLite(%d) slimmable=%d", m_lite ? 1 : 0,
+             m_impl->slimmablePtr ? 1 : 0);
+#endif
+}
+
+bool NeuralAmp::isSlimmable() const {
+#ifdef YAWN_HAS_NAM
+    return m_impl->slimmablePtr != nullptr;
+#else
+    return false;
+#endif
+}
+
 const std::string& NeuralAmp::modelPath() const { return m_impl->modelPath; }
 
 bool NeuralAmp::hasModel() const {
@@ -273,11 +318,15 @@ nlohmann::json NeuralAmp::saveExtraState(
         const std::filesystem::path& /*assetDir*/) const {
     nlohmann::json j;
     if (!m_impl->modelPath.empty()) j["modelPath"] = m_impl->modelPath;
+    if (m_lite) j["lite"] = true;
     return j;
 }
 
 void NeuralAmp::loadExtraState(const nlohmann::json& state,
                                 const std::filesystem::path& /*assetDir*/) {
+    // Restore the Lite preference BEFORE the model loads so setModelPath
+    // settles the correct (lite/full) submodel on the freshly-loaded DSP.
+    if (state.contains("lite")) m_lite = state["lite"].get<bool>();
     if (state.contains("modelPath"))
         setModelPath(state["modelPath"].get<std::string>());
 }
