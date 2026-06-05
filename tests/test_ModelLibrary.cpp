@@ -13,7 +13,15 @@ namespace {
 class ModelLibraryTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        m_root = fs::temp_directory_path() / "yawn_modellib_test";
+        // Unique dir per test: ctest runs cases in parallel and a single
+        // shared path would let one test's remove_all() stomp another's
+        // files mid-scan — a timing race that flakes on CI.
+        const auto* info =
+            ::testing::UnitTest::GetInstance()->current_test_info();
+        m_root = fs::temp_directory_path() /
+                 ("yawn_modellib_test_" +
+                  std::string(info->test_suite_name()) + "_" +
+                  std::string(info->name()));
         fs::remove_all(m_root);
         m_bundled = m_root / "bundled";
         m_user    = m_root / "user";
