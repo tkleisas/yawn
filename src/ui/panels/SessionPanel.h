@@ -218,6 +218,14 @@ public:
     using SceneLaunchCallback = std::function<void(int sceneIdx)>;
     void setOnSceneLaunch(SceneLaunchCallback cb) { m_onSceneLaunch = std::move(cb); }
 
+    // ─── Stop-all-clips (session corner button) ─────────────────────────
+    // Fired by the Stop-All button in the top-left corner (scene-label
+    // column × track-header row). App stops every audio/MIDI/visual clip
+    // and clears each track's launch memory (defaultScene) so the next
+    // transport Play starts nothing — Ableton's "Stop Clips" gesture.
+    using StopAllClipsCallback = std::function<void()>;
+    void setOnStopAllClips(StopAllClipsCallback cb) { m_onStopAllClips = std::move(cb); }
+
     // ─── Live input status query ───────────────────────────────────────
     // App wires this so the grid can colour the per-clip "LIVE" pip by
     // the engine's current connection state. Return values encode
@@ -491,6 +499,14 @@ public:
         float sbY = gridY + gridH;
         m_hsbHovered = (my >= sbY && my < sbY + kScrollbarH && mx >= gridX && mx < gridX + gridW);
 
+        // Stop-all-clips corner button hover.
+        {
+            float bx, by, bw, bh;
+            stopAllButtonRect(bx, by, bw, bh);
+            m_stopAllHovered = (mx >= bx && mx < bx + bw &&
+                                my >= by && my < by + bh);
+        }
+
         // Track hover over clip slot icon zone
         if (m_project && my >= gridY && my < gridY + gridH && mx >= gridX) {
             float cmx = mx + m_scrollX;
@@ -691,6 +707,19 @@ private:
     SceneLaunchCallback  m_onSceneLaunch;
     VisualStopCallback   m_onStopVisualClip;
     VisualLiveStateCallback m_onQueryLiveState;
+    StopAllClipsCallback m_onStopAllClips;
+    bool                 m_stopAllHovered = false;
+
+    // Stop-all-clips button rect — the empty cell at the intersection of
+    // the scene-label column and the track-header row (top-left corner).
+    // Shared by render(), onMouseDownWithClicks(), and onMouseMove().
+    void stopAllButtonRect(float& bx, float& by, float& bw, float& bh) const {
+        const float pad = 4.0f;
+        bx = m_bounds.x + pad;
+        by = m_bounds.y + pad;
+        bw = ::yawn::ui::Theme::kSceneLabelWidth   - pad * 2.0f;
+        bh = ::yawn::ui::Theme::kTrackHeaderHeight - pad * 2.0f;
+    }
 
     // Inline track rename state
     int         m_renameTrack = -1;

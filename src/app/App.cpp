@@ -1002,6 +1002,8 @@ void App::buildWidgetTree() {
             stampVisualLaunch(track, scene);
         });
 
+    m_sessionPanel->setOnStopAllClips([this] { stopAllClips(); });
+
     // ─── Wire v2 framework ──────────────────────────────────────────
     // FontAdapter bridges v1 Font → fw2 TextMetrics. Register it + the
     // renderer in fw2::UIContext, publish that as the global context
@@ -1903,6 +1905,20 @@ void App::stopAllVisualLayers() {
         m_visualLaunchScene[t]    = -1;
         m_sessionPanel->updateClipState(t, false, 0, -1);
     }
+}
+
+void App::stopAllClips() {
+    // Stop every audio/MIDI clip and wipe each track's launch memory so
+    // the next transport Play starts nothing (Ableton "Stop Clips").
+    // Audio/MIDI grid indicators clear via the engine's play-state
+    // feedback; visual layers + their indicators are cleared below.
+    for (int t = 0; t < m_project.numTracks(); ++t) {
+        m_audioEngine.sendCommand(audio::StopClipMsg{t});
+        m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
+        m_project.track(t).defaultScene = -1;
+    }
+    stopAllVisualLayers();
+    markDirty();
 }
 
 // Linear scan for a parameter by name on any device that exposes
@@ -5025,6 +5041,8 @@ bool App::init() {
                     launchVisualClipData(t, *slot->visualClip,
                                           slot->visualClip->firstShaderPath());
                     stampVisualLaunch(t, targetScene);
+                    m_sessionPanel->updateClipState(t, /*playing*/true,
+                                                      /*playPos*/0, targetScene);
                 }
             }
             m_audioEngine.sendCommand(audio::TransportRecordMsg{true, targetScene});
@@ -7097,6 +7115,8 @@ void App::handleKeyEvent(const SDL_Event& event) {
                         launchVisualClipData(t, *slot->visualClip,
                                               slot->visualClip->firstShaderPath());
                         stampVisualLaunch(t, ds);
+                        m_sessionPanel->updateClipState(t, /*playing*/true,
+                                                          /*playPos*/0, ds);
                     }
                 }
                 m_audioEngine.sendCommand(audio::TransportPlayMsg{});

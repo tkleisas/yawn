@@ -163,6 +163,11 @@ private:
     // transport was actually playing.
     void stopAllVisualLayers();
 
+    // "Stop Clips" — stop every audio/MIDI/visual clip and wipe each
+    // track's launch memory (defaultScene) so the next transport Play
+    // starts nothing. Wired to the session-view corner Stop-All button.
+    void stopAllClips();
+
     // Visual-knob automation — also polled from the main thread. The
     // project-side lane store (Project.track.automationLanes) is the
     // source of truth; visual knobs don't need audio-thread precision

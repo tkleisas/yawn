@@ -38,6 +38,24 @@ void SessionPanel::render(UIContext& ctx) {
     paintSceneLabels(r, tm, x, gridY, gridH);
     paintClipGrid(r, tm, gridX, gridY, gridW, gridH);
     paintHScrollbar(r, gridX, gridY + gridH, gridW);
+
+    // Stop-all-clips button — the empty corner cell where the scene-label
+    // column meets the track-header row. A red stop square; stops every
+    // clip and clears launch memory on click.
+    {
+        float bx, by, bw, bh;
+        stopAllButtonRect(bx, by, bw, bh);
+        ::yawn::ui::Color bg = m_stopAllHovered
+            ? ::yawn::ui::Color{70, 70, 78, 255}
+            : ::yawn::ui::Color{40, 40, 45, 255};
+        r.drawRect(bx, by, bw, bh, bg);
+        float half = std::min(bw, bh) * 0.26f;
+        float cx = bx + bw * 0.5f, cy = by + bh * 0.5f;
+        ::yawn::ui::Color sq = m_stopAllHovered
+            ? ::yawn::ui::Color{240, 95, 95, 255}
+            : ::yawn::ui::Color{205, 75, 75, 255};
+        r.drawRect(cx - half, cy - half, half * 2.0f, half * 2.0f, sq);
+    }
 }
 
 bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
@@ -85,6 +103,20 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
             if (clickCount >= 2) {
                 startTrackRename(ti);
             }
+            return true;
+        }
+    }
+
+    // Stop-all-clips button — the corner cell at the scene-label column ×
+    // track-header row. Checked before the my<gridY guard since it sits
+    // in the header band. Stops every clip and resets launch memory.
+    {
+        float bx, by, bw, bh;
+        stopAllButtonRect(bx, by, bw, bh);
+        if (!rightClick && mx >= bx && mx < bx + bw &&
+            my >= by && my < by + bh) {
+            LOG_INFO("User", "Stop all clips");
+            if (m_onStopAllClips) m_onStopAllClips();
             return true;
         }
     }
@@ -259,7 +291,15 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                         m_engine->sendCommand(audio::StopClipMsg{ti});
                     else if (slot->midiClip)
                         m_engine->sendCommand(audio::StopMidiClipMsg{ti});
-                    // Visual clips have no "stop" — shader stays loaded.
+                    else if (slot->visualClip) {
+                        // Visual stop — clear the engine layer + reset its
+                        // launch state via the callback, and drop the grid
+                        // play indicator (visuals have no engine feedback
+                        // to clear it for us, unlike audio/MIDI).
+                        if (m_onStopVisualClip) m_onStopVisualClip(ti);
+                        m_trackStates[ti].playing      = false;
+                        m_trackStates[ti].playingScene = -1;
+                    }
                     m_project->track(ti).defaultScene = -1;
                 } else if (hasClip) {
                     auto lq = slot->launchQuantize;
@@ -272,8 +312,16 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation, slot->followAction});
                     else if (slot->midiClip)
                         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation, slot->followAction});
-                    else if (slot->visualClip && m_onLaunchVisualClip)
-                        m_onLaunchVisualClip(ti, si, slot->visualClip->firstShaderPath());
+                    else if (slot->visualClip) {
+                        if (m_onLaunchVisualClip)
+                            m_onLaunchVisualClip(ti, si, slot->visualClip->firstShaderPath());
+                        // Reflect play state so the grid shows the stop
+                        // square on this slot and clears it from the
+                        // previously-active row in this column. Audio/MIDI
+                        // get this from engine feedback; visuals don't.
+                        m_trackStates[ti].playing      = true;
+                        m_trackStates[ti].playingScene = si;
+                    }
                     m_project->track(ti).defaultScene = si;
                 } else if (trackArmed) {
                     int rlb = slot ? slot->recordLengthBars : 0;
