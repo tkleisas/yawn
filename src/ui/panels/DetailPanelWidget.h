@@ -590,6 +590,13 @@ public:
         for (auto* dw : m_deviceWidgets) delete dw;
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
+        // The display-updater lambdas capture raw pointers into the device
+        // panels just deleted above; if left in place, the next render's
+        // updateParamValues() dereferences (and writes into) freed memory —
+        // a use-after-free that corrupts the heap and detonates later in an
+        // unrelated malloc. Drop them; the rebuild below repopulates. (The
+        // setInstrument / setMidiClip rebuild paths already do this.)
+        m_displayUpdaters.clear();
 
         // Set envelope editor time range from clip length
         if (clip->buffer && sampleRate > 0) {
