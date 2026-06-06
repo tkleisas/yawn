@@ -13,7 +13,11 @@ uniform float blockSize; // @range 4..128 default=24    // block edge in px
 uniform float kick;      // @range 0..2   default=1.0   // kick-driven jump amount
 uniform float freeze;    // @range 0..1   default=0.6   // melt/trail (per-track feedback)
 
-uniform sampler2D iFeedback;
+// NOTE: iFeedback is provided by the engine preamble (both the per-track
+// layer/chain preamble and the master post-FX preamble). Don't redeclare
+// it — a duplicate `uniform sampler2D iFeedback;` makes the per-track chain
+// shader fail to compile, which silently drops the whole effect chain
+// (datamosh + everything after it).
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));

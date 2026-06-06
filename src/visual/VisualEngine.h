@@ -516,6 +516,7 @@ private:
         GLint loc_iAudioHigh        = -1;
         GLint loc_iKick             = -1;
         GLint loc_iPrev             = -1;
+        GLint loc_iFeedback         = -1;
 
         std::vector<Param> params;
     };

@@ -150,6 +150,11 @@ uniform float     iAudioMid;
 uniform float     iAudioHigh;
 uniform float     iKick;
 uniform sampler2D iPrev;
+// Same built-in as the layer/chain preamble so shaders that use iFeedback
+// (e.g. datamosh) compile identically whether run as a per-track chain
+// pass or a master post-FX. In the post-FX chain there's no per-effect
+// feedback buffer, so the engine points iFeedback at iPrev.
+uniform sampler2D iFeedback;
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord);
 
@@ -1507,6 +1512,7 @@ void VisualEngine::cachePostFXUniformLocations(PostEffect& pe) {
     pe.loc_iAudioHigh        = loc("iAudioHigh");
     pe.loc_iKick             = loc("iKick");
     pe.loc_iPrev             = loc("iPrev");
+    pe.loc_iFeedback         = loc("iFeedback");
 }
 
 bool VisualEngine::compileShaderForPostFX(PostEffect& pe,
@@ -2552,6 +2558,10 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_accumTex[cur]);
             if (pe.loc_iPrev >= 0) glUniform1i(pe.loc_iPrev, 0);
+            // No per-effect feedback buffer in the master chain — point
+            // iFeedback at the same accumulator as iPrev (matches the
+            // prior implicit behaviour for shaders like datamosh).
+            if (pe.loc_iFeedback >= 0) glUniform1i(pe.loc_iFeedback, 0);
 
             glDrawArrays(GL_TRIANGLES, 0, 3);
             ++pe.frameCounter;
