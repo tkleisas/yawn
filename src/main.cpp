@@ -38,6 +38,8 @@
 
 #ifndef _WIN32
 #include <execinfo.h>
+#include <unistd.h>   // write, STDERR_FILENO
+#include <fcntl.h>    // open
 #endif
 
 // Redirect stdout/stderr to a log file for debugging
@@ -54,6 +56,38 @@ static void initLogging() {
 }
 
 // ─── Crash handler ──────────────────────────────────────────────────────────
+
+#ifndef _WIN32
+// Log fd opened once at startup so the signal handler never needs the
+// malloc-backed fopen.
+static int g_crashLogFd = -1;
+
+// Async-signal-safe crash writer. A SIGSEGV from heap corruption very
+// often fires *inside* malloc with the arena lock held; fopen / fprintf /
+// backtrace_symbols all allocate and would re-take that lock and
+// self-deadlock — which is why the app HUNG ("not responding") instead of
+// crashing. Use only write(2) + backtrace_symbols_fd, both async-signal-
+// safe, so a crash always terminates cleanly and leaves a log.
+static void writeCrashSafe(const char* reason) {
+    const int fd = (g_crashLogFd >= 0) ? g_crashLogFd : STDERR_FILENO;
+    auto put = [fd](const char* s) {
+        if (!s) return;
+        size_t n = std::strlen(s);
+        while (n > 0) {
+            ssize_t w = ::write(fd, s, n);
+            if (w <= 0) break;
+            s += w; n -= static_cast<size_t>(w);
+        }
+    };
+    put("\n========== CRASH (signal) ==========\n");
+    put("Reason: "); put(reason); put("\n");
+    put("Stack trace:\n");
+    void* stack[64];
+    int frames = backtrace(stack, 64);
+    backtrace_symbols_fd(stack, frames, fd);  // async-signal-safe, no malloc
+    put("====================================\n");
+}
+#endif
 
 static void writeCrashLog(const char* reason) {
     FILE* f = std::fopen("yawn.log", "a");
@@ -132,7 +166,13 @@ static void signalHandler(int sig) {
         case SIGILL:  name = "SIGILL (Illegal instruction)"; break;
         default: break;
     }
+    // Async-signal-safe path on POSIX (writeCrashLog's stdio/malloc can
+    // deadlock when the signal interrupted malloc — see writeCrashSafe).
+#ifdef _WIN32
     writeCrashLog(name);
+#else
+    writeCrashSafe(name);
+#endif
     std::signal(sig, SIG_DFL);
     std::raise(sig);
 }
@@ -200,6 +240,11 @@ static LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS* exInfo) {
 #endif
 
 static void initCrashHandler() {
+#ifndef _WIN32
+    // Pre-open the crash log so the (async-signal-safe) signal handler can
+    // write to it with write(2) without touching malloc/stdio.
+    g_crashLogFd = ::open("yawn.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+#endif
     std::signal(SIGSEGV, signalHandler);
     std::signal(SIGABRT, signalHandler);
     std::signal(SIGFPE,  signalHandler);
