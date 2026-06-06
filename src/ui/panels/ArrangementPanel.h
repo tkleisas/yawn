@@ -82,6 +82,7 @@ public:
     using ClipChangeCallback     = std::function<void(int track)>;
     using TrackArrToggleCallback = std::function<void(int track, bool active)>;
     using ClipContextMenuCallback = std::function<void(int track, int clipIdx, float mx, float my)>;
+    using TrackContextMenuCallback = std::function<void(int track, float mx, float my)>;
     using ClipDoubleClickCallback = std::function<void(int track, int clipIdx)>;
 
     void setOnTrackClick(TrackClickCallback cb)         { m_onTrackClick = std::move(cb); }
@@ -89,6 +90,7 @@ public:
     void setOnClipChange(ClipChangeCallback cb)         { m_onClipChange = std::move(cb); }
     void setOnTrackArrToggle(TrackArrToggleCallback cb) { m_onTrackArrToggle = std::move(cb); }
     void setOnClipContextMenu(ClipContextMenuCallback cb) { m_onClipContextMenu = std::move(cb); }
+    void setOnTrackContextMenu(TrackContextMenuCallback cb) { m_onTrackContextMenu = std::move(cb); }
     void setOnClipDoubleClick(ClipDoubleClickCallback cb) { m_onClipDoubleClick = std::move(cb); }
 
     // ─── Track rename ─────────────────────────────────────────────────
@@ -274,6 +276,7 @@ private:
     LoopChangeCallback       m_onLoopChange;
     RenameCallback           m_onTrackRenamed;
     ClipContextMenuCallback  m_onClipContextMenu;
+    TrackContextMenuCallback m_onTrackContextMenu;
     ClipDoubleClickCallback  m_onClipDoubleClick;
 
     // Inline track rename state

@@ -320,6 +320,19 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
         float relY = e.y - gridY + m_scrollY;
         int track = trackAtY(relY);
         if (track >= 0 && track < m_project->numTracks()) {
+            // Right-click anywhere on the header → track context menu
+            // (add effect/instrument, etc.). Without this, that menu was
+            // reachable only from the Session-view track headers, so a
+            // user working in Arrangement view had to flip back to Session
+            // just to add a device. Select the track first so the menu and
+            // detail panel target the right track, then defer to the host.
+            if (isRight(e)) {
+                m_selectedTrack = track;
+                if (m_onTrackClick) m_onTrackClick(track);
+                if (m_onTrackContextMenu) m_onTrackContextMenu(track, e.x, e.y);
+                return true;
+            }
+
             float ty = gridY + trackYOffset(track) - m_scrollY;
             float baseH = trackBaseHeight(track);
 
