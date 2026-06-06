@@ -8823,6 +8823,36 @@ void App::update() {
 }
 
 void App::render() {
+    // The main-window swap below is vsync-blocked; when the main window is
+    // genuinely off-screen (minimized / hidden / fully occluded) the
+    // compositor throttles that swap to a crawl, and since the visual
+    // output is ticked right after it, the VJ output's frame rate gets
+    // dragged down too. In that state, skip the main render+swap entirely
+    // and just drive the visual output: its own window vsync paces the
+    // loop when visible, otherwise a short sleep keeps us off a 100%-CPU
+    // busy spin. NOTE: key on visibility only, NOT input focus — an
+    // unfocused-but-visible main window must keep rendering or interactive
+    // overlays (e.g. the right-click context menu) never paint.
+    {
+        const SDL_WindowFlags wf = SDL_GetWindowFlags(m_mainWindow.getHandle());
+        const bool mainOffScreen =
+            (wf & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED)) != 0;
+        const bool outputVisible  = m_visualEngine.isOutputVisible();
+        if (mainOffScreen) {
+            if (outputVisible) {
+                const auto& transport = m_audioEngine.transport();
+                const double sr = std::max(1.0, m_audioEngine.sampleRate());
+                const double seconds =
+                    static_cast<double>(transport.positionInSamples()) / sr;
+                const double beats = transport.positionInBeats();
+                m_visualEngine.tick(seconds, beats, transport.isPlaying());
+            } else {
+                SDL_Delay(8);
+            }
+            return;
+        }
+    }
+
     m_mainWindow.makeCurrent();
 
     int w = m_mainWindow.getWidth();
