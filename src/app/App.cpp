@@ -2117,6 +2117,41 @@ void App::pollVisualKnobAutomation() {
     }
 }
 
+void App::promptNumber(const char* title, const std::string& def,
+                       std::function<void(const std::string&)> onText) {
+    SDL_StartTextInput(m_mainWindow.getHandle());
+    m_textInputDialog.prompt(title, def,
+        [this, onText = std::move(onText)](const std::string& text) {
+            SDL_StopTextInput(m_mainWindow.getHandle());
+            onText(text);
+        });
+}
+
+void App::promptCustomFloat(const char* title, float current, float lo, float hi,
+                            float promptScale, std::function<void(float)> apply) {
+    if (promptScale == 0.0f) promptScale = 1.0f;
+    char def[32];
+    std::snprintf(def, sizeof def, "%g", current / promptScale);
+    promptNumber(title, def,
+        [lo, hi, promptScale, apply = std::move(apply)](const std::string& text) {
+            float v;
+            try { v = std::stof(text); } catch (...) { return; }
+            v = std::clamp(v * promptScale, lo, hi);
+            apply(v);
+        });
+}
+
+void App::promptCustomInt(const char* title, int current, int lo, int hi,
+                          std::function<void(int)> apply) {
+    promptNumber(title, std::to_string(current),
+        [lo, hi, apply = std::move(apply)](const std::string& text) {
+            int v;
+            try { v = std::stoi(text); } catch (...) { return; }
+            v = std::clamp(v, lo, hi);
+            apply(v);
+        });
+}
+
 void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my) {
     using namespace ui::fw2::Menu;
     using ui::fw2::MenuEntry;
@@ -2590,6 +2625,20 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                                 markDirty();
                             }));
                     }
+                    sItems.push_back(separator());
+                    sItems.push_back(item("Custom…",
+                        [this, trackIndex, sceneIndex, curSpeed]() {
+                            promptCustomFloat("Animation Speed (×)", curSpeed,
+                                0.05f, 16.0f, 1.0f,
+                                [this, trackIndex, sceneIndex](float sp) {
+                                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                                    if (!s || !s->visualClip) return;
+                                    s->visualClip->animSpeed = sp;
+                                    m_visualEngine.setLayerAnimation(trackIndex,
+                                        s->visualClip->animClip, sp);
+                                    markDirty();
+                                });
+                        }));
                     aItems.push_back(submenu("Speed", std::move(sItems)));
                     items.push_back(submenu("Animation", std::move(aItems)));
                 }
@@ -2618,6 +2667,10 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addLen("8 bars",  8);
             addLen("16 bars", 16);
             addLen("32 bars", 32);
+            lenItems.push_back(separator());
+            lenItems.push_back(item("Custom…", [this, setLen, curBars]() {
+                promptCustomInt("Clip Length (bars)", curBars, 1, 4096, setLen);
+            }));
             items.push_back(submenu("Clip Length", std::move(lenItems)));
         }
 
@@ -2700,6 +2753,11 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addLoop("4 bars", 4);
             addLoop("8 bars", 8);
             addLoop("16 bars",16);
+            loopItems.push_back(separator());
+            loopItems.push_back(item("Custom…", [this, applyTiming, curRate, curBars]() {
+                promptCustomInt("Video Loop (bars, 0 = free)", curBars, 0, 4096,
+                    [applyTiming, curRate](int b){ applyTiming(b, curRate); });
+            }));
             items.push_back(submenu("Video Loop", std::move(loopItems)));
 
             // Playback Rate submenu (F.3).
@@ -2714,6 +2772,11 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addRate("1× (normal)", 1.0f);
             addRate("2×",    2.0f);
             addRate("4×",    4.0f);
+            rateItems.push_back(separator());
+            rateItems.push_back(item("Custom…", [this, applyTiming, curBars, curRate]() {
+                promptCustomFloat("Video Rate (×)", curRate, 0.05f, 16.0f, 1.0f,
+                    [applyTiming, curBars](float r){ applyTiming(curBars, r); });
+            }));
             items.push_back(submenu("Video Rate", std::move(rateItems)));
 
             // In/Out trim submenu — picks a sub-range of the source.
@@ -2740,6 +2803,29 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             addTrim("Middle (25–75%)",       0.25f, 0.75f);
             addTrim("First quarter (0–25%)", 0.00f, 0.25f);
             addTrim("Last quarter (75–100%)",0.75f, 1.00f);
+            trimItems.push_back(separator());
+            trimItems.push_back(item("Custom… (in out %)",
+                [this, trackIndex, sceneIndex, curIn, curOut]() {
+                    char def[48];
+                    std::snprintf(def, sizeof def, "%g %g",
+                                  curIn * 100.0f, curOut * 100.0f);
+                    promptNumber("Video Trim — in out, percent (e.g. 25 75)", def,
+                        [this, trackIndex, sceneIndex](const std::string& t) {
+                            float inP = 0.0f, outP = 0.0f;
+                            if (std::sscanf(t.c_str(), "%f %f", &inP, &outP) != 2)
+                                return;
+                            float inF  = std::clamp(inP  * 0.01f, 0.0f, 1.0f);
+                            float outF = std::clamp(outP * 0.01f, 0.0f, 1.0f);
+                            if (outF <= inF) return;   // ignore invalid range
+                            auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                            if (!s || !s->visualClip) return;
+                            s->visualClip->videoIn  = inF;
+                            s->visualClip->videoOut = outF;
+                            if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                                m_visualEngine.setLayerVideoTrim(trackIndex, inF, outF);
+                            markDirty();
+                        });
+                }));
             items.push_back(submenu("Video Trim", std::move(trimItems)));
 
             items.push_back(separator());
@@ -4048,6 +4134,15 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
                 apply(snapshot);
             }, std::abs(cur->rate - rp.beats) > 0.001f));
     }
+    rateItems.push_back(separator());
+    rateItems.push_back(item("Custom…", [this, apply, snapshot]() mutable {
+        promptCustomFloat("LFO Rate (beats per cycle)", snapshot.rate,
+            0.01f, 64.0f, 1.0f,
+            [apply, snapshot](float v) mutable {
+                snapshot.rate = v; snapshot.sync = true; snapshot.enabled = true;
+                apply(snapshot);
+            });
+    }));
     items.push_back(submenu("Rate", std::move(rateItems)));
 
     // Depth submenu.
@@ -4063,6 +4158,14 @@ void App::showVisualKnobLFOMenu(int knobIdx, float mx, float my) {
                 apply(snapshot);
             }, std::abs(cur->depth - dv) > 0.001f));
     }
+    depthItems.push_back(separator());
+    depthItems.push_back(item("Custom…", [this, apply, snapshot]() mutable {
+        promptCustomFloat("LFO Depth (%)", snapshot.depth, 0.0f, 1.0f, 0.01f,
+            [apply, snapshot](float v) mutable {
+                snapshot.depth = v; snapshot.enabled = true;
+                apply(snapshot);
+            });
+    }));
     items.push_back(submenu("Depth", std::move(depthItems)));
 
     ui::fw2::ContextMenu::show(std::move(items),

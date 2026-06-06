@@ -121,6 +121,21 @@ private:
     void showVisualKnobLFOMenu(int knobIdx, float mx, float my);
     void showShaderLibraryMenu(float mx, float my);
 
+    // "Custom…" numeric entry for preset menus. promptNumber opens the
+    // modal text dialog pre-filled with `def` and hands the raw string to
+    // `onText` on confirm (SDL text-input start/stop handled here). The
+    // typed wrappers parse + clamp to [lo,hi] and call apply(value);
+    // promptScale lets the user enter display units (e.g. 0.01 to type a
+    // percent for a 0..1 param) — default shown = current/promptScale.
+    // No undo/markDirty here: the apply callback owns persistence, matching
+    // each menu's preset items.
+    void promptNumber(const char* title, const std::string& def,
+                      std::function<void(const std::string&)> onText);
+    void promptCustomFloat(const char* title, float current, float lo, float hi,
+                           float promptScale, std::function<void(float)> apply);
+    void promptCustomInt(const char* title, int current, int lo, int hi,
+                         std::function<void(int)> apply);
+
     // MIDI LFO modulation-target picker (shown from the LFO device strip).
     // Builds a grouped menu of every modulatable target reachable from the
     // LFO at (track, chainSlot): instrument / audio-fx / midi-fx / mixer
