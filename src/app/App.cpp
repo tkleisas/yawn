@@ -40,6 +40,7 @@
 #include "effects/Resampler.h"
 #include "effects/ClockDrift.h"
 #include "effects/CDError.h"
+#include "effects/AutoPanner.h"
 #include "midi/Arpeggiator.h"
 #include "midi/Chord.h"
 #include "midi/Scale.h"
@@ -1378,6 +1379,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Phaser",      [](){ return std::make_unique<effects::Phaser>(); });
     addFxItem("Wah",         [](){ return std::make_unique<effects::Wah>(); });
     addFxItem("Rotary",      [](){ return std::make_unique<effects::Rotary>(); });
+    addFxItem("Auto Panner", [](){ return std::make_unique<effects::AutoPanner>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
     addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
     addFxItem("Beat Repeat",   [](){ return std::make_unique<effects::BeatRepeat>(); });
@@ -5251,6 +5253,7 @@ bool App::init() {
         addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
         addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
         addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
+        addFx("Auto Panner",     [](){ return std::make_unique<effects::AutoPanner>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
         addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
         addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
@@ -6162,6 +6165,7 @@ bool App::init() {
             addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
             addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
             addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
+            addFx("Auto Panner",     [](){ return std::make_unique<effects::AutoPanner>(); });
             addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
             addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
             addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
@@ -6300,6 +6304,7 @@ bool App::init() {
             addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
             addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
             addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
+            addFx("Auto Panner",     [](){ return std::make_unique<effects::AutoPanner>(); });
             addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
             addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
             addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });

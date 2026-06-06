@@ -51,6 +51,7 @@
 #include "effects/Resampler.h"
 #include "effects/ClockDrift.h"
 #include "effects/CDError.h"
+#include "effects/AutoPanner.h"
 
 #include "midi/MidiEffect.h"
 #include "midi/Arpeggiator.h"
@@ -128,6 +129,7 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"resampler",   [] { return std::make_unique<effects::Resampler>(); }},
         {"clockdrift",  [] { return std::make_unique<effects::ClockDrift>(); }},
         {"cderror",     [] { return std::make_unique<effects::CDError>(); }},
+        {"autopanner",  [] { return std::make_unique<effects::AutoPanner>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
