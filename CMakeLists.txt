@@ -44,6 +44,15 @@ function(yawn_set_warnings target)
             -Werror=return-local-addr      # returning addr of local
             -Werror=uninitialized          # potentially uninitialized local
         )
+        # A sanitizer build perturbs the optimizer enough to trip spurious
+        # -Wmaybe-uninitialized in libstdc++ (<regex> / std::function), which
+        # -Werror=uninitialized then promotes to an error. Relax just that
+        # one warning when sanitizing so diagnostic builds compile. Appended
+        # after the block above so it wins on the command line. No effect on
+        # normal (non-sanitizer) builds.
+        if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+            target_compile_options(${target} PRIVATE -Wno-error=maybe-uninitialized)
+        endif()
     endif()
 endfunction()
 
