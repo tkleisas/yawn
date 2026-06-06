@@ -50,7 +50,9 @@ static bool isBuiltInEffect(const std::string& n) {
         n == "Amp Simulator" ||
         n == "Phaser"       || n == "Wah"          || n == "Rotary" ||
         n == "Oscilloscope" || n == "Spectrum Analyzer" || n == "Spectrum" ||
-        n == "Tuner")
+        n == "Tuner" ||
+        n == "Beat Repeat"  || n == "Buffer Repeat" || n == "Resampler" ||
+        n == "Clock Drift"  || n == "CD Error")
         return true;
     // MIDI effects — lumped with audio effects for the 2-bucket filter.
     if (n == "Arpeggiator"  || n == "Chord"        || n == "Scale" ||

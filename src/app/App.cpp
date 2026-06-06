@@ -35,6 +35,11 @@
 #include "effects/Oscilloscope.h"
 #include "effects/SpectrumAnalyzer.h"
 #include "effects/Tuner.h"
+#include "effects/BeatRepeat.h"
+#include "effects/BufferRepeat.h"
+#include "effects/Resampler.h"
+#include "effects/ClockDrift.h"
+#include "effects/CDError.h"
 #include "midi/Arpeggiator.h"
 #include "midi/Chord.h"
 #include "midi/Scale.h"
@@ -1368,6 +1373,11 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     addFxItem("Rotary",      [](){ return std::make_unique<effects::Rotary>(); });
     addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
     addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
+    addFxItem("Beat Repeat",   [](){ return std::make_unique<effects::BeatRepeat>(); });
+    addFxItem("Buffer Repeat", [](){ return std::make_unique<effects::BufferRepeat>(); });
+    addFxItem("Resampler",     [](){ return std::make_unique<effects::Resampler>(); });
+    addFxItem("Clock Drift",   [](){ return std::make_unique<effects::ClockDrift>(); });
+    addFxItem("CD Error",      [](){ return std::make_unique<effects::CDError>(); });
     addFxItem("Noise Gate",  [](){ return std::make_unique<effects::NoiseGate>(); });
     addFxItem("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
     addFxItem("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
@@ -5236,6 +5246,11 @@ bool App::init() {
         addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
         addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
         addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
+        addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
+        addFx("Buffer Repeat",   [](){ return std::make_unique<effects::BufferRepeat>(); });
+        addFx("Resampler",       [](){ return std::make_unique<effects::Resampler>(); });
+        addFx("Clock Drift",     [](){ return std::make_unique<effects::ClockDrift>(); });
+        addFx("CD Error",        [](){ return std::make_unique<effects::CDError>(); });
         addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
         addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
         addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
@@ -6142,6 +6157,11 @@ bool App::init() {
             addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
             addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
             addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
+            addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
+            addFx("Buffer Repeat",   [](){ return std::make_unique<effects::BufferRepeat>(); });
+            addFx("Resampler",       [](){ return std::make_unique<effects::Resampler>(); });
+            addFx("Clock Drift",     [](){ return std::make_unique<effects::ClockDrift>(); });
+            addFx("CD Error",        [](){ return std::make_unique<effects::CDError>(); });
             addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
             addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
             addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
@@ -6275,6 +6295,11 @@ bool App::init() {
             addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
             addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
             addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
+            addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
+            addFx("Buffer Repeat",   [](){ return std::make_unique<effects::BufferRepeat>(); });
+            addFx("Resampler",       [](){ return std::make_unique<effects::Resampler>(); });
+            addFx("Clock Drift",     [](){ return std::make_unique<effects::ClockDrift>(); });
+            addFx("CD Error",        [](){ return std::make_unique<effects::CDError>(); });
             addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
             addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
             addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });

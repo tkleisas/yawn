@@ -46,6 +46,11 @@
 #include "effects/SplineEQ.h"
 #include "effects/NeuralAmp.h"
 #include "effects/ConvolutionReverb.h"
+#include "effects/BeatRepeat.h"
+#include "effects/BufferRepeat.h"
+#include "effects/Resampler.h"
+#include "effects/ClockDrift.h"
+#include "effects/CDError.h"
 
 #include "midi/MidiEffect.h"
 #include "midi/Arpeggiator.h"
@@ -118,6 +123,11 @@ inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string
         {"splineeq",    [] { return std::make_unique<effects::SplineEQ>(); }},
         {"neuralamp",   [] { return std::make_unique<effects::NeuralAmp>(); }},
         {"convreverb",  [] { return std::make_unique<effects::ConvolutionReverb>(); }},
+        {"beatrepeat",  [] { return std::make_unique<effects::BeatRepeat>(); }},
+        {"bufferrepeat",[] { return std::make_unique<effects::BufferRepeat>(); }},
+        {"resampler",   [] { return std::make_unique<effects::Resampler>(); }},
+        {"clockdrift",  [] { return std::make_unique<effects::ClockDrift>(); }},
+        {"cderror",     [] { return std::make_unique<effects::CDError>(); }},
     };
     auto it = registry.find(id);
     return (it != registry.end()) ? it->second() : nullptr;
@@ -207,6 +217,11 @@ inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const
     if (n == "Spline EQ")         return std::make_unique<yawn::effects::SplineEQ>();
     if (n == "Neural Amp")        return std::make_unique<yawn::effects::NeuralAmp>();
     if (n == "Convolution Reverb")return std::make_unique<yawn::effects::ConvolutionReverb>();
+    if (n == "Beat Repeat")       return std::make_unique<yawn::effects::BeatRepeat>();
+    if (n == "Buffer Repeat")     return std::make_unique<yawn::effects::BufferRepeat>();
+    if (n == "Resampler")         return std::make_unique<yawn::effects::Resampler>();
+    if (n == "Clock Drift")       return std::make_unique<yawn::effects::ClockDrift>();
+    if (n == "CD Error")          return std::make_unique<yawn::effects::CDError>();
     return nullptr;
 }
 

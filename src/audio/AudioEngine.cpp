@@ -1302,6 +1302,13 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
     }
 
+    // Push the host tempo to every effect chain before the mixer runs
+    // them, so tempo-synced effects (Beat Repeat, Delay sync, …) line up
+    // with the transport this block.
+    m_mixer.setChainsTempo(m_transport.bpm(),
+                           m_transport.positionInBeats(),
+                           m_transport.isPlaying() && !m_transport.isCountingIn());
+
     // Run mixer: per-track fader/pan/mute/solo, sends→returns, master
     // Mixer clears output before writing
     m_mixer.process(m_trackBufferPtrs, kMaxTracks, output, nf, nc);

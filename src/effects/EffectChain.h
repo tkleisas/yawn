@@ -47,6 +47,12 @@ public:
             if (slot) slot->setSidechainInput(buffer);
     }
 
+    // Fan the host tempo out to every effect (see AudioEffect::setTempo).
+    void setTempo(double bpm, double beatPosition, bool playing) {
+        for (auto& slot : m_slots)
+            if (slot) slot->setTempo(bpm, beatPosition, playing);
+    }
+
     AudioEffect* insert(int slot, std::unique_ptr<AudioEffect> effect) {
         if (slot < 0 || slot >= kMaxEffectsPerChain) return nullptr;
         effect->init(m_sampleRate, m_maxBlockSize);

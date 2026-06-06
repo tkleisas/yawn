@@ -73,6 +73,16 @@ public:
     // the master out — this phase is just the reporting plumbing.
     virtual int latencySamples() const { return 0; }
 
+    // ── Host tempo ─────────────────────────────────────────────────
+    // Pushed by the engine once per block (before process) on every
+    // chain: bpm = current tempo, beatPosition = transport position in
+    // quarter-note beats, playing = transport running. Tempo-synced
+    // effects (Beat Repeat, Delay sync, …) override this; the default
+    // ignores it. Always called, even when stopped (playing=false).
+    virtual void setTempo(double bpm, double beatPosition, bool playing) {
+        (void)bpm; (void)beatPosition; (void)playing;
+    }
+
     // ── Sidechain input ────────────────────────────────────────────
     // Mirrors Instrument's sidechain plumbing — set by AudioEngine
     // each buffer cycle to point at the source track's interleaved

@@ -190,6 +190,15 @@ public:
     }
     effects::EffectChain& masterEffects() { return m_masterFx; }
 
+    // Push the host tempo to every effect chain (track / return / master)
+    // once per block. Tempo-synced effects (Beat Repeat, Delay sync, …)
+    // read it; the rest ignore it. Called by AudioEngine before process().
+    void setChainsTempo(double bpm, double beatPosition, bool playing) {
+        for (auto& c : m_trackFx)  c.setTempo(bpm, beatPosition, playing);
+        for (auto& c : m_returnFx) c.setTempo(bpm, beatPosition, playing);
+        m_masterFx.setTempo(bpm, beatPosition, playing);
+    }
+
     // ── Latency reporting ──
     // Per-track / per-bus / master values are just the sum of the
     // associated EffectChain's latencies. The UI reads these to show

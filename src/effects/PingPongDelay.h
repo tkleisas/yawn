@@ -46,6 +46,7 @@ public:
     const char* id()   const override { return "pingpongdelay"; }
 
     void setBPM(double bpm) { m_bpm = bpm; }
+    void setTempo(double bpm, double, bool) override { if (bpm > 0.0) m_bpm = bpm; }
 
     void init(double sampleRate, int maxBlockSize) override {
         m_sampleRate = sampleRate;
