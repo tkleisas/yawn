@@ -504,7 +504,12 @@ void ContextMenuManager::openSubmenuForRow(int parentLevelIdx, int parentRow,
     sub.bounds        = computeSubmenuBounds(ctx, sub.entries, parent.bounds, parentRow);
     m_levels.push_back(std::move(sub));
 
-    parent.openSubmenuRow = parentRow;
+    // push_back above may reallocate m_levels, leaving `parent` (and
+    // `trigger`) dangling — writing through them here was a heap
+    // use-after-free that corrupted the allocator (surfaced later as
+    // "corrupted double linked list"). Re-index by parentLevelIdx, which
+    // stays valid across the grow.
+    m_levels[parentLevelIdx].openSubmenuRow = parentRow;
 }
 
 void ContextMenuManager::closeLevelsFrom(int firstToClose) {
