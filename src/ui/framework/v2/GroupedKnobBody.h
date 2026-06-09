@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -210,15 +211,11 @@ public:
 
     GroupedKnobBody() { setName("GroupedKnobBody"); }
 
-    ~GroupedKnobBody() override {
-        for (auto& sec : m_sections)
-            for (auto& ke : sec.knobs)
-                delete ke.knob;
-        delete m_display;
-    }
+    // Knobs and the display widget are unique_ptr-owned — no manual
+    // destructor needed.
 
     void configure(const Config& config, const std::vector<ParamDesc>& allParams) {
-        m_display      = config.display;
+        m_display.reset(config.display);
         m_displayWidth = config.displayWidth;
 
         for (auto& sd : config.sections) {
@@ -227,7 +224,7 @@ public:
             for (int idx : sd.paramIndices) {
                 if (idx < 0 || idx >= static_cast<int>(allParams.size())) continue;
                 const auto& pd = allParams[idx];
-                auto* k = new FwKnob();
+                auto k = std::make_unique<FwKnob>();
                 k->setRange(pd.minVal, pd.maxVal);
                 k->setDefaultValue(pd.defaultVal);
                 k->setValue(pd.defaultVal);
@@ -267,7 +264,7 @@ public:
                     m_onParamTouch(pidx, startV, /*touching*/true);
                     m_onParamTouch(pidx, endV,   /*touching*/false);
                 });
-                sec.knobs.push_back({pd.index, k});
+                sec.knobs.push_back({pd.index, std::move(k)});
             }
             m_sections.push_back(std::move(sec));
         }
@@ -315,7 +312,7 @@ public:
     // The hosting panel stashes its v1 UIContext here before calling
     // render()/onLayout() so we can drive the v1 display widget's
     // lifecycle. Non-owning; valid only for the duration of the call.
-    Widget* display() const { return m_display; }
+    Widget* display() const { return m_display.get(); }
 
     // ─── fw2 Widget overrides ───────────────────────────────────────
 
@@ -463,7 +460,7 @@ public:
                 ev.lx = e.x - kb.x;
                 ev.ly = e.y - kb.y;
                 ke.knob->dispatchMouseDown(ev);
-                m_draggingKnob = ke.knob;
+                m_draggingKnob = ke.knob.get();
                 captureMouse();
                 return true;
             }
@@ -516,7 +513,7 @@ public:
     FwKnob* editingKnob() const {
         for (auto& sec : m_sections)
             for (auto& ke : sec.knobs)
-                if (ke.knob->isEditing()) return ke.knob;
+                if (ke.knob->isEditing()) return ke.knob.get();
         return nullptr;
     }
 
@@ -556,14 +553,14 @@ private:
     static constexpr float kPadX       = 6.0f;
     static constexpr int   kMaxRows    = 2;
 
-    struct KnobEntry { int paramIndex; FwKnob* knob; };
+    struct KnobEntry { int paramIndex; std::unique_ptr<FwKnob> knob; };
     struct InternalSection {
         std::string label;
         std::vector<KnobEntry> knobs;
         float x = 0, w = 0;
     };
 
-    Widget*                           m_display      = nullptr;
+    std::unique_ptr<Widget>           m_display;
     float                             m_displayWidth = 0;
     std::vector<InternalSection>      m_sections;
 

@@ -304,7 +304,7 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
     if (m_scroll.dispatchMouseDown(e)) return true;
 
     for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
-        auto* dw = m_deviceWidgets[i];
+        auto* dw = m_deviceWidgets[i].get();
         const auto& db = dw->bounds();
         bool inside = mx >= db.x && mx < db.x + db.w && my >= db.y && my < db.y + db.h;
         if (inside) {
@@ -316,7 +316,7 @@ bool DetailPanelWidget::onMouseDown(MouseEvent& e) {
 
 bool DetailPanelWidget::handleKnobRightClick(size_t deviceIdx, float mx, float my) {
     auto& ref = m_deviceRefs[deviceIdx];
-    auto* dw = m_deviceWidgets[deviceIdx];
+    auto* dw = m_deviceWidgets[deviceIdx].get();
     auto& db = dw->bounds();
 
     int paramCount = ref.paramCount();

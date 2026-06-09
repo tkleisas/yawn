@@ -68,6 +68,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <memory>
 
 namespace yawn {
 namespace ui {
@@ -361,7 +362,7 @@ public:
     // Check if any clip-property knob or device knob is in text-edit mode
     bool hasEditingKnob() const {
         if (editingKnob() != nullptr) return true;
-        for (auto* dw : m_deviceWidgets)
+        for (auto& dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return true;
         return false;
     }
@@ -380,7 +381,7 @@ public:
             }
             return k->dispatchKeyDown(ke);
         }
-        for (auto* dw : m_deviceWidgets)
+        for (auto& dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return dw->forwardKeyDown(key);
         return false;
     }
@@ -391,7 +392,7 @@ public:
             k->takeTextInput(text ? text : "");
             return true;
         }
-        for (auto* dw : m_deviceWidgets)
+        for (auto& dw : m_deviceWidgets)
             if (dw->hasEditingKnob()) return dw->forwardTextInput(text);
         return false;
     }
@@ -399,7 +400,7 @@ public:
     // Cancel any knob in text-edit mode (e.g., when clicking outside)
     void cancelEditingKnobs() {
         if (auto* k = editingKnob()) k->endEdit(/*commit*/false);
-        for (auto* dw : m_deviceWidgets) dw->cancelEditingKnobs();
+        for (auto& dw : m_deviceWidgets) dw->cancelEditingKnobs();
     }
 
     // Show audio clip view: waveform + properties + effect chain
@@ -587,7 +588,6 @@ public:
 
         saveExpandedStates();
         m_scroll.removeAllChildren();
-        for (auto* dw : m_deviceWidgets) delete dw;
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
         // The display-updater lambdas capture raw pointers into the device
@@ -629,7 +629,8 @@ public:
                 ref.chainIndex = i;
                 ref.audioEffect = fx;
 
-                auto* dw = new DeviceWidget();
+                auto dwOwn = std::make_unique<DeviceWidget>();
+                auto* dw = dwOwn.get();
                 dw->setDeviceName(fx->name());
                 dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
                 dw->setRemovable(true);
@@ -646,7 +647,7 @@ public:
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
                 m_scroll.addChild(dw);
-                m_deviceWidgets.push_back(dw);
+                m_deviceWidgets.push_back(std::move(dwOwn));
                 m_deviceRefs.push_back(ref);
             }
         }
@@ -785,7 +786,6 @@ public:
         saveExpandedStates();
 
         m_scroll.removeAllChildren();
-        for (auto* dw : m_deviceWidgets) delete dw;
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
         m_displayUpdaters.clear();
@@ -808,7 +808,8 @@ public:
                 ref.chainIndex = i;
                 ref.midiEffect = fx;
 
-                auto* dw = new DeviceWidget();
+                auto dwOwn = std::make_unique<DeviceWidget>();
+                auto* dw = dwOwn.get();
                 dw->setDeviceName(fx->name());
                 dw->setDeviceType(DeviceHeaderWidget::DeviceType::MidiEffect);
                 dw->setRemovable(true);
@@ -822,7 +823,7 @@ public:
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
                 m_scroll.addChild(dw);
-                m_deviceWidgets.push_back(dw);
+                m_deviceWidgets.push_back(std::move(dwOwn));
                 m_deviceRefs.push_back(ref);
             }
         }
@@ -834,7 +835,8 @@ public:
             ref.chainIndex = 0;
             ref.instrument = inst;
 
-            auto* dw = new DeviceWidget();
+            auto dwOwn = std::make_unique<DeviceWidget>();
+            auto* dw = dwOwn.get();
             dw->setDeviceName(inst->name());
             dw->setDeviceType(DeviceHeaderWidget::DeviceType::Instrument);
             dw->setRemovable(false);
@@ -848,7 +850,7 @@ public:
             snapPoints.push_back(xPos);
             xPos += dw->preferredWidth() + kDeviceGap;
             m_scroll.addChild(dw);
-            m_deviceWidgets.push_back(dw);
+            m_deviceWidgets.push_back(std::move(dwOwn));
             m_deviceRefs.push_back(ref);
         }
 
@@ -862,7 +864,8 @@ public:
                 ref.chainIndex = i;
                 ref.audioEffect = fx;
 
-                auto* dw = new DeviceWidget();
+                auto dwOwn = std::make_unique<DeviceWidget>();
+                auto* dw = dwOwn.get();
                 dw->setDeviceName(fx->name());
                 dw->setDeviceType(DeviceHeaderWidget::DeviceType::AudioEffect);
                 dw->setRemovable(true);
@@ -879,7 +882,7 @@ public:
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
                 m_scroll.addChild(dw);
-                m_deviceWidgets.push_back(dw);
+                m_deviceWidgets.push_back(std::move(dwOwn));
                 m_deviceRefs.push_back(ref);
             }
         }
@@ -904,7 +907,8 @@ public:
                 ref.padNote     = chainIdx;
                 ref.instrument  = chRef.instrument.get();
 
-                auto* dw = new DeviceWidget();
+                auto dwOwn = std::make_unique<DeviceWidget>();
+                auto* dw = dwOwn.get();
                 char nameBuf[64];
                 std::snprintf(nameBuf, sizeof(nameBuf), "Chain %d: %s",
                               chainIdx + 1, chRef.instrument->name());
@@ -920,7 +924,7 @@ public:
                 snapPoints.push_back(xPos);
                 xPos += dw->preferredWidth() + kDeviceGap;
                 m_scroll.addChild(dw);
-                m_deviceWidgets.push_back(dw);
+                m_deviceWidgets.push_back(std::move(dwOwn));
                 m_deviceRefs.push_back(ref);
             }
         }
@@ -947,7 +951,8 @@ public:
                     ref.padNote     = chainIdx;
                     ref.audioEffect = fx;
 
-                    auto* dw = new DeviceWidget();
+                    auto dwOwn = std::make_unique<DeviceWidget>();
+                auto* dw = dwOwn.get();
                     char nameBuf[64];
                     std::snprintf(nameBuf, sizeof(nameBuf), "Chain %d: %s",
                                   chainIdx + 1, fx->name());
@@ -966,7 +971,7 @@ public:
                     snapPoints.push_back(xPos);
                     xPos += dw->preferredWidth() + kDeviceGap;
                     m_scroll.addChild(dw);
-                    m_deviceWidgets.push_back(dw);
+                    m_deviceWidgets.push_back(std::move(dwOwn));
                     m_deviceRefs.push_back(ref);
                 }
             }
@@ -992,7 +997,8 @@ public:
                     ref.padNote     = sel;
                     ref.audioEffect = fx;
 
-                    auto* dw = new DeviceWidget();
+                    auto dwOwn = std::make_unique<DeviceWidget>();
+                auto* dw = dwOwn.get();
                     // Tag the device name with "Pad N:" so the pad
                     // these effects belong to is unambiguous on
                     // screen — multiple track-level chains with
@@ -1016,7 +1022,7 @@ public:
                     snapPoints.push_back(xPos);
                     xPos += dw->preferredWidth() + kDeviceGap;
                     m_scroll.addChild(dw);
-                    m_deviceWidgets.push_back(dw);
+                    m_deviceWidgets.push_back(std::move(dwOwn));
                     m_deviceRefs.push_back(ref);
                 }
             }
@@ -1054,7 +1060,6 @@ public:
 
     void clear() {
         m_scroll.removeAllChildren();
-        for (auto* dw : m_deviceWidgets) delete dw;
         m_deviceWidgets.clear();
         m_deviceRefs.clear();
         m_expandStates.clear();
@@ -1268,7 +1273,7 @@ public:
         if (m_viewMode == ViewMode::AudioClip) {
             if (m_waveformWidget.dispatchMouseMove(e)) return true;
         }
-        for (auto* dw : m_deviceWidgets) {
+        for (auto& dw : m_deviceWidgets) {
             if (dw->dispatchMouseMove(e)) return true;
         }
         return false;
@@ -1346,7 +1351,7 @@ public:
         if (m_viewMode == ViewMode::AudioClip) {
             if (m_waveformWidget.dispatchMouseUp(e)) return true;
         }
-        for (auto* dw : m_deviceWidgets) {
+        for (auto& dw : m_deviceWidgets) {
             const auto& db = dw->bounds();
             if (e.x >= db.x && e.x < db.x + db.w &&
                 e.y >= db.y && e.y < db.y + db.h) {
@@ -1647,7 +1652,7 @@ private:
         // Wire drag-to-reorder: find this device's index in m_deviceWidgets
         dw->setOnDragStart([this, dw]() {
             for (size_t i = 0; i < m_deviceWidgets.size(); ++i) {
-                if (m_deviceWidgets[i] == dw) {
+                if (m_deviceWidgets[i].get() == dw) {
                     m_dragReorderActive = true;
                     m_dragSourceIdx = static_cast<int>(i);
                     m_dragInsertIdx = static_cast<int>(i);
@@ -2453,7 +2458,10 @@ private:
 
     // ── State ──
     SnapScrollContainer m_scroll;
-    std::vector<DeviceWidget*> m_deviceWidgets;  // owned
+    // Owns the device strips; m_scroll holds non-owning child pointers
+    // (the fw2 tree is not RAII-owning), so removeAllChildren() must
+    // run before this vector drops the widgets on every rebuild path.
+    std::vector<std::unique_ptr<DeviceWidget>> m_deviceWidgets;
     std::vector<DeviceRef>     m_deviceRefs;     // parallel to m_deviceWidgets
     std::vector<ExpandState>   m_expandStates;
     std::vector<std::function<void()>> m_displayUpdaters;  // instrument display updaters

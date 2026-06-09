@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,9 +65,9 @@ public:
 
     struct ParamSlot {
         enum Type { TKnob, TDentedKnob, TStepSelector, TToggle, TKnob360 };
-        FwKnob*         knob    = nullptr;
-        FwToggle*       toggle  = nullptr;
-        FwStepSelector* stepSel = nullptr;
+        std::unique_ptr<FwKnob>         knob;
+        std::unique_ptr<FwToggle>       toggle;
+        std::unique_ptr<FwStepSelector> stepSel;
         Type type = TKnob;
         int  paramIndex = -1;
 
@@ -75,9 +76,9 @@ public:
         }
 
         Widget* w2() const {
-            if (isKnob())              return knob;
-            if (type == TToggle)       return toggle;
-            if (type == TStepSelector) return stepSel;
+            if (isKnob())              return knob.get();
+            if (type == TToggle)       return toggle.get();
+            if (type == TStepSelector) return stepSel.get();
             return nullptr;
         }
 
@@ -167,13 +168,8 @@ public:
         });
     }
 
-    ~DeviceWidget() {
-        clearKnobs();
-        delete m_visualizer;
-        delete m_vizKnobGrid;
-        delete m_customPanel;
-        delete m_customBody;
-    }
+    // All owned children (param slots, visualizer, custom panel/body)
+    // are unique_ptr members — no manual destructor needed.
 
     DeviceWidget(const DeviceWidget&) = delete;
     DeviceWidget& operator=(const DeviceWidget&) = delete;
@@ -202,14 +198,14 @@ public:
                 if      (vt == "spectrum") mode = VisualizerWidget::Mode::Spectrum;
                 else if (vt == "tuner")    mode = VisualizerWidget::Mode::Tuner;
             }
-            m_visualizer  = new VisualizerWidget(mode);
-            m_vizKnobGrid = new FwGrid();
+            m_visualizer  = std::make_unique<VisualizerWidget>(mode);
+            m_vizKnobGrid = std::make_unique<FwGrid>();
             m_vizKnobGrid->setCellSize(kKnobSize + kKnobSpacing, kKnobSize + 22.0f);
             m_vizKnobGrid->setMaxRows(1);
             m_vizKnobGrid->setGridPadding(8.0f);
         } else {
-            delete m_visualizer;  m_visualizer  = nullptr;
-            delete m_vizKnobGrid; m_vizKnobGrid = nullptr;
+            m_visualizer.reset();
+            m_vizKnobGrid.reset();
         }
     }
 
@@ -222,18 +218,16 @@ public:
     // DeviceWidget.
 
     void setCustomPanel(Widget* panel, float h, float minW = 0.0f) {
-        if (m_customPanel != panel) delete m_customPanel;
-        m_customPanel  = panel;
+        if (m_customPanel.get() != panel) m_customPanel.reset(panel);
         m_customPanelH = h;
         m_customMinW   = minW;
     }
-    Widget* customPanel() const { return m_customPanel; }
+    Widget* customPanel() const { return m_customPanel.get(); }
 
     void setCustomBody(CustomDeviceBody* body) {
-        if (m_customBody != body) delete m_customBody;
-        m_customBody = body;
+        if (m_customBody.get() != body) m_customBody.reset(body);
     }
-    CustomDeviceBody* customBody() const { return m_customBody; }
+    CustomDeviceBody* customBody() const { return m_customBody.get(); }
 
     Rect customPanelLayoutRect() const { return m_customPanelRect; }
     Rect customBodyLayoutRect() const  { return m_customBodyRect; }
@@ -569,7 +563,7 @@ public:
             if (e.x >= cb.x && e.x < cb.x + cb.w &&
                 e.y >= cb.y && e.y < cb.y + cb.h) {
                 if (m_customPanel->dispatchMouseDown(e)) {
-                    m_v2Dragging = m_customPanel;
+                    m_v2Dragging = m_customPanel.get();
                     return true;
                 }
             }
@@ -669,25 +663,25 @@ public:
     const std::vector<ParamSlot>& vizKnobs() const { return m_vizKnobs; }
     FwGrid& knobGrid()                              { return m_knobGrid; }
     const FwGrid& knobGrid() const                  { return m_knobGrid; }
-    FwGrid* vizKnobGrid()                           { return m_vizKnobGrid; }
+    FwGrid* vizKnobGrid()                           { return m_vizKnobGrid.get(); }
 
 private:
     DeviceHeaderWidget     m_header;
     FwGrid                 m_knobGrid;
     std::vector<ParamSlot> m_knobs;
-    VisualizerWidget*      m_visualizer  = nullptr;
-    FwGrid*                m_vizKnobGrid = nullptr;
+    std::unique_ptr<VisualizerWidget> m_visualizer;
+    std::unique_ptr<FwGrid>           m_vizKnobGrid;
     std::vector<ParamSlot> m_vizKnobs;
 
     bool        m_isVisualizer = false;
     bool        m_expanded     = true;
     std::string m_deviceName;
 
-    // v1 cross-framework slots (non-owning)
-    Widget*                           m_customPanel = nullptr;
+    // v1 cross-framework slots (owned — see setCustomPanel/setCustomBody)
+    std::unique_ptr<Widget>           m_customPanel;
     float                              m_customPanelH = 0;
     float                              m_customMinW   = 0;
-    CustomDeviceBody* m_customBody = nullptr;
+    std::unique_ptr<CustomDeviceBody> m_customBody;
 
     // Layout rects for v1 children (filled by onLayout; read by wrapper)
     Rect m_customPanelRect{};
@@ -764,14 +758,7 @@ private:
     }
 
     void clearKnobs() {
-        auto freeSlot = [](ParamSlot& s) {
-            delete s.knob;    s.knob    = nullptr;
-            delete s.toggle;  s.toggle  = nullptr;
-            delete s.stepSel; s.stepSel = nullptr;
-        };
-        for (auto& s : m_knobs)    freeSlot(s);
         m_knobs.clear();
-        for (auto& s : m_vizKnobs) freeSlot(s);
         m_vizKnobs.clear();
         m_v2Dragging = nullptr;
     }
@@ -781,7 +768,7 @@ private:
         grid.setMaxRows(maxRows);
 
         auto makeKnob = [this](const ParamInfo& p) {
-            auto* k = new FwKnob();
+            auto k = std::make_unique<FwKnob>();
             k->setRange(p.minVal, p.maxVal);
             k->setDefaultValue(p.defaultVal);
             k->setValue(p.defaultVal);
@@ -843,14 +830,14 @@ private:
 
             switch (hint) {
             case ::yawn::WidgetHint::DentedKnob: {
-                auto* dk = makeKnob(p);
+                auto dk = makeKnob(p);
                 dk->addDetent(p.defaultVal, 0.04f);
-                slot.knob = dk;
+                slot.knob = std::move(dk);
                 slot.type = ParamSlot::TDentedKnob;
                 break;
             }
             case ::yawn::WidgetHint::StepSelector: {
-                auto* ss = new FwStepSelector();
+                auto ss = std::make_unique<FwStepSelector>();
                 ss->setRange(static_cast<int>(p.minVal + 0.5f),
                               static_cast<int>(p.maxVal + 0.5f));
                 ss->setValue(static_cast<int>(p.defaultVal + 0.5f));
@@ -873,12 +860,12 @@ private:
                         m_onParamTouch(idx, fv, /*touching*/false);
                     }
                 });
-                slot.stepSel = ss;
+                slot.stepSel = std::move(ss);
                 slot.type    = ParamSlot::TStepSelector;
                 break;
             }
             case ::yawn::WidgetHint::Toggle: {
-                auto* ts = new FwToggle();
+                auto ts = std::make_unique<FwToggle>();
                 ts->setVariant(ToggleVariant::Switch);
                 ts->setState(p.defaultVal > 0.5f);
                 ts->setLabel(p.name);
@@ -890,25 +877,24 @@ private:
                         m_onParamTouch(idx, v, /*touching*/false);
                     }
                 });
-                slot.toggle = ts;
+                slot.toggle = std::move(ts);
                 slot.type   = ParamSlot::TToggle;
                 break;
             }
             case ::yawn::WidgetHint::Knob360: {
-                auto* k360 = makeKnob(p);
+                auto k360 = makeKnob(p);
                 k360->setWrapMode(true);
-                slot.knob = k360;
+                slot.knob = std::move(k360);
                 slot.type = ParamSlot::TKnob360;
                 break;
             }
             default: {
-                auto* k = makeKnob(p);
-                slot.knob = k;
+                slot.knob = makeKnob(p);
                 slot.type = ParamSlot::TKnob;
                 break;
             }
             }
-            slots.push_back(slot);
+            slots.push_back(std::move(slot));
         }
     }
 };
