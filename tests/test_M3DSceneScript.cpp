@@ -8,18 +8,35 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 using namespace yawn::visual;
 namespace fs = std::filesystem;
 
 namespace {
 
 // Write `body` to a unique temp .lua file and return its path. The
-// fixture removes it on teardown.
+// fixture removes it on teardown. The name includes the PID and test
+// name: ctest --parallel runs each test as its own process, so a
+// fixture-local counter alone collides across concurrently running
+// tests of this suite (intermittent CI failures).
 class SceneScriptTest : public ::testing::Test {
 protected:
     std::string writeScript(const std::string& body) {
+#ifdef _WIN32
+        const int pid = _getpid();
+#else
+        const int pid = static_cast<int>(getpid());
+#endif
+        const char* testName =
+            ::testing::UnitTest::GetInstance()->current_test_info()->name();
         auto p = fs::temp_directory_path() /
-                 ("yawn_scene_test_" + std::to_string(m_counter++) + ".lua");
+                 ("yawn_scene_test_" + std::to_string(pid) + "_" + testName +
+                  "_" + std::to_string(m_counter++) + ".lua");
         std::ofstream f(p);
         f << body;
         f.close();
