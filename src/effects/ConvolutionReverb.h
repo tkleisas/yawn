@@ -101,6 +101,8 @@ public:
         m_preDelayWrite = 0;
         m_wetScratchL.assign(maxBlockSize, 0.0f);
         m_wetScratchR.assign(maxBlockSize, 0.0f);
+        m_delayScratchL.assign(maxBlockSize, 0.0f);
+        m_delayScratchR.assign(maxBlockSize, 0.0f);
         updateFilters();
         // Re-load IR if one was set before init() (preset path).
         if (!m_pendingIR.empty()) {
@@ -160,6 +162,10 @@ public:
         ConvolutionEngine* eL = m_engineL.load(std::memory_order_acquire);
         ConvolutionEngine* eR = m_engineR.load(std::memory_order_acquire);
         if (!eL || !eR || !eL->hasIR() || numFrames <= 0) return;
+        // Scratch blocks are sized to init()'s maxBlockSize; a larger
+        // host block would overrun them (true before this guard too —
+        // m_wetScratchL/R had the same bound).
+        if (numFrames > static_cast<int>(m_wetScratchL.size())) return;
 
         // ── 1. Pre-delay buffer (interleaved L/R) ──
         // Fill the delay line with the gained dry signal, then read
@@ -172,18 +178,18 @@ public:
             m_preDelayBuf[wIdx * 2 + 0] = l;
             m_preDelayBuf[wIdx * 2 + 1] = r;
         }
-        // Read delayed samples into a temporary block for the engines.
-        std::vector<float> delayedL(numFrames), delayedR(numFrames);
+        // Read delayed samples into the pre-sized scratch blocks for
+        // the engines (no per-block allocation on the audio thread).
         for (int i = 0; i < numFrames; ++i) {
             const int rIdx = (m_preDelayWrite + i - preDelaySamp + bufFrames * 2) % bufFrames;
-            delayedL[i] = m_preDelayBuf[rIdx * 2 + 0];
-            delayedR[i] = m_preDelayBuf[rIdx * 2 + 1];
+            m_delayScratchL[i] = m_preDelayBuf[rIdx * 2 + 0];
+            m_delayScratchR[i] = m_preDelayBuf[rIdx * 2 + 1];
         }
         m_preDelayWrite = (m_preDelayWrite + numFrames) % bufFrames;
 
         // ── 2. Convolution (per channel, same mono IR for both) ──
-        eL->process(delayedL.data(), m_wetScratchL.data(), numFrames);
-        eR->process(delayedR.data(), m_wetScratchR.data(), numFrames);
+        eL->process(m_delayScratchL.data(), m_wetScratchL.data(), numFrames);
+        eR->process(m_delayScratchR.data(), m_wetScratchR.data(), numFrames);
 
         // ── 3. Wet path filtering (low cut + high cut on the tail) ──
         for (int i = 0; i < numFrames; ++i) {
@@ -384,8 +390,10 @@ private:
     Biquad m_hiCutL, m_hiCutR;
 
     // Per-block scratch for the wet signal between convolution and
-    // dry-mix-add. Avoids per-sample heap allocs.
+    // dry-mix-add, and for the pre-delayed dry feed into the engines.
+    // Sized once in init() so process() never touches the heap.
     std::vector<float> m_wetScratchL, m_wetScratchR;
+    std::vector<float> m_delayScratchL, m_delayScratchR;
 };
 
 } // namespace effects
