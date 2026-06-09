@@ -49,8 +49,8 @@ private:
     static float shape(float x, int type);
 
     void updateToneFilter() {
-        m_toneL.compute(Biquad::Type::LowPass, m_sampleRate, m_params[kTone], 0.0, 0.707);
-        m_toneR.compute(Biquad::Type::LowPass, m_sampleRate, m_params[kTone], 0.0, 0.707);
+        Biquad::computeStereo(m_toneL, m_toneR, Biquad::Type::LowPass,
+                              m_sampleRate, m_params[kTone], 0.0, 0.707);
     }
 
     Biquad m_toneL, m_toneR;

@@ -92,11 +92,12 @@ private:
     }
 
     void updateToneFilter() {
-        m_toneL.compute(Biquad::Type::LowPass, m_sampleRate, m_params[kTone], 0.0, 0.707);
-        m_toneR.compute(Biquad::Type::LowPass, m_sampleRate, m_params[kTone], 0.0, 0.707);
+        Biquad::computeStereo(m_toneL, m_toneR, Biquad::Type::LowPass,
+                              m_sampleRate, m_params[kTone], 0.0, 0.707);
         // Hiss is bandpass-filtered to sound like tape hiss (~1–8 kHz)
-        m_hissFilterL.compute(Biquad::Type::BandPass, m_sampleRate, 3000.0, 0.0, 0.8);
-        m_hissFilterR.compute(Biquad::Type::BandPass, m_sampleRate, 3000.0, 0.0, 0.8);
+        Biquad::computeStereo(m_hissFilterL, m_hissFilterR,
+                              Biquad::Type::BandPass,
+                              m_sampleRate, 3000.0, 0.0, 0.8);
     }
 
     // Delay line for wow/flutter

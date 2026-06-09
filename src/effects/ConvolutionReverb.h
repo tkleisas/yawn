@@ -340,10 +340,10 @@ private:
     void updateFilters() {
         const float lc = std::clamp(m_params[kLowCutHz],   20.0f, 1000.0f);
         const float hc = std::clamp(m_params[kHighCutHz], 2000.0f, 20000.0f);
-        m_loCutL.compute(Biquad::Type::HighPass, m_sampleRate, lc, 0.0, 0.707);
-        m_loCutR.compute(Biquad::Type::HighPass, m_sampleRate, lc, 0.0, 0.707);
-        m_hiCutL.compute(Biquad::Type::LowPass,  m_sampleRate, hc, 0.0, 0.707);
-        m_hiCutR.compute(Biquad::Type::LowPass,  m_sampleRate, hc, 0.0, 0.707);
+        Biquad::computeStereo(m_loCutL, m_loCutR, Biquad::Type::HighPass,
+                              m_sampleRate, lc, 0.0, 0.707);
+        Biquad::computeStereo(m_hiCutL, m_hiCutR, Biquad::Type::LowPass,
+                              m_sampleRate, hc, 0.0, 0.707);
     }
 
     float m_params[kParamCount] = {

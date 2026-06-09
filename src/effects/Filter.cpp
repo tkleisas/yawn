@@ -30,8 +30,8 @@ void Filter::updateFilter() {
         default:    bt = Biquad::Type::LowPass;  break;
     }
     const float hz = cutoffNormToHz(m_params[kCutoff]);
-    m_filterL.compute(bt, m_sampleRate, hz, 0.0, m_params[kResonance]);
-    m_filterR.compute(bt, m_sampleRate, hz, 0.0, m_params[kResonance]);
+    Biquad::computeStereo(m_filterL, m_filterR, bt,
+                          m_sampleRate, hz, 0.0, m_params[kResonance]);
 }
 
 } // namespace yawn::effects

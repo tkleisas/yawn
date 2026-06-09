@@ -34,12 +34,12 @@ void EQ::updateFilters() {
     const float lowHz  = lowFreqNormToHz (m_params[kLowFreq]);
     const float midHz  = midFreqNormToHz (m_params[kMidFreq]);
     const float highHz = highFreqNormToHz(m_params[kHighFreq]);
-    m_lowL[0].compute(Biquad::Type::LowShelf,  m_sampleRate, lowHz,  m_params[kLowGain],  0.707);
-    m_lowR[0].compute(Biquad::Type::LowShelf,  m_sampleRate, lowHz,  m_params[kLowGain],  0.707);
-    m_midL[0].compute(Biquad::Type::Peak,       m_sampleRate, midHz,  m_params[kMidGain],  m_params[kMidQ]);
-    m_midR[0].compute(Biquad::Type::Peak,       m_sampleRate, midHz,  m_params[kMidGain],  m_params[kMidQ]);
-    m_highL[0].compute(Biquad::Type::HighShelf, m_sampleRate, highHz, m_params[kHighGain], 0.707);
-    m_highR[0].compute(Biquad::Type::HighShelf, m_sampleRate, highHz, m_params[kHighGain], 0.707);
+    Biquad::computeStereo(m_lowL[0], m_lowR[0], Biquad::Type::LowShelf,
+                          m_sampleRate, lowHz, m_params[kLowGain], 0.707);
+    Biquad::computeStereo(m_midL[0], m_midR[0], Biquad::Type::Peak,
+                          m_sampleRate, midHz, m_params[kMidGain], m_params[kMidQ]);
+    Biquad::computeStereo(m_highL[0], m_highR[0], Biquad::Type::HighShelf,
+                          m_sampleRate, highHz, m_params[kHighGain], 0.707);
 }
 
 } // namespace yawn::effects

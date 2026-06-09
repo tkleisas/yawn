@@ -184,10 +184,9 @@ public:
                 Biquad::Type bt = (ftype == 0) ? Biquad::Type::LowPass
                                 : (ftype == 1) ? Biquad::Type::HighPass
                                                : Biquad::Type::BandPass;
-                m_filterL.compute(bt, m_sampleRate, fc, 0.0,
-                                   m_params[kResonance]);
-                m_filterR.compute(bt, m_sampleRate, fc, 0.0,
-                                   m_params[kResonance]);
+                Biquad::computeStereo(m_filterL, m_filterR, bt,
+                                       m_sampleRate, fc, 0.0,
+                                       m_params[kResonance]);
                 wetL = m_filterL.process(dryL);
                 wetR = m_filterR.process(dryR);
             }

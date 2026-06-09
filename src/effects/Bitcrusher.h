@@ -164,8 +164,8 @@ private:
         // 1-pole LP per side. The shaping job here doesn't need
         // sharper roll-off; users dial the cutoff for a "feel" tilt
         // rather than a brick-wall anti-alias filter.
-        m_preL.compute(Biquad::Type::LowPass, m_sampleRate, fc, 0.0, 0.707);
-        m_preR.compute(Biquad::Type::LowPass, m_sampleRate, fc, 0.0, 0.707);
+        Biquad::computeStereo(m_preL, m_preR, Biquad::Type::LowPass,
+                              m_sampleRate, fc, 0.0, 0.707);
     }
 
     float randFloat() {

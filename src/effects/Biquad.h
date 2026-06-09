@@ -115,6 +115,20 @@ public:
         a2 = static_cast<float>(a2d * inv_a0);
     }
 
+    // Compute coefficients once and share them across a stereo L/R
+    // pair (filter state stays per-channel). Effects almost always run
+    // identical filters on both channels; this replaces the
+    // copy-pasted double compute() calls and halves the transcendental
+    // work — which runs on every parameter tweak, and for some effects
+    // (EnvelopeFollower) inside the audio loop.
+    static void computeStereo(Biquad& l, Biquad& r, Type type,
+                              double sampleRate, double freq,
+                              double gainDB, double Q) {
+        l.compute(type, sampleRate, freq, gainDB, Q);
+        r.b0 = l.b0; r.b1 = l.b1; r.b2 = l.b2;
+        r.a1 = l.a1; r.a2 = l.a2;
+    }
+
 private:
     float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f;
     float a1 = 0.0f, a2 = 0.0f;

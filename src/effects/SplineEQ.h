@@ -345,8 +345,8 @@ private:
             case ntHighCut:   bt = Biquad::Type::LowPass;   break;
             default:          bt = Biquad::Type::Peak;      break;
         }
-        m_filtersL[n].compute(bt, m_sampleRate, fcClamped, gdb, q);
-        m_filtersR[n].compute(bt, m_sampleRate, fcClamped, gdb, q);
+        Biquad::computeStereo(m_filtersL[n], m_filtersR[n], bt,
+                              m_sampleRate, fcClamped, gdb, q);
     }
 
     // ── FFT (radix-2 Cooley-Tukey) ──

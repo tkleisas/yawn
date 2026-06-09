@@ -101,26 +101,26 @@ float AmpSimulator::ampSaturate(float x, int type) {
 
 void AmpSimulator::updateFilters() {
     // Tone stack
-    m_bassL.compute(Biquad::Type::LowShelf,  m_sampleRate, 200.0, m_params[kBass], 0.707);
-    m_bassR.compute(Biquad::Type::LowShelf,  m_sampleRate, 200.0, m_params[kBass], 0.707);
-    m_midL.compute(Biquad::Type::Peak,        m_sampleRate, 800.0, m_params[kMid],  1.0);
-    m_midR.compute(Biquad::Type::Peak,        m_sampleRate, 800.0, m_params[kMid],  1.0);
-    m_trebL.compute(Biquad::Type::HighShelf,  m_sampleRate, 3200.0, m_params[kTreble], 0.707);
-    m_trebR.compute(Biquad::Type::HighShelf,  m_sampleRate, 3200.0, m_params[kTreble], 0.707);
+    Biquad::computeStereo(m_bassL, m_bassR, Biquad::Type::LowShelf,
+                          m_sampleRate, 200.0, m_params[kBass], 0.707);
+    Biquad::computeStereo(m_midL, m_midR, Biquad::Type::Peak,
+                          m_sampleRate, 800.0, m_params[kMid], 1.0);
+    Biquad::computeStereo(m_trebL, m_trebR, Biquad::Type::HighShelf,
+                          m_sampleRate, 3200.0, m_params[kTreble], 0.707);
 
     // Cabinet simulation: low-pass at 5kHz + resonant peak at 2.5kHz
-    m_cabLpL.compute(Biquad::Type::LowPass, m_sampleRate, 5000.0, 0.0, 0.707);
-    m_cabLpR.compute(Biquad::Type::LowPass, m_sampleRate, 5000.0, 0.0, 0.707);
-    m_cabPeakL.compute(Biquad::Type::Peak,  m_sampleRate, 2500.0, 3.0, 1.2);
-    m_cabPeakR.compute(Biquad::Type::Peak,  m_sampleRate, 2500.0, 3.0, 1.2);
+    Biquad::computeStereo(m_cabLpL, m_cabLpR, Biquad::Type::LowPass,
+                          m_sampleRate, 5000.0, 0.0, 0.707);
+    Biquad::computeStereo(m_cabPeakL, m_cabPeakR, Biquad::Type::Peak,
+                          m_sampleRate, 2500.0, 3.0, 1.2);
 
     // Presence: post-cab high shelf at 4kHz
-    m_presL.compute(Biquad::Type::HighShelf, m_sampleRate, 4000.0, m_params[kPresence], 0.707);
-    m_presR.compute(Biquad::Type::HighShelf, m_sampleRate, 4000.0, m_params[kPresence], 0.707);
+    Biquad::computeStereo(m_presL, m_presR, Biquad::Type::HighShelf,
+                          m_sampleRate, 4000.0, m_params[kPresence], 0.707);
 
     // Input high-pass at 80Hz to remove rumble
-    m_inputHpL.compute(Biquad::Type::HighPass, m_sampleRate, 80.0, 0.0, 0.707);
-    m_inputHpR.compute(Biquad::Type::HighPass, m_sampleRate, 80.0, 0.0, 0.707);
+    Biquad::computeStereo(m_inputHpL, m_inputHpR, Biquad::Type::HighPass,
+                          m_sampleRate, 80.0, 0.0, 0.707);
 }
 
 } // namespace yawn::effects

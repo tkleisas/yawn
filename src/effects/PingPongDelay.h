@@ -179,8 +179,8 @@ private:
 
     void updateFilters() {
         const float fc = std::clamp(m_params[kFilter], 200.0f, 20000.0f);
-        m_filterL.compute(Biquad::Type::LowPass, m_sampleRate, fc, 0.0, 0.707);
-        m_filterR.compute(Biquad::Type::LowPass, m_sampleRate, fc, 0.0, 0.707);
+        Biquad::computeStereo(m_filterL, m_filterR, Biquad::Type::LowPass,
+                              m_sampleRate, fc, 0.0, 0.707);
     }
 
     std::vector<float> m_bufferL, m_bufferR;
