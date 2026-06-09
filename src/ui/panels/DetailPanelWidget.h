@@ -2358,6 +2358,7 @@ private:
                 if (slash != std::string::npos) base = p.substr(slash + 1);
                 disp->setModelName(base);
                 disp->setLoadedFlag(na->hasModel());
+                disp->setErrorText(na->lastLoadError());
                 disp->setLiteState(na->lite(), na->isSlimmable());
             });
             return true;

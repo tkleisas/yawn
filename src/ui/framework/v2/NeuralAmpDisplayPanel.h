@@ -47,6 +47,9 @@ public:
         m_marqueeFrame = 0.0f;
     }
     void setLoadedFlag(bool loaded)         { m_loaded = loaded; }
+    // Why the most recent model load failed; empty = no error. Shown
+    // in red on the status row in place of the ready/idle indicator.
+    void setErrorText(const std::string& s) { m_errorText = s; }
     void setOnLoadRequest(std::function<void()> cb)  { m_onLoadRequest  = std::move(cb); }
     void setOnClearRequest(std::function<void()> cb) { m_onClearRequest = std::move(cb); }
 
@@ -175,12 +178,25 @@ public:
             r.popClip();
         }
 
-        // "Loaded" / "Not loaded" status indicator.
+        // "Loaded" / "Not loaded" status indicator — replaced by the
+        // load-failure reason (in red) when the last load was rejected,
+        // so a bad file is visible on the device instead of only in
+        // yawn.log. Clipped like the filename row; errors carry the
+        // failed file's basename and can overflow the panel width.
         if (tm) {
-            const char* status = m_loaded ? "● ready" : "○ idle";
-            const Color sc = m_loaded ? Color{ 80, 220, 100, 255}
-                                       : Color{160, 160, 170, 200};
-            tm->drawText(r, status, m_bounds.x + pad, nameY + fs + 4, fs, sc);
+            if (!m_errorText.empty()) {
+                const std::string err = "✗ " + m_errorText;
+                r.pushClip(m_bounds.x + pad, nameY + fs + 4,
+                            m_bounds.w - pad * 2, fs + 4);
+                tm->drawText(r, err, m_bounds.x + pad, nameY + fs + 4, fs,
+                              Color{235, 110, 100, 255});
+                r.popClip();
+            } else {
+                const char* status = m_loaded ? "● ready" : "○ idle";
+                const Color sc = m_loaded ? Color{ 80, 220, 100, 255}
+                                           : Color{160, 160, 170, 200};
+                tm->drawText(r, status, m_bounds.x + pad, nameY + fs + 4, fs, sc);
+            }
         }
 
         // Button row at the bottom.
@@ -251,6 +267,7 @@ private:
 #endif
 
     std::string m_modelName;
+    std::string m_errorText;
     bool        m_loaded = false;
     std::function<void(int, float)> m_onParamChange;
     std::function<void()>           m_onLoadRequest;

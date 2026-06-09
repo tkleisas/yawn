@@ -28,7 +28,18 @@ namespace yawn {
 namespace effects {
 
 struct NeuralAmp::Impl {
+    // Path of the model the active DSP was loaded from — kept in sync
+    // with what's actually processing audio (see setModelPath), so the
+    // UI and project serialization never claim a model that isn't
+    // running. Exception: when a load fails and NO model is active
+    // (fresh device, project opened with the file missing), this keeps
+    // the requested path so the project's model reference survives a
+    // resave and self-heals once the file is back.
     std::string modelPath;
+    // Human-readable reason the most recent load failed; empty when
+    // the last load succeeded (or the model was cleared). Shown on the
+    // device panel's status row.
+    std::string lastError;
     double      sampleRate     = 48000.0;
     int         maxBlockSize   = 256;
 
@@ -179,7 +190,6 @@ void NeuralAmp::process(float* buffer, int numFrames, int numChannels) {
 }
 
 void NeuralAmp::setModelPath(const std::string& path) {
-    m_impl->modelPath = path;
     // Diagnostic — fires regardless of YAWN_HAS_NAM so the user
     // sees a log entry every time setModelPath is called. Useful
     // for narrowing "the panel shows the filename but the engine
@@ -196,7 +206,12 @@ void NeuralAmp::setModelPath(const std::string& path) {
 #endif
     LOG_INFO("NeuralAmp", "setModelPath('%s') YAWN_HAS_NAM=%s",
              path.c_str(), hasNamStr);
-#ifdef YAWN_HAS_NAM
+#ifndef YAWN_HAS_NAM
+    // No NAM in this build — store the path so the project's model
+    // reference survives save/load; the device stays in passthrough.
+    m_impl->modelPath = path;
+#else
+    m_impl->lastError.clear();
     // Drain retired DSPs from previous loads. Safe at this point —
     // any setModelPath after the first happens with the audio
     // thread already long since switched over to the new pointer
@@ -220,8 +235,25 @@ void NeuralAmp::setModelPath(const std::string& path) {
     if (path.empty()) {
         retireOldDsp();
         m_impl->slimmablePtr = nullptr;
+        m_impl->modelPath.clear();
         return;
     }
+
+    // Record a failed load. modelPath must keep describing the DSP
+    // that's actually processing: when a previous model survives the
+    // failure it stays the truth; when nothing is loaded we adopt the
+    // requested path anyway so a project that references a (currently)
+    // missing/broken file doesn't lose the reference on its next save.
+    auto noteFailure = [this, &path](const std::string& reason) {
+        std::string base = path;
+        if (const auto slash = path.find_last_of("/\\");
+            slash != std::string::npos)
+            base = path.substr(slash + 1);
+        m_impl->lastError = base + ": " + reason;
+        if (!m_impl->dspPtr.load(std::memory_order_acquire))
+            m_impl->modelPath = path;
+    };
+
     try {
         // nam::get_dsp returns std::unique_ptr<nam::DSP>. Throws
         // std::runtime_error on bad model files / unsupported
@@ -260,23 +292,27 @@ void NeuralAmp::setModelPath(const std::string& path) {
                 newDsp.release(), std::memory_order_acq_rel);
             m_impl->slimmablePtr = slim;
             if (old) m_impl->retiredDsps.emplace_back(old);
+            m_impl->modelPath = path;
             LOG_INFO("NeuralAmp",
                      "Loaded NAM model: %s (slimmable=%d lite=%d)",
                      path.c_str(), slim ? 1 : 0, m_lite ? 1 : 0);
         } else {
             LOG_WARN("NeuralAmp",
                      "nam::get_dsp returned null for %s", path.c_str());
+            noteFailure("unrecognized model file");
         }
     } catch (const std::exception& e) {
         LOG_WARN("NeuralAmp", "Failed to load %s: %s", path.c_str(), e.what());
         // Don't touch dspPtr — keep whatever was there before. A
         // failed load shouldn't lose the previously-working model.
+        noteFailure(e.what());
     } catch (...) {
         // NAM may throw types other than std::exception (rare but
         // possible per its source). Catch-all so a non-standard
         // exception doesn't terminate the app.
         LOG_WARN("NeuralAmp", "Failed to load %s: unknown exception",
                  path.c_str());
+        noteFailure("unknown error");
     }
 #endif
 }
@@ -305,6 +341,8 @@ bool NeuralAmp::isSlimmable() const {
 }
 
 const std::string& NeuralAmp::modelPath() const { return m_impl->modelPath; }
+
+const std::string& NeuralAmp::lastLoadError() const { return m_impl->lastError; }
 
 bool NeuralAmp::hasModel() const {
 #ifdef YAWN_HAS_NAM

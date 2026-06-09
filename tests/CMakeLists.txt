@@ -12,6 +12,14 @@ target_include_directories(yawn_tests SYSTEM PRIVATE
 
 target_compile_definitions(yawn_tests PRIVATE YAWN_TEST_BUILD)
 
+# Bundled .nam captures — lets the NeuralAmp tests load a real model
+# and verify failed-load behavior against a working one.
+if(YAWN_HAS_NAM)
+    target_compile_definitions(yawn_tests PRIVATE
+        YAWN_BUNDLED_NAM_DIR="${CMAKE_SOURCE_DIR}/assets/nam"
+    )
+endif()
+
 # Expose the vendored tinygltf sample glb path so the M3DModel test can
 # load a real fixture without us having to ship our own.
 if(YAWN_HAS_MODEL3D)

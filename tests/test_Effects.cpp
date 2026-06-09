@@ -1613,3 +1613,80 @@ TEST(Rotary, StableUnderLongRender) {
                 << "rotary blew up at block " << b;
     }
 }
+
+// ─── NeuralAmp model-path / failed-load behavior ─────────────────────
+// modelPath() must always describe the DSP that's actually processing;
+// lastLoadError() surfaces why the most recent load was rejected.
+// (Real loads only run when YAWN_HAS_NAM — the no-NAM build keeps the
+// path verbatim for project-reference round-tripping.)
+
+#include "effects/NeuralAmp.h"
+#include <filesystem>
+#include <fstream>
+
+#ifdef YAWN_HAS_NAM
+
+TEST(NeuralAmp, FailedLoadOnFreshDeviceKeepsRequestedPath) {
+    NeuralAmp na;
+    na.init(kSampleRate, kBlockSize);
+
+    // No model active → the requested path is adopted even though the
+    // load failed, so a project opened with a missing .nam file keeps
+    // its model reference across a resave.
+    na.setModelPath("/definitely/does/not/exist.nam");
+    EXPECT_FALSE(na.hasModel());
+    EXPECT_EQ(na.modelPath(), "/definitely/does/not/exist.nam");
+    EXPECT_FALSE(na.lastLoadError().empty());
+
+    // Clearing resets both the path and the error.
+    na.setModelPath("");
+    EXPECT_TRUE(na.modelPath().empty());
+    EXPECT_TRUE(na.lastLoadError().empty());
+}
+
+#ifdef YAWN_BUNDLED_NAM_DIR
+TEST(NeuralAmp, FailedLoadKeepsPreviousWorkingModel) {
+    const std::string good = std::string(YAWN_BUNDLED_NAM_DIR) +
+        "/Tim R/Tim R Fender TwinVerb Norm Bright.nam";
+    if (!std::filesystem::exists(good))
+        GTEST_SKIP() << "bundled .nam capture not present: " << good;
+
+    NeuralAmp na;
+    na.init(kSampleRate, kBlockSize);
+    na.setModelPath(good);
+    ASSERT_TRUE(na.hasModel());
+    EXPECT_EQ(na.modelPath(), good);
+    EXPECT_TRUE(na.lastLoadError().empty());
+
+    // Corrupt candidate file: load must fail, the working model keeps
+    // processing, and modelPath() keeps describing the working model
+    // (NOT the rejected file) so UI + serialization stay truthful.
+    const auto bad = std::filesystem::temp_directory_path() /
+                     "yawn_neuralamp_corrupt_test.nam";
+    { std::ofstream f(bad); f << "this is not a nam model"; }
+    na.setModelPath(bad.string());
+    EXPECT_TRUE(na.hasModel());
+    EXPECT_EQ(na.modelPath(), good);
+    EXPECT_FALSE(na.lastLoadError().empty());
+
+    // A subsequent successful load clears the error.
+    na.setModelPath(good);
+    EXPECT_TRUE(na.hasModel());
+    EXPECT_TRUE(na.lastLoadError().empty());
+
+    std::error_code ec;
+    std::filesystem::remove(bad, ec);
+}
+#endif // YAWN_BUNDLED_NAM_DIR
+
+#else // !YAWN_HAS_NAM
+
+TEST(NeuralAmp, NoNamBuildKeepsPathForRoundTrip) {
+    NeuralAmp na;
+    na.init(kSampleRate, kBlockSize);
+    na.setModelPath("/some/model.nam");
+    EXPECT_EQ(na.modelPath(), "/some/model.nam");
+    EXPECT_FALSE(na.hasModel());
+}
+
+#endif // YAWN_HAS_NAM

@@ -75,10 +75,16 @@ public:
 
     // ── Model file management ───────────────────────────────────────
     // setModelPath kicks off NAM model loading (when YAWN_HAS_NAM).
-    // Empty path or load-failure clears the model and the device
-    // falls back to gain-stage passthrough behaviour.
+    // Empty path clears the model (gain-stage passthrough). On a
+    // failed load the previously-working model keeps processing and
+    // modelPath() keeps describing it; lastLoadError() reports why the
+    // new file was rejected (empty after a successful load or clear).
+    // If a load fails with NO model active (fresh device, project
+    // opened with the file missing), modelPath() keeps the requested
+    // path so the project's model reference survives a resave.
     void               setModelPath(const std::string& path);
     const std::string& modelPath() const;
+    const std::string& lastLoadError() const;
     bool               hasModel() const;
 
     // ── Slimmable size ("Lite" CPU-saver) ───────────────────────────
