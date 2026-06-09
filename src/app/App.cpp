@@ -8292,6 +8292,10 @@ void App::update() {
     // the rationale.
     m_project.purgeClipGraveyard();
 
+    // Free arrangement clip lists the audio thread swapped out and
+    // retired; they can hold the last shared_ptr to clip data.
+    m_audioEngine.arrangementPlayback().collectRetired();
+
     // Piano roll holds a raw midi::MidiClip* pointer to whatever the
     // user opened for editing. Several slot-mutation paths (recording
     // finalize, paste, scene insert, project load) can replace the

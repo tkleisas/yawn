@@ -144,6 +144,8 @@ TEST(ProjectArrangement, UpdateArrangementLength) {
 
 #include "audio/ArrangementPlayback.h"
 #include "audio/Transport.h"
+#include <atomic>
+#include <thread>
 
 namespace {
 
@@ -358,6 +360,56 @@ TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
     ap.applyPendingClips();
     ap.setTrackActive(0, true);
     EXPECT_TRUE(ap.isTrackActive(0));
+}
+
+// Hammer the lock-free submit/apply/retire path from two threads.
+// ASan/LSan verifies every node and clip list is freed exactly once.
+TEST(ArrangementPlayback, ConcurrentSubmitAndApply) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    transport.setBPM(120.0);
+    transport.play();
+    auto audioBuf = makeTestBuffer(44100, 1);
+    constexpr int kSubmits = 5000;
+    std::atomic<bool> done{false};
+
+    std::thread uiThread([&] {
+        for (int i = 0; i < kSubmits; ++i) {
+            std::vector<yawn::audio::ArrClipRef> clips;
+            yawn::audio::ArrClipRef c;
+            c.type = yawn::audio::ArrClipRef::Type::Audio;
+            c.startBeat = 0.0;
+            c.lengthBeats = 4.0;
+            c.audioBuffer = audioBuf;
+            clips.push_back(c);
+            ap.submitTrackClips(i % yawn::kMaxTracks, std::move(clips));
+        }
+        done.store(true, std::memory_order_release);
+    });
+
+    // "Audio thread": apply until the submitter finishes, then once
+    // more to drain any submission that landed after the last apply.
+    while (!done.load(std::memory_order_acquire))
+        ap.applyPendingClips();
+    ap.applyPendingClips();
+    uiThread.join();
+    ap.collectRetired();
+
+    // Every track received submissions and the last one was applied —
+    // each must render the clip's audio at beat 0.
+    for (int t = 0; t < yawn::kMaxTracks && t < kSubmits; ++t) {
+        ap.setTrackActive(t, true);
+        std::vector<float> buffer(256 * 2, 0.0f);
+        ap.processAudioTrack(t, buffer.data(), 256, 2);
+        bool hasNonZero = false;
+        for (float s : buffer)
+            if (s != 0.0f) { hasNonZero = true; break; }
+        EXPECT_TRUE(hasNonZero) << "track " << t << " lost its clip list";
+    }
 }
 
 // ── Transport loop ──────────────────────────────────────────────────────

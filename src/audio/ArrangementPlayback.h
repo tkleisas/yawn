@@ -5,9 +5,12 @@
 // Audio clips are rendered directly into the track buffer; MIDI clips
 // are scanned and emitted into the track MIDI buffer.
 //
-// The UI thread sends arrangement clip lists via command messages.
-// The audio thread only reads the clip data (AudioBuffer / MidiClip are
-// immutable once loaded, shared via shared_ptr).
+// The UI thread submits arrangement clip lists through a lock-free
+// per-track mailbox (submitTrackClips); the audio thread swaps them in
+// (applyPendingClips) and retires the old lists back to the UI thread
+// for destruction — no locks, allocations, or frees on the audio
+// thread. The audio thread only reads the clip data (AudioBuffer /
+// MidiClip are immutable once loaded, shared via shared_ptr).
 
 #include "core/Constants.h"
 #include "audio/AudioBuffer.h"
@@ -18,7 +21,7 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
-#include <mutex>
+#include <utility>
 #include <vector>
 
 namespace yawn {
@@ -61,6 +64,12 @@ class ArrangementPlayback {
 public:
     ArrangementPlayback() = default;
 
+    ~ArrangementPlayback() {
+        for (auto& slot : m_pendingSlot)
+            delete slot.exchange(nullptr, std::memory_order_acq_rel);
+        collectRetired();
+    }
+
     void setTransport(Transport* t) { m_transport = t; }
     void setSampleRate(double sr)   { m_sampleRate = sr; }
 
@@ -76,23 +85,42 @@ public:
         return m_tracks[track].active;
     }
 
-    // Called from UI thread — thread-safe clip submission
+    // Called from UI thread — lock-free clip submission. Last writer
+    // wins: a node the audio thread hasn't consumed yet is replaced
+    // and freed here, never on the audio thread.
     void submitTrackClips(int track, std::vector<ArrClipRef> clips) {
         if (track < 0 || track >= kMaxTracks) return;
-        std::lock_guard<std::mutex> lock(m_pendingMutex);
-        m_pendingClips[track] = std::move(clips);
-        m_pendingFlags[track].store(true, std::memory_order_release);
+        auto* node = new PendingClipsNode{std::move(clips), nullptr};
+        delete m_pendingSlot[track].exchange(node, std::memory_order_acq_rel);
+        collectRetired();
     }
 
-    // Called from audio thread (once per buffer) — applies any pending clip updates
+    // Called from audio thread (once per buffer) — applies any pending
+    // clip updates. No locks and no heap traffic: the new list is
+    // swapped in and the node (now carrying the OLD list, whose
+    // destruction may drop the last shared_ptr to clip data) is pushed
+    // onto the retired stack for the UI thread to free.
     void applyPendingClips() {
         for (int t = 0; t < kMaxTracks; ++t) {
-            if (m_pendingFlags[t].load(std::memory_order_acquire)) {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_tracks[t].clips = std::move(m_pendingClips[t]);
-                m_pendingFlags[t].store(false, std::memory_order_release);
-                resetTrack(t);
-            }
+            if (!m_pendingSlot[t].load(std::memory_order_acquire))
+                continue;
+            auto* node = m_pendingSlot[t].exchange(nullptr, std::memory_order_acq_rel);
+            if (!node) continue;
+            std::swap(m_tracks[t].clips, node->clips);
+            retire(node);
+            resetTrack(t);
+        }
+    }
+
+    // Called from UI thread — frees clip lists the audio thread has
+    // swapped out. Invoked on every submit and once per frame from
+    // App::update() so retired lists don't pin clip data.
+    void collectRetired() {
+        auto* node = m_retiredHead.exchange(nullptr, std::memory_order_acquire);
+        while (node) {
+            auto* next = node->next;
+            delete node;
+            node = next;
         }
     }
 
@@ -119,15 +147,17 @@ public:
             resetTrack(t);
     }
 
+    // Called from UI thread with transport stopped (see
+    // AudioEngine::removeTrackSlot). Pending nodes shift down with
+    // their track; a node displaced from a slot is freed here.
     void removeTrackSlot(int index, int last) {
         for (int i = index; i < last; ++i) {
             m_tracks[i] = std::move(m_tracks[i + 1]);
-            m_pendingClips[i] = std::move(m_pendingClips[i + 1]);
-            m_pendingFlags[i].store(m_pendingFlags[i + 1].load());
+            auto* moved = m_pendingSlot[i + 1].exchange(nullptr, std::memory_order_acq_rel);
+            delete m_pendingSlot[i].exchange(moved, std::memory_order_acq_rel);
         }
         m_tracks[last] = {};
-        m_pendingClips[last].clear();
-        m_pendingFlags[last].store(false);
+        delete m_pendingSlot[last].exchange(nullptr, std::memory_order_acq_rel);
     }
 
     // Render audio for one track into buffer (called from processAudio).
@@ -139,6 +169,25 @@ public:
     void processMidiTrack(int track, midi::MidiBuffer& midiBuffer, int numFrames);
 
 private:
+    // Heap node carrying a clip list across threads. Allocated and
+    // freed only on the UI thread; the audio thread just exchanges
+    // pointers and swaps vector contents.
+    struct PendingClipsNode {
+        std::vector<ArrClipRef> clips;
+        PendingClipsNode* next = nullptr;
+    };
+
+    // Audio thread — push a consumed node (holding the old clip list)
+    // onto the retired stack. Single producer; the only contention is
+    // the UI thread taking the whole stack in collectRetired().
+    void retire(PendingClipsNode* node) {
+        auto* head = m_retiredHead.load(std::memory_order_relaxed);
+        do {
+            node->next = head;
+        } while (!m_retiredHead.compare_exchange_weak(
+            head, node, std::memory_order_release, std::memory_order_relaxed));
+    }
+
     // Find the clip index at the given beat position (binary search on sorted clips)
     int findClipAt(const std::vector<ArrClipRef>& clips, double beat) const {
         for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
@@ -154,10 +203,11 @@ private:
     double m_sampleRate = kDefaultSampleRate;
     std::array<ArrTrackState, kMaxTracks> m_tracks{};
 
-    // Thread-safe clip submission (UI→audio)
-    std::mutex m_pendingMutex;
-    std::vector<ArrClipRef> m_pendingClips[kMaxTracks];
-    std::atomic<bool> m_pendingFlags[kMaxTracks]{};
+    // Lock-free clip submission (UI→audio): per-track mailbox of the
+    // latest submitted list, plus a stack of consumed nodes awaiting
+    // UI-thread destruction.
+    std::atomic<PendingClipsNode*> m_pendingSlot[kMaxTracks]{};
+    std::atomic<PendingClipsNode*> m_retiredHead{nullptr};
 };
 
 } // namespace audio
