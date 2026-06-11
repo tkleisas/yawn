@@ -79,12 +79,11 @@ bool App::init() {
         return false;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    // GL context attributes are owned by ui::Window::create — it runs
+    // a fallback chain (3.3 core strict → relaxed framebuffer → legacy
+    // request) for machines whose drivers reject the strict
+    // core-profile/pixel-format combination, and shows an actionable
+    // message box if no usable context exists at all.
 
     ui::WindowConfig winConfig;
     winConfig.title = "Y.A.W.N — Yet Another Audio Workstation New";

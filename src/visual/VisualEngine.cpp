@@ -340,10 +340,14 @@ VisualEngine::~VisualEngine() { shutdown(); }
 // ── Window + context creation ──────────────────────────────────────────────
 
 bool VisualEngine::createOutputWindowAndContext() {
+    // Don't re-request a specific GL version/profile here: SDL's global
+    // attribute state still holds whatever configuration ui::Window's
+    // fallback chain succeeded with for the MAIN context (3.3 core on
+    // healthy drivers, a legacy request on picky ones). Mirroring it
+    // keeps this shared context creatable on exactly the machines the
+    // main one was; demanding 3.3 core here would fail on a machine
+    // that only worked via the fallback.
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
     const Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
     m_outputWindow = SDL_CreateWindow("Y.A.W.N - Visual Output",
