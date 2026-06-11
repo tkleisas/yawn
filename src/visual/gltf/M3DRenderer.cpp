@@ -1,4 +1,5 @@
 #include "visual/gltf/M3DRenderer.h"
+#include "ui/GlCaps.h"
 #include "util/Logger.h"
 
 #include <algorithm>
@@ -32,16 +33,19 @@ namespace {
 //       and single-draw path — unchanged behaviour).
 //   1 → per-instance vertex attributes (locations 5..10) + uViewProj, for
 //       GPU-instanced static models (one draw for N copies).
+// No #version line (compileShader prepends GlCaps::glslVersionLine())
+// and no layout() qualifiers (GLSL 1.40 lacks them — locations are
+// bound with glBindAttribLocation in linkProgram; they must match the
+// glVertexAttribPointer indices in uploadModel).
 constexpr const char* kVertexSrc =
-    "#version 330 core\n"
-    "layout(location=0)  in vec3  aPos;\n"
-    "layout(location=1)  in vec3  aNormal;\n"
-    "layout(location=2)  in vec2  aUV;\n"
-    "layout(location=3)  in uvec4 aJoints;\n"
-    "layout(location=4)  in vec4  aWeights;\n"
-    "layout(location=5)  in mat4  aInstanceModel;\n"   // occupies 5,6,7,8
-    "layout(location=9)  in vec4  aColorEmis;\n"        // rgb + emissive
-    "layout(location=10) in float aOpacity;\n"
+    "in vec3  aPos;\n"            // location 0
+    "in vec3  aNormal;\n"         // location 1
+    "in vec2  aUV;\n"             // location 2
+    "in uvec4 aJoints;\n"         // location 3
+    "in vec4  aWeights;\n"        // location 4
+    "in mat4  aInstanceModel;\n"  // location 5 (occupies 5,6,7,8)
+    "in vec4  aColorEmis;\n"      // location 9 (rgb + emissive)
+    "in float aOpacity;\n"        // location 10
     "uniform mat4  uMVP;\n"
     "uniform mat4  uModel;\n"
     "uniform mat4  uViewProj;\n"
@@ -87,7 +91,6 @@ constexpr const char* kVertexSrc =
 // alpha MASK, plus per-instance tint/emissive/opacity. Normal mapping and
 // a full Cook-Torrance BRDF are a later phase.
 constexpr const char* kFragmentSrc =
-    "#version 330 core\n"
     "in vec3 vWorldNormal;\n"
     "in vec3 vWorldPos;\n"
     "in vec2 vUV;\n"
@@ -184,7 +187,8 @@ BracketResult bracketKeyframes(const std::vector<float>& times, float t) {
 
 GLuint compileShader(GLenum type, const char* src, const char* label) {
     GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
+    const char* sources[2] = { ui::GlCaps::glslVersionLine(), src };
+    glShaderSource(s, 2, sources, nullptr);
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -203,6 +207,17 @@ GLuint linkProgram(GLuint vs, GLuint fs) {
     GLuint p = glCreateProgram();
     glAttachShader(p, vs);
     glAttachShader(p, fs);
+    // Pre-link location binding replaces the layout() qualifiers GLSL
+    // 1.40 lacks. aInstanceModel is a mat4 — binding its base location
+    // assigns the four consecutive slots 5..8.
+    glBindAttribLocation(p, 0,  "aPos");
+    glBindAttribLocation(p, 1,  "aNormal");
+    glBindAttribLocation(p, 2,  "aUV");
+    glBindAttribLocation(p, 3,  "aJoints");
+    glBindAttribLocation(p, 4,  "aWeights");
+    glBindAttribLocation(p, 5,  "aInstanceModel");
+    glBindAttribLocation(p, 9,  "aColorEmis");
+    glBindAttribLocation(p, 10, "aOpacity");
     glLinkProgram(p);
     GLint ok = 0;
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
@@ -425,22 +440,33 @@ void M3DRenderer::uploadModel(const M3DModel& model, Model& dst) {
 
         // Per-instance attributes from the shared instance VBO (divisor 1):
         // locations 5..8 = mat4 model, 9 = vec4 (rgb + emissive), 10 = opacity.
-        glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
-        const GLsizei iStride = kInstanceFloats * sizeof(float);
-        for (int c = 0; c < 4; ++c) {
-            glEnableVertexAttribArray(5 + c);
-            glVertexAttribPointer(5 + c, 4, GL_FLOAT, GL_FALSE, iStride,
-                reinterpret_cast<void*>(static_cast<uintptr_t>(c * 4 * sizeof(float))));
-            glVertexAttribDivisor(5 + c, 1);
+        // Attribute divisors are core 3.3 / ARB_instanced_arrays; on a
+        // GL 3.1 context without the extension these arrays stay
+        // disabled and drawInstances routes everything through the
+        // per-instance uniform path (uInstanced == 0), which never
+        // reads them.
+        if (ui::GlCaps::instancedArrays()) {
+            auto setDivisor = [](GLuint index) {
+                if (glVertexAttribDivisor)         glVertexAttribDivisor(index, 1);
+                else if (glVertexAttribDivisorARB) glVertexAttribDivisorARB(index, 1);
+            };
+            glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+            const GLsizei iStride = kInstanceFloats * sizeof(float);
+            for (int c = 0; c < 4; ++c) {
+                glEnableVertexAttribArray(5 + c);
+                glVertexAttribPointer(5 + c, 4, GL_FLOAT, GL_FALSE, iStride,
+                    reinterpret_cast<void*>(static_cast<uintptr_t>(c * 4 * sizeof(float))));
+                setDivisor(5 + c);
+            }
+            glEnableVertexAttribArray(9);
+            glVertexAttribPointer(9, 4, GL_FLOAT, GL_FALSE, iStride,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(16 * sizeof(float))));
+            setDivisor(9);
+            glEnableVertexAttribArray(10);
+            glVertexAttribPointer(10, 1, GL_FLOAT, GL_FALSE, iStride,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(20 * sizeof(float))));
+            setDivisor(10);
         }
-        glEnableVertexAttribArray(9);
-        glVertexAttribPointer(9, 4, GL_FLOAT, GL_FALSE, iStride,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(16 * sizeof(float))));
-        glVertexAttribDivisor(9, 1);
-        glEnableVertexAttribArray(10);
-        glVertexAttribPointer(10, 1, GL_FLOAT, GL_FALSE, iStride,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(20 * sizeof(float))));
-        glVertexAttribDivisor(10, 1);
 
         gm.indexCount    = static_cast<GLsizei>(src.indices.size());
         gm.materialIndex = src.materialIndex;
@@ -825,8 +851,10 @@ void M3DRenderer::drawInstances(const std::vector<M3DInstance>& instances) {
         for (const auto& gm : mdl.meshes)
             if (gm.skinIndex >= 0) { hasSkin = true; break; }
 
-        if (hasSkin) {
+        if (hasSkin || !ui::GlCaps::instancedArrays()) {
             // Per-instance pose → no batching; use the uniform path.
+            // Also the route for GL 3.1 contexts without
+            // ARB_instanced_arrays: same image, one draw per instance.
             for (const auto* in : group) drawInstance(*in);
             continue;
         }

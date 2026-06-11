@@ -1,4 +1,5 @@
 #include "ui/Renderer.h"
+#include "ui/GlCaps.h"
 #include "util/Logger.h"
 #include <cstring>
 #include <cmath>
@@ -6,11 +7,15 @@
 namespace yawn {
 namespace ui {
 
+// No #version line and no layout() qualifiers — the version comes from
+// GlCaps::glslVersionLine() at compile time (GLSL 3.30 or 1.40 for the
+// GL 3.1 fallback path) and attribute locations are bound with
+// glBindAttribLocation before linking. Keep the bodies in the common
+// 1.40/3.30 subset.
 static const char* kVertexShader = R"(
-#version 330 core
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aTexCoord;
-layout(location = 2) in vec4 aColor;
+in vec2 aPos;
+in vec2 aTexCoord;
+in vec4 aColor;
 
 uniform mat4 uProjection;
 
@@ -25,7 +30,6 @@ void main() {
 )";
 
 static const char* kFragmentShader = R"(
-#version 330 core
 in vec2 vTexCoord;
 in vec4 vColor;
 
@@ -41,7 +45,8 @@ void main() {
 
 static GLuint compileShader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, nullptr);
+    const char* sources[2] = { GlCaps::glslVersionLine(), source };
+    glShaderSource(shader, 2, sources, nullptr);
     glCompileShader(shader);
 
     GLint success;
@@ -69,6 +74,12 @@ bool Renderer2D::init() {
     m_shaderProgram = glCreateProgram();
     glAttachShader(m_shaderProgram, vs);
     glAttachShader(m_shaderProgram, fs);
+    // Bind attribute locations pre-link (replaces layout() qualifiers,
+    // which GLSL 1.40 lacks). Must match the glVertexAttribPointer
+    // indices below.
+    glBindAttribLocation(m_shaderProgram, 0, "aPos");
+    glBindAttribLocation(m_shaderProgram, 1, "aTexCoord");
+    glBindAttribLocation(m_shaderProgram, 2, "aColor");
     glLinkProgram(m_shaderProgram);
 
     GLint success;

@@ -1,6 +1,7 @@
 #include "visual/VisualEngine.h"
 #include "visual/VisualEngineAPI.h"
 #include "visual/VisualNoteBus.h"
+#include "ui/GlCaps.h"
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
 #include "visual/gltf/M3DModel.h"
 #include "visual/gltf/M3DRenderer.h"
@@ -40,10 +41,15 @@ VisualEngine::ContextScope::~ContextScope() {
 }
 
 // ── Shader sources ─────────────────────────────────────────────────────────
+//
+// No #version lines here: compileShaderProgram prepends
+// ui::GlCaps::glslVersionLine() — GLSL 3.30 on a 3.3+ context, GLSL
+// 1.40 on the GL 3.1 fallback path (old Windows Intel drivers,
+// Raspberry Pi). Keep these sources (and bundled shaders) in the
+// common 1.40/3.30 subset.
 
 // Fullscreen triangle from gl_VertexID — no VBO.
 static const char* kFullscreenVS = R"GLSL(
-#version 330 core
 out vec2 vUV;
 void main() {
     vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0,
@@ -54,7 +60,6 @@ void main() {
 )GLSL";
 
 static const char* kShaderToyPreamble = R"GLSL(
-#version 330 core
 in vec2 vUV;
 out vec4 fragColor_out;
 
@@ -133,7 +138,6 @@ void main() {
 // YAWN audio/beat extensions. A..H knobs are NOT available here — post-FX
 // parameters use the same @range annotation convention as layer shaders.
 static const char* kPostFXPreamble = R"GLSL(
-#version 330 core
 in vec2 vUV;
 out vec4 fragColor_out;
 
@@ -168,7 +172,6 @@ void main() {
 )GLSL";
 
 static const char* kBlitFS = R"GLSL(
-#version 330 core
 in vec2 vUV;
 out vec4 fragColor;
 uniform sampler2D uTex;
@@ -186,7 +189,6 @@ void main() {
 //   Multiply : result = lerp(dst, dst * src, opacity)
 //   Screen   : result = lerp(dst, 1 - (1-dst)*(1-src), opacity)
 static const char* kCompositeFS = R"GLSL(
-#version 330 core
 in vec2 vUV;
 out vec4 fragColor;
 uniform sampler2D uSrc;
@@ -223,7 +225,8 @@ GLuint VisualEngine::compileShaderProgram(const char* vertSrc, const char* fragS
     auto compileOne = [](GLenum type, const char* src, const char* stageName,
                          const char* programName) -> GLuint {
         GLuint shader = glCreateShader(type);
-        glShaderSource(shader, 1, &src, nullptr);
+        const char* sources[2] = { ui::GlCaps::glslVersionLine(), src };
+        glShaderSource(shader, 2, sources, nullptr);
         glCompileShader(shader);
         GLint ok = 0;
         glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
@@ -464,19 +467,27 @@ void VisualEngine::destroyLayer(Layer& L) {
 }
 
 void VisualEngine::uploadLayerText(Layer& L) {
+    // Shaders expect (r,r,r,r) when sampling the text channel. With
+    // texture swizzle (GL 3.3 / ARB ext) we store R8 and swizzle; on
+    // the GL 3.1 fallback path we expand to RGBA8 on the CPU instead.
+    const bool swizzle = ui::GlCaps::textureSwizzle();
+
     // Create the texture lazily so layers without text use no VRAM.
     if (L.textTex == 0) {
         glGenTextures(1, &L.textTex);
         glBindTexture(GL_TEXTURE_2D, L.textTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, kTextTexW, kTextTexH, 0,
-                     GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, swizzle ? GL_R8 : GL_RGBA8,
+                     kTextTexW, kTextTexH, 0,
+                     swizzle ? GL_RED : GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         // Wrap horizontally so shaders can scroll by shifting UV.x freely.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        GLint swizzle[4] = { GL_RED, GL_RED, GL_RED, GL_RED };
-        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+        if (swizzle) {
+            GLint sw[4] = { GL_RED, GL_RED, GL_RED, GL_RED };
+            glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, sw);
+        }
     }
     // Rasterize at ~70% of tex height so glyphs fit with descender margin.
     const float pxH = kTextTexH * 0.70f;
@@ -486,8 +497,20 @@ void VisualEngine::uploadLayerText(Layer& L) {
 
     glBindTexture(GL_TEXTURE_2D, L.textTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kTextTexW, kTextTexH,
-                    GL_RED, GL_UNSIGNED_BYTE, m_textScratch.data());
+    if (swizzle) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kTextTexW, kTextTexH,
+                        GL_RED, GL_UNSIGNED_BYTE, m_textScratch.data());
+    } else {
+        static thread_local std::vector<uint8_t> rgba;
+        rgba.resize(size_t(kTextTexW) * kTextTexH * 4);
+        for (size_t i = 0, n = size_t(kTextTexW) * kTextTexH; i < n; ++i) {
+            const uint8_t r = m_textScratch[i];
+            rgba[i * 4 + 0] = r; rgba[i * 4 + 1] = r;
+            rgba[i * 4 + 2] = r; rgba[i * 4 + 3] = r;
+        }
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kTextTexW, kTextTexH,
+                        GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
 
     LOG_INFO("Visual", "Rasterised text (\"%s\") → %d px wide",
@@ -714,18 +737,25 @@ bool VisualEngine::createDummyChannels() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    // iChannel0 audio texture: 512×2 R8. Row 0 = FFT, row 1 = waveform.
+    // iChannel0 audio texture: 512×2, row 0 = FFT, row 1 = waveform.
+    // Shaders expect (r,r,r,1): R8 + swizzle where available, RGBA8
+    // with CPU expansion on the GL 3.1 fallback path (see updateAudioTexture).
     glGenTextures(1, &m_audioTex);
     glBindTexture(GL_TEXTURE_2D, m_audioTex);
     m_audioTexPixels.assign(kAudioTexW * kAudioTexH, 0);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, kAudioTexW, kAudioTexH, 0,
-                 GL_RED, GL_UNSIGNED_BYTE, m_audioTexPixels.data());
+    if (ui::GlCaps::textureSwizzle()) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, kAudioTexW, kAudioTexH, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, m_audioTexPixels.data());
+        GLint swizzle[4] = { GL_RED, GL_RED, GL_RED, GL_ONE };
+        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kAudioTexW, kAudioTexH, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    GLint swizzle[4] = { GL_RED, GL_RED, GL_RED, GL_ONE };
-    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 
     glBindTexture(GL_TEXTURE_2D, 0);
     return true;
@@ -1839,8 +1869,22 @@ void VisualEngine::updateAudioTexture() {
 
     glBindTexture(GL_TEXTURE_2D, m_audioTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kAudioTexW, kAudioTexH,
-                    GL_RED, GL_UNSIGNED_BYTE, m_audioTexPixels.data());
+    if (ui::GlCaps::textureSwizzle()) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kAudioTexW, kAudioTexH,
+                        GL_RED, GL_UNSIGNED_BYTE, m_audioTexPixels.data());
+    } else {
+        // GL 3.1 fallback: expand R8 → (r,r,r,255) on the CPU, matching
+        // the swizzle the shaders rely on. 512×2 px per frame — trivial.
+        static thread_local std::vector<uint8_t> rgba;
+        rgba.resize(m_audioTexPixels.size() * 4);
+        for (size_t i = 0; i < m_audioTexPixels.size(); ++i) {
+            const uint8_t r = m_audioTexPixels[i];
+            rgba[i * 4 + 0] = r; rgba[i * 4 + 1] = r;
+            rgba[i * 4 + 2] = r; rgba[i * 4 + 3] = 255;
+        }
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kAudioTexW, kAudioTexH,
+                        GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

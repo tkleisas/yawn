@@ -3,6 +3,7 @@
 
 #undef STB_TRUETYPE_IMPLEMENTATION
 #include "ui/Font.h"
+#include "ui/GlCaps.h"
 #include "ui/Theme.h"
 #include "ui/Renderer.h"
 #include "util/Logger.h"
@@ -140,17 +141,29 @@ bool Font::load(const std::string& path, float pixelHeight) {
         }
     }
 
-    // Upload to OpenGL texture
+    // Upload to OpenGL texture. The text shader wants (1,1,1,coverage):
+    // R8 atlas + swizzle where available (GL 3.3 / ARB ext); on the
+    // GL 3.1 fallback path, expand to RGBA8 on the CPU instead — a
+    // one-time 4× of the atlas (~1 MB), not a per-frame cost.
     glGenTextures(1, &m_textureId);
     glBindTexture(GL_TEXTURE_2D, m_textureId);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m_atlasWidth, m_atlasHeight,
-                 0, GL_RED, GL_UNSIGNED_BYTE, bitmap.data());
+    if (GlCaps::textureSwizzle()) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m_atlasWidth, m_atlasHeight,
+                     0, GL_RED, GL_UNSIGNED_BYTE, bitmap.data());
+        // Swizzle: use red channel as alpha, white as color
+        GLint swizzle[] = {GL_ONE, GL_ONE, GL_ONE, GL_RED};
+        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+    } else {
+        std::vector<uint8_t> rgba(bitmap.size() * 4);
+        for (size_t i = 0; i < bitmap.size(); ++i) {
+            rgba[i * 4 + 0] = 255; rgba[i * 4 + 1] = 255;
+            rgba[i * 4 + 2] = 255; rgba[i * 4 + 3] = bitmap[i];
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_atlasWidth, m_atlasHeight,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // Swizzle: use red channel as alpha, white as color
-    GLint swizzle[] = {GL_ONE, GL_ONE, GL_ONE, GL_RED};
-    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 
     LOG_INFO("UI", "Font loaded: %s (%.0fpx, %zu glyphs, %dx%d atlas)",
              path.c_str(), pixelHeight, m_glyphs.size(), m_atlasWidth, m_atlasHeight);

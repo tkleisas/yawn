@@ -1,4 +1,5 @@
 #include "ui/Window.h"
+#include "ui/GlCaps.h"
 #include "util/Logger.h"
 #include <glad/gl.h>
 #include <cstdio>
@@ -94,17 +95,20 @@ bool Window::create(const WindowConfig& config) {
         }
 
         // Load OpenGL functions via glad and verify we actually got
-        // the 3.3 feature set — a legacy request can succeed yet hand
-        // back GL 1.1 (Microsoft Basic Display Adapter, RDP sessions),
-        // which would crash on the first missing entry point instead
-        // of failing cleanly here.
+        // at least the GL 3.1 feature set (the renderers' hard floor —
+        // GLSL 1.40, VAOs, FBOs, TBOs; chosen so Sandy Bridge-era
+        // Windows drivers and Raspberry Pi 4/5 Mesa v3d qualify). A
+        // legacy request can succeed yet hand back GL 1.1 (Microsoft
+        // Basic Display Adapter, RDP sessions), which would crash on
+        // the first missing entry point instead of failing cleanly
+        // here.
         const int version = gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress);
         const int maj = GLAD_VERSION_MAJOR(version);
         const int min = GLAD_VERSION_MINOR(version);
-        if (!version || maj < 3 || (maj == 3 && min < 3)) {
+        if (!version || maj < 3 || (maj == 3 && min < 1)) {
             char buf[128];
             std::snprintf(buf, sizeof(buf),
-                          "driver provides OpenGL %d.%d but Y.A.W.N needs 3.3+",
+                          "driver provides OpenGL %d.%d but Y.A.W.N needs 3.1+",
                           maj, min);
             lastError = buf;
             LOG_WARN("UI", "GL version check failed (%s): %s",
@@ -115,6 +119,14 @@ bool Window::create(const WindowConfig& config) {
             m_window = nullptr;
             continue;
         }
+
+        // Publish the context's capabilities for the renderers: on a
+        // 3.1/3.2 context they switch to GLSL 1.40 preambles and use
+        // ARB-extension or CPU fallbacks for swizzle / instancing.
+        GlCaps::major = maj;
+        GlCaps::minor = min;
+        GlCaps::extTextureSwizzle  = GLAD_GL_ARB_texture_swizzle != 0;
+        GlCaps::extInstancedArrays = GLAD_GL_ARB_instanced_arrays != 0;
 
         // Log the adapter details — the single most useful line in a
         // user's yawn.log when graphics misbehave on their machine.
@@ -138,7 +150,7 @@ bool Window::create(const WindowConfig& config) {
     // wrong and what to do in a dialog (plain Win32/desktop message
     // box; works without any GL).
     std::string msg =
-        "Y.A.W.N could not create an OpenGL 3.3 graphics context.\n\n"
+        "Y.A.W.N could not create an OpenGL 3.1 graphics context.\n\n"
         "Last error: " + lastError + "\n\n"
         "This usually means the graphics driver is missing or outdated "
         "(Windows' built-in 'Microsoft Basic Display Adapter' has no "
