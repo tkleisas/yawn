@@ -136,6 +136,23 @@ public:
     // --- Public API ---
 
     bool  isOpen() const { return m_open; }
+
+    // ─── Resize-handle affordance ───────────────────────────────────
+    // Hover is driven centrally from the app's mouse-move handler
+    // (which also picks the NS-resize cursor) rather than in
+    // onMouseMove: fw2 move dispatch only reaches the child under the
+    // pointer, so panel-local tracking would go stale the moment the
+    // pointer leaves the strip. Matches the ContentGrid divider
+    // contract. The strip stays active while the panel is collapsed
+    // (it doubles as the double-click reopen target).
+    bool isOverResizeHandle(float mx, float my) const {
+        return mx >= m_bounds.x && mx < m_bounds.x + m_bounds.w &&
+               my >= m_bounds.y && my < m_bounds.y + kHandleHeight;
+    }
+    void setHandleHover(bool h) {
+        if (h != m_handleHover) { m_handleHover = h; invalidate(); }
+    }
+    bool isHandleDragging() const { return m_handleDragActive; }
     void  setOpen(bool open) {
         m_open = open;
         m_targetHeight = open ? m_userPanelHeight : kCollapsedHeight;
@@ -2512,6 +2529,7 @@ private:
 
     // Handle drag state
     bool  m_handleDragActive = false;
+    bool  m_handleHover      = false;   // set by App's central cursor logic
     float m_handleDragStartY = 0;
     float m_handleDragStartH = 0;
     std::chrono::steady_clock::time_point m_lastHandleClickTime{};

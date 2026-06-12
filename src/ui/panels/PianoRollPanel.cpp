@@ -51,11 +51,23 @@ void PianoRollPanel::render(UIContext& ctx) {
 
     r.drawRect(m_px, m_py, m_pw, m_bounds.h, Color{30, 30, 33});
 
-    r.drawRect(m_px, m_py, m_pw, kHandleHeight, Color{55, 55, 60});
+    // Resize handle strip — same hover/drag states as the ContentGrid
+    // divider (brighten on hover, accent while dragging), plus a
+    // full-width groove line so the whole strip reads as draggable,
+    // not just the center dots.
     {
+        const Color barCol = m_handleDragActive ? Color{255, 165, 0}
+                           : m_handleHover      ? Color{80, 80, 90}
+                                                 : Color{55, 55, 60};
+        r.drawRect(m_px, m_py, m_pw, kHandleHeight, barCol);
         float cx = m_px + m_pw * 0.5f;
         float cy = m_py + kHandleHeight * 0.5f;
-        Color dotCol{90, 90, 95};
+        const Color lineCol = m_handleDragActive ? Color{255, 210, 140}
+                            : m_handleHover      ? Color{120, 120, 128}
+                                                  : Color{75, 75, 82};
+        r.drawRect(m_px + 6.0f, cy - 0.5f, m_pw - 12.0f, 1.0f, lineCol);
+        const Color dotCol = m_handleDragActive ? Color{40, 30, 10}
+                                                 : Color{120, 120, 128};
         float dotR = 1.0f;
         float spacing = 6.0f;
         r.drawRect(cx - spacing - dotR, cy - dotR, dotR * 2, dotR * 2, dotCol);

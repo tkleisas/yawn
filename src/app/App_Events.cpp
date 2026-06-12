@@ -897,9 +897,24 @@ void App::processEvents() {
                     m_rootLayout->dispatchMouseMove(me);
                 }
 
+                // Bottom-docked panel resize handles (piano roll, detail
+                // panel): hover is computed HERE from the live pointer
+                // position — fw2 move dispatch only reaches the child
+                // under the pointer, so panel-local tracking would go
+                // stale the moment the pointer leaves the strip.
+                const bool prHandle = m_pianoRoll &&
+                    (m_pianoRoll->isOverResizeHandle(mx, my) ||
+                     m_pianoRoll->isHandleDragging());
+                const bool dpHandle = m_showDetailPanel && m_detailPanel &&
+                    (m_detailPanel->isOverResizeHandle(mx, my) ||
+                     m_detailPanel->isHandleDragging());
+                if (m_pianoRoll)   m_pianoRoll->setHandleHover(prHandle);
+                if (m_detailPanel) m_detailPanel->setHandleHover(dpHandle);
+
                 // Update cursor shape based on content grid divider hover or panel resize
                 bool wantNS = m_contentGrid->wantsVerticalResize()
-                           || (m_arrangementPanel && m_arrangementPanel->wantsVerticalResize());
+                           || (m_arrangementPanel && m_arrangementPanel->wantsVerticalResize())
+                           || prHandle || dpHandle;
                 if (m_contentGrid->wantsHorizontalResize() && wantNS) {
                     SDL_SetCursor(m_cursorMove);
                 } else if (m_contentGrid->wantsHorizontalResize()) {

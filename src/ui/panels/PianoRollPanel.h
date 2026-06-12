@@ -260,6 +260,22 @@ public:
     int   trackIndex() const { return m_trackIdx; }
     float height()     const { return m_animatedHeight; }
 
+    // ─── Resize-handle affordance ───────────────────────────────────────
+    // Hover is driven centrally from the app's mouse-move handler (which
+    // also picks the NS-resize cursor) rather than in onMouseMove: fw2
+    // move dispatch only reaches the child under the pointer, so
+    // panel-local tracking would go stale the moment the pointer leaves
+    // the strip. Matches the ContentGrid divider contract.
+    bool isOverResizeHandle(float mx, float my) const {
+        return m_open && m_clip &&
+               mx >= m_px && mx < m_px + m_pw &&
+               my >= m_py && my < m_py + kHandleHeight;
+    }
+    void setHandleHover(bool h) {
+        if (h != m_handleHover) { m_handleHover = h; invalidate(); }
+    }
+    bool isHandleDragging() const { return m_handleDragActive; }
+
     void setOpen(bool o) {
         m_open = o;
         m_targetHeight = o ? m_userHeight : 0.0f;
@@ -948,6 +964,7 @@ private:
 
     // Handle drag state
     bool  m_handleDragActive = false;
+    bool  m_handleHover      = false;   // set by App's central cursor logic
     float m_handleDragStartY = 0;
     float m_handleDragStartH = 0;
     std::chrono::steady_clock::time_point m_lastHandleClickTime{};
