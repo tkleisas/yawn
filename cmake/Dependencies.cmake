@@ -48,6 +48,17 @@ FetchContent_Declare(
 )
 set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+if(WIN32)
+    # Steinberg ASIO host support — the path to low (~5-10 ms round
+    # trip) latency on Windows audio interfaces (WASAPI shared mode
+    # adds 30 ms+). PortAudio's CMake downloads the ASIO SDK from
+    # Steinberg at configure time; the SDK is used at build time only
+    # and is NOT redistributed (per its license — see NOTICES.md).
+    # ASIO devices then show up in Pa_GetDeviceCount enumeration
+    # alongside WASAPI/DirectSound ones, tagged with their host API in
+    # the Preferences device pickers.
+    set(PA_USE_ASIO ON CACHE BOOL "" FORCE)
+endif()
 FetchContent_MakeAvailable(portaudio)
 
 # PortAudio target name varies; create an alias

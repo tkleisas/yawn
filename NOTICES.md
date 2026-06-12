@@ -128,6 +128,12 @@ under `build/_deps/`. Each carries its own LICENSE file:
 
 - **SDL3** — zlib license — https://github.com/libsdl-org/SDL
 - **PortAudio** — MIT license — https://github.com/PortAudio/portaudio
+- **Steinberg ASIO SDK** (Windows builds only) — proprietary,
+  royalty-free license — https://www.steinberg.net/asiosdk. Used at
+  build time to compile PortAudio's ASIO host; the SDK itself is
+  downloaded from Steinberg during the build and is **not**
+  redistributed with YAWN, per its license. *ASIO is a trademark and
+  software of Steinberg Media Technologies GmbH.*
 - **RtMidi** — modified MIT — https://github.com/thestk/rtmidi
 - **libsndfile** — LGPL 2.1 — https://github.com/libsndfile/libsndfile
 - **FLAC / Ogg / Vorbis** — BSD-style — https://xiph.org/

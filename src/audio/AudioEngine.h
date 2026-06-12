@@ -46,6 +46,11 @@ enum class TrackTransportState : uint8_t {
 struct AudioDevice {
     int id = -1;
     std::string name;
+    // Host API the device belongs to ("ASIO", "Windows WASAPI",
+    // "ALSA", …). On Windows the same physical interface appears once
+    // per host API with near-identical names — the UI appends this so
+    // the user can deliberately pick the ASIO entry for low latency.
+    std::string hostApi;
     int maxInputChannels = 0;
     int maxOutputChannels = 0;
     double defaultSampleRate = kDefaultSampleRate;

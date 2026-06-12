@@ -226,13 +226,31 @@ void FwPreferencesDialog::refreshDevices() {
 }
 
 void FwPreferencesDialog::syncDropdownsToState() {
+    // When devices span multiple host APIs (Windows: the same physical
+    // interface appears under ASIO, WASAPI and DirectSound with
+    // near-identical names), tag each entry with its API so the user
+    // can deliberately pick e.g. "Focusrite USB ASIO  [ASIO]" for low
+    // latency. Single-API platforms (typical Linux: ALSA only) skip
+    // the tag — it would be pure noise.
+    bool multiApi = false;
+    for (const auto& d : m_audioDevices) {
+        if (!d.hostApi.empty() && d.hostApi != m_audioDevices.front().hostApi) {
+            multiApi = true;
+            break;
+        }
+    }
+    auto apiTag = [multiApi](const audio::AudioDevice& d) -> std::string {
+        return (multiApi && !d.hostApi.empty()) ? "  [" + d.hostApi + "]"
+                                                 : std::string{};
+    };
+
     // Build output / input device lists from m_audioDevices, filtered
     // by whether the device has usable channels.
     std::vector<std::string> outLabels;
     m_outputDeviceIds.clear();
     for (const auto& d : m_audioDevices) {
         if (d.maxOutputChannels > 0) {
-            outLabels.push_back(d.name);
+            outLabels.push_back(d.name + apiTag(d));
             m_outputDeviceIds.push_back(d.id);
         }
     }
@@ -252,7 +270,7 @@ void FwPreferencesDialog::syncDropdownsToState() {
             // Selecting one captures whatever Windows is sending to that
             // output endpoint — used by the Auto-Sampler to record
             // software synths without VB-CABLE.
-            std::string label = d.name;
+            std::string label = d.name + apiTag(d);
             if (d.isLoopback) label += "  [loopback]";
             inLabels.push_back(std::move(label));
             m_inputDeviceIds.push_back(d.id);

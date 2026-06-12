@@ -61,6 +61,9 @@ std::vector<AudioDevice> AudioEngine::enumerateDevices() {
         AudioDevice d;
         d.id = i;
         d.name = info->name ? info->name : "";
+        if (const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+            api && api->name)
+            d.hostApi = api->name;
         d.maxInputChannels = info->maxInputChannels;
         d.maxOutputChannels = info->maxOutputChannels;
         d.defaultSampleRate = info->defaultSampleRate;
@@ -379,7 +382,13 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     }
 
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
-    LOG_INFO("Audio", "Output device: %s", devInfo->name);
+    // Include the host API — on Windows the same interface exists as
+    // ASIO / WASAPI / DirectSound entries with near-identical names,
+    // and which one is in use is the first question for any latency
+    // report.
+    const PaHostApiInfo* outApi = Pa_GetHostApiInfo(devInfo->hostApi);
+    LOG_INFO("Audio", "Output device: %s [%s]", devInfo->name,
+             outApi && outApi->name ? outApi->name : "?");
     if (m_hasInputDevice) {
         const PaDeviceInfo* inDevInfo = Pa_GetDeviceInfo(inputParams.device);
 #if defined(_WIN32)
