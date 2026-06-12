@@ -66,6 +66,31 @@ public:
     }
 
     void onLayout(Rect bounds, UIContext& ctx) override {
+        // Keep the secondary panes (bottom row = mixer, right column)
+        // at constant PIXEL size when our overall size changes — the
+        // detail panel / piano roll growing below us, or a window
+        // resize. The dividers are stored as ratios, and re-applying a
+        // ratio to a changed size rescales BOTH panes proportionally —
+        // dragging a bottom panel's splitter visibly resized the mixer
+        // row too. Instead, convert the ratio so the secondary pane's
+        // pixel size survives and the top-left (session/arrangement)
+        // pane absorbs all the elastic space. recomputeDividers()'s
+        // pixel minimums still bound the result.
+        if (m_lastH > kDividerSize && bounds.h > kDividerSize &&
+            bounds.h != m_lastH) {
+            const float botPx = m_lastH - m_hRatio * m_lastH - kDividerSize;
+            m_hRatio = std::clamp(
+                (bounds.h - kDividerSize - botPx) / bounds.h, 0.02f, 0.98f);
+        }
+        if (m_lastW > kDividerSize && bounds.w > kDividerSize &&
+            bounds.w != m_lastW) {
+            const float rightPx = m_lastW - m_vRatio * m_lastW - kDividerSize;
+            m_vRatio = std::clamp(
+                (bounds.w - kDividerSize - rightPx) / bounds.w, 0.02f, 0.98f);
+        }
+        m_lastW = bounds.w;
+        m_lastH = bounds.h;
+
         m_bounds = bounds;
         recomputeDividers();
 
@@ -244,6 +269,11 @@ private:
 
     float m_vDivX = 0;
     float m_hDivY = 0;
+
+    // Last laid-out size — lets onLayout detect size changes and
+    // preserve the secondary panes' pixel size (see comment there).
+    float m_lastW = 0;
+    float m_lastH = 0;
 
     bool  m_dragH = false, m_dragV = false;
     float m_dragStartMX = 0, m_dragStartMY = 0;
