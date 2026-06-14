@@ -703,6 +703,11 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     self->m_pendingShaderTrack = -1;
                     self->m_pendingShaderScene = -1;
                     if (ti < 0 || si < 0) return;
+                    // Remember the folder so the next shader load starts here.
+                    self->m_settings.lastShaderDir =
+                        std::filesystem::path(filelist[0]).parent_path().string();
+                    self->m_settingsDirty = true;
+                    self->m_settingsDirtyAge = 0;
                     auto vc = std::make_unique<visual::VisualClip>();
                     // Copy the source into <project>/shaders/<stem>.frag
                     // and store the project-relative path. Bundled
@@ -716,7 +721,8 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 },
                 this, m_mainWindow.getHandle(),
                 &filter, 1,
-                /*default_location*/ nullptr,
+                m_settings.lastShaderDir.empty()
+                    ? nullptr : m_settings.lastShaderDir.c_str(),
                 /*allow_many*/ false);
         }));
 
@@ -872,6 +878,33 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                         markDirty();
                     }));
             }
+        }
+
+        // "Clear Shader" — drop the clip's source shader. Mirrors the
+        // Clear Live Input / Clear All Models options. If this is the
+        // launched clip, refresh the live layer: re-launch (falling back
+        // to the video/model/live passthrough) when another source
+        // remains, otherwise tear the layer down.
+        if (hasVisualClip && !slot->visualClip->firstShaderPath().empty()) {
+            items.push_back(item("Clear Shader",
+                [this, trackIndex, sceneIndex]() {
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s || !s->visualClip) return;
+                    s->visualClip->ensurePass0().shaderPath.clear();
+                    if (m_project.track(trackIndex).defaultScene == sceneIndex) {
+                        const auto& vc = *s->visualClip;
+                        const bool hasOtherSource =
+                            !vc.videoPath.empty() ||
+                            (vc.liveInput && !vc.liveUrl.empty()) ||
+                            !vc.modelPath.empty();
+                        if (hasOtherSource)
+                            launchVisualClipData(trackIndex, vc,
+                                                  vc.firstShaderPath());
+                        else
+                            m_visualEngine.clearLayer(trackIndex);
+                    }
+                    markDirty();
+                }));
         }
 
         // "Set Video…" — opens a file picker, kicks off the ffmpeg
