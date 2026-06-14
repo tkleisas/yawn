@@ -1,8 +1,10 @@
 #include "audio/OfflineRenderer.h"
 #include "audio/AudioEngine.h"
+#include "util/FileIO.h"
 #include "util/Logger.h"
 #include <vector>
 #include <cstring>
+#include <cmath>
 
 namespace yawn {
 namespace audio {
@@ -108,6 +110,24 @@ std::shared_ptr<AudioBuffer> OfflineRenderer::render(
     if (progress.cancelled.load()) {
         progress.done.store(true);
         return nullptr;
+    }
+
+    // The engine always renders at its native (device) sample rate so every
+    // rate-dependent component — clip playback, synth oscillators, effects —
+    // stays correct. Convert the finished buffer to the requested export rate
+    // here so the WAV header and its samples agree; otherwise the file plays
+    // back at the wrong speed/pitch (e.g. 48 kHz render written as 96 kHz).
+    if (config.targetSampleRate > 0 &&
+        std::fabs(static_cast<double>(config.targetSampleRate) - sampleRate) > 0.5) {
+        auto resampled = util::resampleBuffer(
+            *result, sampleRate, static_cast<double>(config.targetSampleRate));
+        if (resampled) {
+            LOG_INFO("Render", "Resampled %.0f Hz -> %d Hz (%lld -> %d frames)",
+                     sampleRate, config.targetSampleRate,
+                     static_cast<long long>(result->numFrames()),
+                     resampled->numFrames());
+            result = resampled;
+        }
     }
 
     LOG_INFO("Render", "Offline render complete: %lld frames",
