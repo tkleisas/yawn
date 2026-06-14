@@ -1419,6 +1419,14 @@ void App::processEvents() {
                 break;
             }
 
+            case SDL_EVENT_DROP_BEGIN:
+                // A new drag-drop batch is starting. Clear the multi-file
+                // video cascade anchor so the first video in this batch
+                // re-anchors on the slot under the cursor.
+                m_videoDropTrack = -1;
+                m_videoDropScene = -1;
+                break;
+
             case SDL_EVENT_DROP_FILE: {
                 const char* file = event.drop.data;
                 if (file) {
@@ -1507,7 +1515,24 @@ void App::processEvents() {
                                 "Save the project first, then drag the video again.",
                                 [this]() { saveProjectAs(); });
                         } else {
-                            startVideoImport(targetTrack, targetScene, file);
+                            // First video of the batch anchors on the slot
+                            // under the cursor; later files cascade down
+                            // successive scenes so dropping several videos
+                            // fills several slots. Clamp to the last existing
+                            // scene rather than growing the grid: addScene()
+                            // reallocates the per-track clip-slot vectors,
+                            // which would dangle the clip-automation pointers
+                            // the audio thread reads every buffer (→ crash).
+                            // Extra videos past the last scene stack on the
+                            // final slot.
+                            if (m_videoDropTrack < 0) {
+                                m_videoDropTrack = targetTrack;
+                                m_videoDropScene = targetScene;
+                            }
+                            int vs = std::min(m_videoDropScene,
+                                              m_project.numScenes() - 1);
+                            startVideoImport(m_videoDropTrack, vs, file);
+                            ++m_videoDropScene;
                         }
                         break;
                     }
