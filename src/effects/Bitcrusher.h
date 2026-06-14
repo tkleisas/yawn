@@ -18,6 +18,7 @@
 
 #include "effects/AudioEffect.h"
 #include "effects/Biquad.h"
+#include "audio/Oversampling.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,7 @@ public:
         kPreFilter,   // 200..20000 Hz (log) — lowpass before crusher
         kDither,      // 0/1 toggle
         kMix,         // 0..1
+        kOversample,  // 0/1 toggle — run the crush at 2× to tame quantizer aliasing
         kParamCount
     };
 
@@ -52,6 +54,8 @@ public:
         m_preL.reset();
         m_preR.reset();
         m_rngState = 0xC0FFEEu;
+        m_upL.reset();   m_upR.reset();
+        m_downL.reset(); m_downR.reset();
     }
 
     void process(float* buffer, int numFrames, int numChannels) override {
@@ -61,23 +65,21 @@ public:
         const float targetSr = std::clamp(m_params[kSampleRate], 100.0f, 48000.0f);
         const bool  ditherOn = m_params[kDither] >= 0.5f;
         const float mix      = std::clamp(m_params[kMix], 0.0f, 1.0f);
+        const bool  os       = m_params[kOversample] >= 0.5f;
 
-        // Sample-rate reduction step. Phase accumulates by
-        // (targetSr / sourceSr); when it crosses 1.0 we sample the
-        // current input and hold for subsequent output samples.
-        // Equivalent to a zero-order-hold downsampler followed by the
-        // host-rate output (no upsampling — the held value is what
-        // the user hears, with aliasing baked in by design).
-        const double phaseInc = static_cast<double>(targetSr)
-                              / static_cast<double>(m_sampleRate);
-
-        // Quantization step size on a [-1, 1] signal, with `bits`
-        // bits available across that range. 1-bit = 2 levels, 16-bit
-        // = 65536. Dither amplitude = 1 LSB triangular (uniform in
-        // [-step/2, +step/2] sum of two; that's TPDF).
+        // Quantization step size on a [-1, 1] signal, with `bits` bits
+        // available across that range. 1-bit = 2 levels, 16-bit = 65536.
         const float levels = static_cast<float>(1 << bits);
         const float step   = 2.0f / levels;
         const float halfStep = step * 0.5f;
+
+        // Sample-rate reduction phase advances by (targetSr / effRate). At
+        // 2× the hold + quantize run at twice the resolution so the steps'
+        // harmonics above the host Nyquist are filtered out by the decimator
+        // instead of folding back as harsh fizz. The in-band SR-reduction
+        // aliasing (the lo-fi "crunch") is preserved either way.
+        const double effRate  = os ? 2.0 * m_sampleRate : m_sampleRate;
+        const double phaseInc = static_cast<double>(targetSr) / effRate;
 
         const bool stereo = (numChannels > 1);
 
@@ -85,39 +87,23 @@ public:
             float dryL = buffer[i * numChannels];
             float dryR = stereo ? buffer[i * numChannels + 1] : dryL;
 
-            // Pre-filter: lowpass before SR reduction. With cutoff at
-            // 20 kHz the filter is effectively transparent at the
-            // host rate, so users who don't want this can leave the
-            // knob maxed.
+            // Pre-filter (linear): lowpass before the crusher, at host rate.
             float inL = m_preL.process(dryL);
             float inR = m_preR.process(dryR);
 
-            // SR-reduction: advance phase, sample-and-hold on wrap.
-            m_phase += phaseInc;
-            if (m_phase >= 1.0) {
-                m_phase -= 1.0;
-                m_heldL = inL;
-                m_heldR = inR;
+            float crL, crR;
+            if (os) {
+                float uL0, uL1, uR0, uR1;
+                m_upL.process(inL, uL0, uL1);
+                m_upR.process(inR, uR0, uR1);
+                float c0L, c0R, c1L, c1R;
+                crushOne(uL0, uR0, phaseInc, step, halfStep, ditherOn, c0L, c0R);
+                crushOne(uL1, uR1, phaseInc, step, halfStep, ditherOn, c1L, c1R);
+                crL = m_downL.process(c0L, c1L);
+                crR = m_downR.process(c0R, c1R);
+            } else {
+                crushOne(inL, inR, phaseInc, step, halfStep, ditherOn, crL, crR);
             }
-            float crL = m_heldL;
-            float crR = m_heldR;
-
-            // Optional TPDF dither (sum of two uniform RVs → triangular
-            // distribution). Adds at most 1 LSB of noise before the
-            // round, which de-correlates quantization error from the
-            // signal and audibly smooths low-amplitude content.
-            if (ditherOn) {
-                const float dL = (randFloat() - randFloat()) * halfStep;
-                const float dR = (randFloat() - randFloat()) * halfStep;
-                crL += dL;
-                crR += dR;
-            }
-
-            // Bit-depth quantization. Round to nearest step. Mid-tread
-            // (signal-symmetric) — avoids the DC offset that a mid-rise
-            // quantizer would introduce at very low bit depths.
-            crL = std::floor(crL / step + 0.5f) * step;
-            crR = std::floor(crR / step + 0.5f) * step;
 
             // Wet/dry mix. Use the device's m_mix as a global override
             // multiplier so the chain-level mix knob still works in
@@ -142,6 +128,8 @@ public:
                 false, WidgetHint::Toggle},
             {"Mix",        0.0f,    1.0f,     1.0f,    "",  false,
                 false, WidgetHint::DentedKnob},
+            {"OS 2x",      0.0f,    1.0f,     0.0f,    "",  true,
+                false, WidgetHint::Toggle},
         };
         return infos[std::clamp(index, 0, kParamCount - 1)];
     }
@@ -175,11 +163,37 @@ private:
         return static_cast<float>(m_rngState & 0x7FFFFF) / 8388607.0f;
     }
 
-    float    m_params[kParamCount] = {12.0f, 24000.0f, 20000.0f, 0.0f, 1.0f};
+    // Crush one sample (SR sample-and-hold + optional TPDF dither + bit
+    // quantization) at whatever rate `phaseInc` corresponds to. Mid-tread
+    // quantizer (signal-symmetric) avoids a DC offset at low bit depths.
+    inline void crushOne(float inL, float inR, double phaseInc, float step,
+                         float halfStep, bool ditherOn,
+                         float& outL, float& outR) {
+        m_phase += phaseInc;
+        if (m_phase >= 1.0) {
+            m_phase -= 1.0;
+            m_heldL = inL;
+            m_heldR = inR;
+        }
+        float crL = m_heldL, crR = m_heldR;
+        if (ditherOn) {
+            crL += (randFloat() - randFloat()) * halfStep;
+            crR += (randFloat() - randFloat()) * halfStep;
+        }
+        outL = std::floor(crL / step + 0.5f) * step;
+        outR = std::floor(crR / step + 0.5f) * step;
+    }
+
+    float    m_params[kParamCount] = {12.0f, 24000.0f, 20000.0f, 0.0f, 1.0f, 0.0f};
     Biquad   m_preL, m_preR;
     double   m_phase = 0.0;
     float    m_heldL = 0.0f, m_heldR = 0.0f;
     uint32_t m_rngState = 0xC0FFEEu;
+
+    // 2× oversampling for the crush core (one up/down per channel). Pre-
+    // filter stays at the host rate; only the hold+quantize run at 2×.
+    ::yawn::audio::dsp::Upsampler2x   m_upL, m_upR;
+    ::yawn::audio::dsp::Downsampler2x m_downL, m_downR;
 };
 
 } // namespace effects
