@@ -43,6 +43,16 @@ struct NeuralAmp::Impl {
     double      sampleRate     = 48000.0;
     int         maxBlockSize   = 256;
 
+    // Model metadata captured on load (see setModelPath). Kept outside
+    // the YAWN_HAS_NAM block so the getters compile in NAM-less builds
+    // (they just stay at these neutral defaults → no normalize, no SR
+    // warning). modelLoudness is the .nam's embedded output loudness in
+    // dB (valid only when modelHasLoudness); expectedSampleRate is the
+    // rate the model was trained at (0 = unknown).
+    double      modelLoudness    = 0.0;
+    bool        modelHasLoudness = false;
+    double      expectedSampleRate = 0.0;
+
 #ifdef YAWN_HAS_NAM
     // RCU-lite atomic pointer swap for the active DSP. Background:
     // user reported a use-after-free crash on the third .nam load.
@@ -101,6 +111,9 @@ void NeuralAmp::init(double sampleRate, int maxBlockSize) {
     m_maxBlockSize = maxBlockSize;
     m_impl->sampleRate   = sampleRate;
     m_impl->maxBlockSize = maxBlockSize;
+    // Re-derive the host-rate amp-strip coefficients for the new rate.
+    updateToneStack();
+    updateGateCoeffs();
 #ifdef YAWN_HAS_NAM
     m_impl->monoIn .assign(maxBlockSize, 0.0f);
     m_impl->monoOut.assign(maxBlockSize, 0.0f);
@@ -116,6 +129,12 @@ void NeuralAmp::init(double sampleRate, int maxBlockSize) {
 }
 
 void NeuralAmp::reset() {
+    // Host-rate amp-strip state (gate + tone stack) — always present.
+    m_bass.reset();
+    m_mid.reset();
+    m_treble.reset();
+    m_gateGain = 1.0f;
+    m_gateEnv  = 0.0f;
 #ifdef YAWN_HAS_NAM
     if (nam::DSP* dsp = m_impl->dspPtr.load(std::memory_order_acquire))
         dsp->Reset(m_impl->sampleRate, m_impl->maxBlockSize);
@@ -148,12 +167,14 @@ void NeuralAmp::process(float* buffer, int numFrames, int numChannels) {
     nam::DSP* dsp = m_impl->dspPtr.load(std::memory_order_acquire);
     if (dsp && numFrames <= m_impl->maxBlockSize) {
         // ── NAM inference path ──
-        // Sum stereo to mono, apply input gain, hand to nam::DSP,
-        // apply output gain, blend back into the buffer.
+        // Sum stereo to mono, gate, apply input gain, hand to nam::DSP,
+        // then normalize / tone-shape the output and blend it back.
         for (int i = 0; i < numFrames; ++i) {
             const float l = buffer[i * numChannels];
             const float r = stereo ? buffer[i * numChannels + 1] : l;
-            m_impl->monoIn[i] = (l + r) * 0.5f * inGain;
+            // Gate the raw input level (threshold is relative to the
+            // incoming signal, before drive), then apply the drive gain.
+            m_impl->monoIn[i] = gateSample((l + r) * 0.5f) * inGain;
         }
         // NAM expects NAM_SAMPLE** — per-channel pointers. Mono = one
         // channel pointer. The library contract is "process num_frames
@@ -163,10 +184,26 @@ void NeuralAmp::process(float* buffer, int numFrames, int numChannels) {
         float* outCh = m_impl->monoOut.data();
         dsp->process(&inCh, &outCh, numFrames);
 
+        // Normalize gain: when enabled and the model carries loudness
+        // metadata, level the output toward a fixed reference so swapping
+        // captures doesn't jump in volume. Matches the NAM plugin's
+        // "Normalize" — target ≈ -18 dB, gain = ref - modelLoudness.
+        float normGain = 1.0f;
+        if (m_params[kNormalize] >= 0.5f && m_impl->modelHasLoudness) {
+            constexpr float kRefDb = -18.0f;
+            normGain = std::pow(
+                10.0f, (kRefDb - static_cast<float>(m_impl->modelLoudness)) / 20.0f);
+        }
+
         for (int i = 0; i < numFrames; ++i) {
             const float dryL = buffer[i * numChannels];
             const float dryR = stereo ? buffer[i * numChannels + 1] : dryL;
-            const float wet  = m_impl->monoOut[i] * outGain;
+            // Model output → normalize → tone stack → output gain.
+            float wet = m_impl->monoOut[i] * normGain;
+            wet = m_bass.process(wet);
+            wet = m_mid.process(wet);
+            wet = m_treble.process(wet);
+            wet *= outGain;
             buffer[i * numChannels] = dryL * d + wet * w;
             if (stereo)
                 buffer[i * numChannels + 1] = dryR * d + wet * w;
@@ -177,12 +214,18 @@ void NeuralAmp::process(float* buffer, int numFrames, int numChannels) {
 
     // ── Fallback path: gain stage with mono sum ──
     // Hits when NAM isn't compiled in OR no model is loaded OR the
-    // host block size exceeds our pre-sized buffers.
+    // host block size exceeds our pre-sized buffers. The amp-strip
+    // gate + tone stack still run here so those knobs aren't inert
+    // without a model; Normalize is inherently a no-op (no loudness
+    // metadata without a loaded model).
     for (int i = 0; i < numFrames; ++i) {
         const float dryL = buffer[i * numChannels];
         const float dryR = stereo ? buffer[i * numChannels + 1] : dryL;
-        const float pre  = (dryL + dryR) * 0.5f * inGain;
-        const float wet  = pre * outGain;
+        const float pre  = gateSample((dryL + dryR) * 0.5f) * inGain;
+        float wet = m_bass.process(pre);
+        wet = m_mid.process(wet);
+        wet = m_treble.process(wet);
+        wet *= outGain;
         buffer[i * numChannels] = dryL * d + wet * w;
         if (stereo)
             buffer[i * numChannels + 1] = dryR * d + wet * w;
@@ -236,6 +279,9 @@ void NeuralAmp::setModelPath(const std::string& path) {
         retireOldDsp();
         m_impl->slimmablePtr = nullptr;
         m_impl->modelPath.clear();
+        m_impl->modelHasLoudness   = false;
+        m_impl->modelLoudness      = 0.0;
+        m_impl->expectedSampleRate = 0.0;
         return;
     }
 
@@ -272,6 +318,25 @@ void NeuralAmp::setModelPath(const std::string& path) {
             // on the UI / loader thread — happens BEFORE we
             // publish the new pointer to the audio thread.
             newDsp->Reset(m_impl->sampleRate, m_impl->maxBlockSize);
+
+            // Capture model metadata for the amp strip + diagnostics.
+            // GetLoudness() throws unless HasLoudness() is true, so it's
+            // strictly guarded. GetExpectedSampleRate() returns the
+            // training rate (or <=0 when the file didn't record one);
+            // running at a different host rate isn't fatal — we don't
+            // resample (neither does the stock plugin) — but we warn so
+            // a wrong-rate tone has a paper trail.
+            m_impl->modelHasLoudness = newDsp->HasLoudness();
+            m_impl->modelLoudness =
+                m_impl->modelHasLoudness ? newDsp->GetLoudness() : 0.0;
+            m_impl->expectedSampleRate = newDsp->GetExpectedSampleRate();
+            if (m_impl->expectedSampleRate > 0.0 &&
+                std::fabs(m_impl->expectedSampleRate - m_impl->sampleRate) > 1.0) {
+                LOG_WARN("NeuralAmp",
+                         "Model trained at %.0f Hz but host runs at %.0f Hz — "
+                         "tone/feel may differ (no resampling applied)",
+                         m_impl->expectedSampleRate, m_impl->sampleRate);
+            }
 
             // Detect slimmable models (A2 SlimmableWavenet /
             // SlimmableContainer) and apply the user's Lite preference
@@ -350,6 +415,15 @@ bool NeuralAmp::hasModel() const {
 #else
     return false;
 #endif
+}
+
+double NeuralAmp::expectedSampleRate() const {
+    return m_impl->expectedSampleRate;
+}
+
+bool NeuralAmp::sampleRateMismatch() const {
+    return m_impl->expectedSampleRate > 0.0 &&
+           std::fabs(m_impl->expectedSampleRate - m_impl->sampleRate) > 1.0;
 }
 
 nlohmann::json NeuralAmp::saveExtraState(

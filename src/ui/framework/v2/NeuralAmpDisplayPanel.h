@@ -50,6 +50,9 @@ public:
     // Why the most recent model load failed; empty = no error. Shown
     // in red on the status row in place of the ready/idle indicator.
     void setErrorText(const std::string& s) { m_errorText = s; }
+    // Non-fatal advisory (e.g. sample-rate mismatch) shown in amber on
+    // the status row when there's no hard error. Empty = nothing to say.
+    void setWarningText(const std::string& s) { m_warningText = s; }
     void setOnLoadRequest(std::function<void()> cb)  { m_onLoadRequest  = std::move(cb); }
     void setOnClearRequest(std::function<void()> cb) { m_onClearRequest = std::move(cb); }
 
@@ -191,6 +194,13 @@ public:
                 tm->drawText(r, err, m_bounds.x + pad, nameY + fs + 4, fs,
                               Color{235, 110, 100, 255});
                 r.popClip();
+            } else if (!m_warningText.empty()) {
+                const std::string warn = "⚠ " + m_warningText;
+                r.pushClip(m_bounds.x + pad, nameY + fs + 4,
+                            m_bounds.w - pad * 2, fs + 4);
+                tm->drawText(r, warn, m_bounds.x + pad, nameY + fs + 4, fs,
+                              Color{230, 190, 90, 255});
+                r.popClip();
             } else {
                 const char* status = m_loaded ? "● ready" : "○ idle";
                 const Color sc = m_loaded ? Color{ 80, 220, 100, 255}
@@ -268,6 +278,7 @@ private:
 
     std::string m_modelName;
     std::string m_errorText;
+    std::string m_warningText;
     bool        m_loaded = false;
     std::function<void(int, float)> m_onParamChange;
     std::function<void()>           m_onLoadRequest;

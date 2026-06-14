@@ -2352,22 +2352,51 @@ private:
         }
 
         if (id == "neuralamp") {
-            // Same CustomDeviceBody pattern as Conv Reverb. Buttons
-            // drive an App-side handler that opens an SDL file
-            // dialog scoped to .nam, then calls effect->setModelPath
-            // (which kicks off the NAM library load + Reset +
-            // prewarm inside NeuralAmp::setModelPath).
+            // The model panel (filename / Load / Clear / Lite) lives on
+            // the left as a GroupedKnobBody display widget; the built-in
+            // amp-strip knobs (gate / drive / tone / output) group to its
+            // right. This reuses the same GroupedKnobBody machinery the
+            // instruments use rather than the bare setCustomBody path, so
+            // the device renders a full amp channel. The Load button
+            // drives an App-side handler that opens an SDL .nam dialog and
+            // calls effect->setModelPath (NAM load + Reset + prewarm).
             auto* disp = new NeuralAmpDisplayPanel();
             auto* na   = static_cast<effects::NeuralAmp*>(fx);
-            disp->setOnParamChange([ref](int idx, float v) {
-                DeviceRef r = ref; r.setParam(idx, v);
-            });
             disp->setOnLoadRequest([this, na]() {
                 if (m_onLoadNamModel) m_onLoadNamModel(na);
             });
             disp->setOnClearRequest([na]() { na->setModelPath(""); });
             disp->setOnToggleLite([na]() { na->setLite(!na->lite()); });
-            dw->setCustomBody(disp);
+
+            GroupedKnobBody::Config config;
+            config.display = disp;
+            config.displayWidth = 190.0f;
+            config.sections = {
+                {"Gate",   {effects::NeuralAmp::kGate}},
+                {"Drive",  {effects::NeuralAmp::kInputGain}},
+                {"Tone",   {effects::NeuralAmp::kBass,
+                            effects::NeuralAmp::kMid,
+                            effects::NeuralAmp::kTreble}},
+                {"Output", {effects::NeuralAmp::kOutputGain,
+                            effects::NeuralAmp::kMix,
+                            effects::NeuralAmp::kNormalize}},
+            };
+
+            int count = na->parameterCount();
+            std::vector<GroupedKnobBody::ParamDesc> params(count);
+            for (int p = 0; p < count; ++p) {
+                const auto& info = na->parameterInfo(p);
+                params[p] = {p, info.name, info.unit ? info.unit : "",
+                             info.minValue, info.maxValue, info.defaultValue,
+                             info.isBoolean, info.formatFn};
+            }
+
+            auto* body = new GroupedKnobBody();
+            body->configure(config, params);
+            body->setOnParamChange([ref](int idx, float v) {
+                DeviceRef r = ref; r.setParam(idx, v);
+            });
+            dw->setCustomBody(body);
             configureDeviceWidget(dw, ref);
             m_displayUpdaters.push_back([disp, na]() {
                 std::string p = na->modelPath();
@@ -2378,6 +2407,12 @@ private:
                 disp->setLoadedFlag(na->hasModel());
                 disp->setErrorText(na->lastLoadError());
                 disp->setLiteState(na->lite(), na->isSlimmable());
+                disp->setWarningText(
+                    na->sampleRateMismatch()
+                        ? ("trained @ " +
+                           std::to_string(static_cast<int>(
+                               na->expectedSampleRate())) + " Hz")
+                        : std::string());
             });
             return true;
         }
