@@ -27,6 +27,8 @@ void TapeEmulation::reset() {
     m_toneR.reset();
     m_hissFilterL.reset();
     m_hissFilterR.reset();
+    m_osL.reset();
+    m_osR.reset();
 }
 
 void TapeEmulation::process(float* buffer, int numFrames, int numChannels) {
@@ -59,13 +61,23 @@ void TapeEmulation::process(float* buffer, int numFrames, int numChannels) {
     // Hiss level: -60dB to -20dB
     float hissGain = hiss * 0.01f;
 
+    const bool os = m_params[kOversample] >= 0.5f;
+
     for (int i = 0; i < numFrames; ++i) {
         float inL = buffer[i * numChannels];
         float inR = (numChannels > 1) ? buffer[i * numChannels + 1] : inL;
 
-        // 1. Tape saturation (asymmetric soft clipping)
-        float satL = tapeSaturate(inL * drive) * makeupGain;
-        float satR = tapeSaturate(inR * drive) * makeupGain;
+        // 1. Tape saturation (asymmetric soft clipping) — the only
+        //    nonlinearity; oversample it when enabled. makeupGain and the
+        //    downstream delay/tone/hiss are linear and stay at host rate.
+        float satL, satR;
+        if (os) {
+            satL = m_osL.process(inL, [&](float v) { return tapeSaturate(v * drive); }) * makeupGain;
+            satR = m_osR.process(inR, [&](float v) { return tapeSaturate(v * drive); }) * makeupGain;
+        } else {
+            satL = tapeSaturate(inL * drive) * makeupGain;
+            satR = tapeSaturate(inR * drive) * makeupGain;
+        }
 
         // 2. Write saturated signal into delay line
         m_delayL[m_writePos] = satL;

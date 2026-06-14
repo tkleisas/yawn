@@ -17,6 +17,7 @@ void AmpSimulator::reset() {
     m_cabPeakL.reset();m_cabPeakR.reset();
     m_presL.reset();   m_presR.reset();
     m_inputHpL.reset();m_inputHpR.reset();
+    m_osL.reset();     m_osR.reset();
 }
 
 void AmpSimulator::process(float* buffer, int numFrames, int numChannels) {
@@ -28,6 +29,7 @@ void AmpSimulator::process(float* buffer, int numFrames, int numChannels) {
     float outputGain = std::pow(10.0f, outputDB / 20.0f);
     int ampType = std::clamp(static_cast<int>(m_params[kAmpType]), 0, 3);
     float cabMix = std::clamp(m_params[kCabinet], 0.0f, 1.0f);
+    const bool os = m_params[kOversample] >= 0.5f;
 
     for (int i = 0; i < numFrames; ++i) {
         float L = buffer[i * numChannels];
@@ -37,9 +39,16 @@ void AmpSimulator::process(float* buffer, int numFrames, int numChannels) {
         L = m_inputHpL.process(L);
         R = m_inputHpR.process(R);
 
-        // 2. Preamp drive + saturation
-        L = ampSaturate(L * drive, ampType);
-        R = ampSaturate(R * drive, ampType);
+        // 2. Preamp drive + saturation (the only nonlinearity — oversample
+        //    it when enabled so its harmonics don't alias; the tone stack
+        //    and cab below are linear and stay at the host rate).
+        if (os) {
+            L = m_osL.process(L, [&](float v) { return ampSaturate(v * drive, ampType); });
+            R = m_osR.process(R, [&](float v) { return ampSaturate(v * drive, ampType); });
+        } else {
+            L = ampSaturate(L * drive, ampType);
+            R = ampSaturate(R * drive, ampType);
+        }
 
         // 3. Tone stack
         L = m_bassL.process(L);

@@ -20,6 +20,7 @@
 
 #include "effects/AudioEffect.h"
 #include "effects/Biquad.h"
+#include "audio/Oversampling.h"
 #include <algorithm>
 #include <cmath>
 
@@ -37,6 +38,7 @@ public:
         kOutput,     // -24 to +6 dB: master volume
         kAmpType,    // 0–3: Clean, Crunch, Lead, HighGain
         kCabinet,    // 0–1: cabinet simulation amount
+        kOversample, // 0/1 toggle — 2× the tube saturation to anti-alias
         kParamCount
     };
 
@@ -63,8 +65,9 @@ public:
             {"Output",  -24.0f,   6.0f, -6.0f, "dB", false, false, WidgetHint::DentedKnob},
             {"Type",     0.0f,    3.0f,  1.0f, "",   false, false, WidgetHint::StepSelector, kAmpTypeLabels, 4},
             {"Cabinet",  0.0f,    1.0f,  0.8f, "",   false, false, WidgetHint::DentedKnob},
+            {"OS 2x",    0.0f,    1.0f,  0.0f, "",   true,  false, WidgetHint::Toggle},
         };
-        return infos[index];
+        return infos[std::clamp(index, 0, kParamCount - 1)];
     }
 
     float getParameter(int index) const override { return m_params[index]; }
@@ -96,7 +99,10 @@ private:
     // Input HP
     Biquad m_inputHpL, m_inputHpR;
 
-    float m_params[kParamCount] = {12.0f, 0.0f, 0.0f, 0.0f, 0.0f, -6.0f, 1.0f, 0.8f};
+    // 2× oversamplers for the tube saturation (one per channel).
+    ::yawn::audio::dsp::Oversampler2x m_osL, m_osR;
+
+    float m_params[kParamCount] = {12.0f, 0.0f, 0.0f, 0.0f, 0.0f, -6.0f, 1.0f, 0.8f, 0.0f};
 };
 
 } // namespace effects

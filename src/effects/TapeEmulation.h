@@ -14,6 +14,7 @@
 
 #include "effects/AudioEffect.h"
 #include "effects/Biquad.h"
+#include "audio/Oversampling.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -31,6 +32,7 @@ public:
         kHiss,         // 0–1: tape noise level
         kTone,         // 200–20000 Hz: high-frequency rolloff
         kWetDry,       // 0–1: wet/dry mix
+        kOversample,   // 0/1 toggle — 2× the tape saturation to anti-alias
         kParamCount
     };
 
@@ -51,8 +53,9 @@ public:
             {"Hiss",       0.0f, 1.0f,     0.05f,   "",   false},
             {"Tone",       200.0f, 20000.0f, 8000.0f, "Hz", false},
             {"Wet/Dry",    0.0f, 1.0f,     1.0f,    "",   false, false, WidgetHint::DentedKnob},
+            {"OS 2x",      0.0f, 1.0f,     0.0f,    "",   true,  false, WidgetHint::Toggle},
         };
-        return infos[index];
+        return infos[std::clamp(index, 0, kParamCount - 1)];
     }
 
     float getParameter(int index) const override { return m_params[index]; }
@@ -114,7 +117,10 @@ private:
     // Noise generator state
     uint32_t m_hissState = 12345;
 
-    float m_params[kParamCount] = {0.3f, 0.15f, 0.1f, 0.05f, 8000.0f, 1.0f};
+    // 2× oversamplers for the tape saturation (one per channel).
+    ::yawn::audio::dsp::Oversampler2x m_osL, m_osR;
+
+    float m_params[kParamCount] = {0.3f, 0.15f, 0.1f, 0.05f, 8000.0f, 1.0f, 0.0f};
 };
 
 } // namespace effects

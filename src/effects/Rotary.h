@@ -33,6 +33,7 @@
 // no compensation needed for upstream/downstream alignment.
 
 #include "effects/AudioEffect.h"
+#include "audio/Oversampling.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -63,6 +64,7 @@ public:
         kDrumFastRPM,  // 150..400 — drum rotor RPM in Fast mode
         kMicWidth,     // 0..1 — stereo amplitude-mod depth
         kMix,          // 0..1 — dry/wet
+        kOversample,   // 0/1 toggle — 2× the pre-rotor drive to anti-alias
         kParamCount
     };
 
@@ -102,6 +104,8 @@ public:
         m_hornRPM   = targetHornRPM();
         m_drumRPM   = targetDrumRPM();
         m_lpL = m_lpR = 0.0f;
+        m_osL.reset();
+        m_osR.reset();
     }
 
     void process(float* buffer, int numFrames, int numChannels) override {
@@ -114,6 +118,7 @@ public:
         const float mix     = std::clamp(m_params[kMix],       0.0f, 1.0f);
         const float accel   = std::clamp(m_params[kAccel], 0.1f, 5.0f);
         const bool  stereo  = (numChannels > 1);
+        const bool  os      = m_params[kOversample] >= 0.5f;
 
         // RPM ramp coefficients. exp(-1/τ·sr) per-sample → after τ
         // seconds the residual is e⁻¹ ≈ 36% — a "time constant" of
@@ -152,15 +157,23 @@ public:
             if (m_hornAngle >= 1.0) m_hornAngle -= 1.0;
             if (m_drumAngle >= 1.0) m_drumAngle -= 1.0;
 
-            // 3) Pre-drive (soft saturation) on the dry input.
+            // 3) Pre-drive (soft saturation) on the dry input — the only
+            //    nonlinearity; oversample it when enabled so its harmonics
+            //    don't alias. Everything below (crossover, Doppler delays,
+            //    amplitude mod) is linear and stays at the host rate.
             const float dryL = buffer[i * numChannels];
             const float dryR = stereo ? buffer[i * numChannels + 1] : dryL;
             const float driveAmt = 1.0f + drive * 4.0f;
-            const float saturatedL = std::tanh(dryL * driveAmt) /
-                                     std::tanh(driveAmt);
-            const float saturatedR = stereo
-                ? std::tanh(dryR * driveAmt) / std::tanh(driveAmt)
-                : saturatedL;
+            const float invNorm  = 1.0f / std::tanh(driveAmt);
+            auto satFn = [&](float v) { return std::tanh(v * driveAmt) * invNorm; };
+            float saturatedL, saturatedR;
+            if (os) {
+                saturatedL = m_osL.process(dryL, satFn);
+                saturatedR = stereo ? m_osR.process(dryR, satFn) : saturatedL;
+            } else {
+                saturatedL = satFn(dryL);
+                saturatedR = stereo ? satFn(dryR) : saturatedL;
+            }
 
             // 4) Crossover into LF (drum) + HF (horn) bands.
             m_lpL += xoverAlpha * (saturatedL - m_lpL);
@@ -246,6 +259,7 @@ public:
             {"D Fast",      150,  400,  290,    "rpm",false},
             {"Mic Wd",      0,    1,    0.7f,   "",   false, false, WidgetHint::DentedKnob},
             {"Mix",         0,    1,    0.5f,   "",   false, false, WidgetHint::DentedKnob},
+            {"OS 2x",       0,    1,    0.0f,   "",   true,  false, WidgetHint::Toggle},
         };
         return infos[std::clamp(index, 0, kParamCount - 1)];
     }
@@ -306,6 +320,9 @@ private:
 
     float  m_lpL = 0.0f;
     float  m_lpR = 0.0f;
+
+    // 2× oversamplers for the pre-rotor drive (one per channel).
+    ::yawn::audio::dsp::Oversampler2x m_osL, m_osR;
 };
 
 } // namespace effects
