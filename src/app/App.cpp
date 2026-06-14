@@ -645,9 +645,30 @@ void App::startExportRender(const std::string& filePath) {
 
     auto& progress = m_exportDialog.progress();
 
+    // Export is an arrangement bounce. In Session view the arrangement tracks
+    // are inactive (processAudio plays the clip launcher instead), so the
+    // render would be silent. Force arrangement playback on for the bounce
+    // and restore each track's prior state once it's done. We capture the
+    // restore flags by value so the render thread only re-sends them (no
+    // project reads off the UI thread).
+    const int nTracks = m_project.numTracks();
+    std::vector<uint8_t> restoreArrActive(static_cast<size_t>(nTracks), 0);
+    for (int t = 0; t < nTracks; ++t) {
+        restoreArrActive[t] = m_project.track(t).arrangementActive ? 1 : 0;
+        const bool hasArr = !m_project.track(t).arrangementClips.empty();
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, hasArr});
+        if (hasArr) syncArrangementClipsToEngine(t);
+    }
+
     // Launch render on a detached thread
-    std::thread([this, renderCfg, outPath, format, bitDepth, sampleRate, &progress]() {
+    std::thread([this, renderCfg, outPath, format, bitDepth, sampleRate,
+                 nTracks, restoreArrActive, &progress]() {
         auto buffer = audio::OfflineRenderer::render(m_audioEngine, renderCfg, progress);
+
+        // Restore each track's arrangement-active state.
+        for (int t = 0; t < nTracks; ++t)
+            m_audioEngine.sendCommand(
+                audio::SetTrackArrActiveMsg{t, restoreArrActive[t] != 0});
 
         if (buffer && !progress.cancelled.load()) {
             bool ok = util::saveAudioBuffer(outPath, *buffer, sampleRate, format, bitDepth);
