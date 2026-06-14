@@ -9,7 +9,10 @@ void Distortion::init(double sampleRate, int maxBlockSize) {
     reset();
 }
 
-void Distortion::reset() { m_toneL.reset(); m_toneR.reset(); }
+void Distortion::reset() {
+    m_toneL.reset(); m_toneR.reset();
+    m_osL.reset();   m_osR.reset();
+}
 
 void Distortion::process(float* buffer, int numFrames, int numChannels) {
     if (m_bypassed) return;
@@ -18,13 +21,23 @@ void Distortion::process(float* buffer, int numFrames, int numChannels) {
     float wet = m_params[kWetDry];
     float dry = 1.0f - wet;
     int type = static_cast<int>(m_params[kType]);
+    const bool os = m_params[kOversample] >= 0.5f;
 
     for (int i = 0; i < numFrames; ++i) {
         float L = buffer[i * numChannels];
         float R = (numChannels > 1) ? buffer[i * numChannels + 1] : L;
 
-        float distL = shape(L * drive, type);
-        float distR = shape(R * drive, type);
+        // Waveshaper. When oversampling, run shape() at 2× so the harmonics
+        // it generates stay below Nyquist (hard-clip / foldback otherwise
+        // alias badly); the linear tone filter stays at the host rate.
+        float distL, distR;
+        if (os) {
+            distL = m_osL.process(L, [&](float v) { return shape(v * drive, type); });
+            distR = m_osR.process(R, [&](float v) { return shape(v * drive, type); });
+        } else {
+            distL = shape(L * drive, type);
+            distR = shape(R * drive, type);
+        }
 
         // Tone filter
         distL = m_toneL.process(distL);

@@ -397,7 +397,7 @@ TEST(Distortion, Init) {
     Distortion dist;
     dist.init(kSampleRate, kBlockSize);
     EXPECT_STREQ(dist.name(), "Distortion");
-    EXPECT_EQ(dist.parameterCount(), 4);
+    EXPECT_EQ(dist.parameterCount(), 5);  // +OS 2x toggle
 }
 
 TEST(Distortion, SoftClipSaturates) {

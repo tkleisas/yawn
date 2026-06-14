@@ -4,6 +4,7 @@
 
 #include "effects/AudioEffect.h"
 #include "effects/Biquad.h"
+#include "audio/Oversampling.h"
 #include <algorithm>
 #include <cmath>
 
@@ -12,7 +13,7 @@ namespace effects {
 
 class Distortion : public AudioEffect {
 public:
-    enum Param { kDrive, kTone, kWetDry, kType, kParamCount };
+    enum Param { kDrive, kTone, kWetDry, kType, kOversample, kParamCount };
     enum DistType { SoftClip = 0, HardClip = 1, Tube = 2, Foldback = 3 };
 
     const char* name() const override { return "Distortion"; }
@@ -32,8 +33,9 @@ public:
             {"Tone",    200.0f, 20000.0f, 8000.0f, "Hz", false},
             {"Wet/Dry", 0.0f, 1.0f,   1.0f,     "",   false, false, WidgetHint::DentedKnob},
             {"Type",    0.0f, 3.0f,   0.0f,     "",   false, false, WidgetHint::StepSelector, kDistTypeLabels, 4},
+            {"OS 2x",   0.0f, 1.0f,   0.0f,     "",   true,  false, WidgetHint::Toggle},
         };
-        return infos[index];
+        return infos[std::clamp(index, 0, kParamCount - 1)];
     }
 
     float getParameter(int index) const override { return m_params[index]; }
@@ -54,7 +56,12 @@ private:
     }
 
     Biquad m_toneL, m_toneR;
-    float m_params[kParamCount] = {12.0f, 8000.0f, 1.0f, 0.0f};
+    float m_params[kParamCount] = {12.0f, 8000.0f, 1.0f, 0.0f, 0.0f};
+
+    // 2× oversamplers for the waveshaper (one per channel). Used only when
+    // the OS 2x toggle is on; keeps the shaper's harmonics below Nyquist so
+    // hard-clip / foldback don't fold back as aliasing.
+    ::yawn::audio::dsp::Oversampler2x m_osL, m_osR;
 };
 
 } // namespace effects
