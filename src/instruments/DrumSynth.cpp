@@ -48,7 +48,37 @@ void DrumSynth::init(double sampleRate, int maxBlockSize) {
     // fixed-capacity vectors.
     m_scratchL.assign(static_cast<size_t>(maxBlockSize), 0.0f);
     m_scratchR.assign(static_cast<size_t>(maxBlockSize), 0.0f);
+    // 2× oversampling render scratch (twice the block).
+    m_osScratchL.assign(static_cast<size_t>(maxBlockSize) * 2, 0.0f);
+    m_osScratchR.assign(static_cast<size_t>(maxBlockSize) * 2, 0.0f);
     m_oversizedBlockWarned = false;
+
+    // Design the 2×→1× decimation FIR: a windowed-sinc half-band lowpass
+    // with cutoff at 0.25 of the 2× rate (= the host Nyquist). Blackman
+    // window for a ~ -58 dB stopband; normalised to unity DC gain.
+    {
+        constexpr double kPi = 3.14159265358979323846;
+        const int N = Decimator2x::kTaps;
+        const double fc = 0.25;
+        double c[Decimator2x::kTaps];
+        double sum = 0.0;
+        for (int n = 0; n < N; ++n) {
+            const double m = n - (N - 1) / 2.0;
+            const double s = (std::abs(m) < 1e-9)
+                ? 2.0 * fc
+                : std::sin(2.0 * kPi * fc * m) / (kPi * m);
+            const double w = 0.42 - 0.5 * std::cos(2.0 * kPi * n / (N - 1))
+                                  + 0.08 * std::cos(4.0 * kPi * n / (N - 1));
+            c[n] = s * w;
+            sum += c[n];
+        }
+        for (int n = 0; n < N; ++n) {
+            const float v = static_cast<float>(c[n] / sum);
+            m_decL.coeffs[n] = v;
+            m_decR.coeffs[n] = v;
+        }
+    }
+
     reset();
     LOG_INFO("DrumSynth", "init sr=%.0f maxBlockSize=%d",
              sampleRate, maxBlockSize);
@@ -60,6 +90,8 @@ void DrumSynth::reset() {
     std::memset(m_pinkRows, 0, sizeof(m_pinkRows));
     m_pinkSum = 0.0f;
     m_pinkCounter = 0;
+    m_decL.reset();
+    m_decR.reset();
 }
 
 float DrumSynth::pinkNoise() {
@@ -508,6 +540,11 @@ void DrumSynth::process(float* buffer, int numFrames, int numChannels,
             // (and skip the log entirely if nothing was playing).
             int silenced = 0;
             for (auto& vv : m_voices) if (vv.active) { vv.active = false; ++silenced; }
+            // Flush the oversampling decimator too so the panic is truly
+            // immediate — otherwise its FIR delay line would bleed the last
+            // few samples of the killed voices into the next block.
+            m_decL.reset();
+            m_decR.reset();
             if (silenced > 0)
                 LOG_INFO("DrumSynth", "All Notes Off (CC 123) — silenced %d voice%s",
                          silenced, silenced == 1 ? "" : "s");
@@ -531,32 +568,62 @@ void DrumSynth::process(float* buffer, int numFrames, int numChannels,
         return;
     }
 
+    // ── 2× oversampled path ──
+    //
+    // Render the whole kit at twice the host rate, then half-band-decimate
+    // back down. Doubling m_sampleRate while doubling the frame count keeps
+    // every envelope/oscillator increment (all derived from sr) musically
+    // identical — only the per-sample resolution changes — so the per-drum
+    // tanh `drive` saturators produce harmonics that stay below the 2×
+    // Nyquist and get filtered out before they could fold back as aliasing.
+    if (m_params[pOversample] > 0.5f) {
+        const int osN = numFrames * 2;
+        std::memset(m_osScratchL.data(), 0, static_cast<size_t>(osN) * sizeof(float));
+        std::memset(m_osScratchR.data(), 0, static_cast<size_t>(osN) * sizeof(float));
+
+        const double baseSr = m_sampleRate;
+        m_sampleRate = baseSr * 2.0;
+        renderActiveVoices(m_osScratchL.data(), m_osScratchR.data(), osN);
+        m_sampleRate = baseSr;
+
+        const float* osL = m_osScratchL.data();
+        const float* osR = m_osScratchR.data();
+        for (int i = 0; i < numFrames; ++i) {
+            m_decL.push(osL[2 * i]); m_decL.push(osL[2 * i + 1]);
+            m_decR.push(osR[2 * i]); m_decR.push(osR[2 * i + 1]);
+            buffer[i * numChannels] += m_decL.read();
+            if (stereo) buffer[i * numChannels + 1] += m_decR.read();
+        }
+        return;
+    }
+
+    // ── Base-rate path ──
     // Zero the scratch (we ADD to it, matching the Instrument
     // convention that process() is additive into `buffer`).
     std::memset(m_scratchL.data(), 0, static_cast<size_t>(numFrames) * sizeof(float));
     std::memset(m_scratchR.data(), 0, static_cast<size_t>(numFrames) * sizeof(float));
-    float* scratchL = m_scratchL.data();
-    float* scratchR = m_scratchR.data();
+    renderActiveVoices(m_scratchL.data(), m_scratchR.data(), numFrames);
 
+    for (int i = 0; i < numFrames; ++i) {
+        buffer[i * numChannels] += m_scratchL[i];
+        if (stereo) buffer[i * numChannels + 1] += m_scratchR[i];
+    }
+}
+
+void DrumSynth::renderActiveVoices(float* outL, float* outR, int n) {
     for (int slot = 0; slot < kNumDrums; ++slot) {
         auto& v = m_voices[slot];
         if (!v.active) continue;
         switch (slot) {
-            case Kick:       renderKick(v, scratchL, scratchR, numFrames); break;
-            case Snare:      renderSnare(v, scratchL, scratchR, numFrames); break;
-            case Clap:       renderClap(v, scratchL, scratchR, numFrames); break;
+            case Kick:       renderKick(v, outL, outR, n); break;
+            case Snare:      renderSnare(v, outL, outR, n); break;
+            case Clap:       renderClap(v, outL, outR, n); break;
             case Tom1:
-            case Tom2:       renderTom(v, scratchL, scratchR, numFrames, slot); break;
-            case ClosedHH:   renderHiHat(v, scratchL, scratchR, numFrames, false, slot); break;
-            case OpenHH:     renderHiHat(v, scratchL, scratchR, numFrames, true,  slot); break;
-            case Tambourine: renderTambourine(v, scratchL, scratchR, numFrames); break;
+            case Tom2:       renderTom(v, outL, outR, n, slot); break;
+            case ClosedHH:   renderHiHat(v, outL, outR, n, false, slot); break;
+            case OpenHH:     renderHiHat(v, outL, outR, n, true,  slot); break;
+            case Tambourine: renderTambourine(v, outL, outR, n); break;
         }
-    }
-
-    // ── Mix scratch into the output buffer (additive) ──
-    for (int i = 0; i < numFrames; ++i) {
-        buffer[i * numChannels] += scratchL[i];
-        if (stereo) buffer[i * numChannels + 1] += scratchR[i];
     }
 }
 

@@ -79,7 +79,9 @@ public:
         pTom2Tune,  pTom2Attack,  pTom2Decay,  pTom2Drive,
         // Tambourine
         pTambTune,  pTambAttack,  pTambDecay,  pTambDrive,
-        kParamCount  // 7 + 7×4 = 35
+        // Global
+        pOversample,   // 2× oversampling toggle — anti-aliases the per-drum drives
+        kParamCount  // 7 + 7×4 + 1 = 36
     };
 
     const char* name() const override { return "Drum Synth"; }
@@ -142,6 +144,8 @@ public:
             {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
             {"Dec",    20.0f, 600.0f, 150.0f, "ms",false},
             {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            // ── Global ──
+            {"OS 2x",  0.0f, 1.0f, 1.0f, "",   true,  false, WidgetHint::Toggle},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }
@@ -188,6 +192,39 @@ private:
     };
 
     DrumVoice m_voices[kNumDrums] = {};
+
+    // ── 2× anti-aliasing decimator ──────────────────────────────────
+    //
+    // When oversampling is on, the synth renders at 2× the host rate so
+    // the per-drum tanh `drive` saturator generates its harmonics with
+    // twice the headroom below Nyquist. This half-band FIR filters out
+    // everything above the host Nyquist before we drop every other sample,
+    // so those harmonics don't fold back down as harsh aliasing. kTaps is a
+    // power of two so the ring index masks instead of modulos. One per
+    // channel — they carry state across blocks.
+    struct Decimator2x {
+        static constexpr int kTaps = 32;
+        float coeffs[kTaps] = {};
+        float hist[kTaps]   = {};
+        int   pos = 0;
+        void reset() { for (float& s : hist) s = 0.0f; pos = 0; }
+        inline void push(float x) { hist[pos] = x; pos = (pos + 1) & (kTaps - 1); }
+        inline float read() const {
+            float acc = 0.0f;
+            int p = pos;
+            for (int k = 0; k < kTaps; ++k) {
+                p = (p - 1) & (kTaps - 1);
+                acc += coeffs[k] * hist[p];
+            }
+            return acc;
+        }
+    };
+    Decimator2x m_decL, m_decR;
+    std::vector<float> m_osScratchL, m_osScratchR;  // 2× render scratch
+
+    // Render every active voice into outL/outR for n samples (additive).
+    // Shared by the base-rate and 2×-oversampled paths.
+    void renderActiveVoices(float* outL, float* outR, int n);
 
     // ── Parameters ──
     float m_params[kParamCount] = {};

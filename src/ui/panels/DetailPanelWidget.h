@@ -2004,6 +2004,7 @@ private:
                 {"OHH",   {23, 24, 25, 26}},
                 {"Tom2",  {27, 28, 29, 30}},
                 {"Tamb",  {31, 32, 33, 34}},
+                {"Global",{35}},   // OS 2x oversampling toggle
             };
         } else if (nm == "Drum Rack") {
             auto* drPanel = new DrumRackDisplayPanel();
