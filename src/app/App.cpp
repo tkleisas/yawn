@@ -74,15 +74,47 @@ namespace yawn {
 void App::insertSceneAtSelection() {
     const int insertAt = std::clamp(m_selectedScene + 1,
                                      0, m_project.numScenes());
-    m_project.insertScene(insertAt);
+    sceneInsert(insertAt);
     markDirty();
     m_undoManager.push({"Insert Scene",
-        [this, insertAt]{ m_project.deleteScene(insertAt); markDirty(); },
-        [this, insertAt]{ m_project.insertScene(insertAt); markDirty(); },
+        [this, insertAt]{ sceneDelete(insertAt); markDirty(); },
+        [this, insertAt]{ sceneInsert(insertAt); markDirty(); },
         ""});
     // Move the selection to the new scene so repeated Ctrl+I keeps
     // stacking fresh scenes below.
     m_selectedScene = insertAt;
+}
+
+// Stop every launched clip immediately so the audio engine drops the
+// per-slot pointers (ClipPlayState::clip / clipAutomation) it caches from
+// LaunchClipMsg/LaunchMidiClipMsg. MUST run before any structural scene
+// edit: Project::insertScene/deleteScene/duplicateScene reallocate the
+// per-track clip-slot vectors, moving every ClipSlot and dangling
+// &slot->clipAutomation — which AutomationEngine::process dereferences on
+// the audio thread every buffer (→ SIGSEGV). QuantizeMode::None makes the
+// stop take effect on the engine's next callback rather than the next bar.
+void App::stopAllClipsForSceneEdit() {
+    for (int t = 0; t < m_project.numTracks(); ++t) {
+        m_audioEngine.sendCommand(
+            audio::StopClipMsg{t, audio::QuantizeMode::None});
+        m_audioEngine.sendCommand(
+            audio::StopMidiClipMsg{t, audio::QuantizeMode::None});
+    }
+}
+
+void App::sceneInsert(int index) {
+    stopAllClipsForSceneEdit();
+    m_project.insertScene(index);
+}
+
+void App::sceneDelete(int index) {
+    stopAllClipsForSceneEdit();
+    m_project.deleteScene(index);
+}
+
+void App::sceneDuplicate(int index) {
+    stopAllClipsForSceneEdit();
+    m_project.duplicateScene(index);
 }
 
 // Starter track mix for fresh / new projects. Leaves tracks created by

@@ -699,30 +699,30 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
     bool canDelete = m_project.numScenes() > 1;
 
     items.push_back(item("Insert Scene", [this, sceneIndex]() {
-        m_project.insertScene(sceneIndex);
+        sceneInsert(sceneIndex);
         markDirty();
         m_undoManager.push({"Insert Scene",
             [this, sceneIndex]{
-                m_project.deleteScene(sceneIndex);
+                sceneDelete(sceneIndex);
                 markDirty();
             },
             [this, sceneIndex]{
-                m_project.insertScene(sceneIndex);
+                sceneInsert(sceneIndex);
                 markDirty();
             }, ""});
     }));
 
     items.push_back(item("Duplicate Scene", [this, sceneIndex]() {
-        m_project.duplicateScene(sceneIndex);
+        sceneDuplicate(sceneIndex);
         markDirty();
         int dst = sceneIndex + 1;
         m_undoManager.push({"Duplicate Scene",
             [this, dst]{
-                m_project.deleteScene(dst);
+                sceneDelete(dst);
                 markDirty();
             },
             [this, sceneIndex]{
-                m_project.duplicateScene(sceneIndex);
+                sceneDuplicate(sceneIndex);
                 markDirty();
             }, ""});
     }));
@@ -750,17 +750,15 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
             }
             backups.push_back(std::move(b));
         }
-        // Stop any playing clips in this scene
-        for (int t = 0; t < m_project.numTracks(); ++t) {
-            m_audioEngine.sendCommand(audio::StopClipMsg{t});
-            m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
-        }
-        m_project.deleteScene(sceneIndex);
+        // sceneDelete() stops every launched clip first so the audio
+        // thread releases its cached clip-automation pointers before the
+        // clip-slot vectors reallocate.
+        sceneDelete(sceneIndex);
         markDirty();
         auto shared = std::make_shared<std::vector<SlotBackup>>(std::move(backups));
         m_undoManager.push({"Delete Scene",
             [this, sceneIndex, sceneName, shared]{
-                m_project.insertScene(sceneIndex);
+                sceneInsert(sceneIndex);
                 m_project.scene(sceneIndex).name = sceneName;
                 for (int t = 0; t < m_project.numTracks() && t < static_cast<int>(shared->size()); ++t) {
                     auto* slot = m_project.getSlot(t, sceneIndex);
@@ -776,11 +774,7 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                 markDirty();
             },
             [this, sceneIndex]{
-                for (int t = 0; t < m_project.numTracks(); ++t) {
-                    m_audioEngine.sendCommand(audio::StopClipMsg{t});
-                    m_audioEngine.sendCommand(audio::StopMidiClipMsg{t});
-                }
-                m_project.deleteScene(sceneIndex);
+                sceneDelete(sceneIndex);
                 markDirty();
             }, ""});
     }, canDelete));

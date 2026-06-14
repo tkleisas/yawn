@@ -1539,7 +1539,7 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, StopMidiClipMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
-                    m_midiClipEngine.scheduleStop(msg.trackIndex, QuantizeMode::NextBar);
+                    m_midiClipEngine.scheduleStop(msg.trackIndex, msg.quantize);
                     // Send all-notes-off to clean up any held notes
                     for (uint8_t n = 0; n < 128; ++n) {
                         m_trackMidiBuffers[msg.trackIndex].addMessage(

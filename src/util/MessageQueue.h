@@ -170,6 +170,12 @@ struct SetClipAutoRecordDisabledMsg {
 // Stop a MIDI clip on a track
 struct StopMidiClipMsg {
     int trackIndex;
+    // Quantization for the stop, mirroring StopClipMsg. NextBar (default)
+    // = stop at the next bar. None = immediate stop within this block —
+    // used before a structural scene edit so the audio thread drops its
+    // cached clip-automation pointer before the UI thread reallocates the
+    // clip-slot vectors.
+    QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
 // Re-point a playing (or quantized-pending) MIDI clip to a replacement

@@ -275,6 +275,17 @@ private:
     void rehydrateConvolutionIRs();
     void resetEngineState();
     void insertSceneAtSelection();
+
+    // Structural scene edits reallocate Project::m_clipSlots, moving every
+    // ClipSlot and dangling the &slot->clipAutomation pointers the audio
+    // thread reads in AutomationEngine::process. These wrappers stop every
+    // launched clip first (immediate, so the engine drops those pointers),
+    // then mutate — route ALL scene insert/delete/duplicate through them,
+    // including undo/redo lambdas. See stopAllClipsForSceneEdit().
+    void stopAllClipsForSceneEdit();
+    void sceneInsert(int index);
+    void sceneDelete(int index);
+    void sceneDuplicate(int index);
     void updateWindowTitle();
     void markDirty() { m_projectDirty = true; updateWindowTitle(); }
 
@@ -449,6 +460,14 @@ private:
 
     // Track which scene/track to assign next dropped file to
     int m_nextDropScene = 0;
+
+    // Multi-file video drops: SDL fires one DROP_FILE per file, all
+    // sharing the same drop point. We anchor the first video on the slot
+    // under the cursor, then cascade later files in the same batch down
+    // successive scenes so N videos fill N slots instead of colliding in
+    // one. Reset to -1 on DROP_BEGIN; -1 means no batch is in progress.
+    int m_videoDropTrack = -1;
+    int m_videoDropScene = -1;
 
     // Target slot for the pending "Load Shader…" file dialog.
     int m_pendingShaderTrack = -1;
