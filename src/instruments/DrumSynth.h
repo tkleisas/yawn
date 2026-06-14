@@ -21,6 +21,7 @@
 // auto-choke OpenHH the way real hi-hats work.
 
 #include "instruments/Instrument.h"
+#include "audio/Oversampling.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -193,33 +194,15 @@ private:
 
     DrumVoice m_voices[kNumDrums] = {};
 
-    // ── 2× anti-aliasing decimator ──────────────────────────────────
+    // ── 2× anti-aliasing decimators ─────────────────────────────────
     //
-    // When oversampling is on, the synth renders at 2× the host rate so
-    // the per-drum tanh `drive` saturator generates its harmonics with
-    // twice the headroom below Nyquist. This half-band FIR filters out
-    // everything above the host Nyquist before we drop every other sample,
-    // so those harmonics don't fold back down as harsh aliasing. kTaps is a
-    // power of two so the ring index masks instead of modulos. One per
-    // channel — they carry state across blocks.
-    struct Decimator2x {
-        static constexpr int kTaps = 32;
-        float coeffs[kTaps] = {};
-        float hist[kTaps]   = {};
-        int   pos = 0;
-        void reset() { for (float& s : hist) s = 0.0f; pos = 0; }
-        inline void push(float x) { hist[pos] = x; pos = (pos + 1) & (kTaps - 1); }
-        inline float read() const {
-            float acc = 0.0f;
-            int p = pos;
-            for (int k = 0; k < kTaps; ++k) {
-                p = (p - 1) & (kTaps - 1);
-                acc += coeffs[k] * hist[p];
-            }
-            return acc;
-        }
-    };
-    Decimator2x m_decL, m_decR;
+    // When oversampling is on, the synth renders at 2× the host rate so the
+    // per-drum tanh `drive` saturator generates its harmonics with twice the
+    // headroom below Nyquist; these half-band decimators filter out
+    // everything above the host Nyquist before dropping every other sample,
+    // so those harmonics don't fold back as harsh aliasing. One per channel,
+    // state carries across blocks. (Shared utility — see audio/Oversampling.h.)
+    ::yawn::audio::dsp::Downsampler2x m_decL, m_decR;
     std::vector<float> m_osScratchL, m_osScratchR;  // 2× render scratch
 
     // Render every active voice into outL/outR for n samples (additive).

@@ -53,32 +53,6 @@ void DrumSynth::init(double sampleRate, int maxBlockSize) {
     m_osScratchR.assign(static_cast<size_t>(maxBlockSize) * 2, 0.0f);
     m_oversizedBlockWarned = false;
 
-    // Design the 2×→1× decimation FIR: a windowed-sinc half-band lowpass
-    // with cutoff at 0.25 of the 2× rate (= the host Nyquist). Blackman
-    // window for a ~ -58 dB stopband; normalised to unity DC gain.
-    {
-        constexpr double kPi = 3.14159265358979323846;
-        const int N = Decimator2x::kTaps;
-        const double fc = 0.25;
-        double c[Decimator2x::kTaps];
-        double sum = 0.0;
-        for (int n = 0; n < N; ++n) {
-            const double m = n - (N - 1) / 2.0;
-            const double s = (std::abs(m) < 1e-9)
-                ? 2.0 * fc
-                : std::sin(2.0 * kPi * fc * m) / (kPi * m);
-            const double w = 0.42 - 0.5 * std::cos(2.0 * kPi * n / (N - 1))
-                                  + 0.08 * std::cos(4.0 * kPi * n / (N - 1));
-            c[n] = s * w;
-            sum += c[n];
-        }
-        for (int n = 0; n < N; ++n) {
-            const float v = static_cast<float>(c[n] / sum);
-            m_decL.coeffs[n] = v;
-            m_decR.coeffs[n] = v;
-        }
-    }
-
     reset();
     LOG_INFO("DrumSynth", "init sr=%.0f maxBlockSize=%d",
              sampleRate, maxBlockSize);
@@ -589,10 +563,10 @@ void DrumSynth::process(float* buffer, int numFrames, int numChannels,
         const float* osL = m_osScratchL.data();
         const float* osR = m_osScratchR.data();
         for (int i = 0; i < numFrames; ++i) {
-            m_decL.push(osL[2 * i]); m_decL.push(osL[2 * i + 1]);
-            m_decR.push(osR[2 * i]); m_decR.push(osR[2 * i + 1]);
-            buffer[i * numChannels] += m_decL.read();
-            if (stereo) buffer[i * numChannels + 1] += m_decR.read();
+            const float l = m_decL.process(osL[2 * i], osL[2 * i + 1]);
+            const float r = m_decR.process(osR[2 * i], osR[2 * i + 1]);
+            buffer[i * numChannels] += l;
+            if (stereo) buffer[i * numChannels + 1] += r;
         }
         return;
     }
