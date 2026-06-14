@@ -469,6 +469,15 @@ private:
     int m_videoDropTrack = -1;
     int m_videoDropScene = -1;
 
+    // Live drag-drop cursor position. SDL_EVENT_DROP_FILE carries (0,0) on
+    // some platforms (notably Linux), so we track SDL_EVENT_DROP_POSITION
+    // during the drag and use it (or the OS mouse state) to resolve which
+    // slot a dropped file lands on. m_haveDropPos guards against backends
+    // that don't emit DROP_POSITION at all.
+    float m_lastDropX   = 0.0f;
+    float m_lastDropY   = 0.0f;
+    bool  m_haveDropPos = false;
+
     // Target slot for the pending "Load Shader…" file dialog.
     int m_pendingShaderTrack = -1;
     int m_pendingShaderScene = -1;

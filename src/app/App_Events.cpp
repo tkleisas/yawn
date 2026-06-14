@@ -1422,16 +1422,48 @@ void App::processEvents() {
             case SDL_EVENT_DROP_BEGIN:
                 // A new drag-drop batch is starting. Clear the multi-file
                 // video cascade anchor so the first video in this batch
-                // re-anchors on the slot under the cursor.
+                // re-anchors on the slot under the cursor, and drop any
+                // stale cursor position from a previous drag.
                 m_videoDropTrack = -1;
                 m_videoDropScene = -1;
+                m_haveDropPos    = false;
+                break;
+
+            case SDL_EVENT_DROP_POSITION:
+                // Live cursor position as the drag moves over the window.
+                // This is the reliable source of the drop location — the
+                // DROP_FILE event itself reports (0,0) on some platforms.
+                if (event.drop.x != 0.0f || event.drop.y != 0.0f) {
+                    m_lastDropX   = event.drop.x;
+                    m_lastDropY   = event.drop.y;
+                    m_haveDropPos = true;
+                }
                 break;
 
             case SDL_EVENT_DROP_FILE: {
                 const char* file = event.drop.data;
                 if (file) {
+                    // Resolve the drop position. SDL_EVENT_DROP_FILE reports
+                    // (0,0) on some platforms (notably Linux), which would
+                    // make the grid hit-test fail and drop the file into the
+                    // selected track's default slot instead of under the
+                    // cursor. Fall back to the live position tracked from
+                    // DROP_POSITION during the drag, then to the OS mouse
+                    // state.
                     float dropX = event.drop.x;
                     float dropY = event.drop.y;
+                    if (dropX == 0.0f && dropY == 0.0f) {
+                        if (m_haveDropPos) {
+                            dropX = m_lastDropX;
+                            dropY = m_lastDropY;
+                        } else {
+                            SDL_GetMouseState(&dropX, &dropY);
+                        }
+                    }
+                    LOG_INFO("Drop",
+                             "file drop raw=(%.0f,%.0f) eff=(%.0f,%.0f) dropPos=%d",
+                             event.drop.x, event.drop.y, dropX, dropY,
+                             m_haveDropPos ? 1 : 0);
 
                     // Check if drop is over the detail panel (for sample-based instruments)
                     auto db = m_detailPanel->bounds();
