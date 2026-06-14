@@ -146,6 +146,24 @@ void ArrangementPanel::render(UIContext& ctx) {
     paintScrollbar(r, gridX, gridY + gridH, gridW);
     paintVScrollbar(r, gridX + gridW, gridY, gridH);
 
+    // Top-left corner: "return to start" button. A |◀ glyph that snaps
+    // the playhead (and the view) back to bar 1 — the discoverable
+    // counterpart to the Home key. Sits at the left edge so it clears
+    // the centred Loop pill.
+    {
+        const float btnW = 24.0f, btnH = 18.0f;
+        const float bx = x + 8.0f;
+        const float by = y + (kRulerH - btnH) * 0.5f;
+        r.drawRoundedRect(bx, by, btnW, btnH, 4.0f, Color{55, 55, 60, 230});
+        const float cx = bx + btnW * 0.5f, cy = by + btnH * 0.5f;
+        const Color ic{200, 200, 210, 255};
+        // Vertical bar + left-pointing triangle = "skip to start".
+        r.drawRect(cx - 6.0f, cy - 5.0f, 2.0f, 10.0f, ic);
+        r.drawTriangle(cx - 3.0f, cy, cx + 4.0f, cy - 5.0f, cx + 4.0f, cy + 5.0f, ic);
+        m_homeBtnX = bx; m_homeBtnY = by;
+        m_homeBtnW = btnW; m_homeBtnH = btnH;
+    }
+
     // Top-left corner: loop toggle button. Pill labeled "Loop" — green
     // when active, dim gray when off. Clicking it toggles m_loopEnabled
     // and, on first enable with no range, seeds a 4-bar loop.
@@ -198,6 +216,18 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
     float gridW = w - kTrackHeaderW - kScrollbarW;
     float gridY = y + kRulerH;
     float gridH = h - kRulerH - kScrollbarH;
+
+    // "Return to start" button (top-left corner). Snaps the playhead to
+    // bar 1 via the same callback the ruler click uses, and rewinds the
+    // horizontal scroll so the start of the arrangement is in view.
+    if (m_homeBtnW > 0 && isLeft(e) &&
+        e.x >= m_homeBtnX && e.x < m_homeBtnX + m_homeBtnW &&
+        e.y >= m_homeBtnY && e.y < m_homeBtnY + m_homeBtnH) {
+        if (m_onPlayheadClick) m_onPlayheadClick(0.0);
+        m_scrollX = 0.0f;
+        invalidate();
+        return true;
+    }
 
     // Loop toggle button (top-left corner). Cached rect comes from the
     // previous paint — so a click before the first render is a no-op.
@@ -917,6 +947,14 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
 
     // Clip drag
     if (m_selClipTrack < 0 || m_selClipIdx < 0) return false;
+
+    // Edge auto-scroll so a clip can be moved or resized past the visible
+    // viewport — the same affordance the ruler and loop-marker drags use.
+    // Recompute the beat under the cursor afterwards so the clip keeps
+    // tracking the timeline as the view pans.
+    edgeAutoScrollX(e.x);
+    curBeat = static_cast<double>((e.x - gridX + m_scrollX) / m_pixelsPerBeat);
+
     double delta = curBeat - m_dragStartBeat;
 
     if (m_dragMode == DragMode::MoveClip) {
@@ -972,6 +1010,15 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
         float relY = e.y - gridY + m_scrollY;
         int newTrack = trackAtY(relY);
         newTrack = std::clamp(newTrack, 0, m_project->numTracks() - 1);
+
+        // A clip may only live on a track of its own kind — block dragging
+        // an audio clip onto a MIDI/visual track and vice-versa. If the
+        // track under the cursor is a different type, keep the clip on its
+        // current track so the user can still slide it horizontally.
+        if (newTrack != m_selClipTrack &&
+            m_project->track(newTrack).type != m_project->track(m_selClipTrack).type) {
+            newTrack = m_selClipTrack;
+        }
 
         if (newTrack != m_selClipTrack) {
             auto& src = m_project->track(m_selClipTrack).arrangementClips;

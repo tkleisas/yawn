@@ -268,6 +268,9 @@ private:
     // Loop toggle button (top-left corner) — cached per-render.
     float m_loopBtnX = 0, m_loopBtnY = 0, m_loopBtnW = 0, m_loopBtnH = 0;
 
+    // "Return to start" button (top-left corner) — cached per-render.
+    float m_homeBtnX = 0, m_homeBtnY = 0, m_homeBtnW = 0, m_homeBtnH = 0;
+
     // Callbacks
     TrackClickCallback       m_onTrackClick;
     PlayheadClickCallback    m_onPlayheadClick;
