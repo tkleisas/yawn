@@ -61,19 +61,23 @@ TEST(ClipWarp, SpeedRatioSameBPM) {
 }
 
 TEST(ClipWarp, SpeedRatioSlower) {
-    // Original 120 BPM played at 60 BPM → ratio 2.0 (advance faster through source)
+    // Original 120 BPM played at 60 BPM (slower project) → ratio 0.5:
+    // advance slower through the source so the clip plays slower to
+    // match the slower grid.
     Clip clip;
     clip.warpMode = WarpMode::Auto;
     clip.originalBPM = 120.0;
-    EXPECT_DOUBLE_EQ(clip.warpSpeedRatio(60.0), 2.0);
+    EXPECT_DOUBLE_EQ(clip.warpSpeedRatio(60.0), 0.5);
 }
 
 TEST(ClipWarp, SpeedRatioFaster) {
-    // Original 120 BPM played at 240 BPM → ratio 0.5 (advance slower through source)
+    // Original 120 BPM played at 240 BPM (faster project) → ratio 2.0:
+    // advance faster through the source so the clip plays faster to
+    // match the faster grid.
     Clip clip;
     clip.warpMode = WarpMode::Repitch;
     clip.originalBPM = 120.0;
-    EXPECT_DOUBLE_EQ(clip.warpSpeedRatio(240.0), 0.5);
+    EXPECT_DOUBLE_EQ(clip.warpSpeedRatio(240.0), 2.0);
 }
 
 TEST(ClipWarp, ClonePreservesWarpData) {
@@ -885,8 +889,8 @@ TEST_F(WarpPlaybackTest, RepitchDoubleSpeed) {
     clip->loopEnd = 2000;
     clip->warpMode = WarpMode::Repitch;
     clip->originalBPM = 120.0;
-    
-    m_transport.setBPM(60.0); // half project BPM → speed ratio = 120/60 = 2.0
+
+    m_transport.setBPM(240.0); // double project BPM → speed ratio = 240/120 = 2.0
     m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
     
     // Process enough frames for fade-in to complete (~500 frames)
@@ -912,13 +916,13 @@ TEST_F(WarpPlaybackTest, RepitchHalfSpeed) {
     for (int i = 0; i < 100; ++i) data[i] = static_cast<float>(i);
     clip->warpMode = WarpMode::Repitch;
     clip->originalBPM = 120.0;
-    
-    m_transport.setBPM(240.0); // speed ratio = 120/240 = 0.5
+
+    m_transport.setBPM(60.0); // half project BPM → speed ratio = 60/120 = 0.5
     m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
-    
+
     std::vector<float> output(20, 0.0f);
     m_engine.processTrackToBuffer(0, output.data(), 10, 1);
-    
+
     // At speed ratio 0.5, advances half a sample per frame
     // Values should increase more slowly
     EXPECT_GT(output[9], 0.0f);
@@ -933,8 +937,8 @@ TEST_F(WarpPlaybackTest, NonLoopingWarpedClipStops) {
     clip->looping = false;
     clip->warpMode = WarpMode::Beats;
     clip->originalBPM = 120.0;
-    
-    m_transport.setBPM(60.0); // speed ratio = 2.0 → finishes in ~5 frames
+
+    m_transport.setBPM(240.0); // speed ratio = 240/120 = 2.0 → finishes in ~5 frames
     m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
     
     std::vector<float> output(40, 0.0f);
@@ -1025,7 +1029,7 @@ TEST_F(WarpPlaybackTest, BeatsModeStereoProducesOutput) {
     clip->originalBPM = 120.0;
     clip->looping = true;
 
-    m_transport.setBPM(100.0); // speed ratio = 1.2
+    m_transport.setBPM(100.0); // speed ratio = 100/120 ≈ 0.83
     m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     std::vector<float> output(2048, 0.0f);
@@ -1053,7 +1057,7 @@ TEST_F(WarpPlaybackTest, TonesModePitchPreserving) {
     clip->originalBPM = 120.0;
     clip->looping = true;
 
-    m_transport.setBPM(60.0); // speed ratio = 2.0 (half speed)
+    m_transport.setBPM(60.0); // speed ratio = 60/120 = 0.5 (half speed)
     m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     std::vector<float> output(2048, 0.0f);
@@ -1084,7 +1088,7 @@ TEST_F(WarpPlaybackTest, RepitchVsBeatsOutputDiffers) {
     clipBeats->originalBPM = 120.0;
     clipBeats->looping = true;
 
-    m_transport.setBPM(60.0); // speed ratio = 2.0
+    m_transport.setBPM(60.0); // speed ratio = 60/120 = 0.5
 
     ClipEngine engineR, engineB;
     engineR.setTransport(&m_transport);
@@ -1162,7 +1166,7 @@ TEST_F(WarpPlaybackTest, ShortClipFallsBackFromStretcher) {
     clip->originalBPM = 120.0;
     clip->looping = true;
 
-    m_transport.setBPM(60.0); // speed ratio = 2.0
+    m_transport.setBPM(60.0); // speed ratio = 60/120 = 0.5
     m_engine.scheduleClip(0, 0, clip.get(), QuantizeMode::None);
 
     std::vector<float> output(256, 0.0f);

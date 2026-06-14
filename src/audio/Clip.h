@@ -42,12 +42,24 @@ struct Clip {
         return effectiveLoopEnd() - loopStart;
     }
 
-    // Compute speed ratio to play this clip at targetBPM.
+    // Speed ratio to play this clip at targetBPM, expressed as
+    // source-frames advanced per output frame (the convention every
+    // consumer uses: `pos += ratio` in Repitch, the stretcher's
+    // setSpeedRatio in the time-stretch paths). >1 = play faster.
+    //
+    // A clip captured at originalBPM must be sped up when the project
+    // runs faster than that, so the ratio is targetBPM/originalBPM —
+    // NOT the inverse. (This was previously originalBPM/targetBPM,
+    // which inverted warp: raising the transport BPM slowed the clip
+    // down. It also disagreed with the warp-marker path
+    // computeLocalSpeedRatio, which already computed targetBPM/
+    // originalBPM via srcSamples/dstSamples.)
+    //
     // Returns 1.0 if warping is off or originalBPM is unknown.
     double warpSpeedRatio(double targetBPM) const {
         if (warpMode == WarpMode::Off || originalBPM <= 0.0 || targetBPM <= 0.0)
             return 1.0;
-        return originalBPM / targetBPM;
+        return targetBPM / originalBPM;
     }
 
     // Shallow copy (shares audio buffer, copies warp data)
