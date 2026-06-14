@@ -354,14 +354,19 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
 
     // --- Master volume, metering, always-on soft-clip ---
     //
-    // Tanh-style soft-clipper at the very end of the chain prevents
-    // harsh digital clipping when cumulative track output pushes the
-    // master hot. Linear below kClipThresh (transparent for normal
-    // signals); above it, smoothly curves toward ±1.0. Peak meters
-    // read PRE-clip so the user still sees that they're overloading
-    // instead of the clipper hiding the problem.
+    // Tanh-style soft-clipper at the very end of the chain prevents harsh
+    // digital clipping when cumulative track output pushes the master hot.
+    // Linear below the threshold (transparent for normal signals); above it
+    // it smoothly curves toward ±1.0. The threshold sits at 0.7 (-3 dB) with
+    // a wide 0.3 knee: the knee width = 1-t, so a lower threshold means a
+    // gentler, more gradual saturation curve. The old 0.95/0.05 knee was
+    // nearly a brickwall limiter and added harsh high-order harmonics on hot
+    // multi-track mixes; this softer curve stays effectively transparent up
+    // to ~-1.5 dB and warms rather than crunches the peaks above it. Peak
+    // meters read PRE-clip so the user still sees they're overloading instead
+    // of the clipper hiding it.
     auto softClip = [](float x) -> float {
-        constexpr float t = 0.95f;
+        constexpr float t = 0.7f;
         constexpr float range = 1.0f - t;
         if (x >  t) return t + std::tanh((x - t) / range) * range;
         if (x < -t) return -(t + std::tanh((-x - t) / range) * range);
