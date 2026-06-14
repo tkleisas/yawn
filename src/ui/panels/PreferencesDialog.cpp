@@ -97,6 +97,10 @@ void FwPreferencesDialog::configureStaticDropdowns() {
         m_state.latencyCompensation = (s == CheckState::On);
     });
 
+    m_masterOsCheckbox.setOnChange([this](CheckState s) {
+        m_state.masterOversample = (s == CheckState::On);
+    });
+
     m_linkCheckbox.setOnChange([this](CheckState s) {
         m_state.linkEnabled = (s == CheckState::On);
     });
@@ -304,6 +308,8 @@ void FwPreferencesDialog::syncDropdownsToState() {
     // Plugin Delay Compensation toggle
     m_pdcCheckbox.setChecked(m_state.latencyCompensation,
                               ValueChangeSource::Programmatic);
+    m_masterOsCheckbox.setChecked(m_state.masterOversample,
+                                   ValueChangeSource::Programmatic);
 
     // Ableton Link toggles
     m_linkCheckbox.setChecked(m_state.linkEnabled,
@@ -586,6 +592,10 @@ void FwPreferencesDialog::layoutAndRenderAudioTab(UIContext& ctx, Rect content) 
     // own label ("Latency Compensation") so we don't drawLabeledRow
     // a second copy of it; just render it taking the full row.
     placeAndRender(m_pdcCheckbox, ctx, Rect{content.x, y, content.w, rowH});
+    y += rowH + kRowGap;
+
+    // Master soft-clip oversampling toggle (anti-aliases the master clipper).
+    placeAndRender(m_masterOsCheckbox, ctx, Rect{content.x, y, content.w, rowH});
 }
 
 void FwPreferencesDialog::layoutAndRenderMidiTab(UIContext& ctx, Rect content) {
@@ -730,6 +740,7 @@ std::vector<Widget*> FwPreferencesDialog::visibleWidgets() {
             out.push_back(&m_sampleRateDD);
             out.push_back(&m_bufferSizeDD);
             out.push_back(&m_pdcCheckbox);
+            out.push_back(&m_masterOsCheckbox);
             break;
         case 1:
             for (auto& cb : m_midiInputChecks)  out.push_back(cb.get());

@@ -373,15 +373,24 @@ void Mixer::process(float* const* trackBuffers, int numTracks,
         return x;
     };
 
+    const bool osMaster = m_masterOversample.load(std::memory_order_relaxed);
     float mPeakL = 0.0f, mPeakR = 0.0f;
     for (int i = 0; i < numFrames; ++i) {
         const float l = output[i * nc + 0] * m_master.volume;
         mPeakL = std::max(mPeakL, std::abs(l));
-        output[i * nc + 0] = softClip(l);
+        float r = 0.0f;
         if (nc > 1) {
-            const float r = output[i * nc + 1] * m_master.volume;
+            r = output[i * nc + 1] * m_master.volume;
             mPeakR = std::max(mPeakR, std::abs(r));
-            output[i * nc + 1] = softClip(r);
+        }
+        // Apply the soft-clip at 2× when oversampling so its harmonics stay
+        // below Nyquist and don't alias; otherwise clip in place.
+        if (osMaster) {
+            output[i * nc + 0] = m_osMasterL.process(l, softClip);
+            if (nc > 1) output[i * nc + 1] = m_osMasterR.process(r, softClip);
+        } else {
+            output[i * nc + 0] = softClip(l);
+            if (nc > 1) output[i * nc + 1] = softClip(r);
         }
     }
 

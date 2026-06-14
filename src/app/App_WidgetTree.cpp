@@ -185,6 +185,7 @@ void App::setupMenuBar() {
             state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
             state.fontScale = m_settings.fontScale;
             state.latencyCompensation = m_audioEngine.mixer().pdcEnabled();
+            state.masterOversample = m_audioEngine.mixer().masterOversample();
             state.linkEnabled = m_audioEngine.linkManager().enabled();
             state.linkStartStopSync = m_audioEngine.linkManager().startStopSyncEnabled();
             m_preferencesDialog.open(state, &m_audioEngine, &m_midiEngine);
@@ -549,6 +550,10 @@ void App::buildWidgetTree() {
             }
             m_settings.latencyCompensation = s.latencyCompensation;
             m_audioEngine.mixer().setPdcEnabled(s.latencyCompensation);
+
+            // Master soft-clip oversampling toggle.
+            m_settings.masterOversample = s.masterOversample;
+            m_audioEngine.mixer().setMasterOversample(s.masterOversample);
 
             // Ableton Link toggle. Apply to the live engine and
             // persist for next launch.

@@ -57,6 +57,10 @@ struct AppSettings {
     // default; users that only want tempo sync leave this off.
     bool linkStartStopSync = false;
 
+    // Oversample the master soft-clipper 2× to keep its saturation from
+    // aliasing. Cheap; on by default. Edit → Preferences → Audio.
+    bool masterOversample = true;
+
     // Last folder the shader file picker landed in. Restored as the
     // dialog's start location so repeated shader loads don't reset to $HOME.
     std::string lastShaderDir;
@@ -106,6 +110,7 @@ struct AppSettings {
             s.linkEnabled = j.value("linkEnabled", false);
             s.linkStartStopSync = j.value("linkStartStopSync", false);
             s.lastShaderDir = j.value("lastShaderDir", std::string());
+            s.masterOversample = j.value("masterOversample", true);
         } catch (...) {
             LOG_WARN("App", "Failed to parse settings file");
         }
@@ -134,6 +139,7 @@ struct AppSettings {
             j["linkEnabled"] = s.linkEnabled;
             j["linkStartStopSync"] = s.linkStartStopSync;
             j["lastShaderDir"] = s.lastShaderDir;
+            j["masterOversample"] = s.masterOversample;
             std::ofstream out(path);
             if (out.is_open()) {
                 out << j.dump(2);

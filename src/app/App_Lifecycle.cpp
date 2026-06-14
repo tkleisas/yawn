@@ -811,6 +811,7 @@ bool App::init() {
     // setPdcEnabled is a plain bool flag read by the audio thread —
     // safe to set without going through the message queue.
     m_audioEngine.mixer().setPdcEnabled(m_settings.latencyCompensation);
+    m_audioEngine.mixer().setMasterOversample(m_settings.masterOversample);
 
     // Apply Ableton Link toggle from saved preferences. The transport
     // panel's Link button reads this same flag, so the saved state

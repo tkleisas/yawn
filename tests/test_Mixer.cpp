@@ -12,6 +12,11 @@ class MixerTest : public ::testing::Test {
 protected:
     void SetUp() override {
         m_mixer.reset();
+        // These tests assert exact per-sample gain/pan math. The master
+        // soft-clip oversampler (on by default) adds a small filter latency
+        // + startup ramp that shifts those values, so disable it here — the
+        // anti-aliasing behaviour is covered by the Oversampling tests.
+        m_mixer.setMasterOversample(false);
     }
 
     // Create a constant-value stereo buffer for a track

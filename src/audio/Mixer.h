@@ -2,6 +2,7 @@
 
 #include "core/Constants.h"
 #include "effects/EffectChain.h"
+#include "audio/Oversampling.h"
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -245,6 +246,12 @@ public:
     bool pdcEnabled() const           { return m_pdcEnabled; }
     void setPdcEnabled(bool enabled)  { m_pdcEnabled = enabled; }
 
+    // Oversample the always-on master soft-clipper 2× so its saturation
+    // harmonics don't fold back as aliasing. Cheap (one stereo stream);
+    // on by default. UI-thread setter, audio-thread reader → atomic.
+    bool masterOversample() const          { return m_masterOversample.load(std::memory_order_relaxed); }
+    void setMasterOversample(bool enabled) { m_masterOversample.store(enabled, std::memory_order_relaxed); }
+
     // Reads "max track latency this block" — what the UI should
     // show as the engine's effective output latency. Updated each
     // block by process(); read by the UI thread (racy float-style
@@ -322,6 +329,11 @@ private:
     // users with serious mixes (Conv Reverb + lookahead limiter
     // on different tracks) flip it on once and forget.
     bool m_pdcEnabled      = false;
+
+    // Master soft-clip oversampling (see setMasterOversample). One
+    // oversampler per channel; carries half-band FIR state across blocks.
+    std::atomic<bool>  m_masterOversample{true};
+    dsp::Oversampler2x m_osMasterL, m_osMasterR;
 
     // Apply `delaySamples` of compensation to `buffer` in-place via
     // the per-track ring buffer. Reads-then-writes per sample so

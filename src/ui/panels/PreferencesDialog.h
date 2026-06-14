@@ -64,6 +64,7 @@ public:
         // by leaving it off; flip on once you wire up a Conv Reverb
         // or a lookahead Limiter in a serious mix).
         bool latencyCompensation    = false;
+        bool masterOversample       = true;
 
         // Link — Ableton Link network beat/tempo sync. Off by
         // default; turning on advertises this app on the LAN and
@@ -185,6 +186,7 @@ private:
 
     // Audio tab — Plugin Delay Compensation toggle (off by default).
     FwCheckbox m_pdcCheckbox{"Latency Compensation"};
+    FwCheckbox m_masterOsCheckbox{"Oversample Master Clip"};
 
     // Link tab — Ableton Link enable toggle. The peer count is
     // rendered as plain text alongside (read straight from the
