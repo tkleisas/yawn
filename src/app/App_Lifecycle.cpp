@@ -239,6 +239,17 @@ bool App::init() {
             if (m_project.track(t).armed) { anyArmed = true; break; }
         }
 
+        // Will this launch advance the transport? It does if it's already
+        // playing, if an armed track triggers a record count-in, or if the
+        // scene has any audio/MIDI clip (whose LaunchClipMsg starts the
+        // transport). Visual clips then defer to the same bar instead of
+        // firing a bar early.
+        bool willPlay = m_audioEngine.transport().isPlaying() || anyArmed;
+        for (int t = 0; t < m_project.numTracks() && !willPlay; ++t) {
+            auto* s = m_project.getSlot(t, sceneIdx);
+            if (s && (s->audioClip || s->midiClip)) willPlay = true;
+        }
+
         // ── PASS 1: armed tracks → Start*RecordMsg FIRST. ──
         // This ensures the StartMidiRecordMsg / StartAudioRecordMsg
         // handlers see `!m_transport.isPlaying()` and trigger the
@@ -288,9 +299,10 @@ bool App::init() {
                     slot->followAction, slot->autoRecordDisabled});
                 trk.defaultScene = sceneIdx;
             } else if (slot && slot->visualClip) {
-                launchVisualClipData(t, *slot->visualClip,
-                                      slot->visualClip->firstShaderPath());
-                stampVisualLaunch(t, sceneIdx);
+                // Honour the slot's launchQuantize so the video/shader
+                // starts on the same bar boundary as the quantized
+                // audio/MIDI clips in this scene instead of immediately.
+                launchVisualClipQuantized(t, sceneIdx, willPlay);
                 trk.defaultScene = sceneIdx;
                 m_sessionPanel->updateClipState(t, true, 0,
                                                   sceneIdx, false, 0.0);
@@ -368,9 +380,8 @@ bool App::init() {
                         &slot->clipAutomation, slot->followAction,
                         slot->autoRecordDisabled});
                 } else if (slot->visualClip) {
-                    launchVisualClipData(t, *slot->visualClip,
-                                          slot->visualClip->firstShaderPath());
-                    stampVisualLaunch(t, targetScene);
+                    launchVisualClipQuantized(t, targetScene,
+                                              /*transportWillPlay*/true);
                     m_sessionPanel->updateClipState(t, /*playing*/true,
                                                       /*playPos*/0, targetScene);
                 }

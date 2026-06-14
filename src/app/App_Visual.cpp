@@ -81,6 +81,59 @@ void App::stampVisualLaunch(int track, int scene) {
     m_visualLaunchScene[track] = scene;
 }
 
+void App::launchVisualClipQuantized(int track, int scene, bool transportWillPlay) {
+    if (track < 0 || track >= kMaxTracks) return;
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot || !slot->visualClip) return;
+
+    const auto q = slot->launchQuantize;
+    const bool playing = m_audioEngine.transport().isPlaying();
+
+    // Launch immediately when there's no quantize, or when nothing is going
+    // to advance the transport for us to sync against (a lone visual launch
+    // while stopped). Otherwise defer to the boundary the audio/MIDI clips
+    // will start on — including the from-stopped case, where the transport
+    // spins up at the parked position and the clips fire on the next bar
+    // (see ClipEngine::checkPendingLaunches).
+    if (q == audio::QuantizeMode::None || (!playing && !transportWillPlay)) {
+        m_visualHasPending[track] = false;
+        launchVisualClipData(track, *slot->visualClip, slot->visualClip->firstShaderPath());
+        stampVisualLaunch(track, scene);
+        return;
+    }
+
+    // Defer to the next bar/beat boundary, matching the audio engine's
+    // quantize so video and audio start together.
+    const double cur = m_audioEngine.transport().positionInBeats();
+    const int beatsPerBar = std::max(1, m_audioEngine.transport().numerator());
+    double fire = (q == audio::QuantizeMode::NextBeat)
+        ? std::floor(cur) + 1.0
+        : (std::floor(cur / beatsPerBar) + 1.0) * beatsPerBar;
+
+    m_visualHasPending[track]    = true;
+    m_visualPendingScene[track]  = scene;
+    m_visualPendingFireBeat[track] = fire;
+}
+
+void App::pollVisualLaunchQueue() {
+    const bool playing = m_audioEngine.transport().isPlaying();
+    const double beat = m_audioEngine.transport().positionInBeats();
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (!m_visualHasPending[t]) continue;
+        // Fire once the transport is playing and has reached the boundary.
+        // Pending launches are only created when something will advance the
+        // transport, so this won't get stuck while stopped.
+        if (!playing || beat < m_visualPendingFireBeat[t]) continue;
+        const int scene = m_visualPendingScene[t];
+        m_visualHasPending[t] = false;
+        auto* slot = m_project.getSlot(t, scene);
+        if (slot && slot->visualClip) {
+            launchVisualClipData(t, *slot->visualClip, slot->visualClip->firstShaderPath());
+            stampVisualLaunch(t, scene);
+        }
+    }
+}
+
 void App::launchVisualClipData(int track,
                                 const visual::VisualClip& vc,
                                 const std::string& shaderPath) {

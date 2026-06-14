@@ -229,6 +229,10 @@ void App::update() {
     // shader / chain params follow the macro in lock-step.
     applyMacroMappings();
 
+    // Fire any quantized visual-clip launches whose bar/beat boundary has
+    // arrived, so video starts in sync with the scene's audio/MIDI clips.
+    pollVisualLaunchQueue();
+
     // Session-view follow actions for visual clips. Fires Next /
     // Random / etc. once barCount bars have elapsed since launch.
     pollVisualFollowActions();

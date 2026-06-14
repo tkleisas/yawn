@@ -925,11 +925,14 @@ void App::buildWidgetTree() {
         });
 
     m_sessionPanel->setOnLaunchVisualClip(
-        [this](int track, int scene, const std::string& shaderPath) {
-            auto* slot = m_project.getSlot(track, scene);
-            if (!slot || !slot->visualClip) return;
-            launchVisualClipData(track, *slot->visualClip, shaderPath);
-            stampVisualLaunch(track, scene);
+        [this](int track, int scene, const std::string& /*shaderPath*/) {
+            // Defer to the slot's launchQuantize so the video starts in sync
+            // with the quantized audio/MIDI clips in the same scene rather
+            // than immediately. A lone visual launch has nothing to sync to
+            // while stopped, so only defer when already playing. (shaderPath
+            // is re-derived from the slot.)
+            launchVisualClipQuantized(track, scene,
+                                      m_audioEngine.transport().isPlaying());
         });
 
     m_sessionPanel->setOnStopAllClips([this] { stopAllClips(); });

@@ -168,6 +168,20 @@ private:
     // a time reference. Every session launch path must call this after
     // launchVisualClipData, or envelopes never advance.
     void stampVisualLaunch(int track, int scene);
+    // Launch a visual clip honouring the slot's launchQuantize. When the
+    // transport is (or is about to be) advancing and quantize != None, the
+    // launch is deferred to the next bar/beat boundary (via
+    // pollVisualLaunchQueue) so the video starts in sync with the quantized
+    // audio/MIDI clips in the same scene instead of immediately.
+    // transportWillPlay tells us a launched audio/MIDI clip (or count-in)
+    // will start the transport even though it isn't playing yet — without
+    // it, a visual evaluated before the transport spins up would fire a bar
+    // early. Pass false for a lone visual launch (nothing to sync to while
+    // stopped → launch now).
+    void launchVisualClipQuantized(int track, int scene, bool transportWillPlay);
+    // Fire any pending quantized visual launches whose boundary has been
+    // reached. Polled each frame.
+    void pollVisualLaunchQueue();
     // Arrangement playback — polled each frame; fires launch / clear
     // on visual tracks as the transport head crosses clip boundaries.
     void pollArrangementVisualPlayback();
@@ -595,6 +609,15 @@ private:
     double m_visualLaunchBeat[kMaxTracks] = {};
     int    m_visualLaunchScene[kMaxTracks] = {};
     bool   m_visualLaunchInit = false;
+
+    // Pending quantized visual-clip launches (UI thread). Audio/MIDI clips
+    // honour slot.launchQuantize — the audio engine defers them to a
+    // bar/beat boundary. Visual clips must defer to the SAME boundary or
+    // the video starts before the audio on a scene launch. m_visualHasPending
+    // zero-inits to false = nothing pending, so no explicit init is needed.
+    bool   m_visualHasPending[kMaxTracks] = {};
+    int    m_visualPendingScene[kMaxTracks] = {};
+    double m_visualPendingFireBeat[kMaxTracks] = {};
 
     // UI state from audio thread
     double m_displayBeats = 0.0;
