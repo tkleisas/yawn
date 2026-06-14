@@ -875,6 +875,11 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Render each track's clip into its own buffer
     m_arrPlayback.applyPendingClips();
     m_clipEngine.checkAndFirePending();
+    // Audio follow actions: the clip engine is driven per-track via
+    // processTrackToBuffer() below (not process()), so its bar-counting /
+    // follow-action check must be invoked here explicitly. The MIDI engine
+    // does this inside its process() call further down.
+    m_clipEngine.checkFollowActions();
     m_midiClipEngine.checkAndFirePending();
     checkPendingRecordStops(nf);
     for (int t = 0; t < kMaxTracks; ++t) {

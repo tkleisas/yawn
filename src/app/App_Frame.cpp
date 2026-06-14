@@ -650,7 +650,11 @@ void App::update() {
                 auto* slot = m_project.getSlot(ti, targetScene);
                 if (!slot || slot->empty()) return;
 
-                auto lq = slot->launchQuantize;
+                // Launch immediately, NOT with the slot's launchQuantize. The
+                // follow action already fired at the bar boundary it was timed
+                // to; re-quantizing to the next bar would make the current clip
+                // loop one extra bar before the next one starts.
+                auto lq = audio::QuantizeMode::None;
                 if (slot->audioClip) {
                     m_audioEngine.sendCommand(audio::LaunchClipMsg{
                         ti, targetScene, slot->audioClip.get(), lq,

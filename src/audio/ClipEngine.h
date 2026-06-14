@@ -124,6 +124,12 @@ public:
     // Check and fire pending quantized launches. Call once per buffer before processing tracks.
     void checkAndFirePending();
 
+    // Advance per-clip bar counters and fire follow actions. Call once per
+    // buffer. process() calls this itself, but AudioEngine drives the clip
+    // engine via processTrackToBuffer() (for per-track mixer routing), so it
+    // must call this explicitly — otherwise audio follow actions never fire.
+    void checkFollowActions();
+
     // Force the next checkAndFirePending call to behave as if it
     // were the first invocation — sets m_lastQuantizeCheck back to
     // -1 (the "always at boundary" sentinel). AudioEngine calls this
@@ -158,7 +164,6 @@ public:
 
 private:
     void checkPendingLaunches();
-    void checkFollowActions();
     void processTrack(int trackIndex, float* output, int numFrames, int numChannels);
     void processTrackStretched(int trackIndex, float* output, int numFrames, int numChannels);
     double computeLocalSpeedRatio(const Clip& clip, double samplePos, double projectBPM) const;
