@@ -337,6 +337,96 @@ TEST(ArrangementPlayback, MidiClipEmitsNotes) {
     EXPECT_GT(midiBuffer.count(), 0);
 }
 
+// ── Loop vs silence on extend (v0.84.3 / v0.84.4) ──
+
+TEST(ArrangementPlayback, AudioLoopWrapsPastSourceEnd) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    // 100-frame source, extended to 4 beats, looping. A single 256-frame
+    // render crosses the source end ~2.5×, so positions past the source
+    // must wrap and keep producing sound.
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.loop = true;
+    c.audioBuffer = makeTestBuffer(100, 1);
+    clips.push_back(c);
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+
+    std::vector<float> buffer(256, 0.0f);
+    ap.processAudioTrack(0, buffer.data(), 256, 1);
+    EXPECT_NE(buffer[50], 0.0f);    // source plays
+    EXPECT_NE(buffer[200], 0.0f);   // and keeps playing past its end (looped)
+}
+
+TEST(ArrangementPlayback, AudioNoLoopSilentPastSourceEnd) {
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Audio;
+    c.startBeat = 0.0;
+    c.lengthBeats = 4.0;
+    c.loop = false;            // one-shot → silent past the source
+    c.audioBuffer = makeTestBuffer(100, 1);
+    clips.push_back(c);
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+
+    std::vector<float> buffer(256, 0.0f);
+    ap.processAudioTrack(0, buffer.data(), 256, 1);
+    EXPECT_NE(buffer[50], 0.0f);    // source plays
+    EXPECT_EQ(buffer[200], 0.0f);   // then silence past the 100-frame source
+}
+
+TEST(ArrangementPlayback, MidiLoopRepeatsVsOneShot) {
+    // A 1-beat MIDI loop placed in a 4-beat slot: looping re-fires the note
+    // each beat (~4×), a one-shot fires it once. Render the whole 4 beats.
+    auto mc = std::make_shared<yawn::midi::MidiClip>();
+    mc->setLengthBeats(1.0);
+    yawn::midi::MidiNote note;
+    note.startBeat = 0.0; note.duration = 0.5;
+    note.pitch = 60; note.channel = 0; note.velocity = 16384;
+    mc->addNote(note);
+
+    auto run = [&](bool loop) {
+        yawn::audio::ArrangementPlayback ap;
+        yawn::audio::Transport transport;
+        transport.setSampleRate(44100.0);
+        transport.setBPM(120.0);
+        transport.play();
+        ap.setTransport(&transport);
+        ap.setSampleRate(44100.0);
+        std::vector<yawn::audio::ArrClipRef> clips;
+        yawn::audio::ArrClipRef c;
+        c.type = yawn::audio::ArrClipRef::Type::Midi;
+        c.startBeat = 0.0; c.lengthBeats = 4.0; c.loop = loop; c.midiClip = mc;
+        clips.push_back(c);
+        ap.setTrackClips(0, std::move(clips));
+        ap.setTrackActive(0, true);
+        yawn::midi::MidiBuffer mb; mb.clear();
+        ap.processMidiTrack(0, mb, 4 * 22050);  // 4 beats at 120 BPM / 44.1k
+        return mb.count();
+    };
+    EXPECT_GT(run(true), run(false));   // looping emits more events
+    EXPECT_GT(run(true), 2);            // multiple iterations, not just one
+}
+
 TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
     yawn::audio::ArrangementPlayback ap;
     yawn::audio::Transport transport;

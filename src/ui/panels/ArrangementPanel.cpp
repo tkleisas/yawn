@@ -1657,19 +1657,38 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                     if (p > maxP) maxP = p;
                 }
                 int pRange = std::max(1, maxP - minP + 1);
-                double len = clip.lengthBeats;
+                // Notes sit at their real beat position (× pixels-per-beat),
+                // so they never stretch. When looping, tile the loop region
+                // [offsetBeats, content end) across the slot; one-shots draw
+                // once and leave the extended tail blank.
+                const double ppb = m_pixelsPerBeat;
+                const double contentEnd = clip.midiClip->lengthBeats();
+                const double loopLen = contentEnd - clip.offsetBeats;
+                const bool tileLoop = clip.loop && loopLen > 1e-6;
+                const double tileW = loopLen * ppb;
+                const int maxTiles = (tileLoop && tileW >= 1.0)
+                    ? static_cast<int>(std::ceil(cw / tileW)) + 1 : 1;
                 r.pushClip(cx, cy, cw, ch);
-                for (int i = 0; i < clip.midiClip->noteCount(); ++i) {
-                    const auto& n = clip.midiClip->note(i);
-                    double noteBeat = n.startBeat - clip.offsetBeats;
-                    if (noteBeat + n.duration < 0 || noteBeat > len) continue;
-                    float nx = cx + static_cast<float>(noteBeat / len) * cw;
-                    float nw = std::max(1.0f,
-                        static_cast<float>(n.duration / len) * cw);
-                    float ny = nY + nH -
-                        (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
-                    float nh = std::max(1.0f, nH / pRange);
-                    r.drawRect(nx, ny, nw, nh, noteCol);
+                for (int tt = 0; tt < maxTiles; ++tt) {
+                    const float tox = tileLoop ? tt * static_cast<float>(tileW) : 0.0f;
+                    if (cx + tox >= cx + cw) break;
+                    for (int i = 0; i < clip.midiClip->noteCount(); ++i) {
+                        const auto& n = clip.midiClip->note(i);
+                        double relBeat = n.startBeat - clip.offsetBeats;
+                        if (tileLoop) {
+                            if (relBeat < 0 || relBeat >= loopLen) continue;
+                        } else if (relBeat + n.duration < 0 ||
+                                   relBeat > clip.lengthBeats) {
+                            continue;
+                        }
+                        float nx = cx + tox + static_cast<float>(relBeat * ppb);
+                        if (nx >= cx + cw) continue;
+                        float nw = std::max(1.0f, static_cast<float>(n.duration * ppb));
+                        float ny = nY + nH -
+                            (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
+                        float nh = std::max(1.0f, nH / pRange);
+                        r.drawRect(nx, ny, nw, nh, noteCol);
+                    }
                 }
                 r.popClip();
             }

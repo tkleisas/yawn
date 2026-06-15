@@ -1,5 +1,6 @@
 #include "audio/ArrangementPlayback.h"
 #include <algorithm>
+#include <cmath>
 
 namespace yawn {
 namespace audio {
@@ -112,72 +113,89 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
         if (clip.endBeat() <= currentBeat || clip.startBeat >= bufEndBeat) continue;
 
         auto& mc = *clip.midiClip;
-        double clipLocalStart = currentBeat - clip.startBeat + clip.offsetBeats;
-        double clipLocalEnd   = bufEndBeat - clip.startBeat + clip.offsetBeats;
+        const double contentEnd = mc.lengthBeats();          // loop region end
+        const bool looping = clip.loop &&
+                             (contentEnd - clip.offsetBeats) > 1e-6;
 
-        // Clamp to clip boundaries
-        double scanStart = std::max(clipLocalStart, clip.offsetBeats);
-        double scanEnd   = std::min(clipLocalEnd, clip.offsetBeats + clip.lengthBeats);
-        if (scanStart >= scanEnd) continue;
+        // Emit every event whose content beat lands in [scanStart, scanEnd)
+        // for one playthrough whose content sits at the timeline implied by
+        // `localStart`. Two-pass (offs before ons) so back-to-back same-pitch
+        // notes re-articulate cleanly on same-frame collisions. When looping,
+        // note ends are clamped to the loop end so nothing hangs past it.
+        auto emitWindow = [&](double localStart, double scanStart, double scanEnd) {
+            if (scanStart >= scanEnd) return;
+            const bool reachedEnd = looping && (scanEnd >= contentEnd - 1e-9);
 
-        // Two-pass scan to keep Note-Offs ahead of Note-Ons in the
-        // emitted buffer. When a buffer boundary doesn't align with
-        // a beat (the common case), Note-A.endBeat == Note-B.startBeat
-        // makes both events land at the same frame. If the on lands
-        // first, the synth allocates a new voice for B, then the
-        // delayed Note-Off (matching pitch P) kills the new voice
-        // instead of A's lingering one — back-to-back same-pitch
-        // notes end up sounding as one held note (no re-articulation).
-        // Off-then-on guarantees clean release-then-attack at the
-        // boundary regardless of frame collisions.
-
-        // --- Pass 1: Note-Offs ---
-        for (int i = 0; i < mc.noteCount(); ++i) {
-            const auto& note = mc.note(i);
-            double noteEnd = note.startBeat + note.duration;
-            if (noteEnd >= scanStart && noteEnd < scanEnd) {
-                double beatInBuffer = (noteEnd - clipLocalStart);
-                int frameOff = static_cast<int>(beatInBuffer * samplesPerBeat);
-                frameOff = std::clamp(frameOff, 0, numFrames - 1);
-
+            // --- Pass 1: Note-Offs ---
+            for (int i = 0; i < mc.noteCount(); ++i) {
+                const auto& note = mc.note(i);
+                double noteEnd = note.startBeat + note.duration;
+                if (looping && noteEnd > contentEnd) noteEnd = contentEnd;
+                const bool inWin = noteEnd >= scanStart &&
+                    (noteEnd < scanEnd || (reachedEnd && noteEnd <= scanEnd));
+                if (!inWin) continue;
+                int frameOff = std::clamp(
+                    static_cast<int>((noteEnd - localStart) * samplesPerBeat),
+                    0, numFrames - 1);
                 midiBuffer.addMessage(
                     midi::MidiMessage::noteOff(note.channel, note.pitch, 0, frameOff));
             }
-        }
 
-        // --- Pass 2: Note-Ons ---
-        for (int i = 0; i < mc.noteCount(); ++i) {
-            const auto& note = mc.note(i);
-            if (note.startBeat >= scanStart && note.startBeat < scanEnd) {
-                double beatInBuffer = (note.startBeat - clipLocalStart);
-                int frameOff = static_cast<int>(beatInBuffer * samplesPerBeat);
-                frameOff = std::clamp(frameOff, 0, numFrames - 1);
-
-                // Convert 16-bit velocity to 7-bit
+            // --- Pass 2: Note-Ons ---
+            for (int i = 0; i < mc.noteCount(); ++i) {
+                const auto& note = mc.note(i);
+                if (note.startBeat < scanStart || note.startBeat >= scanEnd) continue;
+                int frameOff = std::clamp(
+                    static_cast<int>((note.startBeat - localStart) * samplesPerBeat),
+                    0, numFrames - 1);
                 uint8_t vel7 = static_cast<uint8_t>(
                     std::min(127, static_cast<int>(note.velocity >> 9)));
                 if (vel7 == 0) vel7 = 1;
-
                 midiBuffer.addMessage(
                     midi::MidiMessage::noteOn(note.channel, note.pitch, vel7, frameOff));
             }
-        }
 
-        // Scan CCs
-        for (int i = 0; i < mc.ccCount(); ++i) {
-            const auto& cc = mc.ccEvent(i);
-            if (cc.beat >= scanStart && cc.beat < scanEnd) {
-                double beatInBuffer = (cc.beat - clipLocalStart);
-                int frameOff = static_cast<int>(beatInBuffer * samplesPerBeat);
-                frameOff = std::clamp(frameOff, 0, numFrames - 1);
-
-                // Convert 32-bit value to 7-bit CC
+            // --- CCs ---
+            for (int i = 0; i < mc.ccCount(); ++i) {
+                const auto& cc = mc.ccEvent(i);
+                if (cc.beat < scanStart || cc.beat >= scanEnd) continue;
+                int frameOff = std::clamp(
+                    static_cast<int>((cc.beat - localStart) * samplesPerBeat),
+                    0, numFrames - 1);
                 uint8_t val7 = static_cast<uint8_t>(
                     std::min(127, static_cast<int>(cc.value >> 25)));
                 midiBuffer.addMessage(
                     midi::MidiMessage::cc(cc.channel, static_cast<uint8_t>(cc.ccNumber),
                                           val7, frameOff));
             }
+        };
+
+        if (looping) {
+            // Tile the loop region [offsetBeats, contentEnd) across the slot;
+            // step through whichever iterations this buffer touches (almost
+            // always one — buffers are a tiny fraction of a beat).
+            const double loopLen = contentEnd - clip.offsetBeats;
+            const double relStart = currentBeat - clip.startBeat;
+            int k = static_cast<int>(std::floor(std::max(0.0, relStart) / loopLen));
+            for (int guard = 0; guard < 256; ++guard, ++k) {
+                const double vStart = clip.startBeat + static_cast<double>(k) * loopLen;
+                if (vStart >= bufEndBeat || vStart >= clip.endBeat()) break;
+                const double localStart = currentBeat - vStart + clip.offsetBeats;
+                const double scanStart  = std::max(localStart, clip.offsetBeats);
+                const double scanEnd    = std::min({
+                    bufEndBeat - vStart + clip.offsetBeats,
+                    contentEnd,
+                    clip.endBeat() - vStart + clip.offsetBeats });
+                emitWindow(localStart, scanStart, scanEnd);
+            }
+        } else {
+            // One-shot: play the content once, silent past its end.
+            const double clipLocalStart = currentBeat - clip.startBeat + clip.offsetBeats;
+            const double clipLocalEnd   = bufEndBeat - clip.startBeat + clip.offsetBeats;
+            const double scanStart = std::max(clipLocalStart, clip.offsetBeats);
+            const double scanEnd   = std::min(clipLocalEnd,
+                                              clip.offsetBeats + clip.lengthBeats);
+            emitWindow(clipLocalStart, scanStart, scanEnd);
         }
     }
 }
