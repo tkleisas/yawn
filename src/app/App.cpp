@@ -492,6 +492,7 @@ void App::syncArrangementClipsToEngine(int trackIdx) {
         ref.lengthBeats = ac.lengthBeats;
         ref.offsetBeats = ac.offsetBeats;
         ref.loop = ac.loop;
+        ref.stretch = ac.stretch;
         ref.audioBuffer = ac.audioBuffer;
         ref.midiClip = ac.midiClip;
         refs.push_back(std::move(ref));

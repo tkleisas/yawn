@@ -126,10 +126,19 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
         // end OR clip end) cut the window, so any note still sounding across
         // that boundary is force-released there — otherwise a note straddling
         // the clip end gets a note-on with no note-off and hangs past the clip.
-        auto emitWindow = [&](double localStart, double scanStart,
+        // `base`/`scale` map a content beat cb → its timeline beat:
+        //   timeline = base + (cb - offsetBeats) * scale
+        // scale = 1 for loop/one-shot; scale = slotLen/contentLen for stretch.
+        auto emitWindow = [&](double base, double scale, double scanStart,
                               double scanEnd, double bufEndContent) {
             if (scanStart >= scanEnd) return;
             const bool hardEnd = scanEnd < bufEndContent - 1e-9;
+            auto frameAt = [&](double cb) {
+                const double tl = base + (cb - clip.offsetBeats) * scale;
+                return std::clamp(
+                    static_cast<int>((tl - currentBeat) * samplesPerBeat),
+                    0, numFrames - 1);
+            };
 
             // --- Pass 1: Note-Offs ---
             for (int i = 0; i < mc.noteCount(); ++i) {
@@ -144,43 +153,48 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
                 } else {
                     continue;
                 }
-                int frameOff = std::clamp(
-                    static_cast<int>((offBeat - localStart) * samplesPerBeat),
-                    0, numFrames - 1);
                 midiBuffer.addMessage(
-                    midi::MidiMessage::noteOff(note.channel, note.pitch, 0, frameOff));
+                    midi::MidiMessage::noteOff(note.channel, note.pitch, 0, frameAt(offBeat)));
             }
 
             // --- Pass 2: Note-Ons ---
             for (int i = 0; i < mc.noteCount(); ++i) {
                 const auto& note = mc.note(i);
                 if (note.startBeat < scanStart || note.startBeat >= scanEnd) continue;
-                int frameOff = std::clamp(
-                    static_cast<int>((note.startBeat - localStart) * samplesPerBeat),
-                    0, numFrames - 1);
                 uint8_t vel7 = static_cast<uint8_t>(
                     std::min(127, static_cast<int>(note.velocity >> 9)));
                 if (vel7 == 0) vel7 = 1;
                 midiBuffer.addMessage(
-                    midi::MidiMessage::noteOn(note.channel, note.pitch, vel7, frameOff));
+                    midi::MidiMessage::noteOn(note.channel, note.pitch, vel7,
+                                              frameAt(note.startBeat)));
             }
 
             // --- CCs ---
             for (int i = 0; i < mc.ccCount(); ++i) {
                 const auto& cc = mc.ccEvent(i);
                 if (cc.beat < scanStart || cc.beat >= scanEnd) continue;
-                int frameOff = std::clamp(
-                    static_cast<int>((cc.beat - localStart) * samplesPerBeat),
-                    0, numFrames - 1);
                 uint8_t val7 = static_cast<uint8_t>(
                     std::min(127, static_cast<int>(cc.value >> 25)));
                 midiBuffer.addMessage(
                     midi::MidiMessage::cc(cc.channel, static_cast<uint8_t>(cc.ccNumber),
-                                          val7, frameOff));
+                                          val7, frameAt(cc.beat)));
             }
         };
 
-        if (looping) {
+        if (clip.stretch && (contentEnd - clip.offsetBeats) > 1e-6) {
+            // Stretch: map the whole content [offsetBeats, contentEnd) onto the
+            // slot. scale = slot/content (>1 slows the notes down, <1 speeds up);
+            // one playthrough, no loop.
+            const double contentLen = contentEnd - clip.offsetBeats;
+            const double scale = clip.lengthBeats / contentLen;
+            const double invScale = (scale > 1e-9) ? 1.0 / scale : 0.0;
+            const double bufEndContent =
+                clip.offsetBeats + (bufEndBeat - clip.startBeat) * invScale;
+            const double scanStart = std::max(clip.offsetBeats,
+                clip.offsetBeats + (currentBeat - clip.startBeat) * invScale);
+            const double scanEnd = std::min(bufEndContent, contentEnd);
+            emitWindow(clip.startBeat, scale, scanStart, scanEnd, bufEndContent);
+        } else if (looping) {
             // Tile the loop region [offsetBeats, contentEnd) across the slot;
             // step through whichever iterations this buffer touches (almost
             // always one — buffers are a tiny fraction of a beat).
@@ -197,7 +211,7 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
                     bufEndContent,
                     contentEnd,
                     clip.endBeat() - vStart + clip.offsetBeats });
-                emitWindow(localStart, scanStart, scanEnd, bufEndContent);
+                emitWindow(vStart, 1.0, scanStart, scanEnd, bufEndContent);
             }
         } else {
             // One-shot: play the content once, silent past its end.
@@ -206,7 +220,7 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
             const double scanStart = std::max(clipLocalStart, clip.offsetBeats);
             const double scanEnd   = std::min(clipLocalEnd,
                                               clip.offsetBeats + clip.lengthBeats);
-            emitWindow(clipLocalStart, scanStart, scanEnd, clipLocalEnd);
+            emitWindow(clip.startBeat, 1.0, scanStart, scanEnd, clipLocalEnd);
         }
     }
 }

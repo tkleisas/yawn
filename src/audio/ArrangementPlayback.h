@@ -40,6 +40,9 @@ struct ArrClipRef {
     // the content from offsetBeats to the source end; false plays once
     // and goes silent past the end.
     bool   loop = true;
+    // Time-stretch the content to fill the slot exactly (overrides loop).
+    // MIDI scales note times; audio uses the time-stretcher (later step).
+    bool   stretch = false;
 
     std::shared_ptr<AudioBuffer>   audioBuffer;
     std::shared_ptr<midi::MidiClip> midiClip;

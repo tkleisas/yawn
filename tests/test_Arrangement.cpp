@@ -465,6 +465,43 @@ TEST(ArrangementPlayback, MidiLoopNoHungNoteAtClipEnd) {
     EXPECT_EQ(ons, offs);   // nothing hangs past the clip end
 }
 
+TEST(ArrangementPlayback, MidiStretchScalesNoteTiming) {
+    // 2-beat content, note at beat 1.0. Stretched into a 4-beat slot (×2)
+    // the note-on lands at timeline beat 2.0 (frame 44100); unstretched it
+    // stays at beat 1.0 (frame 22050).
+    auto mc = std::make_shared<yawn::midi::MidiClip>();
+    mc->setLengthBeats(2.0);
+    yawn::midi::MidiNote note;
+    note.startBeat = 1.0; note.duration = 0.5;
+    note.pitch = 60; note.channel = 0; note.velocity = 16384;
+    mc->addNote(note);
+
+    auto firstNoteOnFrame = [&](bool stretch) {
+        yawn::audio::ArrangementPlayback ap;
+        yawn::audio::Transport transport;
+        transport.setSampleRate(44100.0);
+        transport.setBPM(120.0);
+        transport.play();
+        ap.setTransport(&transport);
+        ap.setSampleRate(44100.0);
+        std::vector<yawn::audio::ArrClipRef> clips;
+        yawn::audio::ArrClipRef c;
+        c.type = yawn::audio::ArrClipRef::Type::Midi;
+        c.startBeat = 0.0; c.lengthBeats = 4.0; c.loop = false;
+        c.stretch = stretch; c.midiClip = mc;
+        clips.push_back(c);
+        ap.setTrackClips(0, std::move(clips));
+        ap.setTrackActive(0, true);
+        yawn::midi::MidiBuffer mb; mb.clear();
+        ap.processMidiTrack(0, mb, 4 * 22050);
+        for (int i = 0; i < mb.count(); ++i)
+            if (mb[i].isNoteOn()) return mb[i].frameOffset;
+        return -1;
+    };
+    EXPECT_NEAR(firstNoteOnFrame(true),  44100, 8);   // 2.0 beats (×2)
+    EXPECT_NEAR(firstNoteOnFrame(false), 22050, 8);   // 1.0 beat (native)
+}
+
 TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
     yawn::audio::ArrangementPlayback ap;
     yawn::audio::Transport transport;

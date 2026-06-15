@@ -879,11 +879,15 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
                 markDirty();
             }));
 
-        // Stretch to fit — video clips only for now (audio/MIDI stretch is
-        // a later step). Overrides loop: the video fills the slot exactly.
-        if (clips[clipIdx].type == ArrangementClip::Type::Visual &&
-            clips[clipIdx].visualClip &&
-            !clips[clipIdx].visualClip->videoPath.empty()) {
+        // Stretch to fit — MIDI (scale note times) and video (frame map).
+        // Audio stretch (the live time-stretcher) is a later step. Overrides
+        // loop: the content fills the slot exactly.
+        const bool canStretch =
+            clips[clipIdx].type == ArrangementClip::Type::Midi ||
+            (clips[clipIdx].type == ArrangementClip::Type::Visual &&
+             clips[clipIdx].visualClip &&
+             !clips[clipIdx].visualClip->videoPath.empty());
+        if (canStretch) {
             const bool isStretch = clips[clipIdx].stretch;
             items.push_back(item(
                 isStretch ? "Stretch to fit: On" : "Stretch to fit: Off",
