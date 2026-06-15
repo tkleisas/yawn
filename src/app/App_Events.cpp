@@ -915,9 +915,13 @@ void App::processEvents() {
                 bool wantNS = m_contentGrid->wantsVerticalResize()
                            || (m_arrangementPanel && m_arrangementPanel->wantsVerticalResize())
                            || prHandle || dpHandle;
-                if (m_contentGrid->wantsHorizontalResize() && wantNS) {
+                bool gridEW = m_contentGrid->wantsHorizontalResize();
+                // Hovering / dragging a clip's left or right trim edge.
+                bool clipEW = m_arrangementPanel &&
+                              m_arrangementPanel->wantsHorizontalResize();
+                if (gridEW && wantNS) {
                     SDL_SetCursor(m_cursorMove);
-                } else if (m_contentGrid->wantsHorizontalResize()) {
+                } else if (gridEW || clipEW) {
                     SDL_SetCursor(m_cursorEWResize);
                 } else if (wantNS) {
                     SDL_SetCursor(m_cursorNSResize);

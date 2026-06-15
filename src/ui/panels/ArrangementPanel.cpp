@@ -916,6 +916,9 @@ bool ArrangementPanel::onMouseMove(MouseMoveEvent& e) {
             }
         }
         m_hoverResize = foundResize;
+
+        // Clip-edge hover → resize cursor + visible grab handles.
+        clipEdgeAt(e.x, e.y, m_hoverClipTrack, m_hoverClipIdx, m_hoverClipEdge);
     }
 
     if (m_dragMode == DragMode::None) return false;
@@ -1491,6 +1494,41 @@ unsigned ArrangementPanel::getThumbnailTexture(const std::string& path) const {
     return tex;
 }
 
+void ArrangementPanel::clipEdgeAt(float px, float py, int& outTrack,
+                                  int& outClip, int& outEdge) const {
+    outTrack = -1; outClip = -1; outEdge = 0;
+    if (!m_project) return;
+    const float gridX = m_bounds.x + kTrackHeaderW;
+    const float gridY = m_bounds.y + kRulerH;
+    const float gridH = m_bounds.h - kRulerH - kScrollbarH;
+    const float gridW = m_bounds.w - kTrackHeaderW;
+    if (px < gridX || px >= gridX + gridW || py < gridY || py >= gridY + gridH)
+        return;
+    const float relY = py - gridY + m_scrollY;
+    const int t = trackAtY(relY);
+    if (t < 0 || t >= m_project->numTracks()) return;
+    // Restrict to the main clip row (not the automation lanes below it).
+    const float ty = gridY + trackYOffset(t) - m_scrollY;
+    const float baseH = trackBaseHeight(t);
+    if (py < ty || py >= ty + baseH) return;
+
+    const double beat = (px - gridX + m_scrollX) / m_pixelsPerBeat;
+    auto& clips = m_project->track(t).arrangementClips;
+    for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+        const auto& c = clips[i];
+        if (beat < c.startBeat || beat >= c.endBeat()) continue;
+        const float lpx = gridX + static_cast<float>(c.startBeat) * m_pixelsPerBeat - m_scrollX;
+        const float rpx = gridX + static_cast<float>(c.endBeat()) * m_pixelsPerBeat - m_scrollX;
+        constexpr float kEdge = 6.0f;  // matches onMouseDown's grab zone
+        const bool wideEnough = (c.lengthBeats * m_pixelsPerBeat) > kEdge * 3;
+        outTrack = t; outClip = i;
+        if      (wideEnough && px < lpx + kEdge) outEdge = 1;  // left
+        else if (wideEnough && px > rpx - kEdge) outEdge = 2;  // right
+        else                                     outEdge = 0;  // body
+        return;
+    }
+}
+
 void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                                           float x, float y, float w, float h) {
     r.pushClip(x, y, w, h);
@@ -1661,11 +1699,19 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
             r.drawRectOutline(cx, cy, cw, ch,
                 selected ? Color{255, 255, 255, 200} : clipCol.withAlpha(100));
 
-            if (selected && cw > 18.0f) {
-                float hw = 3.0f, hh = ch * 0.4f;
-                float hy = cy + (ch - hh) * 0.5f;
-                r.drawRect(cx + 1, hy, hw, hh, Color{255, 255, 255, 140});
-                r.drawRect(cx + cw - hw - 1, hy, hw, hh, Color{255, 255, 255, 140});
+            // Resize grab handles on both edges — shown when the clip is
+            // selected OR hovered, so the trim/extend affordance is
+            // discoverable. The edge actually under the cursor brightens.
+            const bool hovered = (t == m_hoverClipTrack && ci == m_hoverClipIdx);
+            if ((selected || hovered) && cw > 14.0f) {
+                const float hw = 4.0f, hh = ch * 0.5f;
+                const float hy = cy + (ch - hh) * 0.5f;
+                const Color dim{255, 255, 255, 150};
+                const Color hot{255, 255, 255, 235};
+                r.drawRect(cx + 1, hy, hw, hh,
+                           (hovered && m_hoverClipEdge == 1) ? hot : dim);
+                r.drawRect(cx + cw - hw - 1, hy, hw, hh,
+                           (hovered && m_hoverClipEdge == 2) ? hot : dim);
             }
 
             if (cw > 20.0f && !clip.name.empty()) {

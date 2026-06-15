@@ -216,6 +216,13 @@ public:
 
     // Cursor hint — true when hovering a track resize handle
     bool wantsVerticalResize() const { return m_hoverResize || m_dragMode == DragMode::ResizeTrackH; }
+    // True when hovering a clip's left/right resize edge (or mid-resize) —
+    // drives the horizontal-resize (EW) cursor.
+    bool wantsHorizontalResize() const {
+        return m_hoverClipEdge != 0 ||
+               m_dragMode == DragMode::ResizeLeft ||
+               m_dragMode == DragMode::ResizeRight;
+    }
 
     // Effective row height (main row + expanded auto lanes)
     float trackRowHeight(int t) const;
@@ -338,6 +345,14 @@ private:
     // Clip drag state
     enum class DragMode { None, MoveClip, ResizeLeft, ResizeRight, AutoPoint, ResizeTrackH };
     DragMode m_dragMode      = DragMode::None;
+    // Clip-edge hover (for the resize cursor + visible grab handles).
+    // Updated each idle mouse-move; edge: 0=none/body, 1=left, 2=right.
+    int      m_hoverClipTrack = -1;
+    int      m_hoverClipIdx   = -1;
+    int      m_hoverClipEdge  = 0;
+    // Hit-test (x,y) → clip + which resize edge it's over.
+    void clipEdgeAt(float x, float y, int& outTrack, int& outClip,
+                    int& outEdge) const;
     double   m_dragStartBeat = 0.0;
     double   m_dragOrigStart = 0.0;
     double   m_dragOrigLength = 0.0;
