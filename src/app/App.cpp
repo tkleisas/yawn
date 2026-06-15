@@ -855,6 +855,8 @@ void App::exportVideo(const std::string& filePath) {
     }
 
     // 1) Audio bounce → WAV (OfflineRenderer stops/restarts the stream).
+    SDL_SetWindowTitle(m_mainWindow.getHandle(), "Y.A.W.N — exporting (audio)…");
+    SDL_PumpEvents();
     audio::RenderConfig rc;
     rc.startBeat = 0.0; rc.endBeat = lengthBeats;
     rc.targetSampleRate = static_cast<int>(sampleRate); rc.channels = 2;
@@ -887,8 +889,19 @@ void App::exportVideo(const std::string& filePath) {
             stbi_write_png((tmp / nameBuf).string().c_str(), w, h, 4,
                            rgba.data(), w * 4);
         }
-        if ((f % 30) == 0)
+        if ((f % 8) == 0) {
+            // The render blocks the main thread; answer the window-manager's
+            // "still alive?" ping so the OS doesn't pop a "not responding"
+            // dialog, and show progress in the title bar. (The window still
+            // doesn't repaint — a fully responsive render is a follow-up.)
+            SDL_PumpEvents();
+            char title[96];
+            std::snprintf(title, sizeof(title),
+                          "Y.A.W.N — exporting video… %d%%",
+                          static_cast<int>(100.0 * f / totalFrames));
+            SDL_SetWindowTitle(m_mainWindow.getHandle(), title);
             LOG_INFO("VideoExport", "  frame %d / %d", f, totalFrames);
+        }
     }
     m_visualEngine.endOfflineRender();
 
@@ -914,9 +927,12 @@ void App::exportVideo(const std::string& filePath) {
                               "-preset", "medium", "-crf", "20" });
     if (haveAudio) args.insert(args.end(), { "-c:a", "aac", "-shortest" });
     args.push_back(outPath);
+    SDL_SetWindowTitle(m_mainWindow.getHandle(), "Y.A.W.N — exporting (encoding)…");
+    SDL_PumpEvents();
     const bool encOk = visual::runFFmpegCommand(args);
 
     fs::remove_all(tmp, ec);
+    updateWindowTitle();   // restore the normal title
     if (encOk)
         m_toastManager.show("Exported video: " + fs::path(outPath).filename().string(),
                             3.5f, ui::ToastManager::Severity::Info);
