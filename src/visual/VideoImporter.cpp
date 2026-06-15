@@ -554,8 +554,9 @@ bool VideoImporter::start(const std::string& sourcePath,
         }
 
         if (vOK) {
-            m_result.audioPath     = hasAudio ? audioOut.string() : std::string();
-            m_result.thumbnailPath = hasThumb ? thumbOut.string() : std::string();
+            m_result.audioPath       = hasAudio ? audioOut.string() : std::string();
+            m_result.thumbnailPath   = hasThumb ? thumbOut.string() : std::string();
+            m_result.durationSeconds = dur;
             m_state = State::Done;
             LOG_INFO("Video", "Import done: %s (audio=%s, thumb=%s)",
                      videoOut.string().c_str(),

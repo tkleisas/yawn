@@ -1196,8 +1196,29 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
             }
         }
 
+        // "Tempo Sync" toggle — when on, the clip follows the project
+        // tempo (a video stretches to play over its Clip Length; a
+        // shader/scene's animation clock becomes beat-driven). Off =
+        // free-running on wall-clock. Auto-enabled for imported videos.
+        if (hasVisualClip) {
+            const bool synced = slot->visualClip->tempoSync;
+            items.push_back(item(
+                synced ? "Tempo Sync: On" : "Tempo Sync: Off",
+                [this, trackIndex, sceneIndex]() {
+                    auto* s = m_project.getSlot(trackIndex, sceneIndex);
+                    if (!s || !s->visualClip) return;
+                    const bool on = !s->visualClip->tempoSync;
+                    s->visualClip->tempoSync = on;
+                    if (m_project.track(trackIndex).defaultScene == sceneIndex)
+                        m_visualEngine.setLayerTempoSync(trackIndex, on,
+                            s->visualClip->lengthBeats);
+                    markDirty();
+                }));
+        }
+
         // "Clip Length" submenu — drives the envelope loop / follow-
-        // action bar counter / session-clip "duration" abstraction.
+        // action bar counter / session-clip "duration" abstraction, and
+        // (when Tempo Sync is on) the tempo-locked playback length.
         if (hasVisualClip) {
             const double curLen = slot->visualClip->lengthBeats;
             const int    curBars = static_cast<int>(std::round(curLen / 4.0));
@@ -1205,6 +1226,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                 auto* s = m_project.getSlot(trackIndex, sceneIndex);
                 if (!s || !s->visualClip) return;
                 s->visualClip->lengthBeats = bars * 4.0;
+                // Live-update a currently-playing synced layer so the
+                // loop length / beat clock changes take effect at once.
+                if (s->visualClip->tempoSync &&
+                    m_project.track(trackIndex).defaultScene == sceneIndex)
+                    m_visualEngine.setLayerTempoSync(trackIndex, true,
+                        s->visualClip->lengthBeats);
                 markDirty();
             };
             std::vector<MenuEntry> lenItems;

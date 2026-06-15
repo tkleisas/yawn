@@ -950,6 +950,7 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
     if (!vc.scenePath.empty())        j["scenePath"]       = vc.scenePath;
     if (vc.animClip  != 0)            j["animClip"]        = vc.animClip;
     if (vc.animSpeed != 1.0f)         j["animSpeed"]       = vc.animSpeed;
+    if (vc.tempoSync)                 j["tempoSync"]       = true;
 }
 
 std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val) {
@@ -1005,6 +1006,7 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
     vc->scenePath       = val.value("scenePath",       std::string());
     vc->animClip        = val.value("animClip",  0);
     vc->animSpeed       = val.value("animSpeed", 1.0f);
+    vc->tempoSync       = val.value("tempoSync", false);
     // Legacy "lfos" key on the clip — silently ignored. LFOs now
     // live on the track's MacroDevice (see deserialize for tracks).
     return vc;

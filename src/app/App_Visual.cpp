@@ -99,6 +99,14 @@ void App::launchVisualClipQuantized(int track, int scene, bool transportWillPlay
         m_visualHasPending[track] = false;
         launchVisualClipData(track, *slot->visualClip, slot->visualClip->firstShaderPath());
         stampVisualLaunch(track, scene);
+        // A tempo-synced clip is driven by the transport beat clock, so it
+        // needs the transport running to advance. Audio/MIDI launches
+        // auto-start it (AudioEngine LaunchClipMsg); a lone visual launch
+        // does not, so start it here — otherwise a synced clip would sit
+        // frozen at beat 0. Free-running clips (wall-clock) don't need it.
+        if (slot->visualClip->tempoSync &&
+            !m_audioEngine.transport().isPlaying())
+            m_audioEngine.sendCommand(audio::TransportPlayMsg{});
         return;
     }
 
@@ -203,6 +211,10 @@ void App::launchVisualClipData(int track,
         }
     }
     m_visualEngine.setLayerText(track, vc.text);
+
+    // Tempo sync — applies to every clip kind (a synced shader/scene
+    // gets a beat-driven iTime; a synced video stretches to lengthBeats).
+    m_visualEngine.setLayerTempoSync(track, vc.tempoSync, vc.lengthBeats);
 
     // iChannel2 source selection — mutually exclusive per layer.
     // Priority: model > live > file. Engine enforces the teardown
@@ -933,6 +945,19 @@ void App::onVideoImportDone(PendingVideoImport& pi) {
         slot->visualClip->videoPath       = r.videoPath;
         slot->visualClip->thumbnailPath   = r.thumbnailPath;
         slot->visualClip->videoSourcePath = pi.sourcePath;
+
+        // Auto-detect the clip's musical length from the source duration
+        // and turn on tempo sync, so the imported video follows the
+        // project tempo like audio/MIDI clips do. At the current BPM it
+        // plays ~native speed; changing the BPM rescales it. Rounded to a
+        // whole beat for a tidy "N bars" readout — the user can fine-tune
+        // via Clip Length, or disable sync to free-run at native rate.
+        if (r.durationSeconds > 0.0) {
+            const double bpm = std::max(1.0, m_audioEngine.transport().bpm());
+            double beats = std::round(r.durationSeconds * bpm / 60.0);
+            slot->visualClip->lengthBeats = std::max(1.0, beats);
+            slot->visualClip->tempoSync   = true;
+        }
         markDirty();
     }
 

@@ -39,7 +39,26 @@ struct VisualClip {
 
     std::string name;               // display name (defaults to filename stem)
     int         colorIndex = 0;     // UI accent colour
-    double      lengthBeats = 4.0;  // nominal length (for future arrangement use)
+
+    // Musical length of the clip, in beats (e.g. 16 = 4 bars at 4/4).
+    // Unified across all visual content: it drives the session-slot
+    // "N bars" badge + playback pie (like audio/MIDI clips), the
+    // follow-action bar counters, and — when tempoSync is on — the
+    // tempo-locked playback length (a video stretches to fill it; a
+    // synced shader/scene's beat clock is referenced to it).
+    double      lengthBeats = 4.0;
+
+    // When true the clip's animation/playback follows the transport
+    // tempo instead of free-running on wall-clock:
+    //   * video   → stretched to play its trimmed range over lengthBeats
+    //               of transport time, looping (so it tracks BPM).
+    //   * shader/scene → iTime is driven by beats (scales with BPM,
+    //               freezes when the transport stops).
+    // Off (default) = the historical wall-clock behaviour. Auto-enabled
+    // for imported videos (with lengthBeats auto-detected from duration);
+    // opt-in for shaders/scenes. Legacy videoLoopBars>0 clips behave as
+    // if tempoSync is on (back-compat — see VisualEngine video path).
+    bool        tempoSync = false;
 
     // Which track's audio drives iAudioLevel in the shader.
     //   -1 = master (default)
@@ -151,6 +170,7 @@ struct VisualClip {
         c->name          = name;
         c->colorIndex    = colorIndex;
         c->lengthBeats   = lengthBeats;
+        c->tempoSync     = tempoSync;
         c->audioSource   = audioSource;
         c->text          = text;
         c->videoPath       = videoPath;

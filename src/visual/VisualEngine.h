@@ -171,6 +171,10 @@ public:
     // exactly N bars of transport time. rate is an additional multiplier
     // (1.0 = no change); applied in both modes.
     void setLayerVideoTiming(int track, int loopBars, float rate);
+    // Tempo sync: when `sync` is true the layer follows the transport
+    // tempo (video stretches to play over `lengthBeats`; a shader/scene
+    // gets a beat-driven iTime). lengthBeats is the clip's musical length.
+    void setLayerTempoSync(int track, bool sync, double lengthBeats);
     // In/out fractions (0..1) restricting the playable range of the clip.
     void setLayerVideoTrim(int track, float inFrac, float outFrac);
     void clearLayer(int track);
@@ -405,8 +409,21 @@ private:
         // In/out fractions inside the source (0..1).
         float        videoIn         = 0.0f;
         float        videoOut        = 1.0f;
-        // Transport-beat position at launch (for bar-sync mode).
-        double       videoLaunchBeats = 0.0;
+
+        // ── Tempo sync ──────────────────────────────────────────────
+        // When tempoSync is on the clip follows the transport tempo:
+        // a video stretches to play its trimmed range over `lengthBeats`
+        // of transport time (looping), and a source shader/scene's iTime
+        // is beat-driven (referenced to 120 BPM, so it's unchanged at
+        // 120 and scales with tempo). syncLaunchBeat is the transport
+        // beat at launch (the clock origin); it's stamped lazily on the
+        // first render after launch and re-stamped whenever syncOriginSet
+        // is cleared (setLayerWallClock, i.e. a fresh launch). Legacy
+        // videoLoopBars>0 clips are treated as tempo-locked too.
+        bool         tempoSync       = false;
+        double       lengthBeats     = 4.0;
+        double       syncLaunchBeat  = 0.0;
+        bool         syncOriginSet   = false;
 
         // User-declared shader parameters (bound via glUniform1f each frame).
         std::vector<Param> params;

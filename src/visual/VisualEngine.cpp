@@ -981,7 +981,7 @@ void VisualEngine::setLayerVideoTiming(int track, int loopBars, float rate) {
     it->second.videoRate     = (rate > 0.0f) ? rate : 1.0f;
     // Re-home the launch origin so the change doesn't cause a jump.
     it->second.videoLaunchTime  = std::chrono::steady_clock::now();
-    it->second.videoLaunchBeats = 0.0;
+    it->second.syncOriginSet    = false;
 }
 
 bool VisualEngine::setLayerVideo(int track, const std::string& path) {
@@ -1020,7 +1020,7 @@ bool VisualEngine::setLayerVideo(int track, const std::string& path) {
     }
     L.videoPath = path;
     L.videoLaunchTime  = std::chrono::steady_clock::now();
-    L.videoLaunchBeats = 0.0;  // App refreshes this at next tick if bar-synced
+    L.syncOriginSet    = false;  // re-stamp the beat origin on next tick
 
     // Lazy-create the GL texture the first time we have a video.
     if (L.videoTex == 0) {
@@ -1144,6 +1144,17 @@ void VisualEngine::setLayerWallClock(int track) {
     // Reset wall-clock origin so iTime restarts at 0 on next render.
     L.wallStart        = std::chrono::steady_clock::now();
     L.lastWallSeconds  = 0.0;
+    // Fresh launch → re-stamp the tempo-sync clock origin on the next
+    // render (so a relaunched synced clip restarts at iTime/loop 0).
+    L.syncOriginSet    = false;
+}
+
+void VisualEngine::setLayerTempoSync(int track, bool sync, double lengthBeats) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    L.tempoSync   = sync;
+    L.lengthBeats = (lengthBeats > 0.0) ? lengthBeats : 4.0;
 }
 
 void VisualEngine::setLayerTransportClock(int track, double clipStartBeat) {
@@ -1945,6 +1956,15 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     // visuals). Beats → seconds via the audio engine's current BPM —
     // BPM changes mid-clip gently rescale iTime, which is acceptable
     // loose-sync behavior for visuals.
+    // Stamp the tempo-sync clock origin on the first render after a
+    // launch (covers shaders, scenes, and the videoLoopBars/tempoSync
+    // video paths, which all measure beats from this origin).
+    const bool beatLocked = L.tempoSync || L.videoLoopBars > 0;
+    if (beatLocked && !L.syncOriginSet) {
+        L.syncLaunchBeat = transportBeats;
+        L.syncOriginSet  = true;
+    }
+
     double preWall = 0.0;
     if (L.transportDriven && m_audioEngine) {
         const double bpm = std::max(1.0, m_audioEngine->transport().bpm());
@@ -1953,6 +1973,14 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         // clipBeats can also go negative momentarily between an arm
         // and the first pollArrangementVisualPlayback tick; guard too.
         preWall = std::max(0.0, clipBeats) * 60.0 / bpm;
+    } else if (L.tempoSync) {
+        // Session tempo-sync: a beat-driven clock referenced to 120 BPM,
+        // so a shader/scene animation is unchanged at 120 and scales
+        // linearly with tempo (and freezes when the transport stops,
+        // since beats stop advancing). The video path below reads beats
+        // directly; this clock is what its source shader / a scene sees.
+        constexpr double kRefBPM = 120.0;
+        preWall = std::max(0.0, transportBeats - L.syncLaunchBeat) * 60.0 / kRefBPM;
     } else {
         preWall = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - L.wallStart).count();
@@ -2176,12 +2204,15 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             const double elapsed = std::max(0.0, preWall);
             int advanced = static_cast<int>(elapsed * fps * rate);
             targetFrame = inFrame + (advanced % std::max(1, rangeLen));
-        } else if (L.videoLoopBars > 0 && count > 0) {
-            // Transport-locked: N bars worth of beats maps to the whole
-            // playable range, regardless of the video's native duration.
-            if (L.videoLaunchBeats == 0.0) L.videoLaunchBeats = transportBeats;
-            double elapsedBeats = transportBeats - L.videoLaunchBeats;
-            double loopBeats = static_cast<double>(L.videoLoopBars) * 4.0;
+        } else if (beatLocked && count > 0) {
+            // Transport-locked: the playable range maps onto `loopBeats`
+            // of transport time, regardless of the video's native
+            // duration, so it tracks BPM. An explicit videoLoopBars wins
+            // (legacy); otherwise the clip's musical length drives it.
+            double elapsedBeats = transportBeats - L.syncLaunchBeat;
+            double loopBeats = (L.videoLoopBars > 0)
+                ? static_cast<double>(L.videoLoopBars) * 4.0
+                : L.lengthBeats;
             if (loopBeats < 0.0001) loopBeats = 1.0;
             double phase = std::fmod(elapsedBeats, loopBeats);
             if (phase < 0.0) phase += loopBeats;

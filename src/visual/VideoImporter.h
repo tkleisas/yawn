@@ -32,6 +32,7 @@ public:
         std::string audioPath;     // extracted .wav, empty if no audio stream
         std::string thumbnailPath; // 160x90 JPEG of the first decoded frame
         std::string sourcePath;    // the original source the user dropped
+        double durationSeconds = 0.0; // source duration (ffprobe); 0 if unknown
     };
 
     VideoImporter() = default;

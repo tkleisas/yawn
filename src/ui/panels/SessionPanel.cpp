@@ -1224,6 +1224,31 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
         }
     }
 
+    // ── Visual clip: musical-length readout (parity with audio/MIDI) ──
+    // Shows the clip's length as "N bars" in the bottom-left band, like
+    // audio/MIDI content clips. Tempo-synced clips (which follow the BPM)
+    // are drawn in an accent colour; free-running clips are dimmed since
+    // their length is then only informational (drives follow-actions).
+    if (m_engine && vClip &&
+        m_project->track(ti).type == Track::Type::Visual) {
+        const int beatsPerBar = std::max(1, m_engine->transport().beatsPerBar());
+        const double clipBeats = vClip->lengthBeats;
+        if (clipBeats > 0.0) {
+            double bars = clipBeats / static_cast<double>(beatsPerBar);
+            char bbuf[24];
+            if (std::fabs(bars - std::round(bars)) < 0.05)
+                std::snprintf(bbuf, sizeof(bbuf), "%d bars",
+                              static_cast<int>(std::lround(bars)));
+            else
+                std::snprintf(bbuf, sizeof(bbuf), "%.1f bars", bars);
+            const ::yawn::ui::Color barCol = vClip->tempoSync
+                ? ::yawn::ui::Color{130, 200, 235, 225}
+                : ::yawn::ui::Color{150, 150, 160, 150};
+            tm.drawText(r, bbuf, contentX + 5, iy + ih - 20.0f,
+                         smallSize, barCol);
+        }
+    }
+
     // Selection highlight (shown when not playing/recording to avoid visual clash)
     bool isSelected = (ti == m_selectedTrack && si == m_selectedScene);
     if (isSelected && !isPlaying && !isRecording) {
