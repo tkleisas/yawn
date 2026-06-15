@@ -219,6 +219,10 @@ void App::update() {
     // visual cues (16 ms granularity at 60 Hz).
     pollArrangementVisualPlayback();
 
+    // Capture the actually-playing session clip per track while arrangement
+    // record is armed (follow-actions / scene launches included for free).
+    pollArrangementRecord();
+
     // Per-track visual-knob automation lanes — evaluated here rather
     // than on the audio thread (visuals don't need that precision).
     pollVisualKnobAutomation();

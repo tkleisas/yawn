@@ -237,6 +237,15 @@ private:
     void clearTrackArrangement(int trackIdx);
     void clearAllArrangements();
 
+    // Record session → arrangement. toggleArrangementRecord arms/disarms
+    // (disarm offers to bounce the take); pollArrangementRecord runs each
+    // frame to capture the playing session clip per track; commit writes
+    // the take into the arrangement (punch-overwrite).
+    void toggleArrangementRecord();
+    void pollArrangementRecord();
+    void commitArrangementTake();
+    int  currentSessionScene(int track);  // playing session scene, -1 none
+
     // Atomically replace the live MIDI clip identified by `oldClip`
     // (located in a session slot or an arrangement clip) with `newClip`,
     // retiring the old object through the clip graveyard and live-
@@ -622,6 +631,19 @@ private:
     bool   m_visualHasPending[kMaxTracks] = {};
     int    m_visualPendingScene[kMaxTracks] = {};
     double m_visualPendingFireBeat[kMaxTracks] = {};
+
+    // ── Record session → arrangement (Ableton-style capture) ──
+    // While armed, each frame we poll the actually-playing session clip
+    // per track (so follow-actions / scene launches are captured for
+    // free) and accumulate per-track "take" intervals in timeline beats.
+    // On disarm we offer to bounce the take into the arrangement (punch-
+    // overwriting the recorded range). Capture-then-commit, discardable.
+    struct TakeInterval { int scene; double startBeat; double stopBeat; };
+    bool   m_arrRecording = false;
+    double m_arrRecStartBeat = 0.0;        // beat when recording armed
+    int    m_arrRecScene[kMaxTracks] = {}; // open interval's scene, -1 = none
+    double m_arrRecStart[kMaxTracks] = {}; // open interval's start beat
+    std::array<std::vector<TakeInterval>, kMaxTracks> m_arrRecTake{};
 
     // UI state from audio thread
     double m_displayBeats = 0.0;

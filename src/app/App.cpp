@@ -587,6 +587,144 @@ void App::clearAllArrangements() {
         doClear});
 }
 
+// ── Record session → arrangement ───────────────────────────────────────────
+
+int App::currentSessionScene(int track) {
+    if (track < 0 || track >= m_project.numTracks()) return -1;
+    switch (m_project.track(track).type) {
+        case Track::Type::Audio: {
+            const auto& st = m_audioEngine.clipEngine().trackState(track);
+            return st.active ? st.sceneIndex : -1;
+        }
+        case Track::Type::Midi:
+            return m_audioEngine.midiClipEngine().isTrackPlaying(track)
+                ? m_audioEngine.midiClipEngine().trackState(track).sceneIndex : -1;
+        default:
+            return -1;   // visual capture: a later step
+    }
+}
+
+void App::toggleArrangementRecord() {
+    if (!m_arrRecording) {
+        m_arrRecording   = true;
+        m_arrRecStartBeat = m_audioEngine.transport().positionInBeats();
+        for (int t = 0; t < kMaxTracks; ++t) {
+            m_arrRecScene[t] = -1;
+            m_arrRecStart[t] = 0.0;
+            m_arrRecTake[t].clear();
+        }
+        m_toastManager.show("Arrangement record armed — play and trigger clips",
+                            2.5f, ui::ToastManager::Severity::Info);
+        return;
+    }
+    // Disarm: close any still-open intervals at the current beat, then offer
+    // to commit the take.
+    m_arrRecording = false;
+    const double beat = m_audioEngine.transport().positionInBeats();
+    int total = 0;
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (m_arrRecScene[t] >= 0) {
+            m_arrRecTake[t].push_back({m_arrRecScene[t], m_arrRecStart[t], beat});
+            m_arrRecScene[t] = -1;
+        }
+        total += static_cast<int>(m_arrRecTake[t].size());
+    }
+    if (total == 0) {
+        m_toastManager.show("Arrangement record: nothing captured",
+                            2.0f, ui::ToastManager::Severity::Info);
+        return;
+    }
+    ui::fw2::ConfirmDialog::prompt(
+        "Bounce " + std::to_string(total) + " captured clip(s) to the arrangement?",
+        [this]() { commitArrangementTake(); });
+}
+
+void App::pollArrangementRecord() {
+    if (!m_arrRecording) return;
+    auto& transport = m_audioEngine.transport();
+    if (!transport.isPlaying()) return;
+    const double beat = transport.positionInBeats();
+    const int n = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < n; ++t) {
+        const int scene = currentSessionScene(t);
+        if (scene == m_arrRecScene[t]) continue;   // no transition
+        if (m_arrRecScene[t] >= 0)                  // close the previous interval
+            m_arrRecTake[t].push_back({m_arrRecScene[t], m_arrRecStart[t], beat});
+        m_arrRecScene[t] = scene;                   // open new (or gap)
+        m_arrRecStart[t] = beat;
+    }
+}
+
+void App::commitArrangementTake() {
+    // Launches are bar/beat-quantized, so the ~1-frame poll latency rounds
+    // back to the boundary — snap interval edges to the nearest beat.
+    auto snap = [](double b) { return std::round(b); };
+    const int n = m_project.numTracks();
+    int written = 0;
+    for (int t = 0; t < n && t < kMaxTracks; ++t) {
+        if (m_arrRecTake[t].empty()) continue;
+        auto& track = m_project.track(t);
+        auto& clips = track.arrangementClips;
+
+        // Punch range = the span this track's take covers.
+        double pStart = 1e18, pEnd = -1e18;
+        for (const auto& iv : m_arrRecTake[t]) {
+            pStart = std::min(pStart, snap(iv.startBeat));
+            pEnd   = std::max(pEnd,   snap(iv.stopBeat));
+        }
+        // Punch-overwrite: drop existing clips overlapping that range.
+        clips.erase(std::remove_if(clips.begin(), clips.end(),
+            [&](const ArrangementClip& ac){ return ac.overlaps(pStart, pEnd); }),
+            clips.end());
+
+        // One arrangement clip per captured interval, referencing the slot.
+        for (const auto& iv : m_arrRecTake[t]) {
+            const double s = snap(iv.startBeat), e = snap(iv.stopBeat);
+            if (e - s < 0.25) continue;             // skip sub-beat blips
+            auto* slot = m_project.getSlot(t, iv.scene);
+            if (!slot) continue;
+            ArrangementClip ac;
+            ac.startBeat   = s;
+            ac.lengthBeats = e - s;
+            ac.colorIndex  = track.colorIndex;
+            if (slot->audioClip && slot->audioClip->buffer) {
+                ac.type        = ArrangementClip::Type::Audio;
+                ac.audioBuffer = slot->audioClip->buffer;
+                ac.loop        = slot->audioClip->looping;
+                ac.name        = slot->audioClip->name.empty()
+                                 ? "audio" : slot->audioClip->name;
+            } else if (slot->midiClip) {
+                ac.type        = ArrangementClip::Type::Midi;
+                ac.midiClip    = std::shared_ptr<midi::MidiClip>(
+                                     slot->midiClip->clone().release());
+                ac.name        = slot->midiClip->name().empty()
+                                 ? "midi" : slot->midiClip->name();
+            } else if (slot->visualClip) {
+                ac.type        = ArrangementClip::Type::Visual;
+                ac.visualClip  = slot->visualClip->clone();
+                ac.stretch     = slot->visualClip->tempoSync;
+                ac.name        = slot->visualClip->name.empty()
+                                 ? "visual" : slot->visualClip->name;
+            } else {
+                continue;
+            }
+            clips.push_back(std::move(ac));
+            ++written;
+        }
+        track.sortArrangementClips();
+        if (!track.arrangementActive) {
+            track.arrangementActive = true;
+            m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, true});
+        }
+        syncArrangementClipsToEngine(t);
+        m_arrRecTake[t].clear();
+    }
+    m_project.updateArrangementLength();
+    markDirty();
+    m_toastManager.show("Bounced " + std::to_string(written) + " clip(s) to arrangement",
+                        2.5f, ui::ToastManager::Severity::Info);
+}
+
 midi::MidiClip* App::setMidiClipLive(int track, int scene,
                                      std::unique_ptr<midi::MidiClip> newClip) {
     const midi::MidiClip* oldPtr = m_project.getMidiClip(track, scene);
