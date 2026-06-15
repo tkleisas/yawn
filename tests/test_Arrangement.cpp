@@ -427,6 +427,44 @@ TEST(ArrangementPlayback, MidiLoopRepeatsVsOneShot) {
     EXPECT_GT(run(true), 2);            // multiple iterations, not just one
 }
 
+TEST(ArrangementPlayback, MidiLoopNoHungNoteAtClipEnd) {
+    // A note straddling the clip end (clip length not a multiple of the loop
+    // length) must be released at the clip end rather than hang past it.
+    // Every note-on emitted over the clip's life must have a matching off.
+    auto mc = std::make_shared<yawn::midi::MidiClip>();
+    mc->setLengthBeats(1.0);
+    yawn::midi::MidiNote note;
+    note.startBeat = 0.0; note.duration = 0.8;   // crosses the clip end below
+    note.pitch = 60; note.channel = 0; note.velocity = 16384;
+    mc->addNote(note);
+
+    yawn::audio::ArrangementPlayback ap;
+    yawn::audio::Transport transport;
+    transport.setSampleRate(44100.0);
+    transport.setBPM(120.0);
+    transport.play();
+    ap.setTransport(&transport);
+    ap.setSampleRate(44100.0);
+    std::vector<yawn::audio::ArrClipRef> clips;
+    yawn::audio::ArrClipRef c;
+    c.type = yawn::audio::ArrClipRef::Type::Midi;
+    c.startBeat = 0.0; c.lengthBeats = 2.5;   // 2.5 loop iterations of a 1-beat loop
+    c.loop = true; c.midiClip = mc;
+    clips.push_back(c);
+    ap.setTrackClips(0, std::move(clips));
+    ap.setTrackActive(0, true);
+
+    yawn::midi::MidiBuffer mb; mb.clear();
+    ap.processMidiTrack(0, mb, 3 * 22050);   // render the whole 2.5-beat clip
+    int ons = 0, offs = 0;
+    for (int i = 0; i < mb.count(); ++i) {
+        if (mb[i].isNoteOn())  ++ons;
+        if (mb[i].isNoteOff()) ++offs;
+    }
+    EXPECT_GT(ons, 0);
+    EXPECT_EQ(ons, offs);   // nothing hangs past the clip end
+}
+
 TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
     yawn::audio::ArrangementPlayback ap;
     yawn::audio::Transport transport;

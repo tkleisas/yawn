@@ -120,22 +120,32 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
         // Emit every event whose content beat lands in [scanStart, scanEnd)
         // for one playthrough whose content sits at the timeline implied by
         // `localStart`. Two-pass (offs before ons) so back-to-back same-pitch
-        // notes re-articulate cleanly on same-frame collisions. When looping,
-        // note ends are clamped to the loop end so nothing hangs past it.
-        auto emitWindow = [&](double localStart, double scanStart, double scanEnd) {
+        // notes re-articulate cleanly on same-frame collisions.
+        // `bufEndContent` is the content beat at the buffer's end for this
+        // playthrough; when scanEnd falls short of it a hard boundary (loop
+        // end OR clip end) cut the window, so any note still sounding across
+        // that boundary is force-released there — otherwise a note straddling
+        // the clip end gets a note-on with no note-off and hangs past the clip.
+        auto emitWindow = [&](double localStart, double scanStart,
+                              double scanEnd, double bufEndContent) {
             if (scanStart >= scanEnd) return;
-            const bool reachedEnd = looping && (scanEnd >= contentEnd - 1e-9);
+            const bool hardEnd = scanEnd < bufEndContent - 1e-9;
 
             // --- Pass 1: Note-Offs ---
             for (int i = 0; i < mc.noteCount(); ++i) {
                 const auto& note = mc.note(i);
-                double noteEnd = note.startBeat + note.duration;
-                if (looping && noteEnd > contentEnd) noteEnd = contentEnd;
-                const bool inWin = noteEnd >= scanStart &&
-                    (noteEnd < scanEnd || (reachedEnd && noteEnd <= scanEnd));
-                if (!inWin) continue;
+                double effEnd = note.startBeat + note.duration;
+                if (looping && effEnd > contentEnd) effEnd = contentEnd;
+                double offBeat;
+                if (effEnd >= scanStart && effEnd < scanEnd) {
+                    offBeat = effEnd;                  // natural end inside the window
+                } else if (hardEnd && note.startBeat < scanEnd && effEnd >= scanEnd) {
+                    offBeat = scanEnd;                 // sounding across a hard boundary → cut
+                } else {
+                    continue;
+                }
                 int frameOff = std::clamp(
-                    static_cast<int>((noteEnd - localStart) * samplesPerBeat),
+                    static_cast<int>((offBeat - localStart) * samplesPerBeat),
                     0, numFrames - 1);
                 midiBuffer.addMessage(
                     midi::MidiMessage::noteOff(note.channel, note.pitch, 0, frameOff));
@@ -181,12 +191,13 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
                 const double vStart = clip.startBeat + static_cast<double>(k) * loopLen;
                 if (vStart >= bufEndBeat || vStart >= clip.endBeat()) break;
                 const double localStart = currentBeat - vStart + clip.offsetBeats;
+                const double bufEndContent = bufEndBeat - vStart + clip.offsetBeats;
                 const double scanStart  = std::max(localStart, clip.offsetBeats);
                 const double scanEnd    = std::min({
-                    bufEndBeat - vStart + clip.offsetBeats,
+                    bufEndContent,
                     contentEnd,
                     clip.endBeat() - vStart + clip.offsetBeats });
-                emitWindow(localStart, scanStart, scanEnd);
+                emitWindow(localStart, scanStart, scanEnd, bufEndContent);
             }
         } else {
             // One-shot: play the content once, silent past its end.
@@ -195,7 +206,7 @@ void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuff
             const double scanStart = std::max(clipLocalStart, clip.offsetBeats);
             const double scanEnd   = std::min(clipLocalEnd,
                                               clip.offsetBeats + clip.lengthBeats);
-            emitWindow(clipLocalStart, scanStart, scanEnd);
+            emitWindow(clipLocalStart, scanStart, scanEnd, clipLocalEnd);
         }
     }
 }
