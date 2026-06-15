@@ -69,6 +69,14 @@
 namespace yawn {
 
 void App::update() {
+    // A video export runs as a frame-driven state machine (GL frame render on
+    // this thread, sliced; audio bounce + ffmpeg on a worker). Advance it here.
+    // While it's live, skip every other main-thread op that touches the visual
+    // engine (model thumbnails, layer polls, the output tick) so we don't fight
+    // the export's transport scrubbing.
+    if (m_videoExport) pollVideoExport();
+    const bool vExport = isVideoExporting();
+
     // Debounced settings flush — save ~0.75 s after the last change so a
     // velocity drag doesn't write the settings file every frame.
     if (m_settingsDirty && ++m_settingsDirtyAge > 45) {
@@ -81,7 +89,7 @@ void App::update() {
     // safe point (frame start, no active 2D batch) — ensureModelThumbnail
     // switches to the output GL context to render. Budget a couple per
     // frame so the first reveal doesn't hitch with many models.
-    if (m_browserPanel &&
+    if (!vExport && m_browserPanel &&
         m_browserPanel->activeTab() == ui::fw2::BrowserPanel::Tab::Models) {
         int budget = 2;
         for (const auto& e : m_browserPanel->modelsTab().entries()) {
@@ -205,7 +213,7 @@ void App::update() {
     // transport is already stopped), clear every visual layer so
     // session-launched shaders / models / videos go dark in lockstep
     // with the audio / MIDI scheduleStop path.
-    {
+    if (!vExport) {
         const uint64_t stopCount = m_audioEngine.transport().stopCounter();
         if (stopCount != m_lastSeenStopCounter) {
             stopAllVisualLayers();
@@ -217,7 +225,7 @@ void App::update() {
     // under the transport head on each visual track and fire launch /
     // clear on transitions. Main-thread polling is precise enough for
     // visual cues (16 ms granularity at 60 Hz).
-    pollArrangementVisualPlayback();
+    if (!vExport) pollArrangementVisualPlayback();
 
     // Capture the actually-playing session clip per track while arrangement
     // record is armed (follow-actions / scene launches included for free).
@@ -225,21 +233,21 @@ void App::update() {
 
     // Per-track visual-knob automation lanes — evaluated here rather
     // than on the audio thread (visuals don't need that precision).
-    pollVisualKnobAutomation();
+    if (!vExport) pollVisualKnobAutomation();
 
     // Per-track macro mappings — same once-per-frame cadence as
     // automation. Pulls each macro's live LFO-modulated value from
     // the engine and pushes through to every mapped target so
     // shader / chain params follow the macro in lock-step.
-    applyMacroMappings();
+    if (!vExport) applyMacroMappings();
 
     // Fire any quantized visual-clip launches whose bar/beat boundary has
     // arrived, so video starts in sync with the scene's audio/MIDI clips.
-    pollVisualLaunchQueue();
+    if (!vExport) pollVisualLaunchQueue();
 
     // Session-view follow actions for visual clips. Fires Next /
     // Random / etc. once barCount bars have elapsed since launch.
-    pollVisualFollowActions();
+    if (!vExport) pollVisualFollowActions();
 
     // Video imports — advance each background transcode, apply results.
     for (auto it = m_pendingImports.begin(); it != m_pendingImports.end(); ) {
@@ -368,7 +376,7 @@ void App::update() {
         if (!m_pendingVideoExportPath.empty()) {
             std::string path = std::move(m_pendingVideoExportPath);
             m_pendingVideoExportPath.clear();
-            exportVideo(path);   // blocking; runs on this (GL) thread
+            exportVideo(path);   // kicks off the worker-thread render
         }
     }
 
@@ -823,8 +831,9 @@ void App::render() {
 
     // Visual output: render after the main UI has swapped. tick() saves and
     // restores the current GL context, so it's safe to call here without
-    // disturbing the next main-window frame.
-    if (m_visualEngine.isOutputVisible()) {
+    // disturbing the next main-window frame. Skipped during a video export —
+    // the worker thread owns the output context then.
+    if (!isVideoExporting() && m_visualEngine.isOutputVisible()) {
         const auto& transport = m_audioEngine.transport();
         const double sr = std::max(1.0, m_audioEngine.sampleRate());
         const double seconds = static_cast<double>(transport.positionInSamples()) / sr;

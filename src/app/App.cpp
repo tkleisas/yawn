@@ -65,6 +65,7 @@
 #include <cinttypes>
 #include <cstring>
 #include <thread>
+#include <chrono>
 
 namespace yawn {
 
@@ -838,11 +839,18 @@ void App::openVideoExportDialog() {
                            m_mainWindow.getHandle(), &filter, 1, "export.mp4");
 }
 
-// Blocking offline render of the arrangement to an mp4. Runs on the main
-// (GL) thread, so the UI is unresponsive while it works — progress goes to
-// yawn.log and a toast lands when done. v1: 640×360 @ 30 fps, H.264 + AAC.
+// Offline render of the arrangement to an mp4. Frame-driven state machine:
+// the GL frame render stays on the MAIN thread but is sliced across UI frames
+// (so the window never freezes and the progress bar animates); the non-GL
+// phases — the audio bounce and the ffmpeg encode — run on a worker thread so
+// they don't block the UI either. 640×360 @ 30 fps, H.264 + AAC.
 void App::exportVideo(const std::string& filePath) {
     namespace fs = std::filesystem;
+    if (m_videoExport) {
+        m_toastManager.show("Video export already in progress…",
+                            2.0f, ui::ToastManager::Severity::Info);
+        return;
+    }
     const double bpm        = std::max(1.0, m_audioEngine.transport().bpm());
     const double sampleRate = std::max(1.0, m_audioEngine.sampleRate());
     const double lengthBeats = m_project.arrangementLength();
@@ -860,12 +868,14 @@ void App::exportVideo(const std::string& filePath) {
         ("yawn_vexport_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
     fs::remove_all(tmp, ec);
     fs::create_directories(tmp, ec);
+    std::string outPath = filePath;
+    if (outPath.size() < 4 || outPath.substr(outPath.size() - 4) != ".mp4")
+        outPath += ".mp4";
     LOG_INFO("VideoExport", "Rendering %d frames (%.1fs @ %d fps) → %s",
-             totalFrames, lengthSec, kFps, filePath.c_str());
+             totalFrames, lengthSec, kFps, outPath.c_str());
 
-    // Force arrangement playback on for the bounce (both the engine, for
-    // audio, and the project flag, which the visual poller reads); remember
-    // the prior state to restore afterwards.
+    // Force arrangement playback on for the bounce (engine, for audio; project
+    // flag, which the visual poller reads). Remember prior state to restore.
     const int nTracks = m_project.numTracks();
     std::vector<uint8_t> restoreArr(static_cast<size_t>(nTracks), 0);
     for (int t = 0; t < nTracks; ++t) {
@@ -876,91 +886,188 @@ void App::exportVideo(const std::string& filePath) {
         if (hasArr) syncArrangementClipsToEngine(t);
     }
 
-    // 1) Audio bounce → WAV (OfflineRenderer stops/restarts the stream).
-    SDL_SetWindowTitle(m_mainWindow.getHandle(), "Y.A.W.N — exporting (audio)…");
-    SDL_PumpEvents();
-    audio::RenderConfig rc;
-    rc.startBeat = 0.0; rc.endBeat = lengthBeats;
-    rc.targetSampleRate = static_cast<int>(sampleRate); rc.channels = 2;
-    audio::RenderProgress prog;
-    auto audioBuf = audio::OfflineRenderer::render(m_audioEngine, rc, prog);
-    const fs::path wavPath = tmp / "audio.wav";
-    bool haveAudio = audioBuf &&
-        util::saveAudioBuffer(wavPath.string(), *audioBuf, static_cast<int>(sampleRate));
+    // Open the (shared) export dialog in render mode for the progress bar.
+    ui::fw2::FwExportDialog::Config cfg;
+    cfg.arrangementLengthBeats = lengthBeats;
+    m_exportDialog.open(cfg);          // resets the progress atomics
+    m_exportDialog.setRendering(true);
 
-    // 2) Video pass — drive the transport per frame, render offline, write PNGs.
+    // Build the job; pollVideoExport() drives it from here (audio worker first).
     auto& transport = m_audioEngine.transport();
-    const int64_t savedPos = transport.positionInSamples();
-    const bool savedPlaying = transport.isPlaying();
-    transport.stop();   // we set the position; the callback must not advance it
+    m_videoExport = std::make_unique<VideoExportJob>();
+    auto& j = *m_videoExport;
+    j.phase        = VideoExportJob::Phase::Audio;
+    j.outPath      = outPath;
+    j.tmpDir       = tmp;
+    j.wavPath      = tmp / "audio.wav";
+    j.frame        = 0;
+    j.totalFrames  = totalFrames;
+    j.fps          = kFps;
+    j.bpm          = bpm;
+    j.sampleRate   = sampleRate;
+    j.lengthBeats  = lengthBeats;
+    j.savedPos     = transport.positionInSamples();
+    j.savedPlaying = transport.isPlaying();
+    j.restoreArr   = std::move(restoreArr);
+}
+
+// Main-thread state machine, called once per frame while a job is live.
+// Audio bounce (worker) → frame render (main thread, sliced) → ffmpeg (worker).
+void App::pollVideoExport() {
+    namespace fs = std::filesystem;
+    if (!m_videoExport) return;
+    VideoExportJob& j = *m_videoExport;
+    audio::RenderProgress& progress = m_exportDialog.progress();
+    const bool cancel = progress.cancelled.load();
+
+    switch (j.phase) {
+    // ── Phase 1: bounce the arrangement audio on a worker thread ──────────
+    case VideoExportJob::Phase::Audio: {
+        if (!j.workerLaunched) {
+            j.workerLaunched = true;
+            j.workerDone.store(false);
+            VideoExportJob* job = &j;
+            j.worker = std::thread([this, job]() {
+                audio::RenderConfig rc;
+                rc.startBeat = 0.0; rc.endBeat = job->lengthBeats;
+                rc.targetSampleRate = static_cast<int>(job->sampleRate);
+                rc.channels = 2;
+                auto buf = audio::OfflineRenderer::render(m_audioEngine, rc, job->audioProg);
+                job->haveAudio = buf && !job->audioProg.cancelled.load() &&
+                    util::saveAudioBuffer(job->wavPath.string(), *buf,
+                                          static_cast<int>(job->sampleRate));
+                job->workerDone.store(true);
+            });
+        }
+        // Forward cancellation into the bounce; map its 0–1 into the first 10%.
+        j.audioProg.cancelled.store(cancel);
+        if (!j.workerDone.load()) {
+            progress.fraction.store(0.10f * j.audioProg.fraction.load());
+            break;
+        }
+        if (j.worker.joinable()) j.worker.join();
+        j.workerLaunched = false;
+        if (cancel) { finalizeVideoExport(false, true); break; }
+
+        // Hand off to the frame render (main thread owns the GL from here).
+        auto& transport = m_audioEngine.transport();
+        transport.stop();   // we set the position per frame; don't advance it
+        for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
+        m_activeArrInit = true;
+        m_visualEngine.beginOfflineRender();
+        j.w = m_visualEngine.compositeWidth();
+        j.h = m_visualEngine.compositeHeight();
+        j.phase = VideoExportJob::Phase::Frames;
+        break;
+    }
+
+    // ── Phase 2: render frames on the main thread, sliced by wall-clock ───
+    case VideoExportJob::Phase::Frames: {
+        if (cancel) {
+            m_visualEngine.endOfflineRender();
+            finalizeVideoExport(false, true);
+            break;
+        }
+        auto& transport = m_audioEngine.transport();
+        const auto budgetStart = std::chrono::steady_clock::now();
+        char nameBuf[64];
+        // Render a slice this UI frame, then yield so the window stays live.
+        while (j.frame < j.totalFrames) {
+            const double sec  = static_cast<double>(j.frame) / j.fps;
+            const double beat = sec * j.bpm / 60.0;
+            transport.setPositionInSamples(static_cast<int64_t>(sec * j.sampleRate));
+            pollArrangementVisualPlayback();
+            m_visualEngine.tick(sec, beat, /*playing*/true);
+            if (m_visualEngine.readComposite(j.rgba)) {
+                std::snprintf(nameBuf, sizeof(nameBuf), "f_%06d.png", j.frame);
+                stbi_write_png((j.tmpDir / nameBuf).string().c_str(),
+                               j.w, j.h, 4, j.rgba.data(), j.w * 4);
+            }
+            ++j.frame;
+            if ((j.frame % 60) == 0)
+                LOG_INFO("VideoExport", "  frame %d / %d", j.frame, j.totalFrames);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - budgetStart).count();
+            if (elapsed >= 12) break;   // ~12 ms/frame → keep the UI at speed
+        }
+        progress.fraction.store(0.10f + 0.78f *
+            static_cast<float>(j.frame) / static_cast<float>(j.totalFrames));
+        if (j.frame >= j.totalFrames) {
+            m_visualEngine.endOfflineRender();
+            j.phase = VideoExportJob::Phase::Encode;
+        }
+        break;
+    }
+
+    // ── Phase 3: encode + mux with ffmpeg on a worker thread ──────────────
+    case VideoExportJob::Phase::Encode: {
+        if (!j.workerLaunched) {
+            j.workerLaunched = true;
+            j.workerDone.store(false);
+            progress.fraction.store(0.88f);
+            VideoExportJob* job = &j;
+            j.worker = std::thread([job]() {
+                std::vector<std::string> args = {
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-framerate", std::to_string(job->fps),
+                    "-i", (job->tmpDir / "f_%06d.png").string(),
+                };
+                if (job->haveAudio) { args.push_back("-i"); args.push_back(job->wavPath.string()); }
+                args.insert(args.end(), { "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                          "-preset", "veryfast", "-crf", "21" });
+                if (job->haveAudio) args.insert(args.end(), { "-c:a", "aac", "-shortest" });
+                args.push_back(job->outPath);
+                const bool ok = visual::runFFmpegCommand(args);
+                job->workerOk.store(ok);
+                job->workerDone.store(true);
+            });
+        }
+        if (!j.workerDone.load()) { progress.fraction.store(0.95f); break; }
+        if (j.worker.joinable()) j.worker.join();
+        finalizeVideoExport(j.workerOk.load(), false);
+        break;
+    }
+    }
+}
+
+// Restore engine/transport state, clean up, close the dialog and report.
+void App::finalizeVideoExport(bool ok, bool cancelled) {
+    namespace fs = std::filesystem;
+    if (!m_videoExport) return;
+    VideoExportJob& j = *m_videoExport;
+    if (j.worker.joinable()) j.worker.join();
+
+    // Make sure offline mode is off even if we aborted mid-frame-render.
+    m_visualEngine.endOfflineRender();
+    std::error_code ec;
+    fs::remove_all(j.tmpDir, ec);
+
+    // Restore transport + arrangement-active state + visual transitions.
+    auto& transport = m_audioEngine.transport();
+    transport.setPositionInSamples(j.savedPos);
+    if (j.savedPlaying) transport.play();
+    const int nTracks = m_project.numTracks();
+    for (int t = 0; t < nTracks && t < static_cast<int>(j.restoreArr.size()); ++t) {
+        m_project.track(t).arrangementActive = (j.restoreArr[t] != 0);
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, j.restoreArr[t] != 0});
+    }
     for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
 
-    m_visualEngine.beginOfflineRender();
-    const int w = m_visualEngine.compositeWidth();
-    const int h = m_visualEngine.compositeHeight();
-    std::vector<uint8_t> rgba;
-    char nameBuf[64];
-    for (int f = 0; f < totalFrames; ++f) {
-        const double sec  = static_cast<double>(f) / kFps;
-        const double beat = sec * bpm / 60.0;
-        transport.setPositionInSamples(static_cast<int64_t>(sec * sampleRate));
-        pollArrangementVisualPlayback();                 // launch/clear arr clips
-        m_visualEngine.tick(sec, beat, /*playing*/true); // offline → renders to FBO
-        if (m_visualEngine.readComposite(rgba)) {
-            std::snprintf(nameBuf, sizeof(nameBuf), "f_%06d.png", f);
-            stbi_write_png((tmp / nameBuf).string().c_str(), w, h, 4,
-                           rgba.data(), w * 4);
-        }
-        if ((f % 8) == 0) {
-            // The render blocks the main thread; answer the window-manager's
-            // "still alive?" ping so the OS doesn't pop a "not responding"
-            // dialog, and show progress in the title bar. (The window still
-            // doesn't repaint — a fully responsive render is a follow-up.)
-            SDL_PumpEvents();
-            char title[96];
-            std::snprintf(title, sizeof(title),
-                          "Y.A.W.N — exporting video… %d%%",
-                          static_cast<int>(100.0 * f / totalFrames));
-            SDL_SetWindowTitle(m_mainWindow.getHandle(), title);
-            LOG_INFO("VideoExport", "  frame %d / %d", f, totalFrames);
-        }
-    }
-    m_visualEngine.endOfflineRender();
+    const std::string fname = fs::path(j.outPath).filename().string();
+    m_exportDialog.setRendering(false);
+    m_exportDialog.forceClose();
+    updateWindowTitle();
+    m_videoExport.reset();
 
-    // Restore transport + arrangement-active state.
-    transport.setPositionInSamples(savedPos);
-    if (savedPlaying) transport.play();
-    for (int t = 0; t < nTracks; ++t) {
-        m_project.track(t).arrangementActive = (restoreArr[t] != 0);
-        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, restoreArr[t] != 0});
-    }
-
-    // 3) Encode + mux with ffmpeg.
-    std::string outPath = filePath;
-    if (outPath.size() < 4 || outPath.substr(outPath.size() - 4) != ".mp4")
-        outPath += ".mp4";
-    std::vector<std::string> args = {
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-framerate", std::to_string(kFps),
-        "-i", (tmp / "f_%06d.png").string(),
-    };
-    if (haveAudio) { args.push_back("-i"); args.push_back(wavPath.string()); }
-    args.insert(args.end(), { "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                              "-preset", "medium", "-crf", "20" });
-    if (haveAudio) args.insert(args.end(), { "-c:a", "aac", "-shortest" });
-    args.push_back(outPath);
-    SDL_SetWindowTitle(m_mainWindow.getHandle(), "Y.A.W.N — exporting (encoding)…");
-    SDL_PumpEvents();
-    const bool encOk = visual::runFFmpegCommand(args);
-
-    fs::remove_all(tmp, ec);
-    updateWindowTitle();   // restore the normal title
-    if (encOk)
-        m_toastManager.show("Exported video: " + fs::path(outPath).filename().string(),
-                            3.5f, ui::ToastManager::Severity::Info);
+    if (cancelled)
+        m_toastManager.show("Video export cancelled", 2.5f,
+                            ui::ToastManager::Severity::Info);
+    else if (ok)
+        m_toastManager.show("Exported video: " + fname, 3.5f,
+                            ui::ToastManager::Severity::Info);
     else
-        m_toastManager.show("Video export failed (is ffmpeg installed?)",
-                            3.5f, ui::ToastManager::Severity::Error);
+        m_toastManager.show("Video export failed (is ffmpeg installed?)", 3.5f,
+                            ui::ToastManager::Severity::Error);
 }
 
 // ---------------------------------------------------------------------------

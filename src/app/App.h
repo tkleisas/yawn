@@ -47,6 +47,8 @@
 #include <memory>
 #include <string>
 #include <mutex>
+#include <thread>
+#include <atomic>
 #include <filesystem>
 
 #include "presets/PresetManager.h"
@@ -466,11 +468,42 @@ private:
     static void SDLCALL onExportSaveResult(void* userdata, const char* const* filelist, int filter);
 
     // Video export (offline arrangement render → mp4). The save dialog is
-    // async; the path lands here and the frame loop runs the blocking render.
+    // async; the path lands here and the frame loop kicks off the render.
     std::string m_pendingVideoExportPath;
     static void SDLCALL onVideoExportSaveResult(void* userdata, const char* const* filelist, int filter);
     void openVideoExportDialog();
     void exportVideo(const std::string& filePath);
+
+    // Frame-driven state machine. GL stays on the MAIN thread (rendered in
+    // chunks across frames so the UI never freezes and the progress bar
+    // animates); only the non-GL phases (audio bounce, ffmpeg encode) run on
+    // a worker thread. While a job is live the main thread skips its own
+    // visual pipeline (poll/tick/output) so it doesn't fight the export's
+    // transport scrubbing. Reuses the export dialog's render-mode progress bar.
+    struct VideoExportJob {
+        enum class Phase { Audio, Frames, Encode };
+        Phase                 phase = Phase::Audio;
+        std::string           outPath;
+        std::filesystem::path tmpDir;
+        std::filesystem::path wavPath;
+        int                   frame = 0, totalFrames = 0, fps = 30, w = 0, h = 0;
+        double                bpm = 120.0, sampleRate = 48000.0, lengthBeats = 0.0;
+        bool                  haveAudio = false;
+        int64_t               savedPos = 0;
+        bool                  savedPlaying = false;
+        std::vector<uint8_t>  restoreArr;       // per-track arrangementActive
+        std::vector<uint8_t>  rgba;             // reused readback buffer
+        audio::RenderProgress audioProg;        // sub-progress for the bounce
+        std::thread           worker;           // non-GL phase (audio / ffmpeg)
+        std::atomic<bool>     workerDone{false};
+        std::atomic<bool>     workerOk{false};
+        bool                  workerLaunched = false;
+        ~VideoExportJob() { if (worker.joinable()) worker.join(); }
+    };
+    std::unique_ptr<VideoExportJob> m_videoExport;   // non-null ⇒ exporting
+    bool isVideoExporting() const { return m_videoExport != nullptr; }
+    void pollVideoExport();                          // main-thread state machine
+    void finalizeVideoExport(bool ok, bool cancelled);
 
     // Persistent storage for async SDL file dialog filter (must outlive the dialog)
     SDL_DialogFileFilter m_exportFilter{};
