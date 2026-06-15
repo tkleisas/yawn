@@ -30,6 +30,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 
 namespace yawn {
 namespace ui {
@@ -251,6 +252,12 @@ private:
     Project*            m_project = nullptr;
     audio::AudioEngine* m_engine  = nullptr;
     undo::UndoManager*  m_undoManager = nullptr;
+
+    // Video-thumbnail GL textures, keyed by file path (lazy-loaded, cached
+    // including negative results). Mirrors SessionPanel so visual clips on
+    // the timeline show their preview rather than a bare glyph.
+    mutable std::unordered_map<std::string, unsigned> m_thumbnailCache;
+    unsigned getThumbnailTexture(const std::string& path) const;
 
     float m_scrollX = 0.0f;
     float m_scrollY = 0.0f;

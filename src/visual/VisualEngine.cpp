@@ -1169,6 +1169,17 @@ void VisualEngine::setLayerTransportClock(int track, double clipStartBeat) {
     L.lastWallSeconds  = 0.0;
 }
 
+void VisualEngine::setLayerArrangementVideo(int track, int lengthMode,
+                                            double clipLengthBeats,
+                                            double offsetBeats) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    Layer& L = it->second;
+    L.arrLengthMode  = lengthMode;
+    L.arrLengthBeats = clipLengthBeats;
+    L.arrOffsetBeats = offsetBeats;
+}
+
 bool VisualEngine::setLayerModel(int track, const std::string& path,
                                  const std::vector<std::string>& extraResolved) {
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
@@ -2200,10 +2211,31 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         if (L.transportDriven) {
             // Arrangement mode: frame index is clip-relative and
             // directly follows the transport playhead, so scrubbing
-            // seeks to the exact frame the user hovers.
-            const double elapsed = std::max(0.0, preWall);
-            int advanced = static_cast<int>(elapsed * fps * rate);
-            targetFrame = inFrame + (advanced % std::max(1, rangeLen));
+            // seeks to the exact frame the user hovers. The per-clip
+            // length mode decides how the source fills the slot.
+            const double bpm = (m_audioEngine)
+                ? std::max(1.0, m_audioEngine->transport().bpm()) : 120.0;
+            if (L.arrLengthMode == 1 && L.arrLengthBeats > 0.0) {
+                // Stretch: map the source's content range (offset ..
+                // offset+slotLength beats) onto the playable frame range
+                // so the video fills the slot exactly and tracks tempo.
+                const double totalBeats = L.arrOffsetBeats + L.arrLengthBeats;
+                const double curBeats = L.arrOffsetBeats
+                    + std::max(0.0, transportBeats - L.clipStartBeat);
+                double norm = (totalBeats > 0.0) ? (curBeats / totalBeats) : 0.0;
+                norm = std::clamp(norm, 0.0, 1.0);
+                targetFrame = inFrame +
+                    std::min(rangeLen - 1, static_cast<int>(norm * rangeLen));
+            } else {
+                // Loop / PlayOnce at native rate, shifted by the left-trim.
+                const double offsetSec = L.arrOffsetBeats * 60.0 / bpm;
+                const double elapsed = std::max(0.0, preWall) + offsetSec;
+                int advanced = static_cast<int>(elapsed * fps * rate);
+                if (L.arrLengthMode == 2)            // PlayOnce: hold last frame
+                    targetFrame = inFrame + std::min(advanced, rangeLen - 1);
+                else                                  // Loop (default)
+                    targetFrame = inFrame + (advanced % std::max(1, rangeLen));
+            }
         } else if (beatLocked && count > 0) {
             // Transport-locked: the playable range maps onto `loopBeats`
             // of transport time, regardless of the video's native

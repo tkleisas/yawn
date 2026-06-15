@@ -11,6 +11,8 @@
 #include "../Renderer.h"
 #include "ui/framework/v2/Theme.h"
 #include "ui/framework/v2/DragManager.h"
+#include "stb_image.h"
+#include <glad/gl.h>
 
 #include <SDL3/SDL_keycode.h>
 
@@ -1462,6 +1464,33 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm,
     r.popClip();
 }
 
+unsigned ArrangementPanel::getThumbnailTexture(const std::string& path) const {
+    if (path.empty()) return 0;
+    auto it = m_thumbnailCache.find(path);
+    if (it != m_thumbnailCache.end()) return it->second;
+
+    int w = 0, h = 0, n = 0;
+    unsigned char* pix = stbi_load(path.c_str(), &w, &h, &n, 4);
+    if (!pix) {
+        m_thumbnailCache.emplace(path, 0);  // cache the miss; don't retry
+        return 0;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pix);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pix);
+
+    m_thumbnailCache.emplace(path, tex);
+    return tex;
+}
+
 void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                                           float x, float y, float w, float h) {
     r.pushClip(x, y, w, h);
@@ -1595,10 +1624,21 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                 r.popClip();
             }
 
-            // Visual clip type glyph in upper-left.
+            // Visual clip: thumbnail (videos) behind a type glyph +
+            // length-mode tag. Mirrors the session grid so a clip is
+            // identifiable on the timeline instead of a bare glyph.
             if (clip.type == ArrangementClip::Type::Visual &&
                 clip.visualClip && cw > 12.0f) {
                 const auto& vc = *clip.visualClip;
+                if (!vc.thumbnailPath.empty()) {
+                    unsigned tex = getThumbnailTexture(vc.thumbnailPath);
+                    if (tex) {
+                        r.pushClip(cx, cy, cw, ch);
+                        r.drawTexturedQuad(cx, cy, cw, ch, 0.0f, 0.0f, 1.0f, 1.0f,
+                                           Color{255, 255, 255, 150}, tex);
+                        r.popClip();
+                    }
+                }
                 const char* glyph = "~";           // shader (default)
                 if      (vc.liveInput)            glyph = "●";  // live
                 else if (!vc.modelPath.empty())   glyph = "◆";  // 3D model
@@ -1606,6 +1646,16 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                 else if (!vc.text.empty())        glyph = "T";  // text
                 tm.drawText(r, glyph, cx + 4.0f, cy + 2.0f, fs,
                             Color{255, 255, 255, 230});
+                // Length-mode tag, top-right (L=loop, S=stretch, 1=once).
+                // Only meaningful for file video (the only source the mode
+                // governs); shaders/scenes run on the transport clock.
+                if (cw > 34.0f && !vc.videoPath.empty()) {
+                    const char* modeTag =
+                        clip.lengthMode == ArrangementClip::LengthMode::Stretch  ? "S" :
+                        clip.lengthMode == ArrangementClip::LengthMode::PlayOnce ? "1" : "L";
+                    tm.drawText(r, modeTag, cx + cw - 11.0f, cy + 2.0f, fs,
+                                Color{210, 230, 255, 220});
+                }
             }
 
             r.drawRectOutline(cx, cy, cw, ch,

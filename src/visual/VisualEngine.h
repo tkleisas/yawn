@@ -161,6 +161,10 @@ public:
     // and backward.
     void setLayerWallClock(int track);
     void setLayerTransportClock(int track, double clipStartBeat);
+    // Per-clip arrangement playback params (length mode + slot length +
+    // left-trim, all for the transport-driven video frame path).
+    void setLayerArrangementVideo(int track, int lengthMode,
+                                  double clipLengthBeats, double offsetBeats);
 
     // Attach or detach a Lua scene script. Only meaningful once a
     // model has been set — the script supplies transforms for the
@@ -424,6 +428,14 @@ private:
         double       lengthBeats     = 4.0;
         double       syncLaunchBeat  = 0.0;
         bool         syncOriginSet   = false;
+
+        // Arrangement clip playback (only consulted when transportDriven).
+        // arrLengthMode: 0=Loop, 1=Stretch, 2=PlayOnce — how a video fills
+        // its timeline slot. arrLengthBeats is the slot duration and
+        // arrOffsetBeats the left-trim into the source, both in beats.
+        int          arrLengthMode   = 0;
+        double       arrLengthBeats  = 0.0;
+        double       arrOffsetBeats  = 0.0;
 
         // User-declared shader parameters (bound via glUniform1f each frame).
         std::vector<Param> params;

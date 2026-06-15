@@ -1025,6 +1025,8 @@ json serializeArrangementClip(const ArrangementClip& clip,
     j["startBeat"] = clip.startBeat;
     j["lengthBeats"] = clip.lengthBeats;
     j["offsetBeats"] = clip.offsetBeats;
+    if (clip.lengthMode != ArrangementClip::LengthMode::Loop)
+        j["lengthMode"] = static_cast<int>(clip.lengthMode);
     j["name"] = clip.name;
     j["colorIndex"] = clip.colorIndex;
 
@@ -1057,6 +1059,8 @@ ArrangementClip deserializeArrangementClip(const json& j,
     clip.startBeat = j.value("startBeat", 0.0);
     clip.lengthBeats = j.value("lengthBeats", 4.0);
     clip.offsetBeats = j.value("offsetBeats", 0.0);
+    clip.lengthMode = static_cast<ArrangementClip::LengthMode>(
+        j.value("lengthMode", 0));
     clip.name = j.value("name", "");
     clip.colorIndex = j.value("colorIndex", -1);
 

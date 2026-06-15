@@ -631,6 +631,24 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         }
     }
 
+    // ── Clear Arrangement (convenience) ──
+    // Empty this track's arrangement lane, or every track's, returning
+    // them to session control. The all-tracks variant confirms first.
+    {
+        items.push_back(separator());
+        const bool trackHasArr = !track.arrangementClips.empty() ||
+                                  track.arrangementActive;
+        items.push_back(itemEn("Clear Arrangement (Track)",
+            [this, trackIndex]() { clearTrackArrangement(trackIndex); },
+            trackHasArr));
+        items.push_back(item("Clear Arrangement (All Tracks)…",
+            [this]() {
+                ui::fw2::ConfirmDialog::prompt(
+                    "Clear the arrangement on ALL tracks?",
+                    [this]() { clearAllArrangements(); });
+            }));
+    }
+
     ui::fw2::ContextMenu::show(std::move(items), ui::fw2::Point{mx, my});
 }
 
@@ -1271,6 +1289,12 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                                        ? "visual"
                                        : s->visualClip->name;
                     ac.colorIndex   = s->visualClip->colorIndex;
+                    // A tempo-synced session clip was already following the
+                    // tempo, so it stretches to fill its slot; otherwise it
+                    // loops at native rate (the historical default).
+                    ac.lengthMode   = s->visualClip->tempoSync
+                        ? ArrangementClip::LengthMode::Stretch
+                        : ArrangementClip::LengthMode::Loop;
                     ac.visualClip   = s->visualClip->clone();
                     auto& clips = m_project.track(trackIndex).arrangementClips;
                     clips.push_back(std::move(ac));

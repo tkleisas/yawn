@@ -498,6 +498,93 @@ void App::syncArrangementClipsToEngine(int trackIdx) {
     m_audioEngine.arrangementPlayback().submitTrackClips(trackIdx, std::move(refs));
 }
 
+// Drop a track back to a clean session-controlled state: empty its
+// arrangement lane and stop any arrangement-driven playback. Used by the
+// "Clear Arrangement" menu items; undoable.
+void App::clearTrackArrangement(int trackIdx) {
+    if (trackIdx < 0 || trackIdx >= m_project.numTracks()) return;
+    auto& track = m_project.track(trackIdx);
+    if (track.arrangementClips.empty() && !track.arrangementActive) return;
+
+    // Snapshot for undo — ArrangementClip is copyable (visual clips deep-clone).
+    auto oldClips = track.arrangementClips;
+    const bool wasActive = track.arrangementActive;
+
+    auto doClear = [this, trackIdx]() {
+        auto& t = m_project.track(trackIdx);
+        t.arrangementClips.clear();
+        t.arrangementActive = false;   // back to session control
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{trackIdx, false});
+        syncArrangementClipsToEngine(trackIdx);
+        if (t.type == Track::Type::Visual) {
+            m_visualEngine.clearLayer(trackIdx);
+            m_activeArrVisualClip[trackIdx] = -1;
+        }
+        m_project.updateArrangementLength();
+        markDirty();
+    };
+    doClear();
+
+    m_undoManager.push({"Clear Arrangement",
+        [this, trackIdx, oldClips, wasActive]() {
+            auto& t = m_project.track(trackIdx);
+            t.arrangementClips = oldClips;
+            t.arrangementActive = wasActive;
+            m_audioEngine.sendCommand(
+                audio::SetTrackArrActiveMsg{trackIdx, wasActive});
+            if (wasActive) syncArrangementClipsToEngine(trackIdx);
+            m_project.updateArrangementLength();
+            markDirty();
+        },
+        doClear});
+}
+
+// Clear every track's arrangement in one undoable step.
+void App::clearAllArrangements() {
+    const int n = m_project.numTracks();
+    std::vector<std::pair<std::vector<ArrangementClip>, bool>> snapshot(n);
+    bool anything = false;
+    for (int t = 0; t < n; ++t) {
+        auto& tr = m_project.track(t);
+        snapshot[t] = {tr.arrangementClips, tr.arrangementActive};
+        if (!tr.arrangementClips.empty() || tr.arrangementActive) anything = true;
+    }
+    if (!anything) return;
+
+    auto doClear = [this, n]() {
+        for (int t = 0; t < n; ++t) {
+            auto& tr = m_project.track(t);
+            tr.arrangementClips.clear();
+            tr.arrangementActive = false;
+            m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, false});
+            syncArrangementClipsToEngine(t);
+            if (tr.type == Track::Type::Visual) {
+                m_visualEngine.clearLayer(t);
+                m_activeArrVisualClip[t] = -1;
+            }
+        }
+        m_project.updateArrangementLength();
+        markDirty();
+    };
+    doClear();
+
+    m_undoManager.push({"Clear All Arrangements",
+        [this, snapshot]() {
+            for (int t = 0; t < static_cast<int>(snapshot.size())
+                              && t < m_project.numTracks(); ++t) {
+                auto& tr = m_project.track(t);
+                tr.arrangementClips = snapshot[t].first;
+                tr.arrangementActive = snapshot[t].second;
+                m_audioEngine.sendCommand(
+                    audio::SetTrackArrActiveMsg{t, snapshot[t].second});
+                if (snapshot[t].second) syncArrangementClipsToEngine(t);
+            }
+            m_project.updateArrangementLength();
+            markDirty();
+        },
+        doClear});
+}
+
 midi::MidiClip* App::setMidiClipLive(int track, int scene,
                                      std::unique_ptr<midi::MidiClip> newClip) {
     const midi::MidiClip* oldPtr = m_project.getMidiClip(track, scene);

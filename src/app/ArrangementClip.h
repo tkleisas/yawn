@@ -15,10 +15,23 @@ namespace yawn {
 struct ArrangementClip {
     enum class Type : uint8_t { Audio, Midi, Visual };
 
+    // How a clip fills its timeline slot when the source is shorter or
+    // longer than `lengthBeats`. Primarily governs VISUAL (video)
+    // playback on the arrangement; audio/MIDI ignore it (they always
+    // play their own content from offsetBeats).
+    //   Loop     — play the source at native rate, wrapping (default;
+    //              matches the historical arrangement video behaviour).
+    //   Stretch  — time-stretch the source to fill the slot exactly, so
+    //              it tracks the slot length / tempo (a video speeds up
+    //              or slows to fit).
+    //   PlayOnce — play through once, then hold the last frame.
+    enum class LengthMode : uint8_t { Loop, Stretch, PlayOnce };
+
     Type type = Type::Audio;
     double startBeat = 0.0;       // Absolute position on timeline (beats)
     double lengthBeats = 4.0;     // Duration on timeline (beats)
     double offsetBeats = 0.0;     // Trim offset into source clip (beats)
+    LengthMode lengthMode = LengthMode::Loop;
 
     // Shared clip data — same underlying data as session clip slots
     std::shared_ptr<audio::AudioBuffer> audioBuffer;
@@ -49,6 +62,7 @@ struct ArrangementClip {
           startBeat(o.startBeat),
           lengthBeats(o.lengthBeats),
           offsetBeats(o.offsetBeats),
+          lengthMode(o.lengthMode),
           audioBuffer(o.audioBuffer),
           midiClip(o.midiClip),
           visualClip(o.visualClip ? o.visualClip->clone() : nullptr),
@@ -60,6 +74,7 @@ struct ArrangementClip {
         startBeat    = o.startBeat;
         lengthBeats  = o.lengthBeats;
         offsetBeats  = o.offsetBeats;
+        lengthMode   = o.lengthMode;
         audioBuffer  = o.audioBuffer;
         midiClip     = o.midiClip;
         visualClip   = o.visualClip ? o.visualClip->clone() : nullptr;

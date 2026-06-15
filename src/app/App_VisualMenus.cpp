@@ -851,6 +851,37 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
         m_arrangementPanel->handleAppKey(SDLK_DELETE, /*ctrl=*/false);
     }));
 
+    // Visual file-video clips: how the source fills its timeline slot.
+    // (Shaders/scenes/models run on the transport clock regardless.)
+    if (clips[clipIdx].type == ArrangementClip::Type::Visual &&
+        clips[clipIdx].visualClip &&
+        !clips[clipIdx].visualClip->videoPath.empty()) {
+        items.push_back(separator());
+        const auto curMode = clips[clipIdx].lengthMode;
+        auto setMode = [this, trackIndex, clipIdx](ArrangementClip::LengthMode m) {
+            auto& cs = m_project.track(trackIndex).arrangementClips;
+            if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
+            cs[clipIdx].lengthMode = m;
+            // Live-update the engine if this clip is currently playing.
+            if (m_activeArrVisualClip[trackIndex] == clipIdx)
+                m_visualEngine.setLayerArrangementVideo(trackIndex,
+                    static_cast<int>(m), cs[clipIdx].lengthBeats,
+                    cs[clipIdx].offsetBeats);
+            markDirty();
+        };
+        std::vector<MenuEntry> modeItems;
+        modeItems.push_back(itemEn("Loop",
+            [setMode]{ setMode(ArrangementClip::LengthMode::Loop); },
+            curMode != ArrangementClip::LengthMode::Loop));
+        modeItems.push_back(itemEn("Stretch to fit",
+            [setMode]{ setMode(ArrangementClip::LengthMode::Stretch); },
+            curMode != ArrangementClip::LengthMode::Stretch));
+        modeItems.push_back(itemEn("Play once",
+            [setMode]{ setMode(ArrangementClip::LengthMode::PlayOnce); },
+            curMode != ArrangementClip::LengthMode::PlayOnce));
+        items.push_back(submenu("Length Mode", std::move(modeItems)));
+    }
+
     ui::fw2::ContextMenu::show(std::move(items),
                                  ui::fw::Point{mx, my});
 }

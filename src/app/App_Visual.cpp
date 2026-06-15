@@ -284,6 +284,11 @@ void App::pollArrangementVisualPlayback() {
                 // scrubbing the playhead seeks the visuals. Origin =
                 // the clip's start beat on the arrangement timeline.
                 m_visualEngine.setLayerTransportClock(t, nc.startBeat);
+                // Per-clip length mode + slot length + left-trim drive
+                // how a video fills the slot (loop / stretch / play-once).
+                m_visualEngine.setLayerArrangementVideo(t,
+                    static_cast<int>(nc.lengthMode),
+                    nc.lengthBeats, nc.offsetBeats);
             }
         }
         m_activeArrVisualClip[t] = activeIdx;

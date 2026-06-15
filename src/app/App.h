@@ -232,6 +232,10 @@ private:
     void updateDetailForMaster();
     void switchToView(ViewMode mode);
     void syncArrangementClipsToEngine(int trackIdx);
+    // Empty a track's (or every track's) arrangement lane and return it to
+    // session control. Undoable. See the "Clear Arrangement" menu items.
+    void clearTrackArrangement(int trackIdx);
+    void clearAllArrangements();
 
     // Atomically replace the live MIDI clip identified by `oldClip`
     // (located in a session slot or an arrangement clip) with `newClip`,
