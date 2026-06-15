@@ -648,6 +648,10 @@ private:
     struct TakeInterval { int scene; double startBeat; double stopBeat; };
     bool   m_arrRecording = false;
     double m_arrRecStartBeat = 0.0;        // beat when recording armed
+    double m_arrRecLastBeat = 0.0;         // last beat seen while playing+armed;
+                                           // used to close still-open intervals
+                                           // on disarm (the live transport pos
+                                           // reads 0 if Stop was pressed first)
     int    m_arrRecScene[kMaxTracks] = {}; // open interval's scene, -1 = none
     double m_arrRecStart[kMaxTracks] = {}; // open interval's start beat
     std::array<std::vector<TakeInterval>, kMaxTracks> m_arrRecTake{};

@@ -613,6 +613,7 @@ void App::toggleArrangementRecord() {
         m_arrRecording   = true;
         if (m_transportPanel) m_transportPanel->setArrangementRecArmed(true);
         m_arrRecStartBeat = m_audioEngine.transport().positionInBeats();
+        m_arrRecLastBeat  = m_arrRecStartBeat;
         for (int t = 0; t < kMaxTracks; ++t) {
             m_arrRecScene[t] = -1;
             m_arrRecStart[t] = 0.0;
@@ -626,7 +627,14 @@ void App::toggleArrangementRecord() {
     // to commit the take.
     m_arrRecording = false;
     if (m_transportPanel) m_transportPanel->setArrangementRecArmed(false);
-    const double beat = m_audioEngine.transport().positionInBeats();
+    // Close still-open intervals at the recording high-water beat, NOT the live
+    // transport position — if the user pressed Stop before disarming, the live
+    // position has reset to 0, which would close every open interval backwards
+    // (stop < start) and silently drop it. Tracks whose clip looped on a single
+    // scene (no follow-action scene change) have ONLY that one open interval, so
+    // this is the difference between them capturing and vanishing entirely.
+    const double beat = std::max(m_audioEngine.transport().positionInBeats(),
+                                 m_arrRecLastBeat);
     int total = 0;
     for (int t = 0; t < kMaxTracks; ++t) {
         if (m_arrRecScene[t] >= 0) {
@@ -650,6 +658,7 @@ void App::pollArrangementRecord() {
     auto& transport = m_audioEngine.transport();
     if (!transport.isPlaying()) return;
     const double beat = transport.positionInBeats();
+    m_arrRecLastBeat = beat;   // high-water mark for closing intervals on disarm
     const int n = std::min(m_project.numTracks(), kMaxTracks);
     for (int t = 0; t < n; ++t) {
         const int scene = currentSessionScene(t);
@@ -666,17 +675,30 @@ void App::commitArrangementTake() {
     // back to the boundary — snap interval edges to the nearest beat.
     auto snap = [](double b) { return std::round(b); };
     const int n = m_project.numTracks();
+
+    // Normalize the take to the arrangement origin: shift everything so the
+    // earliest captured content lands on beat 0. When you press Play and then
+    // launch clips, they come in on the next quantize boundary (e.g. bar 2),
+    // so the raw capture begins with a bar of silence — the user expects the
+    // bounce to start at the first downbeat instead. Relative timing between
+    // tracks is preserved (every clip shifts by the same amount).
+    double ofs = 1e18;
+    for (int t = 0; t < n && t < kMaxTracks; ++t)
+        for (const auto& iv : m_arrRecTake[t])
+            ofs = std::min(ofs, snap(iv.startBeat));
+    if (ofs >= 1e17) ofs = 0.0;             // nothing captured
+
     int written = 0;
     for (int t = 0; t < n && t < kMaxTracks; ++t) {
         if (m_arrRecTake[t].empty()) continue;
         auto& track = m_project.track(t);
         auto& clips = track.arrangementClips;
 
-        // Punch range = the span this track's take covers.
+        // Punch range = the span this track's take covers (origin-normalized).
         double pStart = 1e18, pEnd = -1e18;
         for (const auto& iv : m_arrRecTake[t]) {
-            pStart = std::min(pStart, snap(iv.startBeat));
-            pEnd   = std::max(pEnd,   snap(iv.stopBeat));
+            pStart = std::min(pStart, snap(iv.startBeat) - ofs);
+            pEnd   = std::max(pEnd,   snap(iv.stopBeat)  - ofs);
         }
         // Punch-overwrite: drop existing clips overlapping that range.
         clips.erase(std::remove_if(clips.begin(), clips.end(),
@@ -685,7 +707,7 @@ void App::commitArrangementTake() {
 
         // One arrangement clip per captured interval, referencing the slot.
         for (const auto& iv : m_arrRecTake[t]) {
-            const double s = snap(iv.startBeat), e = snap(iv.stopBeat);
+            const double s = snap(iv.startBeat) - ofs, e = snap(iv.stopBeat) - ofs;
             if (e - s < 0.25) continue;             // skip sub-beat blips
             auto* slot = m_project.getSlot(t, iv.scene);
             if (!slot) continue;
