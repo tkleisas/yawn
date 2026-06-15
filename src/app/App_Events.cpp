@@ -552,6 +552,12 @@ void App::handleKeyEvent(const SDL_Event& event) {
                 // must not defer the audio behind the playhead on the Play
                 // gesture (that was the "drums come in half a bar late" bug).
                 for (int t = 0; t < m_project.numTracks(); ++t) {
+                    // Arrangement-active tracks are played by the arrangement
+                    // engine — a global Play must NOT also launch their
+                    // session clip, or a looping session MIDI clip would play
+                    // forever, past the arrangement clip's end (the arrangement
+                    // Play button already skips them; Space must match).
+                    if (m_project.track(t).arrangementActive) continue;
                     int ds = m_project.track(t).defaultScene;
                     if (ds < 0 || ds >= m_project.numScenes()) continue;
                     auto* slot = m_project.getSlot(t, ds);
