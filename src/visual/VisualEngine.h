@@ -66,6 +66,23 @@ public:
     // Render one visual frame. Safe to call when the window is hidden.
     void tick(double transportSeconds, double transportBeats, bool playing);
 
+    // ── Offline (deterministic) render — for video export ──
+    // While offline, tick() renders to the FBOs even when the output
+    // window is hidden, skips the on-screen blit, and drives all
+    // wall-clock-based shader time (notably the post-FX iTime) from the
+    // transport time passed to tick() instead of steady_clock — so a
+    // faster/slower-than-realtime render is reproducible. Call begin
+    // before a render pass and end after.
+    void beginOfflineRender() { m_offlineRender = true; }
+    void endOfflineRender()   { m_offlineRender = false; }
+    // Read the last composited frame (kInternalWidth × kInternalHeight,
+    // RGBA8). Rows are top-down (glReadPixels' bottom-up order is flipped
+    // here). Returns false if nothing has been composited yet. Call right
+    // after tick().
+    bool readComposite(std::vector<uint8_t>& outRGBA);
+    int  compositeWidth() const;    // = kInternalWidth
+    int  compositeHeight() const;   // = kInternalHeight
+
     SDL_Window* outputWindow() const { return m_outputWindow; }
 
     // Borrowed pointer to the audio engine; VisualEngine reads mixer state
@@ -676,6 +693,11 @@ private:
     bool m_outputVisible = false;
     bool m_fullscreen    = false;
     bool m_initialized   = false;
+
+    // Offline render (video export): deterministic time + readback.
+    bool   m_offlineRender = false;
+    double m_offlineSeconds = 0.0;   // synthetic "now" (= transportSeconds)
+    int    m_lastAccumIdx   = 0;     // accum FBO holding the last composite
 };
 
 } // namespace visual

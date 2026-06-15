@@ -2511,8 +2511,38 @@ void VisualEngine::drainNoteBus() {
 
 // ── tick (orchestrates all layers + composite) ────────────────────────────
 
+int VisualEngine::compositeWidth()  const { return kInternalWidth; }
+int VisualEngine::compositeHeight() const { return kInternalHeight; }
+
+bool VisualEngine::readComposite(std::vector<uint8_t>& outRGBA) {
+    if (!m_initialized || !m_outputWindow) return false;
+    const GLuint fbo = m_accumFBO[m_lastAccumIdx];
+    if (!fbo) return false;
+    ContextScope scope(m_outputWindow, m_outputContext);
+    const int w = kInternalWidth, h = kInternalHeight;
+    const size_t need = static_cast<size_t>(w) * h * 4;
+    static thread_local std::vector<uint8_t> raw;
+    if (raw.size() != need) raw.assign(need, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    // glReadPixels is bottom-up; flip to top-down rows for video/PNG.
+    if (outRGBA.size() != need) outRGBA.resize(need);
+    const size_t rowBytes = static_cast<size_t>(w) * 4;
+    for (int y = 0; y < h; ++y)
+        std::memcpy(outRGBA.data() + static_cast<size_t>(y) * rowBytes,
+                    raw.data() + static_cast<size_t>(h - 1 - y) * rowBytes, rowBytes);
+    return true;
+}
+
 void VisualEngine::tick(double transportSeconds, double transportBeats, bool playing) {
-    if (!m_initialized || !m_outputVisible || !m_outputWindow) return;
+    // Offline render bypasses the visibility gate — we render to the FBOs
+    // (and read them back) even with the output window hidden.
+    if (!m_initialized || !m_outputWindow) return;
+    if (!m_outputVisible && !m_offlineRender) return;
+    // Synthetic clock for deterministic offline render (drives post-FX time).
+    if (m_offlineRender) m_offlineSeconds = transportSeconds;
 
     ContextScope scope(m_outputWindow, m_outputContext);
 
@@ -2646,9 +2676,13 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
                 glUniform3f(pe.loc_iResolution,
                             static_cast<float>(kInternalWidth),
                             static_cast<float>(kInternalHeight), 1.0f);
-            const float tSecs = static_cast<float>(
-                std::chrono::duration<double>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            // Post-FX iTime is normally free-running wall-clock; during an
+            // offline render use the synthetic transport time so the result
+            // is deterministic (reproducible regardless of render speed).
+            const float tSecs = m_offlineRender
+                ? static_cast<float>(m_offlineSeconds)
+                : static_cast<float>(std::chrono::duration<double>(
+                      std::chrono::steady_clock::now().time_since_epoch()).count());
             (void)wallSecsF;
             if (pe.loc_iTime             >= 0) glUniform1f(pe.loc_iTime, tSecs);
             if (pe.loc_iTimeDelta        >= 0) glUniform1f(pe.loc_iTimeDelta, tDelta);
@@ -2680,7 +2714,14 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
         }
     }
 
-    // Stage 4: blit the final accumulator to the output window.
+    // Remember which accumulator holds the final composite (for readback).
+    m_lastAccumIdx = cur;
+
+    // Stage 4: blit the final accumulator to the output window. Skipped
+    // during an offline render — there's no on-screen target and the
+    // window may be hidden; the caller reads back the FBO instead.
+    if (m_offlineRender) return;
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     int winW = 0, winH = 0;
     SDL_GetWindowSizeInPixels(m_outputWindow, &winW, &winH);
