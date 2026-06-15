@@ -54,6 +54,8 @@
 #include "util/FileIO.h"
 #include "util/MidiFileIO.h"
 #include "audio/OfflineRenderer.h"
+#include "visual/VideoImporter.h"   // visual::runFFmpeg
+#include "stb_image_write.h"
 #include "presets/PresetGenerator.h"
 #include "presets/MidiLoopManager.h"
 #include "presets/DrumPatterns.h"
@@ -795,6 +797,132 @@ void SDLCALL App::onExportSaveResult(void* userdata, const char* const* filelist
 
     std::lock_guard<std::mutex> lock(app->m_dialogMutex);
     app->m_pendingExportPath = filelist[0];
+}
+
+// ---------------------------------------------------------------------------
+// Export Video (offline arrangement render → mp4)
+// ---------------------------------------------------------------------------
+
+void SDLCALL App::onVideoExportSaveResult(void* userdata, const char* const* filelist, int) {
+    auto* app = static_cast<App*>(userdata);
+    if (!filelist || !filelist[0]) return;
+    std::lock_guard<std::mutex> lock(app->m_dialogMutex);
+    app->m_pendingVideoExportPath = filelist[0];
+}
+
+void App::openVideoExportDialog() {
+    static const SDL_DialogFileFilter filter = { "Video (*.mp4)", "mp4" };
+    SDL_ShowSaveFileDialog(onVideoExportSaveResult, this,
+                           m_mainWindow.getHandle(), &filter, 1, "export.mp4");
+}
+
+// Blocking offline render of the arrangement to an mp4. Runs on the main
+// (GL) thread, so the UI is unresponsive while it works — progress goes to
+// yawn.log and a toast lands when done. v1: 640×360 @ 30 fps, H.264 + AAC.
+void App::exportVideo(const std::string& filePath) {
+    namespace fs = std::filesystem;
+    const double bpm        = std::max(1.0, m_audioEngine.transport().bpm());
+    const double sampleRate = std::max(1.0, m_audioEngine.sampleRate());
+    const double lengthBeats = m_project.arrangementLength();
+    if (lengthBeats <= 0.0) {
+        m_toastManager.show("Nothing on the arrangement timeline to export",
+                            2.5f, ui::ToastManager::Severity::Info);
+        return;
+    }
+    constexpr int kFps = 30;
+    const double lengthSec = lengthBeats * 60.0 / bpm;
+    const int totalFrames = std::max(1, static_cast<int>(std::ceil(lengthSec * kFps)));
+
+    std::error_code ec;
+    const fs::path tmp = fs::temp_directory_path() /
+        ("yawn_vexport_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
+    fs::remove_all(tmp, ec);
+    fs::create_directories(tmp, ec);
+    LOG_INFO("VideoExport", "Rendering %d frames (%.1fs @ %d fps) → %s",
+             totalFrames, lengthSec, kFps, filePath.c_str());
+
+    // Force arrangement playback on for the bounce (both the engine, for
+    // audio, and the project flag, which the visual poller reads); remember
+    // the prior state to restore afterwards.
+    const int nTracks = m_project.numTracks();
+    std::vector<uint8_t> restoreArr(static_cast<size_t>(nTracks), 0);
+    for (int t = 0; t < nTracks; ++t) {
+        restoreArr[t] = m_project.track(t).arrangementActive ? 1 : 0;
+        const bool hasArr = !m_project.track(t).arrangementClips.empty();
+        m_project.track(t).arrangementActive = hasArr;
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, hasArr});
+        if (hasArr) syncArrangementClipsToEngine(t);
+    }
+
+    // 1) Audio bounce → WAV (OfflineRenderer stops/restarts the stream).
+    audio::RenderConfig rc;
+    rc.startBeat = 0.0; rc.endBeat = lengthBeats;
+    rc.targetSampleRate = static_cast<int>(sampleRate); rc.channels = 2;
+    audio::RenderProgress prog;
+    auto audioBuf = audio::OfflineRenderer::render(m_audioEngine, rc, prog);
+    const fs::path wavPath = tmp / "audio.wav";
+    bool haveAudio = audioBuf &&
+        util::saveAudioBuffer(wavPath.string(), *audioBuf, static_cast<int>(sampleRate));
+
+    // 2) Video pass — drive the transport per frame, render offline, write PNGs.
+    auto& transport = m_audioEngine.transport();
+    const int64_t savedPos = transport.positionInSamples();
+    const bool savedPlaying = transport.isPlaying();
+    transport.stop();   // we set the position; the callback must not advance it
+    for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
+
+    m_visualEngine.beginOfflineRender();
+    const int w = m_visualEngine.compositeWidth();
+    const int h = m_visualEngine.compositeHeight();
+    std::vector<uint8_t> rgba;
+    char nameBuf[64];
+    for (int f = 0; f < totalFrames; ++f) {
+        const double sec  = static_cast<double>(f) / kFps;
+        const double beat = sec * bpm / 60.0;
+        transport.setPositionInSamples(static_cast<int64_t>(sec * sampleRate));
+        pollArrangementVisualPlayback();                 // launch/clear arr clips
+        m_visualEngine.tick(sec, beat, /*playing*/true); // offline → renders to FBO
+        if (m_visualEngine.readComposite(rgba)) {
+            std::snprintf(nameBuf, sizeof(nameBuf), "f_%06d.png", f);
+            stbi_write_png((tmp / nameBuf).string().c_str(), w, h, 4,
+                           rgba.data(), w * 4);
+        }
+        if ((f % 30) == 0)
+            LOG_INFO("VideoExport", "  frame %d / %d", f, totalFrames);
+    }
+    m_visualEngine.endOfflineRender();
+
+    // Restore transport + arrangement-active state.
+    transport.setPositionInSamples(savedPos);
+    if (savedPlaying) transport.play();
+    for (int t = 0; t < nTracks; ++t) {
+        m_project.track(t).arrangementActive = (restoreArr[t] != 0);
+        m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, restoreArr[t] != 0});
+    }
+
+    // 3) Encode + mux with ffmpeg.
+    std::string outPath = filePath;
+    if (outPath.size() < 4 || outPath.substr(outPath.size() - 4) != ".mp4")
+        outPath += ".mp4";
+    std::vector<std::string> args = {
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-framerate", std::to_string(kFps),
+        "-i", (tmp / "f_%06d.png").string(),
+    };
+    if (haveAudio) { args.push_back("-i"); args.push_back(wavPath.string()); }
+    args.insert(args.end(), { "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                              "-preset", "medium", "-crf", "20" });
+    if (haveAudio) args.insert(args.end(), { "-c:a", "aac", "-shortest" });
+    args.push_back(outPath);
+    const bool encOk = visual::runFFmpegCommand(args);
+
+    fs::remove_all(tmp, ec);
+    if (encOk)
+        m_toastManager.show("Exported video: " + fs::path(outPath).filename().string(),
+                            3.5f, ui::ToastManager::Severity::Info);
+    else
+        m_toastManager.show("Video export failed (is ffmpeg installed?)",
+                            3.5f, ui::ToastManager::Severity::Error);
 }
 
 // ---------------------------------------------------------------------------

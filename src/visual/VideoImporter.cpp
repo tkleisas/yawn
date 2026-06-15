@@ -572,5 +572,11 @@ bool VideoImporter::start(const std::string& sourcePath,
     return true;
 }
 
+// Public wrapper around the file-local runFFmpeg so the video exporter can
+// reuse the platform process spawn without duplicating it.
+bool runFFmpegCommand(const std::vector<std::string>& args) {
+    return runFFmpeg(args);
+}
+
 } // namespace visual
 } // namespace yawn

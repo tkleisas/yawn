@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace yawn {
 namespace visual {
@@ -70,6 +71,11 @@ private:
     Result             m_result;
     std::string        m_error;
 };
+
+// Spawn ffmpeg with the given argv (argv[0] = "ffmpeg"); blocks until it
+// exits, returns true on success. Shared with the video exporter so it
+// doesn't reimplement the platform process spawn.
+bool runFFmpegCommand(const std::vector<std::string>& args);
 
 } // namespace visual
 } // namespace yawn

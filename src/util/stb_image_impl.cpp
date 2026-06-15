@@ -13,3 +13,7 @@
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
 #include "stb_image.h"
+
+// stb_image_write — PNG output for the video-export frame sequence.
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"

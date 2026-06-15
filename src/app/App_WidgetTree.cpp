@@ -104,6 +104,7 @@ void App::setupMenuBar() {
         M::item("Save As...",   [this]() { saveProjectAs(); },"Ctrl+Shift+S"),
         M::separator(),
         M::item("Export Audio", [this]() { openExportDialog(); }),
+        M::item("Export Video (mp4)…", [this]() { openVideoExportDialog(); }),
         M::separator(),
         M::item("Quit",         [this]() { m_running = false; }, "Ctrl+Q"),
     });

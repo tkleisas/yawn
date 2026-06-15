@@ -365,6 +365,11 @@ void App::update() {
             m_pendingExportPath.clear();
             startExportRender(path);
         }
+        if (!m_pendingVideoExportPath.empty()) {
+            std::string path = std::move(m_pendingVideoExportPath);
+            m_pendingVideoExportPath.clear();
+            exportVideo(path);   // blocking; runs on this (GL) thread
+        }
     }
 
 #ifdef YAWN_HAS_VST3

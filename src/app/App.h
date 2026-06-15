@@ -465,6 +465,13 @@ private:
     std::string m_pendingExportPath;
     static void SDLCALL onExportSaveResult(void* userdata, const char* const* filelist, int filter);
 
+    // Video export (offline arrangement render → mp4). The save dialog is
+    // async; the path lands here and the frame loop runs the blocking render.
+    std::string m_pendingVideoExportPath;
+    static void SDLCALL onVideoExportSaveResult(void* userdata, const char* const* filelist, int filter);
+    void openVideoExportDialog();
+    void exportVideo(const std::string& filePath);
+
     // Persistent storage for async SDL file dialog filter (must outlive the dialog)
     SDL_DialogFileFilter m_exportFilter{};
     std::string m_exportFilterDesc;
