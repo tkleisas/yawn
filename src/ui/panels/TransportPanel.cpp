@@ -377,6 +377,17 @@ void TransportPanel::render(UIContext& ctx) {
         }
     }
 
+    // "Record session → arrangement" armed badge — left of the position
+    // display, always visible while armed so a long take isn't a surprise.
+    if (m_arrRecArmed) {
+        const float s  = tmet.fontSizeLarge;
+        const char* txt = "● REC\xE2\x96\xB8" "ARR";   // ● REC▸ARR
+        const float tw = tm.textWidth(txt, s);
+        const float lh = tm.lineHeight(s);
+        tm.drawText(r, txt, m_velBtnX - 260.0f - tw, y + (h - lh) * 0.5f,
+                    s, ::yawn::ui::Color{235, 90, 90, 255});
+    }
+
     // Right-aligned position display (left of CPU/MEM meter).
     if (!m_posText.empty()) {
         const float posSize = tmet.fontSizeLarge;

@@ -600,13 +600,16 @@ int App::currentSessionScene(int track) {
             return m_audioEngine.midiClipEngine().isTrackPlaying(track)
                 ? m_audioEngine.midiClipEngine().trackState(track).sceneIndex : -1;
         default:
-            return -1;   // visual capture: a later step
+            // Visual: the App tracks the launched session visual clip's scene
+            // per track (set on launch, cleared to -1 on stop/follow-stop).
+            return m_visualLaunchScene[track];
     }
 }
 
 void App::toggleArrangementRecord() {
     if (!m_arrRecording) {
         m_arrRecording   = true;
+        if (m_transportPanel) m_transportPanel->setArrangementRecArmed(true);
         m_arrRecStartBeat = m_audioEngine.transport().positionInBeats();
         for (int t = 0; t < kMaxTracks; ++t) {
             m_arrRecScene[t] = -1;
@@ -620,6 +623,7 @@ void App::toggleArrangementRecord() {
     // Disarm: close any still-open intervals at the current beat, then offer
     // to commit the take.
     m_arrRecording = false;
+    if (m_transportPanel) m_transportPanel->setArrangementRecArmed(false);
     const double beat = m_audioEngine.transport().positionInBeats();
     int total = 0;
     for (int t = 0; t < kMaxTracks; ++t) {

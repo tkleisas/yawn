@@ -171,6 +171,8 @@ public:
 
     void setSelectedScene(int scene) { m_selectedScene = scene; }
     void setCountInBars(int bars) { m_countInBars = bars; }
+    // "Record session → arrangement" armed — shows a red REC→ARR badge.
+    void setArrangementRecArmed(bool armed) { m_arrRecArmed = armed; }
 
     // Optional override for the Record button. When set, the panel
     // calls this callback instead of sending TransportRecordMsg
@@ -377,6 +379,7 @@ private:
     float  m_tapFlash = 0.0f;
 
     bool   m_recording = false;
+    bool   m_arrRecArmed = false;   // "record session → arrangement" armed
     bool   m_countingIn = false;
     double m_countInProgress = 0.0;
     double m_countInBeats = 0.0;
