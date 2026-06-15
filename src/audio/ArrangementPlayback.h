@@ -36,6 +36,10 @@ struct ArrClipRef {
     double startBeat = 0.0;
     double lengthBeats = 4.0;
     double offsetBeats = 0.0;
+    // When the slot is longer than the source content: loop true repeats
+    // the content from offsetBeats to the source end; false plays once
+    // and goes silent past the end.
+    bool   loop = true;
 
     std::shared_ptr<AudioBuffer>   audioBuffer;
     std::shared_ptr<midi::MidiClip> midiClip;

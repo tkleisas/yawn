@@ -851,35 +851,50 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
         m_arrangementPanel->handleAppKey(SDLK_DELETE, /*ctrl=*/false);
     }));
 
-    // Visual file-video clips: how the source fills its timeline slot.
-    // (Shaders/scenes/models run on the transport clock regardless.)
-    if (clips[clipIdx].type == ArrangementClip::Type::Visual &&
-        clips[clipIdx].visualClip &&
-        !clips[clipIdx].visualClip->videoPath.empty()) {
+    // ── Loop / Stretch ──
+    // Loop governs the normal edge-drag (extend repeats the content vs.
+    // silence). Push the changed clip back to the engine so a playing
+    // clip updates live. Applies to every clip type.
+    {
         items.push_back(separator());
-        const auto curMode = clips[clipIdx].lengthMode;
-        auto setMode = [this, trackIndex, clipIdx](ArrangementClip::LengthMode m) {
-            auto& cs = m_project.track(trackIndex).arrangementClips;
-            if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
-            cs[clipIdx].lengthMode = m;
-            // Live-update the engine if this clip is currently playing.
-            if (m_activeArrVisualClip[trackIndex] == clipIdx)
-                m_visualEngine.setLayerArrangementVideo(trackIndex,
-                    static_cast<int>(m), cs[clipIdx].lengthBeats,
-                    cs[clipIdx].offsetBeats);
-            markDirty();
+        auto applyPlayback = [this](int tr, int ci) {
+            syncArrangementClipsToEngine(tr);   // audio/MIDI loop
+            auto& cs = m_project.track(tr).arrangementClips;
+            if (ci >= 0 && ci < static_cast<int>(cs.size()) &&
+                cs[ci].type == ArrangementClip::Type::Visual &&
+                m_activeArrVisualClip[tr] == ci) {
+                const auto& c = cs[ci];
+                const int vmode = c.stretch ? 1 : (c.loop ? 0 : 2);
+                m_visualEngine.setLayerArrangementVideo(tr, vmode,
+                    c.lengthBeats, c.offsetBeats);
+            }
         };
-        std::vector<MenuEntry> modeItems;
-        modeItems.push_back(itemEn("Loop",
-            [setMode]{ setMode(ArrangementClip::LengthMode::Loop); },
-            curMode != ArrangementClip::LengthMode::Loop));
-        modeItems.push_back(itemEn("Stretch to fit",
-            [setMode]{ setMode(ArrangementClip::LengthMode::Stretch); },
-            curMode != ArrangementClip::LengthMode::Stretch));
-        modeItems.push_back(itemEn("Play once",
-            [setMode]{ setMode(ArrangementClip::LengthMode::PlayOnce); },
-            curMode != ArrangementClip::LengthMode::PlayOnce));
-        items.push_back(submenu("Length Mode", std::move(modeItems)));
+        const bool isLooping = clips[clipIdx].loop;
+        items.push_back(item(isLooping ? "Loop: On" : "Loop: Off",
+            [this, trackIndex, clipIdx, applyPlayback, isLooping]() {
+                auto& cs = m_project.track(trackIndex).arrangementClips;
+                if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
+                cs[clipIdx].loop = !isLooping;
+                applyPlayback(trackIndex, clipIdx);
+                markDirty();
+            }));
+
+        // Stretch to fit — video clips only for now (audio/MIDI stretch is
+        // a later step). Overrides loop: the video fills the slot exactly.
+        if (clips[clipIdx].type == ArrangementClip::Type::Visual &&
+            clips[clipIdx].visualClip &&
+            !clips[clipIdx].visualClip->videoPath.empty()) {
+            const bool isStretch = clips[clipIdx].stretch;
+            items.push_back(item(
+                isStretch ? "Stretch to fit: On" : "Stretch to fit: Off",
+                [this, trackIndex, clipIdx, applyPlayback, isStretch]() {
+                    auto& cs = m_project.track(trackIndex).arrangementClips;
+                    if (clipIdx < 0 || clipIdx >= static_cast<int>(cs.size())) return;
+                    cs[clipIdx].stretch = !isStretch;
+                    applyPlayback(trackIndex, clipIdx);
+                    markDirty();
+                }));
+        }
     }
 
     ui::fw2::ContextMenu::show(std::move(items),

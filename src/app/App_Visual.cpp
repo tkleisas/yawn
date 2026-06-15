@@ -284,10 +284,10 @@ void App::pollArrangementVisualPlayback() {
                 // scrubbing the playhead seeks the visuals. Origin =
                 // the clip's start beat on the arrangement timeline.
                 m_visualEngine.setLayerTransportClock(t, nc.startBeat);
-                // Per-clip length mode + slot length + left-trim drive
-                // how a video fills the slot (loop / stretch / play-once).
-                m_visualEngine.setLayerArrangementVideo(t,
-                    static_cast<int>(nc.lengthMode),
+                // loop/stretch decide how a video fills the slot. Engine
+                // modes: 0=loop, 1=stretch, 2=hold-last-frame (loop off).
+                const int vmode = nc.stretch ? 1 : (nc.loop ? 0 : 2);
+                m_visualEngine.setLayerArrangementVideo(t, vmode,
                     nc.lengthBeats, nc.offsetBeats);
             }
         }

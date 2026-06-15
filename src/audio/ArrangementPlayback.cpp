@@ -42,6 +42,18 @@ void ArrangementPlayback::processAudioTrack(int track, float* buffer,
         int64_t totalFrames = buf.numFrames();
         int nc = std::min(buf.numChannels(), numChannels);
 
+        // Loop region = trim-in (offsetBeats) → source end. When looping,
+        // a play position past the end wraps back to loopStart; otherwise
+        // it goes silent (the historical behaviour).
+        int64_t loopStart = static_cast<int64_t>(clip.offsetBeats * samplesPerBeat);
+        loopStart = std::clamp<int64_t>(loopStart, 0,
+                                        std::max<int64_t>(0, totalFrames - 1));
+        const int64_t loopLen = totalFrames - loopStart;
+        auto wrapPos = [&](int64_t pos) -> int64_t {
+            if (!clip.loop || loopLen <= 0 || pos < totalFrames) return pos;
+            return loopStart + (pos - loopStart) % loopLen;
+        };
+
         // If we've moved to a new clip, compute the audio position
         if (clipIdx != state.currentClipIdx) {
             state.currentClipIdx = clipIdx;
@@ -52,13 +64,15 @@ void ArrangementPlayback::processAudioTrack(int track, float* buffer,
             double framesFromStart = beatIntoClip * samplesPerBeat;
             state.audioPlayPos = static_cast<int64_t>(framesFromStart);
             if (state.audioPlayPos < 0) state.audioPlayPos = 0;
+            state.audioPlayPos = wrapPos(state.audioPlayPos);
             if (state.audioPlayPos >= totalFrames) continue;
         }
 
         // Bounds check
-        if (state.audioPlayPos < 0 || state.audioPlayPos >= totalFrames) {
-            state.audioPlayPos++;
-            continue;
+        if (state.audioPlayPos < 0) { state.audioPlayPos++; continue; }
+        if (state.audioPlayPos >= totalFrames) {
+            state.audioPlayPos = wrapPos(state.audioPlayPos);
+            if (state.audioPlayPos >= totalFrames) { state.audioPlayPos++; continue; }
         }
 
         // Fade in/out
@@ -74,6 +88,7 @@ void ArrangementPlayback::processAudioTrack(int track, float* buffer,
         }
 
         state.audioPlayPos++;
+        state.audioPlayPos = wrapPos(state.audioPlayPos);  // loop back at the end
     }
 }
 

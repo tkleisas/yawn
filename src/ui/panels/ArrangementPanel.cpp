@@ -1607,26 +1607,38 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                 double beatsPerSec = bpm / 60.0;
                 int totalFrames = clip.audioBuffer->numFrames();
 
+                // The source content runs from the trim-in (offsetBeats) to
+                // the source end — that's the loop unit. Draw it at native
+                // density (so it never visually "stretches"); when the slot
+                // is longer, tile it if looping, else leave the tail blank
+                // (showing the silence honestly).
                 int startFrame = static_cast<int>(
                     clip.offsetBeats / beatsPerSec * sampleRate);
                 startFrame = std::max(0, std::min(startFrame, totalFrames - 1));
-                int endFrame = static_cast<int>(
-                    (clip.offsetBeats + clip.lengthBeats) / beatsPerSec * sampleRate);
-                endFrame = std::max(startFrame + 1, std::min(endFrame, totalFrames));
-                int frameCount = endFrame - startFrame;
+                int loopFrames = totalFrames - startFrame;
+                double contentBeats =
+                    (static_cast<double>(loopFrames) / sampleRate) * beatsPerSec;
+                double tileW = contentBeats * m_pixelsPerBeat;
+                if (tileW < 1.0) tileW = cw;  // degenerate (very short source)
 
                 Color wfCol{255, 255, 255, 100};
                 r.pushClip(cx, cy, cw, ch);
                 int nch = clip.audioBuffer->numChannels();
-                if (nch >= 2) {
-                    r.drawWaveformStereo(
-                        clip.audioBuffer->channelData(0) + startFrame,
-                        clip.audioBuffer->channelData(1) + startFrame,
-                        frameCount, cx, wfY, cw, wfH, wfCol);
-                } else {
-                    r.drawWaveform(
-                        clip.audioBuffer->channelData(0) + startFrame,
-                        frameCount, cx, wfY, cw, wfH, wfCol);
+                const int maxTiles = clip.loop
+                    ? static_cast<int>(std::ceil(cw / tileW)) + 1 : 1;
+                for (int tile = 0; tile < maxTiles; ++tile) {
+                    float tx = cx + tile * static_cast<float>(tileW);
+                    if (tx >= cx + cw) break;
+                    if (nch >= 2) {
+                        r.drawWaveformStereo(
+                            clip.audioBuffer->channelData(0) + startFrame,
+                            clip.audioBuffer->channelData(1) + startFrame,
+                            loopFrames, tx, wfY, static_cast<float>(tileW), wfH, wfCol);
+                    } else {
+                        r.drawWaveform(
+                            clip.audioBuffer->channelData(0) + startFrame,
+                            loopFrames, tx, wfY, static_cast<float>(tileW), wfH, wfCol);
+                    }
                 }
                 r.popClip();
             }
@@ -1684,16 +1696,24 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                 else if (!vc.text.empty())        glyph = "T";  // text
                 tm.drawText(r, glyph, cx + 4.0f, cy + 2.0f, fs,
                             Color{255, 255, 255, 230});
-                // Length-mode tag, top-right (L=loop, S=stretch, 1=once).
-                // Only meaningful for file video (the only source the mode
-                // governs); shaders/scenes run on the transport clock.
-                if (cw > 34.0f && !vc.videoPath.empty()) {
-                    const char* modeTag =
-                        clip.lengthMode == ArrangementClip::LengthMode::Stretch  ? "S" :
-                        clip.lengthMode == ArrangementClip::LengthMode::PlayOnce ? "1" : "L";
-                    tm.drawText(r, modeTag, cx + cw - 11.0f, cy + 2.0f, fs,
-                                Color{210, 230, 255, 220});
+            }
+
+            // Loop / stretch state badge (top-right) so the resize
+            // behaviour — extend-loops vs extend-silent vs stretch — is
+            // visible at a glance, for every clip type.
+            if (cw > 26.0f) {
+                const char* tag; Color tagC;
+                if (clip.stretch && clip.type == ArrangementClip::Type::Visual) {
+                    tag = "S"; tagC = Color{150, 210, 245, 235};   // stretch
+                } else if (clip.loop) {
+                    tag = "L"; tagC = Color{150, 235, 170, 230};   // loop
+                } else {
+                    tag = "1"; tagC = Color{240, 200, 120, 230};   // one-shot
                 }
+                const float bw = 12.0f, bh = 13.0f;
+                const float bx = cx + cw - bw - 2.0f, by = cy + 2.0f;
+                r.drawRoundedRect(bx, by, bw, bh, 2.0f, Color{0, 0, 0, 110}, 4);
+                tm.drawText(r, tag, bx + 3.0f, by + 1.0f, fs, tagC);
             }
 
             r.drawRectOutline(cx, cy, cw, ch,

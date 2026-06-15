@@ -1291,10 +1291,8 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     ac.colorIndex   = s->visualClip->colorIndex;
                     // A tempo-synced session clip was already following the
                     // tempo, so it stretches to fill its slot; otherwise it
-                    // loops at native rate (the historical default).
-                    ac.lengthMode   = s->visualClip->tempoSync
-                        ? ArrangementClip::LengthMode::Stretch
-                        : ArrangementClip::LengthMode::Loop;
+                    // loops on extend (the default).
+                    ac.stretch      = s->visualClip->tempoSync;
                     ac.visualClip   = s->visualClip->clone();
                     auto& clips = m_project.track(trackIndex).arrangementClips;
                     clips.push_back(std::move(ac));
@@ -1508,6 +1506,7 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
                     ac.type        = ArrangementClip::Type::Audio;
                     ac.audioBuffer = s->audioClip->buffer;
                     ac.lengthBeats = durSec * bpm / 60.0;
+                    ac.loop        = s->audioClip->looping;  // one-shots don't loop
                     ac.name        = s->audioClip->name.empty()
                                      ? "audio" : s->audioClip->name;
                 } else if (s->midiClip) {

@@ -1025,8 +1025,8 @@ json serializeArrangementClip(const ArrangementClip& clip,
     j["startBeat"] = clip.startBeat;
     j["lengthBeats"] = clip.lengthBeats;
     j["offsetBeats"] = clip.offsetBeats;
-    if (clip.lengthMode != ArrangementClip::LengthMode::Loop)
-        j["lengthMode"] = static_cast<int>(clip.lengthMode);
+    if (!clip.loop)    j["loop"]    = false;   // default true
+    if (clip.stretch)  j["stretch"] = true;
     j["name"] = clip.name;
     j["colorIndex"] = clip.colorIndex;
 
@@ -1059,8 +1059,16 @@ ArrangementClip deserializeArrangementClip(const json& j,
     clip.startBeat = j.value("startBeat", 0.0);
     clip.lengthBeats = j.value("lengthBeats", 4.0);
     clip.offsetBeats = j.value("offsetBeats", 0.0);
-    clip.lengthMode = static_cast<ArrangementClip::LengthMode>(
-        j.value("lengthMode", 0));
+    // loop/stretch (v0.84.3+); fall back to the legacy lengthMode int
+    // {0=Loop, 1=Stretch, 2=PlayOnce} written by v0.84.1/2.
+    if (j.contains("loop") || j.contains("stretch")) {
+        clip.loop    = j.value("loop", true);
+        clip.stretch = j.value("stretch", false);
+    } else if (j.contains("lengthMode")) {
+        const int lm = j.value("lengthMode", 0);
+        clip.stretch = (lm == 1);
+        clip.loop    = (lm == 0);
+    }
     clip.name = j.value("name", "");
     clip.colorIndex = j.value("colorIndex", -1);
 
