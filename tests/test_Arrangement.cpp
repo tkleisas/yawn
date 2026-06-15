@@ -502,6 +502,36 @@ TEST(ArrangementPlayback, MidiStretchScalesNoteTiming) {
     EXPECT_NEAR(firstNoteOnFrame(false), 22050, 8);   // 1.0 beat (native)
 }
 
+TEST(ArrangementPlayback, AudioStretchFillsSlot) {
+    // A 2-beat (44100-frame) source stretched to a 4-beat slot fills the
+    // whole slot with sound (the time-stretcher produces ~2× output);
+    // a one-shot would be silent past the source's 2-beat length.
+    auto sampleAt = [&](bool stretch, int frame) {
+        yawn::audio::ArrangementPlayback ap;
+        yawn::audio::Transport transport;
+        transport.setSampleRate(44100.0);
+        transport.setBPM(120.0);
+        transport.play();
+        ap.setTransport(&transport);
+        ap.setSampleRate(44100.0);
+        std::vector<yawn::audio::ArrClipRef> clips;
+        yawn::audio::ArrClipRef c;
+        c.type = yawn::audio::ArrClipRef::Type::Audio;
+        c.startBeat = 0.0; c.lengthBeats = 4.0;   // 4-beat slot
+        c.loop = false; c.stretch = stretch;
+        c.audioBuffer = makeTestBuffer(44100, 1); // 1 s = 2 beats @120
+        clips.push_back(c);
+        ap.setTrackClips(0, std::move(clips));
+        ap.setTrackActive(0, true);
+        std::vector<float> buffer(88200, 0.0f);   // 4 beats
+        ap.processAudioTrack(0, buffer.data(), 88200, 1);
+        return buffer[frame];
+    };
+    // Frame 60000 ≈ beat 2.7 — past the source's natural 2 beats.
+    EXPECT_NE(sampleAt(true,  60000), 0.0f);   // stretched → fills the slot
+    EXPECT_EQ(sampleAt(false, 60000), 0.0f);   // one-shot → silent there
+}
+
 TEST(ArrangementPlayback, SubmitTrackClipsThreadSafe) {
     yawn::audio::ArrangementPlayback ap;
     yawn::audio::Transport transport;

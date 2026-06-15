@@ -1,6 +1,8 @@
 #include "audio/ArrangementPlayback.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <vector>
 
 namespace yawn {
 namespace audio {
@@ -42,6 +44,58 @@ void ArrangementPlayback::processAudioTrack(int track, float* buffer,
         auto& buf = *clip.audioBuffer;
         int64_t totalFrames = buf.numFrames();
         int nc = std::min(buf.numChannels(), numChannels);
+
+        // ── Time-stretch path ──
+        // A stretched clip runs its source through per-channel time-
+        // stretchers to fill the slot (pitch-preserving) instead of a 1:1
+        // read. Needs enough source for the analysis window; very short
+        // clips fall through to the direct read.
+        const int64_t offsetFrame = std::clamp<int64_t>(
+            static_cast<int64_t>(clip.offsetBeats * samplesPerBeat),
+            0, std::max<int64_t>(0, totalFrames));
+        const int64_t contentFrames = totalFrames - offsetFrame;
+        if (clip.stretch && contentFrames >= 2048) {
+            const int sc = std::min(nc, 2);
+            if (clipIdx != state.currentClipIdx) {
+                state.currentClipIdx = clipIdx;
+                state.fadeGain = 0.0f;
+                if (!state.arrStretchReady) {
+                    for (int ch = 0; ch < 2; ++ch) {
+                        state.arrStretch[ch].init(m_sampleRate, 4096,
+                            TimeStretcher::Algorithm::WSOLA);
+                        state.arrStretchOut[ch].assign(
+                            ArrTrackState::kArrStretchOutSize, 0.0f);
+                    }
+                    state.arrStretchReady = true;
+                }
+                const double slotFrames = clip.lengthBeats * samplesPerBeat;
+                const double ratio = (slotFrames > 1.0)
+                    ? static_cast<double>(contentFrames) / slotFrames : 1.0;
+                const double framesIntoClip =
+                    (beat - clip.startBeat) * samplesPerBeat;
+                for (int ch = 0; ch < 2; ++ch) {
+                    state.arrStretch[ch].reset();
+                    state.arrStretch[ch].setSpeedRatio(ratio);
+                    state.arrStretchAvail[ch] = 0;
+                    state.arrStretchRead[ch]  = 0;
+                }
+                state.arrStretchSrcPos = static_cast<double>(offsetFrame)
+                    + std::max(0.0, framesIntoClip) * ratio;
+            }
+            if (state.fadeGain < 1.0f)
+                state.fadeGain = std::min(1.0f,
+                    state.fadeGain + ArrTrackState::kFadeIncrement);
+            if (!fillStretch(state, clip, numChannels)) continue;  // drained
+            const float gain = state.fadeGain;
+            const int rp = state.arrStretchRead[0];
+            for (int ch = 0; ch < sc; ++ch) {
+                if (rp < state.arrStretchAvail[ch])
+                    buffer[frame * numChannels + ch] +=
+                        state.arrStretchOut[ch][rp] * gain;
+            }
+            for (int ch = 0; ch < sc; ++ch) state.arrStretchRead[ch]++;
+            continue;
+        }
 
         // Loop region = trim-in (offsetBeats) → source end. When looping,
         // a play position past the end wraps back to loopStart; otherwise
@@ -91,6 +145,50 @@ void ArrangementPlayback::processAudioTrack(int track, float* buffer,
         state.audioPlayPos++;
         state.audioPlayPos = wrapPos(state.audioPlayPos);  // loop back at the end
     }
+}
+
+bool ArrangementPlayback::fillStretch(ArrTrackState& st, const ArrClipRef& clip,
+                                      int numChannels) {
+    const auto& buf = *clip.audioBuffer;
+    const int totalFrames = buf.numFrames();
+    const int bufCh = buf.numChannels();
+    const int sc = std::min({bufCh, numChannels, 2});
+    if (sc <= 0) return false;
+
+    // Still have unread output? (channels stay in lockstep, so ch0 decides.)
+    if (st.arrStretchRead[0] < st.arrStretchAvail[0]) return true;
+
+    const int srcStart = static_cast<int>(st.arrStretchSrcPos);
+    if (srcStart >= totalFrames) return false;   // source consumed + drained
+
+    static thread_local std::vector<float> gather;
+    constexpr int kGather = 4096;
+    if (static_cast<int>(gather.size()) < kGather) gather.assign(kGather, 0.0f);
+
+    int consumed0 = 0;
+    for (int ch = 0; ch < sc; ++ch) {
+        const int srcCh = std::min(ch, bufCh - 1);
+        int gathered = 0;
+        for (int s = 0; s < kGather; ++s) {
+            const int f = srcStart + s;
+            if (f >= totalFrames) break;
+            gather[s] = buf.sample(srcCh, f);
+            ++gathered;
+        }
+        if (gathered == 0) break;
+        st.arrStretch[ch].resetInputPosition();
+        const int cap = static_cast<int>(st.arrStretchOut[ch].size());
+        std::memset(st.arrStretchOut[ch].data(), 0, cap * sizeof(float));
+        int consumed = 0;
+        const int produced = st.arrStretch[ch].process(
+            gather.data(), gathered, st.arrStretchOut[ch].data(), cap, consumed);
+        st.arrStretchAvail[ch] = produced;
+        st.arrStretchRead[ch]  = 0;
+        if (ch == 0) consumed0 = consumed;
+    }
+    // Advance the shared source position; guard against a zero-consume stall.
+    st.arrStretchSrcPos += (consumed0 > 0) ? consumed0 : 1.0;
+    return st.arrStretchAvail[0] > 0;
 }
 
 void ArrangementPlayback::processMidiTrack(int track, midi::MidiBuffer& midiBuffer,

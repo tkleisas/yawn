@@ -15,6 +15,7 @@
 #include "core/Constants.h"
 #include "audio/AudioBuffer.h"
 #include "audio/Transport.h"
+#include "audio/TimeStretcher.h"
 #include "midi/MidiClip.h"
 #include "midi/MidiTypes.h"
 #include <array>
@@ -63,6 +64,19 @@ struct ArrTrackState {
     // MIDI playback state
     int currentMidiClipIdx = -1;
     double lastMidiBeat = -1.0;        // Last processed beat (for scanning)
+
+    // Time-stretch playback (one stretcher per channel, ≤2). Lazily
+    // init'd on the first stretched clip — a one-time allocation on the
+    // audio thread, matching the session ClipEngine's pattern. Output is
+    // produced in chunks into arrStretchOut and read one frame at a time;
+    // arrStretchSrcPos is the source gather position (frames).
+    TimeStretcher      arrStretch[2];
+    std::vector<float> arrStretchOut[2];
+    int                arrStretchAvail[2] = {0, 0};
+    int                arrStretchRead[2]  = {0, 0};
+    double             arrStretchSrcPos   = 0.0;
+    bool               arrStretchReady    = false;   // stretchers init'd
+    static constexpr int kArrStretchOutSize = 8192;
 
     static constexpr float kFadeIncrement = 0.002f;
 };
@@ -147,6 +161,10 @@ public:
         s.fadeGain = 1.0f;
         s.currentMidiClipIdx = -1;
         s.lastMidiBeat = -1.0;
+        s.arrStretchAvail[0] = s.arrStretchAvail[1] = 0;
+        s.arrStretchRead[0]  = s.arrStretchRead[1]  = 0;
+        // currentClipIdx = -1 forces a re-prime of the stretcher on the
+        // next stretched frame, so no need to reset the stretchers here.
     }
 
     void resetAllTracks() {
@@ -176,6 +194,10 @@ public:
     void processMidiTrack(int track, midi::MidiBuffer& midiBuffer, int numFrames);
 
 private:
+    // Refill a stretched audio clip's per-channel output buffers so each
+    // has at least one unread frame. Returns false when the source is
+    // exhausted and the buffers are drained (clip finished).
+    bool fillStretch(ArrTrackState& st, const ArrClipRef& clip, int numChannels);
     // Heap node carrying a clip list across threads. Allocated and
     // freed only on the UI thread; the audio thread just exchanges
     // pointers and swaps vector contents.

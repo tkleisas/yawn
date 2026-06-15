@@ -1620,11 +1620,16 @@ void ArrangementPanel::paintClipTimeline(Renderer2D& r, TextMetrics& tm,
                     (static_cast<double>(loopFrames) / sampleRate) * beatsPerSec;
                 double tileW = contentBeats * m_pixelsPerBeat;
                 if (tileW < 1.0) tileW = cw;  // degenerate (very short source)
+                // Stretch fills the whole clip with one scaled draw (the
+                // audio is genuinely time-stretched); loop tiles; one-shot
+                // draws once with a blank tail.
+                const bool stretchFill = clip.stretch && loopFrames > 0;
+                if (stretchFill) tileW = cw;
 
                 Color wfCol{255, 255, 255, 100};
                 r.pushClip(cx, cy, cw, ch);
                 int nch = clip.audioBuffer->numChannels();
-                const int maxTiles = clip.loop
+                const int maxTiles = (clip.loop && !stretchFill)
                     ? static_cast<int>(std::ceil(cw / tileW)) + 1 : 1;
                 for (int tile = 0; tile < maxTiles; ++tile) {
                     float tx = cx + tile * static_cast<float>(tileW);
