@@ -581,6 +581,16 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
             else
                 m_dragMode = DragMode::MoveClip;
 
+            // ⌥-drag a clip EDGE stretches it to fit instead of loop/trim
+            // (⌥ on the body is the cross-panel drag below, so this is gated
+            // to the resize edges). The engine re-syncs on drag release via
+            // onClipChange. Off by the menu's Stretch toggle.
+            if ((m_dragMode == DragMode::ResizeLeft ||
+                 m_dragMode == DragMode::ResizeRight) &&
+                (e.modifiers & ModifierKey::Alt)) {
+                clip.stretch = true;
+            }
+
             m_dragStartBeat = beat;
             m_dragOrigStart = clip.startBeat;
             m_dragOrigLength = clip.lengthBeats;
