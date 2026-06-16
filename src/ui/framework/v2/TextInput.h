@@ -60,6 +60,13 @@ public:
     int  cursor() const                    { return m_cursor; }
     void setCursor(int pos);
 
+    // Horizontal scroll offset (px) so the caret stays visible when the
+    // text is wider than the field. Maintained by the painter each frame
+    // (it clamps to keep the caret in view); exposed so the painter can
+    // read/update it. Reset when the text is replaced.
+    float scrollPx() const                 { return m_scrollPx; }
+    void  setScrollPx(float s)             { m_scrollPx = s; }
+
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;
@@ -88,6 +95,7 @@ private:
     std::string m_placeholder;
     int         m_cursor  = 0;         // byte offset into m_text
     bool        m_editing = false;
+    float       m_scrollPx = 0.0f;     // horizontal scroll (painter-maintained)
 
     // Callbacks
     ChangeCallback m_onChange;

@@ -1410,25 +1410,37 @@ static void paintTextInput(Widget& w, UIContext& ctx) {
         showPlaceholder ? p.textDim :
         (t.isEnabled() ? p.textPrimary : p.textDim);
 
-    // Clip so long text doesn't escape the box to the right.
-    ctx.renderer->pushClip(b.x + padX * 0.5f, b.y, b.w - padX, b.h);
-    ctx.textMetrics->drawText(*ctx.renderer, display, tx0, ty, fs, tc);
-
-    // Caret at cursor position while editing. Size + centre it to
-    // match the glyph cap-to-baseline range (≈ 0.7 lh), vertically
-    // centred inside the field — looks balanced against the text
-    // regardless of the shim above.
+    // Horizontal scroll: while editing, keep the caret in view by sliding
+    // the text left/right so a string longer than the field stays editable.
+    // The caret offset (caretRel) is measured from the text start; we clamp
+    // a persisted scroll so the caret never leaves [0, viewW].
+    float drawX    = tx0;
+    float caretRel = 0.0f;
     if (editing) {
-        // Measure up to the cursor byte offset. If the cursor sits in
-        // the middle of a multi-byte char (shouldn't under the SM now
-        // that Backspace/arrows are UTF-8-aware, but be defensive),
-        // back it up to the prior codepoint boundary.
-        int c = t.cursor();
+        int c = t.cursor();   // back up to a codepoint boundary, defensively
         while (c > 0 &&
                 (static_cast<unsigned char>(t.text()[c]) & 0xC0) == 0x80)
             --c;
-        const std::string pre = t.text().substr(0, c);
-        const float caretX = tx0 + ctx.textMetrics->textWidth(pre, fs);
+        caretRel = ctx.textMetrics->textWidth(t.text().substr(0, c), fs);
+        const float viewW = std::max(0.0f, b.w - padX * 2.0f);
+        float scroll = t.scrollPx();
+        if (caretRel < scroll)              scroll = caretRel;          // caret left of view
+        else if (caretRel > scroll + viewW) scroll = caretRel - viewW;  // caret right of view
+        if (scroll < 0.0f) scroll = 0.0f;
+        t.setScrollPx(scroll);
+        drawX = tx0 - scroll;
+    } else {
+        t.setScrollPx(0.0f);
+    }
+
+    // Clip so scrolled / long text doesn't escape the box.
+    ctx.renderer->pushClip(b.x + padX * 0.5f, b.y, b.w - padX, b.h);
+    ctx.textMetrics->drawText(*ctx.renderer, display, drawX, ty, fs, tc);
+
+    // Caret at cursor position while editing. Size + centre it to match the
+    // glyph cap-to-baseline range, vertically centred inside the field.
+    if (editing) {
+        const float caretX = drawX + caretRel;
         const float caretH = lh * 0.75f;
         const float caretY = b.y + (b.h - caretH) * 0.5f;
         ctx.renderer->drawLine(caretX, caretY, caretX, caretY + caretH,

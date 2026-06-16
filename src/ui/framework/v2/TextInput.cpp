@@ -44,6 +44,7 @@ void FwTextInput::setText(std::string t) {
     if (t == m_text) { m_cursor = clampCursor(m_cursor); return; }
     m_text = std::move(t);
     m_cursor = static_cast<int>(m_text.size());
+    m_scrollPx = 0.0f;
     // Not treated as user-typed — no onChange fire. Callers that want
     // to broadcast programmatic sets can emit onChange themselves.
 }

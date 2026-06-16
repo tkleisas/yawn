@@ -77,6 +77,17 @@ void App::update() {
     if (m_videoExport) pollVideoExport();
     const bool vExport = isVideoExporting();
 
+    // The transport's inline BPM / time-signature edit is entered through the
+    // number field's gesture SM, which fires beginEdit outside the mousedown
+    // handler's one-shot SDL_StartTextInput window — so without this, digit
+    // TEXT_INPUT events never start flowing and you can't type a tempo (only
+    // Backspace, a KEY_DOWN, works). Reconcile SDL text input with the edit
+    // state every frame: turn it on while editing if it isn't already.
+    if (m_transportPanel->isEditing() &&
+        !SDL_TextInputActive(m_mainWindow.getHandle())) {
+        SDL_StartTextInput(m_mainWindow.getHandle());
+    }
+
     // Debounced settings flush — save ~0.75 s after the last change so a
     // velocity drag doesn't write the settings file every frame.
     if (m_settingsDirty && ++m_settingsDirtyAge > 45) {
