@@ -64,17 +64,20 @@ The [full feature list lives in **docs/features.md**](docs/features.md) — the 
 
 ## Screenshots
 
-![Y.A.W.N v0.1 — Session View with device chain panel](images/yawn_v.0.1.png)
-*v0.1 — Session View showing the clip grid, mixer, and device chain panel with Arpeggiator → Subtractive Synth → Filter → Oscilloscope → EQ → Spectrum Analyzer.*
+![Y.A.W.N — Session View](images/yawn01_session.png)
+*Session View — the clip grid with scenes across audio, MIDI and visual tracks, the mixer with live meters, and the audio-clip waveform editor below.*
 
-![Y.A.W.N v0.4.1 — Arrangement View](images/yawn_v.0.4.1.png)
-*v0.4.1 — Arrangement View with timeline clips, automation lanes, loop markers, and piano roll editor.*
+![Y.A.W.N — Arrangement View](images/yawn02_arrangement.png)
+*Arrangement View — audio, MIDI and visual clips laid out along the linear timeline, with automation lanes, loop range, and waveform display.*
 
-![Y.A.W.N — FM Synth](images/yawn_fm_synth_01.png)
-*FM Synth with 4-operator algorithm routing diagram and grouped parameter knobs.*
+![Y.A.W.N — DrumSynth](images/yawn03_drumsynth.png)
+*DrumSynth — a per-voice drum synthesizer (tune / attack / drive per voice) feeding a Beat Repeat → Compressor → Active EQ device chain.*
 
-![Y.A.W.N — Piano Roll](images/yawn_piano_roll.png)
-*Piano Roll editor with draw/select/erase tools, velocity bars, and snap-to-grid.*
+![Y.A.W.N — Visual / VJ output](images/yawn04_visual_output.png)
+*Visual / VJ engine — the dedicated output window rendering an audio-reactive layer with a text overlay, driven live from the session alongside the device chain and EQ.*
+
+![Y.A.W.N — Piano roll & step editor](images/yawn05_piano_drumroll.png)
+*Piano roll & step editor — MIDI note editing with velocity lanes, sitting under the DrumSynth device chain.*
 
 ## Tech Stack
 
