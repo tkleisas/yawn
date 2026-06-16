@@ -10,6 +10,7 @@
 #include "audio/AudioEngine.h"
 #include "audio/Mixer.h"
 #include "core/Constants.h"
+#include "stb_image.h"   // static-image visual sources (setLayerImage)
 
 #include <vector>
 #include <fstream>
@@ -1004,6 +1005,7 @@ bool VisualEngine::setLayerVideo(int track, const std::string& path) {
     if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
     L.modelPath.clear();
 #endif
+    clearLayerImageSource(L);   // a static image also feeds iChannel2
 
     if (path.empty()) {
         // Keep the GL texture around at zeros — we rebind to the dummy
@@ -1038,6 +1040,64 @@ bool VisualEngine::setLayerVideo(int track, const std::string& path) {
     return true;
 }
 
+void VisualEngine::clearLayerImageSource(Layer& L) {
+    if (L.imageTex) { glDeleteTextures(1, &L.imageTex); L.imageTex = 0; }
+    L.imagePath.clear();
+    L.imageW = L.imageH = 0;
+}
+
+bool VisualEngine::setLayerImage(int track, const std::string& path) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    Layer& L = it->second;
+
+    ContextScope scope(m_outputWindow, m_outputContext);
+
+    // iChannel2 is shared — tear down any video / live / model source first.
+    if (L.video) L.video->close();
+    L.video.reset();
+    L.videoPath.clear();
+    L.lastVideoFrame = -1;
+    if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
+    L.liveUrl.clear();
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
+    L.modelPath.clear();
+#endif
+
+    if (path.empty()) { clearLayerImageSource(L); return true; }
+
+    int w = 0, h = 0, ch = 0;
+    stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &ch, 4);   // force RGBA
+    if (!pixels || w <= 0 || h <= 0) {
+        LOG_WARN("Visual", "Layer %d: failed to load image %s", track, path.c_str());
+        if (pixels) stbi_image_free(pixels);
+        return false;
+    }
+
+    // Lazy-create, then (re)upload at the image's native size.
+    if (L.imageTex == 0) {
+        glGenTextures(1, &L.imageTex);
+        glBindTexture(GL_TEXTURE_2D, L.imageTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, L.imageTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pixels);
+
+    L.imagePath = path;
+    L.imageW = w;
+    L.imageH = h;
+    LOG_INFO("Visual", "Layer %d: image %s (%dx%d)", track, path.c_str(), w, h);
+    return true;
+}
+
 LiveVideoSource::State VisualEngine::getLayerLiveState(int track) const {
     auto it = m_layers.find(track);
     if (it == m_layers.end() || !it->second.liveVideo)
@@ -1067,6 +1127,7 @@ bool VisualEngine::setLayerLiveInput(int track, const std::string& url) {
     if (L.modelRenderer) { L.modelRenderer->clear(); L.modelRenderer.reset(); }
     L.modelPath.clear();
 #endif
+    clearLayerImageSource(L);
 
     // Same URL as already running? Leave the running source alone so
     // re-launching the clip doesn't stall it on a reconnect.
@@ -1197,6 +1258,7 @@ bool VisualEngine::setLayerModel(int track, const std::string& path,
     L.lastVideoFrame = -1;
     if (L.liveVideo) { L.liveVideo->stop(); L.liveVideo.reset(); }
     L.liveUrl.clear();
+    clearLayerImageSource(L);
 
     // Cache key: the primary path plus every extra, joined. Same model
     // set already loaded → keep as-is (avoid churning the GL upload on
@@ -2272,8 +2334,16 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             }
         }
     }
-    // Resolve which texture iChannel2 sees (model > video > dummy).
+    // Resolve which texture iChannel2 sees (image > model > video > dummy)
+    // and its dimensions for iChannelResolution[2] (so the image-fit shader
+    // can aspect-fit). All four sources are mutually exclusive per layer.
     GLuint iCh2Tex = m_dummyChannelTex[2];
+    float  ch2w = 1.0f, ch2h = 1.0f;
+    if (L.imageTex && !L.imagePath.empty()) {
+        iCh2Tex = L.imageTex;
+        ch2w = static_cast<float>(L.imageW);
+        ch2h = static_cast<float>(L.imageH);
+    } else
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
     if (L.modelRenderer && L.modelRenderer->hasModel() &&
         L.modelRenderer->colorTexture()) {
@@ -2282,6 +2352,8 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
 #endif
     if ((L.video || L.liveVideo) && L.videoTex) {
         iCh2Tex = L.videoTex;
+        ch2w = static_cast<float>(VideoDecoder::kWidth);
+        ch2h = static_cast<float>(VideoDecoder::kHeight);
     }
 
     // Render one pass into `targetFBO`. Templated over the uniform-loc
@@ -2375,7 +2447,7 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
             const float res[12] = {
                 static_cast<float>(kAudioTexW), static_cast<float>(kAudioTexH), 1.0f,
                 static_cast<float>(kTextTexW),  static_cast<float>(kTextTexH),  1.0f,
-                1.0f, 1.0f, 1.0f,
+                ch2w, ch2h, 1.0f,    // iChannel2 = image/video native size
                 1.0f, 1.0f, 1.0f,
             };
             glUniform3fv(src.loc_iChannelResolution, 4, res);

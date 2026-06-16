@@ -105,6 +105,11 @@ struct VisualClip {
     // Kept so "Re-import" can re-transcode without re-prompting the user.
     std::string videoSourcePath;
 
+    // Static image source (PNG/JPG/…), also feeding iChannel2 — mutually
+    // exclusive with videoPath / liveUrl / modelPath. Displayed via the
+    // bundled image_fit.frag (aspect-fit + scale knob, alpha preserved).
+    std::string imagePath;
+
     // Video playback controls (F.2, F.3).
     //   videoLoopBars  : 0  = free-running at the native 30 fps (loops when
     //                          the source ends); >0 = playback rate is
@@ -176,6 +181,7 @@ struct VisualClip {
         c->videoPath       = videoPath;
         c->thumbnailPath   = thumbnailPath;
         c->videoSourcePath = videoSourcePath;
+        c->imagePath       = imagePath;
         c->videoLoopBars   = videoLoopBars;
         c->videoRate       = videoRate;
         c->videoIn         = videoIn;

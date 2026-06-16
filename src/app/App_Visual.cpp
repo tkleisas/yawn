@@ -154,8 +154,11 @@ void App::launchVisualClipData(int track,
     const bool hasFileVideo = !vc.videoPath.empty();
     const bool hasLiveVideo = vc.liveInput && !vc.liveUrl.empty();
     const bool hasModel     = !vc.modelPath.empty();
+    const bool hasImage     = !vc.imagePath.empty();
     if (effectiveShader.empty() && hasModel) {
         effectiveShader = "assets/shaders/model_passthrough.frag";
+    } else if (effectiveShader.empty() && hasImage) {
+        effectiveShader = "assets/shaders/image_fit.frag";
     } else if (effectiveShader.empty() &&
                 (hasFileVideo || hasLiveVideo)) {
         effectiveShader = "assets/shaders/video_passthrough.frag";
@@ -220,7 +223,9 @@ void App::launchVisualClipData(int track,
     // Priority: model > live > file. Engine enforces the teardown
     // either way; we skip the non-winning setters so we don't churn
     // decoder threads / uploads unnecessarily.
-    if (!vc.modelPath.empty()) {
+    if (!vc.imagePath.empty()) {
+        m_visualEngine.setLayerImage(track, vc.imagePath);
+    } else if (!vc.modelPath.empty()) {
         std::vector<std::string> extraResolved;
         for (const auto& p : vc.extraModelPaths)
             if (!p.empty()) extraResolved.push_back(resolveModelPath(p));
@@ -905,6 +910,33 @@ std::string App::localizeShader(const std::string& sourcePath) {
                  src.string().c_str(), target.string().c_str());
     }
     return "shaders/" + stem + ext;
+}
+
+void App::addImageToSlot(int track, int scene, const std::string& sourcePath) {
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot) return;
+    if (!slot->visualClip) {
+        auto vc = std::make_unique<visual::VisualClip>();
+        std::filesystem::path p(sourcePath);
+        vc->name       = p.stem().string();
+        vc->colorIndex = m_project.track(track).colorIndex;
+        m_project.setVisualClip(track, scene, std::move(vc));
+        slot = m_project.getSlot(track, scene);
+        if (!slot || !slot->visualClip) return;
+    }
+    // The image is the sole iChannel2 source — clear the others. No transcode:
+    // we reference the file in place (absolute path).
+    slot->visualClip->imagePath       = sourcePath;
+    slot->visualClip->thumbnailPath   = sourcePath;   // the image is its own thumb
+    slot->visualClip->videoPath.clear();
+    slot->visualClip->videoSourcePath.clear();
+    slot->visualClip->liveInput = false;
+    slot->visualClip->liveUrl.clear();
+    slot->visualClip->modelPath.clear();
+    markDirty();
+    m_toastManager.show("Image loaded: " +
+        std::filesystem::path(sourcePath).filename().string(),
+        2.0f, ui::ToastManager::Severity::Info);
 }
 
 void App::startVideoImport(int track, int scene, const std::string& sourcePath) {

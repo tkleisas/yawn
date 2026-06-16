@@ -598,6 +598,9 @@ private:
 
     void startVideoImport(int track, int scene, const std::string& sourcePath);
     void onVideoImportDone(PendingVideoImport& pi);
+    // Static image (PNG/JPG/…) dropped on a visual track → set it as the
+    // slot's iChannel2 source (no transcode; references the file in place).
+    void addImageToSlot(int track, int scene, const std::string& sourcePath);
 
     // Shader-path helpers (localization + resolution).
     // localizeShader copies an externally-picked .frag into

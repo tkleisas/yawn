@@ -134,6 +134,10 @@ public:
     // (iChannel2 reverts to the dummy black texture). Returns false if
     // the file couldn't be opened.
     bool setLayerVideo(int track, const std::string& path);
+    // Load a static image (PNG/JPG/…) as the layer's iChannel2 source. Empty
+    // path clears it. Mutually exclusive with video/live/model. Returns false
+    // if the image couldn't be decoded.
+    bool setLayerImage(int track, const std::string& path);
     // Attach or detach a live video source (webcam, RTSP, …). Empty
     // url → no live input. Live and file video are mutually exclusive;
     // setting one tears down the other.
@@ -392,6 +396,13 @@ private:
         std::string  videoPath;
         GLuint       videoTex        = 0;
         int          lastVideoFrame  = -1;
+        // Static image (also mutually exclusive with video/live/model — all
+        // feed iChannel2). imageTex holds the loaded RGBA8 picture at its
+        // native size; imageW/H drive the fit shader's aspect.
+        std::string  imagePath;
+        GLuint       imageTex         = 0;
+        int          imageW           = 0;
+        int          imageH           = 0;
         // Live video source (mutually exclusive with `video`). When
         // present, replaces the file-decode upload path each frame with
         // a pull from the LiveVideoSource's latest ready frame.
@@ -687,6 +698,7 @@ private:
     TextRasterizer             m_textRasterizer;
     std::vector<unsigned char> m_textScratch;  // reused CPU R8 buffer
     void uploadLayerText(Layer& L);
+    void clearLayerImageSource(Layer& L);   // free the iChannel2 image texture
 
     const audio::AudioEngine* m_audioEngine = nullptr;
 

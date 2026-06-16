@@ -936,6 +936,7 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
     if (!vc.videoPath.empty())        j["videoPath"]       = vc.videoPath;
     if (!vc.thumbnailPath.empty())    j["thumbnailPath"]   = vc.thumbnailPath;
     if (!vc.videoSourcePath.empty())  j["videoSourcePath"] = vc.videoSourcePath;
+    if (!vc.imagePath.empty())        j["imagePath"]       = vc.imagePath;
     if (vc.videoLoopBars != 0)        j["videoLoopBars"]   = vc.videoLoopBars;
     if (std::abs(vc.videoRate - 1.0f) > 0.001f) j["videoRate"] = vc.videoRate;
     if (vc.videoIn  != 0.0f)          j["videoIn"]         = vc.videoIn;
@@ -991,6 +992,7 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
     vc->videoPath       = val.value("videoPath",       std::string());
     vc->thumbnailPath   = val.value("thumbnailPath",   std::string());
     vc->videoSourcePath = val.value("videoSourcePath", std::string());
+    vc->imagePath       = val.value("imagePath",       std::string());
     vc->videoLoopBars   = val.value("videoLoopBars",   0);
     vc->videoRate       = val.value("videoRate",       1.0f);
     vc->videoIn         = val.value("videoIn",         0.0f);

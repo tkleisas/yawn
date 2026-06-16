@@ -1548,6 +1548,35 @@ void App::processEvents() {
                         }
                         return false;
                     };
+                    // Image drop onto a Visual track → reference it in place
+                    // (no transcode, no save required). Cascades down scenes
+                    // like video does.
+                    auto isImageExt = [](const std::string& path) {
+                        static const char* exts[] = {
+                            ".png",".jpg",".jpeg",".bmp",".tga",".gif"};
+                        std::string p = path;
+                        for (auto& c : p) c = static_cast<char>(std::tolower(c));
+                        for (const char* e : exts) {
+                            size_t n = std::strlen(e);
+                            if (p.size() >= n && p.compare(p.size() - n, n, e) == 0)
+                                return true;
+                        }
+                        return false;
+                    };
+                    if (targetTrack >= 0 && targetTrack < m_project.numTracks() &&
+                        m_project.track(targetTrack).type == Track::Type::Visual &&
+                        isImageExt(file)) {
+                        if (m_videoDropTrack < 0) {
+                            m_videoDropTrack = targetTrack;
+                            m_videoDropScene = targetScene;
+                        }
+                        int vs = std::min(m_videoDropScene,
+                                          m_project.numScenes() - 1);
+                        addImageToSlot(m_videoDropTrack, vs, file);
+                        ++m_videoDropScene;
+                        break;
+                    }
+
                     if (targetTrack >= 0 && targetTrack < m_project.numTracks() &&
                         m_project.track(targetTrack).type == Track::Type::Visual &&
                         isVideoExt(file)) {
