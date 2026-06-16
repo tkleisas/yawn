@@ -16,6 +16,8 @@
 // concurrent imports, create separate VideoImporter instances.
 
 #include <atomic>
+#include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -76,6 +78,41 @@ private:
 // exits, returns true on success. Shared with the video exporter so it
 // doesn't reimplement the platform process spawn.
 bool runFFmpegCommand(const std::vector<std::string>& args);
+
+// Streams raw frames straight into ffmpeg's stdin (rawvideo), so the video
+// export encodes WHILE it renders — no intermediate PNG sequence and no
+// separate encode pass. Cross-platform (POSIX pipe+fork / Win32 pipe).
+//
+//   FfmpegPipe p;
+//   p.start({"ffmpeg","-f","rawvideo","-pixel_format","rgba",
+//            "-video_size","640x360","-framerate","30","-i","-", ..., out});
+//   for each frame: p.write(rgba, w*h*4);
+//   bool ok = p.finish();   // close stdin, wait for ffmpeg
+class FfmpegPipe {
+public:
+    FfmpegPipe() = default;
+    ~FfmpegPipe();
+    FfmpegPipe(const FfmpegPipe&)            = delete;
+    FfmpegPipe& operator=(const FfmpegPipe&) = delete;
+
+    // Spawn ffmpeg (args[0] == "ffmpeg") with stdin wired to a pipe. The args
+    // must make ffmpeg read video from stdin (i.e. "-i", "-").
+    bool start(const std::vector<std::string>& args);
+    bool running() const { return m_started && !m_finished; }
+
+    // Write one frame's worth of raw bytes to ffmpeg's stdin. Returns false
+    // if the pipe broke (ffmpeg died early).
+    bool write(const void* data, size_t bytes);
+
+    // Close stdin and wait for ffmpeg to drain + exit. True on clean exit.
+    bool finish();
+
+private:
+    bool     m_started  = false;
+    bool     m_finished = false;
+    intptr_t m_write    = -1;   // write fd (POSIX) / write HANDLE (Win32)
+    intptr_t m_proc     = -1;   // pid (POSIX) / process HANDLE (Win32)
+};
 
 } // namespace visual
 } // namespace yawn

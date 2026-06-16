@@ -13,6 +13,7 @@
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
 #else
+#  include <csignal>
 #  include <fcntl.h>
 #  include <sys/types.h>
 #  include <sys/wait.h>
@@ -577,6 +578,152 @@ bool VideoImporter::start(const std::string& sourcePath,
 bool runFFmpegCommand(const std::vector<std::string>& args) {
     return runFFmpeg(args);
 }
+
+// ── FfmpegPipe — stream raw frames into ffmpeg's stdin ──────────────────────
+#ifdef _WIN32
+
+FfmpegPipe::~FfmpegPipe() { if (m_started && !m_finished) finish(); }
+
+bool FfmpegPipe::start(const std::vector<std::string>& args) {
+    if (m_started || args.empty()) return false;
+    std::vector<std::string> a = args;
+    a[0] = resolveBinary(a[0]);
+    std::wstring cmd = buildCommandLine(a);
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back(L'\0');
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return false;
+    // Parent's write end must NOT be inherited by the child.
+    SetHandleInformation(wr, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE hNul = CreateFileW(L"NUL", GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             &sa, OPEN_EXISTING, 0, nullptr);
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags     = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput   = rd;
+    si.hStdOutput  = hNul;
+    si.hStdError   = hNul;
+
+    PROCESS_INFORMATION pi = {};
+    BOOL ok = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr,
+                             /*bInheritHandles=*/TRUE, CREATE_NO_WINDOW,
+                             nullptr, nullptr, &si, &pi);
+    CloseHandle(rd);                                   // child owns the read end
+    if (hNul != INVALID_HANDLE_VALUE) CloseHandle(hNul);
+    if (!ok) {
+        CloseHandle(wr);
+        std::fprintf(stderr, "[Video] CreateProcess(%s) failed: %lu\n",
+                      args[0].c_str(), GetLastError());
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    m_write   = reinterpret_cast<intptr_t>(wr);
+    m_proc    = reinterpret_cast<intptr_t>(pi.hProcess);
+    m_started = true;
+    return true;
+}
+
+bool FfmpegPipe::write(const void* data, size_t bytes) {
+    if (!m_started || m_finished || m_write == -1) return false;
+    const char* p = static_cast<const char*>(data);
+    HANDLE h = reinterpret_cast<HANDLE>(m_write);
+    size_t left = bytes;
+    while (left > 0) {
+        DWORD chunk = (left > 0x40000000u) ? 0x40000000u
+                                           : static_cast<DWORD>(left);
+        DWORD wrote = 0;
+        if (!WriteFile(h, p, chunk, &wrote, nullptr) || wrote == 0) return false;
+        p    += wrote;
+        left -= wrote;
+    }
+    return true;
+}
+
+bool FfmpegPipe::finish() {
+    if (!m_started || m_finished) return false;
+    m_finished = true;
+    if (m_write != -1) { CloseHandle(reinterpret_cast<HANDLE>(m_write)); m_write = -1; }
+    DWORD code = 1;
+    if (m_proc != -1) {
+        HANDLE hp = reinterpret_cast<HANDLE>(m_proc);
+        WaitForSingleObject(hp, INFINITE);
+        GetExitCodeProcess(hp, &code);
+        CloseHandle(hp);
+        m_proc = -1;
+    }
+    return code == 0;
+}
+
+#else  // POSIX
+
+FfmpegPipe::~FfmpegPipe() { if (m_started && !m_finished) finish(); }
+
+bool FfmpegPipe::start(const std::vector<std::string>& args) {
+    if (m_started || args.empty()) return false;
+    int pfd[2];
+    if (pipe(pfd) < 0) return false;
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); return false; }
+    if (pid == 0) {
+        // Child: read end → stdin, then exec ffmpeg.
+        dup2(pfd[0], STDIN_FILENO);
+        close(pfd[0]);
+        close(pfd[1]);
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        std::fprintf(stderr, "[Video] execvp(%s) failed: %s\n",
+                      args[0].c_str(), std::strerror(errno));
+        _exit(127);
+    }
+    // Parent keeps the write end.
+    close(pfd[0]);
+    std::signal(SIGPIPE, SIG_IGN);   // a dead ffmpeg → EPIPE on write, not a kill
+    m_write   = static_cast<intptr_t>(pfd[1]);
+    m_proc    = static_cast<intptr_t>(pid);
+    m_started = true;
+    return true;
+}
+
+bool FfmpegPipe::write(const void* data, size_t bytes) {
+    if (!m_started || m_finished || m_write < 0) return false;
+    const char* p   = static_cast<const char*>(data);
+    const int   fd  = static_cast<int>(m_write);
+    size_t      left = bytes;
+    while (left > 0) {
+        ssize_t n = ::write(fd, p, left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;            // EPIPE etc.
+        }
+        p    += n;
+        left -= static_cast<size_t>(n);
+    }
+    return true;
+}
+
+bool FfmpegPipe::finish() {
+    if (!m_started || m_finished) return false;
+    m_finished = true;
+    if (m_write >= 0) { close(static_cast<int>(m_write)); m_write = -1; }
+    int status = 0;
+    pid_t pid = static_cast<pid_t>(m_proc);
+    if (pid > 0) {
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        m_proc = -1;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+#endif  // _WIN32
 
 } // namespace visual
 } // namespace yawn

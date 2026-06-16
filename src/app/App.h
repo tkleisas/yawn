@@ -43,6 +43,7 @@
 #include "util/UndoManager.h"
 #include "transcribe/StemSeparation.h"
 #include "util/IconLoader.h"
+#include "visual/VideoImporter.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -494,6 +495,7 @@ private:
         std::vector<uint8_t>  restoreArr;       // per-track arrangementActive
         std::vector<uint8_t>  rgba;             // reused readback buffer
         audio::RenderProgress audioProg;        // sub-progress for the bounce
+        visual::FfmpegPipe    pipe;             // raw frames → ffmpeg stdin
         std::thread           worker;           // non-GL phase (audio / ffmpeg)
         std::atomic<bool>     workerDone{false};
         std::atomic<bool>     workerOk{false};

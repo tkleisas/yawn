@@ -957,6 +957,30 @@ void App::pollVideoExport() {
         m_visualEngine.beginOfflineRender();
         j.w = m_visualEngine.compositeWidth();
         j.h = m_visualEngine.compositeHeight();
+
+        // Start ffmpeg reading raw RGBA frames from stdin (+ the bounced WAV
+        // for audio). Encoding now overlaps the frame render — no PNG sequence,
+        // no separate encode pass.
+        {
+            char sizeBuf[32];
+            std::snprintf(sizeBuf, sizeof(sizeBuf), "%dx%d", j.w, j.h);
+            std::vector<std::string> args = {
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "rawvideo", "-pixel_format", "rgba",
+                "-video_size", sizeBuf, "-framerate", std::to_string(j.fps),
+                "-i", "-",
+            };
+            if (j.haveAudio) { args.push_back("-i"); args.push_back(j.wavPath.string()); }
+            args.insert(args.end(), { "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                      "-preset", "veryfast", "-crf", "21" });
+            if (j.haveAudio) args.insert(args.end(), { "-c:a", "aac", "-shortest" });
+            args.push_back(j.outPath);
+            if (!j.pipe.start(args)) {
+                m_visualEngine.endOfflineRender();
+                finalizeVideoExport(false, false);   // ffmpeg failed to launch
+                break;
+            }
+        }
         j.phase = VideoExportJob::Phase::Frames;
         break;
     }
@@ -965,23 +989,26 @@ void App::pollVideoExport() {
     case VideoExportJob::Phase::Frames: {
         if (cancel) {
             m_visualEngine.endOfflineRender();
+            j.pipe.finish();
             finalizeVideoExport(false, true);
             break;
         }
         auto& transport = m_audioEngine.transport();
         const auto budgetStart = std::chrono::steady_clock::now();
-        char nameBuf[64];
-        // Render a slice this UI frame, then yield so the window stays live.
+        const size_t frameBytes = static_cast<size_t>(j.w) * j.h * 4;
+        bool pipeBroke = false;
+        // Render a slice this UI frame, streaming each frame straight into
+        // ffmpeg, then yield so the window stays live.
         while (j.frame < j.totalFrames) {
             const double sec  = static_cast<double>(j.frame) / j.fps;
             const double beat = sec * j.bpm / 60.0;
             transport.setPositionInSamples(static_cast<int64_t>(sec * j.sampleRate));
             pollArrangementVisualPlayback();
             m_visualEngine.tick(sec, beat, /*playing*/true);
-            if (m_visualEngine.readComposite(j.rgba)) {
-                std::snprintf(nameBuf, sizeof(nameBuf), "f_%06d.png", j.frame);
-                stbi_write_png((j.tmpDir / nameBuf).string().c_str(),
-                               j.w, j.h, 4, j.rgba.data(), j.w * 4);
+            if (m_visualEngine.readComposite(j.rgba) &&
+                !j.pipe.write(j.rgba.data(), frameBytes)) {
+                pipeBroke = true;          // ffmpeg died early
+                break;
             }
             ++j.frame;
             if ((j.frame % 60) == 0)
@@ -992,6 +1019,12 @@ void App::pollVideoExport() {
         }
         progress.fraction.store(0.10f + 0.78f *
             static_cast<float>(j.frame) / static_cast<float>(j.totalFrames));
+        if (pipeBroke) {
+            m_visualEngine.endOfflineRender();
+            j.pipe.finish();
+            finalizeVideoExport(false, false);
+            break;
+        }
         if (j.frame >= j.totalFrames) {
             m_visualEngine.endOfflineRender();
             j.phase = VideoExportJob::Phase::Encode;
@@ -999,30 +1032,22 @@ void App::pollVideoExport() {
         break;
     }
 
-    // ── Phase 3: encode + mux with ffmpeg on a worker thread ──────────────
+    // ── Phase 3: close ffmpeg's stdin and let it drain the last frames ────
+    // Encoding overlapped the render, so this is just the tail flush. Done on
+    // a worker so the wait never blocks the UI.
     case VideoExportJob::Phase::Encode: {
         if (!j.workerLaunched) {
             j.workerLaunched = true;
             j.workerDone.store(false);
-            progress.fraction.store(0.88f);
+            progress.fraction.store(0.90f);
             VideoExportJob* job = &j;
             j.worker = std::thread([job]() {
-                std::vector<std::string> args = {
-                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                    "-framerate", std::to_string(job->fps),
-                    "-i", (job->tmpDir / "f_%06d.png").string(),
-                };
-                if (job->haveAudio) { args.push_back("-i"); args.push_back(job->wavPath.string()); }
-                args.insert(args.end(), { "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                                          "-preset", "veryfast", "-crf", "21" });
-                if (job->haveAudio) args.insert(args.end(), { "-c:a", "aac", "-shortest" });
-                args.push_back(job->outPath);
-                const bool ok = visual::runFFmpegCommand(args);
+                const bool ok = job->pipe.finish();   // close stdin + wait
                 job->workerOk.store(ok);
                 job->workerDone.store(true);
             });
         }
-        if (!j.workerDone.load()) { progress.fraction.store(0.95f); break; }
+        if (!j.workerDone.load()) { progress.fraction.store(0.96f); break; }
         if (j.worker.joinable()) j.worker.join();
         finalizeVideoExport(j.workerOk.load(), false);
         break;
@@ -1041,6 +1066,7 @@ void App::finalizeVideoExport(bool ok, bool cancelled) {
     m_visualEngine.endOfflineRender();
     std::error_code ec;
     fs::remove_all(j.tmpDir, ec);
+    if (!ok || cancelled) fs::remove(j.outPath, ec);   // drop partial output
 
     // Restore transport + arrangement-active state + visual transitions.
     auto& transport = m_audioEngine.transport();
