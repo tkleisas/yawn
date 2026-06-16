@@ -164,13 +164,14 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_metroDotX = lx + metW + 6.0f;
     m_metroDotY = btnY + boxH * 0.5f;
 
-    // ── Center group: Home | Stop | Play | Record | AUTO ──
-    // AUTO is the master automation-record arm. Wider than the
-    // round transport buttons (it carries a text label), and sits
-    // immediately right of Record so the two arming controls are
-    // visually paired.
+    // ── Center group: Home | Stop | Play | Record | AUTO | ▸ARR ──
+    // AUTO is the master automation-record arm; ▸ARR arms session→arrangement
+    // capture. Both are wider text-label buttons sitting right of Record so
+    // the three arming controls (clip / automation / arrangement) are paired.
     const float autoBtnW  = 56.0f;
-    const float totalBtnW = 4 * btnSize + 3 * btnGap + btnGap + autoBtnW;
+    const float arrBtnW   = 56.0f;
+    const float totalBtnW = 4 * btnSize + 3 * btnGap + btnGap + autoBtnW
+                          + btnGap + arrBtnW;
     const float centerX   = bounds.x + (bounds.w - totalBtnW) * 0.5f;
 
     m_homeBtnX = centerX;                          m_homeBtnY = btnY;
@@ -183,6 +184,8 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_recBtnW  = btnSize;                          m_recBtnH  = btnSize;
     m_autoBtnX = centerX + 4 * (btnSize + btnGap); m_autoBtnY = btnY;
     m_autoBtnW = autoBtnW;                         m_autoBtnH = btnSize;
+    m_arrBtnX  = m_autoBtnX + autoBtnW + btnGap;   m_arrBtnY  = btnY;
+    m_arrBtnW  = arrBtnW;                          m_arrBtnH  = btnSize;
 
     // ── Right side: Link toggle (rightmost), velocity selector left of it ──
     const float linkW = 52.0f;
@@ -377,16 +380,8 @@ void TransportPanel::render(UIContext& ctx) {
         }
     }
 
-    // "Record session → arrangement" armed badge — left of the position
-    // display, always visible while armed so a long take isn't a surprise.
-    if (m_arrRecArmed) {
-        const float s  = tmet.fontSizeLarge;
-        const char* txt = "● REC\xE2\x96\xB8" "ARR";   // ● REC▸ARR
-        const float tw = tm.textWidth(txt, s);
-        const float lh = tm.lineHeight(s);
-        tm.drawText(r, txt, m_velBtnX - 260.0f - tw, y + (h - lh) * 0.5f,
-                    s, ::yawn::ui::Color{235, 90, 90, 255});
-    }
+    // (The session→arrangement armed state now lives in the ▸ARR transport
+    // button, which lights red while armed — no separate badge needed.)
 
     // Right-aligned position display (left of CPU/MEM meter).
     if (!m_posText.empty()) {
@@ -617,6 +612,27 @@ void TransportPanel::paintTransportButtons(Renderer2D& r, TextMetrics* tmPtr) {
                              fs, tc);
         }
     }
+
+    // ▸ARR — session→arrangement capture arm. Same arm-toggle visual language
+    // as AUTO/Record: bright red when armed, dim grey when off.
+    {
+        const Color bg = m_arrRecArmed ? Color{200, 40, 40, 255}
+                                       : Color{42, 42, 50, 255};
+        const Color tc = m_arrRecArmed ? Color{255, 230, 230, 255}
+                                       : Color{170, 170, 180, 255};
+        r.drawRoundedRect(m_arrBtnX, m_arrBtnY, m_arrBtnW, m_arrBtnH,
+                           cornerR, bg);
+        if (tmPtr) {
+            const char* lbl = "\xE2\x96\xB8" "ARR";   // ▸ARR
+            const float fs  = theme().metrics.fontSizeSmall;
+            const float tw  = tmPtr->textWidth(lbl, fs);
+            const float lh  = tmPtr->lineHeight(fs);
+            tmPtr->drawText(r, lbl,
+                             m_arrBtnX + (m_arrBtnW - tw) * 0.5f,
+                             m_arrBtnY + (m_arrBtnH - lh) * 0.5f,
+                             fs, tc);
+        }
+    }
 }
 
 // ─── Mouse events ──────────────────────────────────────────────────
@@ -736,6 +752,15 @@ bool TransportPanel::onMouseDown(MouseEvent& e) {
                  newState ? "arm" : "disarm");
         m_globalAutoArmed = newState;
         if (m_onAutoArmPressed) m_onAutoArmPressed(newState);
+        return true;
+    }
+    // ▸ARR — session→arrangement capture arm. Pure toggle; App owns the
+    // arm/disarm + confirm-and-bounce and reflects the lit state back via
+    // setArrangementRecArmed.
+    if (hitBtn(m_arrBtnX, m_arrBtnY, m_arrBtnW, m_arrBtnH, mx, my)) {
+        LOG_INFO("User", "transport ▸ARR button → %s",
+                 m_arrRecArmed ? "disarm" : "arm");
+        if (m_onArrRecPressed) m_onArrRecPressed();
         return true;
     }
 

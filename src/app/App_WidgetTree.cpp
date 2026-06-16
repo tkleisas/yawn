@@ -371,13 +371,7 @@ void App::setupMenuBar() {
         M::item("Generate Presets for Selected Track's Device", [this]() {
             startPresetGeneration(0.5f, /*selectedDeviceOnly*/true);
         }),
-        M::separator(),
-        // Arm/disarm capturing the live session performance (clip launches,
-        // follow-actions, scenes) into the arrangement. Arm, play & trigger
-        // clips, then pick this again to stop and bounce the take.
-        M::item("Record Session into Arrangement (toggle)", [this]() {
-            toggleArrangementRecord();
-        }),
+        // (Session→arrangement capture moved to the transport ▸ARR button.)
     });
 
     // Help menu

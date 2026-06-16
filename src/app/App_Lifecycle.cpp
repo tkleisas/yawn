@@ -212,6 +212,9 @@ bool App::init() {
         m_audioEngine.sendCommand(audio::SetGlobalAutoRecordMsg{armed});
         markDirty();
     });
+    // ▸ARR transport button — arms/disarms session→arrangement capture
+    // (and on disarm pops the "Bounce N captured clips?" confirm).
+    m_transportPanel->setOnArrRecPressed([this]() { toggleArrangementRecord(); });
     m_transportPanel->setGlobalAutoArmed(m_project.globalAutoRecord());
     m_audioEngine.sendCommand(audio::SetGlobalAutoRecordMsg{
         m_project.globalAutoRecord()});

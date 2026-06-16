@@ -198,6 +198,15 @@ public:
         m_onAutoArmPressed = std::move(cb);
     }
 
+    // ▸ARR — session→arrangement capture arm. A pure toggle: App wires this
+    // to App::toggleArrangementRecord (which arms / disarms + on disarm pops
+    // the "Bounce N captured clips?" confirm). The button's lit state comes
+    // back via setArrangementRecArmed.
+    using ArrRecPressedCallback = std::function<void()>;
+    void setOnArrRecPressed(ArrRecPressedCallback cb) {
+        m_onArrRecPressed = std::move(cb);
+    }
+
     // Virtual-keyboard note-velocity selector (a small selector left of
     // the LINK button). The panel owns the level; App wires this to
     // VirtualKeyboard::setVelocity. (Replaces the old MIDI-menu velocity
@@ -325,6 +334,7 @@ private:
     int                 m_selectedScene = 0;
     RecordPressedCallback m_onRecordPressed;
     AutoArmPressedCallback m_onAutoArmPressed;
+    ArrRecPressedCallback m_onArrRecPressed;
     VelocityChangedCallback m_onVelocityChanged;
 
     bool   m_transportPlaying     = false;
@@ -363,6 +373,9 @@ private:
     // bright red when m_globalAutoArmed.
     float m_autoBtnX = 0, m_autoBtnY = 0, m_autoBtnW = 0, m_autoBtnH = 0;
     bool  m_globalAutoArmed = false;
+    // ▸ARR — session→arrangement capture arm. Right of AUTO; renders red
+    // when armed (m_arrRecArmed). Replaces the old REC▸ARR position-bar badge.
+    float m_arrBtnX = 0, m_arrBtnY = 0, m_arrBtnW = 0, m_arrBtnH = 0;
 
     // BPM/TimeSig box positions — used by handleDoubleClick + MIDI-Learn
     // right-click hit-testing.
