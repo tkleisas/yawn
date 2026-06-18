@@ -8,6 +8,9 @@
 #include "visual/VisualModBus.h"
 #include "transcribe/AudioToMidi.h"
 #include "ui/framework/v2/Fw2Painters.h"
+#include <cmath>
+#include <chrono>
+#include <cstdint>
 #include "ui/framework/v2/Tooltip.h"
 #include "ui/framework/v2/ContextMenu.h"
 #include "ui/framework/v2/Dialog.h"
@@ -465,6 +468,42 @@ int findParamByName(const Device& dev, const std::string& name) {
 }
 } // namespace
 
+namespace {
+// Stateless evaluation of a SavedKnobLFO — matches visual::VisualLFO::evaluate
+// (sample&hold recomputed from the cycle index, so no persistent state needed,
+// which keeps it usable from the offline render worker). Returns the raw shape
+// value in [-1,1]; the caller scales by depth.
+float evalSavedLFO(const SavedKnobLFO& lfo, double beat, double wall) {
+    if (!lfo.enabled || lfo.depth <= 0.0f) return 0.0f;
+    const double r    = (lfo.rate > 0.0001f) ? static_cast<double>(lfo.rate) : 0.0001;
+    const double ph   = lfo.sync ? (beat / r) : (wall * r);
+    const double frac = ph - std::floor(ph);
+    switch (lfo.shape) {
+        case 0: return static_cast<float>(std::sin(frac * 6.28318530718));      // Sine
+        case 1: return static_cast<float>(frac < 0.5 ? 4.0 * frac - 1.0
+                                                     : 3.0 - 4.0 * frac);       // Triangle
+        case 2: return static_cast<float>(2.0 * frac - 1.0);                    // Saw
+        case 3: return frac < 0.5 ? 1.0f : -1.0f;                               // Square
+        case 4: {                                                              // Sample & Hold
+            uint32_t x = static_cast<uint32_t>(static_cast<int>(std::floor(ph)))
+                       * 2654435761u;
+            x ^= x >> 16;
+            return static_cast<float>(x & 0xFFFFFFu)
+                 / static_cast<float>(0xFFFFFF) * 2.0f - 1.0f;
+        }
+        default: return 0.0f;
+    }
+}
+
+// A macro's knob value with its LFO applied, clamped to [0,1].
+float macroValueWithLFO(const MacroDevice& md, int idx, double beat, double wall) {
+    if (idx < 0 || idx >= MacroDevice::kNumMacros) return 0.0f;
+    float v = md.values[idx]
+            + evalSavedLFO(md.lfos[idx], beat, wall) * md.lfos[idx].depth;
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+} // namespace
+
 void App::applyMacroMappings() {
     // Walk every track's MacroDevice once per frame; each mapping
     // reads the live (LFO-modulated) macro value, lerps it through
@@ -479,6 +518,9 @@ void App::applyMacroMappings() {
     // uniform — so an LFO breathing the macro pulses every mapped
     // target in unison.
     const int nTracks = m_project.numTracks();
+    const double beat = m_audioEngine.transport().positionInBeats();
+    const double wall = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
     for (int t = 0; t < nTracks; ++t) {
         auto& track = m_project.track(t);
         if (track.macros.mappings.empty()) continue;
@@ -487,13 +529,13 @@ void App::applyMacroMappings() {
             if (m.macroIdx < 0 ||
                 m.macroIdx >= MacroDevice::kNumMacros) continue;
 
-            // Visual macros pull modulated value from the engine
-            // (which has the LFO state). For non-visual tracks we
-            // fall back to the raw macro value — audio/MIDI tracks
-            // don't yet have layer-style LFO eval (Phase 4.6).
+            // Visual macros pull the modulated value from the engine (which
+            // holds the LFO state); audio/MIDI tracks evaluate the macro's
+            // LFO on the CPU here so they breathe their mapped device params
+            // the same way (and so the offline bounce can reproduce it).
             const float macroV = (track.type == Track::Type::Visual)
                 ? m_visualEngine.getLayerKnobDisplayValue(t, m.macroIdx)
-                : track.macros.values[m.macroIdx];
+                : macroValueWithLFO(track.macros, m.macroIdx, beat, wall);
             const float normV = m.rangeMin
                 + (m.rangeMax - m.rangeMin) * macroV;
 
@@ -567,6 +609,61 @@ void App::applyMacroMappings() {
                 }
                 case MacroTarget::Kind::None:
                     break;
+            }
+        }
+    }
+}
+
+void App::applyAudioMacroModulation(double beat, double wall) {
+    // Audio-only macro application — no visual-engine access, so it's safe to
+    // call from the offline-render worker. Pushes each track's LFO-modulated
+    // macro value to its audio targets at the given transport beat, so the
+    // bounced audio carries the same macro modulation as live playback.
+    const int nTracks = m_project.numTracks();
+    for (int t = 0; t < nTracks; ++t) {
+        const auto& track = m_project.track(t);
+        if (track.macros.mappings.empty()) continue;
+        for (const auto& m : track.macros.mappings) {
+            if (m.macroIdx < 0 || m.macroIdx >= MacroDevice::kNumMacros) continue;
+            const float macroV = macroValueWithLFO(track.macros, m.macroIdx, beat, wall);
+            const float normV  = m.rangeMin + (m.rangeMax - m.rangeMin) * macroV;
+            switch (m.target.kind) {
+                case MacroTarget::Kind::AudioInstrumentParam: {
+                    auto* inst = m_audioEngine.instrument(t);
+                    if (!inst) break;
+                    int pi = findParamByName(*inst, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = inst->parameterInfo(pi);
+                    inst->setParameter(pi, info.minValue + normV * (info.maxValue - info.minValue));
+                    break;
+                }
+                case MacroTarget::Kind::AudioEffectParam: {
+                    auto& chain = m_audioEngine.mixer().trackEffects(t);
+                    auto* fx = chain.effectAt(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    fx->setParameter(pi, info.minValue + normV * (info.maxValue - info.minValue));
+                    break;
+                }
+                case MacroTarget::Kind::MidiEffectParam: {
+                    auto& chain = m_audioEngine.midiEffectChain(t);
+                    auto* fx = chain.effect(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    fx->setParameter(pi, info.minValue + normV * (info.maxValue - info.minValue));
+                    break;
+                }
+                case MacroTarget::Kind::TrackVolume:
+                    m_audioEngine.mixer().setTrackVolume(t, normV * 2.0f);
+                    break;
+                case MacroTarget::Kind::TrackPan:
+                    m_audioEngine.mixer().setTrackPan(t, normV * 2.0f - 1.0f);
+                    break;
+                default: break;
             }
         }
     }

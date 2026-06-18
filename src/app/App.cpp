@@ -932,7 +932,13 @@ void App::pollVideoExport() {
                 rc.startBeat = 0.0; rc.endBeat = job->lengthBeats;
                 rc.targetSampleRate = static_cast<int>(job->sampleRate);
                 rc.channels = 2;
-                auto buf = audio::OfflineRenderer::render(m_audioEngine, rc, job->audioProg);
+                // Drive macro/LFO modulation per render block so the bounced
+                // audio carries the same modulation as live playback.
+                const double bpm = job->bpm;
+                auto buf = audio::OfflineRenderer::render(m_audioEngine, rc, job->audioProg,
+                    [this, bpm](double beat) {
+                        applyAudioMacroModulation(beat, beat * 60.0 / bpm);
+                    });
                 job->haveAudio = buf && !job->audioProg.cancelled.load() &&
                     util::saveAudioBuffer(job->wavPath.string(), *buf,
                                           static_cast<int>(job->sampleRate));
@@ -1004,6 +1010,14 @@ void App::pollVideoExport() {
             const double beat = sec * j.bpm / 60.0;
             transport.setPositionInSamples(static_cast<int64_t>(sec * j.sampleRate));
             pollArrangementVisualPlayback();
+            // Re-apply the per-frame visual modulation the main update() loop
+            // is skipping during export (it's gated on isVideoExporting): the
+            // visual-knob automation lanes and the macro/LFO → shader/chain
+            // param mappings. Without these the exported video is frozen at
+            // base values (no modulation). Sampled at this frame's synthetic
+            // transport position.
+            pollVisualKnobAutomation();
+            applyMacroMappings();
             m_visualEngine.tick(sec, beat, /*playing*/true);
             if (m_visualEngine.readComposite(j.rgba) &&
                 !j.pipe.write(j.rgba.data(), frameBytes)) {
@@ -1190,7 +1204,10 @@ void App::startExportRender(const std::string& filePath) {
         if (hasArr) syncArrangementClipsToEngine(t);
     }
 
-    // Launch render on a detached thread
+    // Launch render on a detached thread. (No per-block macro hook here: this
+    // path leaves the main update() loop running applyMacroMappings, so a
+    // worker-side push would race it. The blocking video export gates that
+    // loop and drives macros from the worker instead — see pollVideoExport.)
     std::thread([this, renderCfg, outPath, format, bitDepth, sampleRate,
                  nTracks, restoreArrActive, &progress]() {
         auto buffer = audio::OfflineRenderer::render(m_audioEngine, renderCfg, progress);

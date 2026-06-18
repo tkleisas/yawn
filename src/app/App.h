@@ -224,6 +224,9 @@ private:
     // the appropriate engine API (visual source / chain only in
     // 4.1; audio + MIDI targets land in 4.2).
     void applyMacroMappings();
+    // Audio-only macro application at a given transport beat — safe to call
+    // from the offline-render worker so the bounce carries macro modulation.
+    void applyAudioMacroModulation(double beat, double wall);
     void performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCopy);
     // Load a .mid loop file into the (track, scene) slot with undo + a
     // status toast. Shared by the Loops-tab double-click (selected slot)

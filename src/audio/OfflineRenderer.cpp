@@ -12,7 +12,8 @@ namespace audio {
 std::shared_ptr<AudioBuffer> OfflineRenderer::render(
     AudioEngine& engine,
     const RenderConfig& config,
-    RenderProgress& progress)
+    RenderProgress& progress,
+    const std::function<void(double beat)>& onBlock)
 {
     progress.fraction.store(0.0f);
     progress.done.store(false);
@@ -76,6 +77,13 @@ std::shared_ptr<AudioBuffer> OfflineRenderer::render(
 
         std::memset(tempBuf.data(), 0,
                     static_cast<size_t>(framesToRender) * channels * sizeof(float));
+
+        // Per-block modulation hook (macro/LFO param pushes) at this block's
+        // transport beat, before the audio is rendered.
+        if (onBlock) {
+            onBlock(static_cast<double>(startSample + framesRendered)
+                    / samplesPerBeat);
+        }
 
         engine.renderBuffer(tempBuf.data(),
                             static_cast<unsigned long>(framesToRender));
