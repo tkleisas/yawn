@@ -71,7 +71,8 @@ jobs:
             libavformat-dev \
             libavutil-dev \
             libswscale-dev \
-            libavdevice-dev
+            libavdevice-dev \
+            ccache
 
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
@@ -89,8 +90,30 @@ jobs:
       - name: Install Python dependencies
         run: pip install jinja2
 
+      # Cache the FetchContent git clones + built deps (SDL3, NAM, ableton_link,
+      # VST3 SDK, eigen, …) — the dominant cost of the Linux build. Keyed on the
+      # dependency declarations; an exact hit skips the ~1.2 GB of re-cloning
+      # entirely. No restore-keys: a dep change must force a clean re-fetch.
+      - name: Cache FetchContent deps (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: linux-deps-${{ hashFiles('cmake/**', 'CMakeLists.txt') }}
+
+      # Compiler cache so unchanged TUs (deps + YAWN) aren't recompiled. The
+      # rolling key + restore-keys keeps a warm cache across releases; ccache
+      # validates by content hash, so a stale restore is safe (just misses).
+      - name: Cache ccache (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: linux-ccache-${{ github.sha }}
+          restore-keys: linux-ccache-
+
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
