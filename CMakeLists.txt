@@ -1,6 +1,28 @@
 cmake_minimum_required(VERSION 3.24)
+
+# ── Version from git tag (configure-time) ─────────────────────────────
+# Reads the latest 'vX.Y.Z' tag so the project version always matches
+# the most recent release. Falls back to the hard-coded default when
+# git isn't available or no tags exist (e.g. tarball builds).
+set(YAWN_VERSION_DEFAULT "0.85.4")
+set(YAWN_VERSION "${YAWN_VERSION_DEFAULT}")
+execute_process(
+    COMMAND git describe --tags --abbrev=0
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE YAWN_GIT_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE YAWN_GIT_RESULT
+)
+if(YAWN_GIT_RESULT EQUAL 0 AND YAWN_GIT_TAG MATCHES "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+    set(YAWN_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+    message(STATUS "Version from git tag: ${YAWN_GIT_TAG} → ${YAWN_VERSION}")
+else()
+    message(STATUS "Version: ${YAWN_VERSION} (no matching git tag found)")
+endif()
+
 project(YAWN
-    VERSION 0.64.1
+    VERSION "${YAWN_VERSION}"
     DESCRIPTION "Yet Another Audio Workstation New"
     LANGUAGES C CXX
 )
