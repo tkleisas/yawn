@@ -6,12 +6,30 @@
 #include "util/EffectChainJson.h"
 #include "visual/VisualEngineAPI.h"
 
+#include <charconv>
+
 #ifdef YAWN_HAS_VST3
 #include "vst3/VST3Instrument.h"
 #include "vst3/VST3Effect.h"
 #endif
 
 namespace yawn {
+
+namespace {
+
+// Exception-free int parse for file-supplied keys ("3" in "3:1" clip
+// keys, macro indices). std::stoi throws std::invalid_argument on
+// garbage like "x" — a corrupt project file could then terminate the
+// app mid-load. Returns false on any non-numeric input.
+bool parseIntSafe(const std::string& s, int& out) {
+    if (s.empty()) return false;
+    const char* first = s.data();
+    const char* last  = first + s.size();
+    const auto res = std::from_chars(first, last, out);
+    return res.ec == std::errc() && res.ptr == last;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Effect chain serialization
@@ -218,10 +236,14 @@ json serializeInstrument(const instruments::Instrument& inst,
         if (sampler.hasSample()) {
             std::string filename = "sample_" + std::to_string(sampleCounter++) + ".wav";
             fs::path samplePath = samplesDir / filename;
-            FileIO::saveAudioFile(samplePath.string(),
+            if (FileIO::saveAudioFile(samplePath.string(),
                                   sampler.sampleData(), sampler.sampleFrames(),
-                                  sampler.sampleChannels(), static_cast<int>(kDefaultSampleRate));
-            j["sampleFile"] = "samples/" + filename;
+                                  sampler.sampleChannels(), static_cast<int>(kDefaultSampleRate))) {
+                j["sampleFile"] = "samples/" + filename;
+            } else {
+                LOG_WARN("Project", "Sample write failed: %s",
+                         samplePath.string().c_str());
+            }
         }
     }
 
@@ -240,9 +262,13 @@ json serializeInstrument(const instruments::Instrument& inst,
             std::string filename = "ms_zone_" + std::to_string(i) + "_" +
                                    std::to_string(sampleCounter++) + ".wav";
             fs::path samplePath = samplesDir / filename;
-            FileIO::saveAudioFile(samplePath.string(),
+            if (!FileIO::saveAudioFile(samplePath.string(),
                                   z->sampleData.data(), z->sampleFrames,
-                                  z->sampleChannels, static_cast<int>(kDefaultSampleRate));
+                                  z->sampleChannels, static_cast<int>(kDefaultSampleRate))) {
+                LOG_WARN("Project", "Zone sample write failed: %s",
+                         samplePath.string().c_str());
+                continue;
+            }
             json zj;
             zj["sampleFile"] = "samples/" + filename;
             zj["sampleRate"] = (z->sampleRate > 0)
@@ -274,9 +300,13 @@ json serializeInstrument(const instruments::Instrument& inst,
             std::string filename = "pad_" + std::to_string(note) + "_" +
                                    std::to_string(sampleCounter++) + ".wav";
             fs::path samplePath = samplesDir / filename;
-            FileIO::saveAudioFile(samplePath.string(),
+            if (!FileIO::saveAudioFile(samplePath.string(),
                                   p.sample->samples.data(), p.sample->frames,
-                                  p.sample->channels, static_cast<int>(kDefaultSampleRate));
+                                  p.sample->channels, static_cast<int>(kDefaultSampleRate))) {
+                LOG_WARN("Project", "Pad sample write failed: %s",
+                         samplePath.string().c_str());
+                continue;
+            }
             json padJ;
             padJ["note"] = note;
             padJ["sampleFile"] = "samples/" + filename;
@@ -318,10 +348,14 @@ json serializeInstrument(const instruments::Instrument& inst,
         if (ds.hasLoop()) {
             std::string filename = "loop_" + std::to_string(sampleCounter++) + ".wav";
             fs::path samplePath = samplesDir / filename;
-            FileIO::saveAudioFile(samplePath.string(),
+            if (FileIO::saveAudioFile(samplePath.string(),
                                   ds.loopData(), ds.loopFrames(),
-                                  ds.loopChannels(), static_cast<int>(kDefaultSampleRate));
-            j["loopFile"] = "samples/" + filename;
+                                  ds.loopChannels(), static_cast<int>(kDefaultSampleRate))) {
+                j["loopFile"] = "samples/" + filename;
+            } else {
+                LOG_WARN("Project", "Loop write failed: %s",
+                         samplePath.string().c_str());
+            }
         }
         json padsArr = json::array();
         for (int i = 0; i < instruments::DrumSlop::kNumPads; ++i) {
@@ -473,8 +507,12 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
             z.volume    = zj.value("volume",   1.0f);
             z.pan       = zj.value("pan",      0.0f);
             z.loop      = zj.value("loop",     false);
-            z.loopStart = zj.value("loopStart", 0);
-            z.loopEnd   = zj.value("loopEnd",   nf);
+            // Clamp file-supplied loop points into the sample — the
+            // audio-thread wrap arithmetic in readZoneSample can
+            // otherwise leave playPos past the buffer → OOB read.
+            z.loopStart = std::clamp(zj.value("loopStart", 0), 0, nf);
+            z.loopEnd   = std::clamp(zj.value("loopEnd",   nf),
+                                     z.loopStart, nf);
             ms.addZone(z);
         }
     }
@@ -734,8 +772,12 @@ json serializeAudioClip(const audio::Clip& clip, const fs::path& samplesDir,
     if (clip.buffer&& clip.buffer->numFrames() > 0) {
         std::string filename = "clip_" + std::to_string(sampleCounter++) + ".wav";
         fs::path samplePath = samplesDir / filename;
-        FileIO::saveAudioBuffer(samplePath.string(), *clip.buffer, static_cast<int>(kDefaultSampleRate));
-        j["sampleFile"] = "samples/" + filename;
+        if (FileIO::saveAudioBuffer(samplePath.string(), *clip.buffer, static_cast<int>(kDefaultSampleRate))) {
+            j["sampleFile"] = "samples/" + filename;
+        } else {
+            LOG_WARN("Project", "Clip sample write failed: %s",
+                     samplePath.string().c_str());
+        }
     }
 
     return j;
@@ -776,6 +818,20 @@ std::unique_ptr<audio::Clip> deserializeAudioClip(const json& j,
         } else {
             LOG_WARN("Project", "Clip sample missing: %s", samplePath.string().c_str());
         }
+    }
+
+    // Clamp file-supplied loop points into the buffer: the ClipEngine
+    // playback loop reads buffer.sample(frame0) with only an assert
+    // guard, so a corrupt loopStart/loopEnd beyond the frame count is
+    // an out-of-bounds read on the audio thread in release builds.
+    if (clip->buffer && clip->buffer->numFrames() > 0) {
+        const int64_t frames = clip->buffer->numFrames();
+        clip->loopStart = std::clamp<int64_t>(clip->loopStart, 0, frames - 1);
+        if (clip->loopEnd >= 0)
+            clip->loopEnd = std::clamp<int64_t>(clip->loopEnd,
+                                              clip->loopStart + 1, frames);
+    } else {
+        clip->loopStart = std::max<int64_t>(clip->loopStart, 0);
     }
 
     return clip;
@@ -1036,7 +1092,9 @@ json serializeArrangementClip(const ArrangementClip& clip,
         // Save the audio buffer reference
         std::string filename = "arr_sample_" + std::to_string(sampleCounter++) + ".wav";
         fs::path samplePath = samplesDir / filename;
-        FileIO::saveAudioBuffer(samplePath.string(), *clip.audioBuffer, static_cast<int>(kDefaultSampleRate));
+        if (!FileIO::saveAudioBuffer(samplePath.string(), *clip.audioBuffer, static_cast<int>(kDefaultSampleRate)))
+            LOG_WARN("Project", "Arrangement clip sample write failed: %s",
+                     samplePath.string().c_str());
         j["sampleFile"] = filename;
     } else if (clip.type == ArrangementClip::Type::Midi && clip.midiClip) {
         j["midiClip"] = serializeMidiClip(*clip.midiClip);
@@ -1344,15 +1402,46 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         if (!fx.empty()) root["visualPostFX"] = fx;
     }
 
-    // Write project.json
-    std::ofstream out(folderPath / "project.json");
-    if (!out.is_open()) {
-        LOG_ERROR("Project", "Failed to open %s for writing",
-                  (folderPath / "project.json").string().c_str());
-        return false;
+    // Write project.json via temp+rename: a crash or full disk
+    // mid-write must leave either the old project or the new one
+    // intact — never a truncated project.json (which the hardened
+    // loader would then reject on next open).
+    const fs::path jsonPath = folderPath / "project.json";
+    const fs::path tmpPath  = folderPath / "project.json.tmp";
+    {
+        std::ofstream out(tmpPath);
+        if (!out.is_open()) {
+            LOG_ERROR("Project", "Failed to open %s for writing",
+                      tmpPath.string().c_str());
+            return false;
+        }
+        out << root.dump(2);
+        out.flush();
+        if (!out) {
+            LOG_ERROR("Project", "Write failed for %s (disk full?)",
+                      tmpPath.string().c_str());
+            out.close();
+            std::error_code ec;
+            fs::remove(tmpPath, ec);
+            return false;
+        }
     }
-    out << root.dump(2);
-    out.close();
+    // Rename over the old file (atomic on POSIX; on Windows rename
+    // won't overwrite, so remove the target first).
+    std::error_code ec;
+    fs::rename(tmpPath, jsonPath, ec);
+    if (ec) {
+        std::error_code ec2;
+        fs::remove(jsonPath, ec2);
+        ec.clear();
+        fs::rename(tmpPath, jsonPath, ec);
+        if (ec) {
+            LOG_ERROR("Project", "Failed to rename %s → %s: %s",
+                      tmpPath.string().c_str(), jsonPath.string().c_str(),
+                      ec.message().c_str());
+            return false;
+        }
+    }
 
     return true;
 }
@@ -1391,8 +1480,14 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
     double sr = engine.sampleRate();
     int blockSize = 256;
 
+    // Everything after the parse is hardened against malformed content:
+    // per-section try/catch (one corrupt entity is skipped, not fatal),
+    // type/shape guards before iterating containers, and clamps on any
+    // file-supplied count or index that can reach an engine array.
+    try {
+
     // Transport
-    if (root.contains("project")) {
+    if (root.contains("project") && root["project"].is_object()) {
         const auto& proj = root["project"];
         engine.transport().setBPM(proj.value("bpm", 120.0));
         engine.transport().setTimeSignature(
@@ -1403,22 +1498,39 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
         project.setGlobalAutoRecord(proj.value("globalAutoRecord", false));
     }
 
-    // Tracks & Scenes
+    // Tracks & Scenes — counts come from the file and must never exceed
+    // the engine's fixed per-track arrays (kMaxTracks/kMaxScenes);
+    // oversized files load truncated with a warning, not an OOB write.
     int numTracks = 0;
     int numScenes = 0;
-    if (root.contains("tracks")) numTracks = static_cast<int>(root["tracks"].size());
-    if (root.contains("scenes")) numScenes = static_cast<int>(root["scenes"].size());
+    if (root.contains("tracks") && root["tracks"].is_array())
+        numTracks = static_cast<int>(root["tracks"].size());
+    if (root.contains("scenes") && root["scenes"].is_array())
+        numScenes = static_cast<int>(root["scenes"].size());
 
+    if (numTracks > kMaxTracks) {
+        LOG_WARN("Project", "Project has %d tracks (max %d) — loading first %d",
+                 numTracks, kMaxTracks, kMaxTracks);
+        numTracks = kMaxTracks;
+    }
+    if (numScenes > kMaxScenes) {
+        LOG_WARN("Project", "Project has %d scenes (max %d) — loading first %d",
+                 numScenes, kMaxScenes, kMaxScenes);
+        numScenes = kMaxScenes;
+    }
     if (numTracks == 0) numTracks = kDefaultNumTracks;
     if (numScenes == 0) numScenes = kDefaultNumScenes;
 
     project.init(numTracks, numScenes);
 
     // Restore track metadata
-    if (root.contains("tracks")) {
+    if (root.contains("tracks") && root["tracks"].is_array()) {
         int t = 0;
         for (const auto& tj : root["tracks"]) {
             if (t >= numTracks) break;
+            // One corrupt track must not take down the whole load —
+            // skip it (defaults from project.init stay in place).
+            try {
             auto& tr = project.track(t);
             tr.name = tj.value("name", "Track " + std::to_string(t + 1));
             std::string typeStr = tj.value("type", "Audio");
@@ -1469,7 +1581,8 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 if (mj.contains("values") && mj["values"].is_object()) {
                     for (auto it = mj["values"].begin();
                          it != mj["values"].end(); ++it) {
-                        int i = std::stoi(it.key());
+                        int i = -1;
+                        if (!parseIntSafe(it.key(), i)) continue;
                         if (i >= 0 && i < MacroDevice::kNumMacros)
                             tr.macros.values[i] = it.value().get<float>();
                     }
@@ -1477,7 +1590,8 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 if (mj.contains("labels") && mj["labels"].is_object()) {
                     for (auto it = mj["labels"].begin();
                          it != mj["labels"].end(); ++it) {
-                        int i = std::stoi(it.key());
+                        int i = -1;
+                        if (!parseIntSafe(it.key(), i)) continue;
                         if (i >= 0 && i < MacroDevice::kNumMacros)
                             tr.macros.labels[i] = it.value().get<std::string>();
                     }
@@ -1485,7 +1599,8 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 if (mj.contains("lfos") && mj["lfos"].is_object()) {
                     for (auto it = mj["lfos"].begin();
                          it != mj["lfos"].end(); ++it) {
-                        int i = std::stoi(it.key());
+                        int i = -1;
+                        if (!parseIntSafe(it.key(), i)) continue;
                         if (i < 0 || i >= MacroDevice::kNumMacros) continue;
                         const auto& lj = it.value();
                         auto& s = tr.macros.lfos[i];
@@ -1546,28 +1661,43 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                                           tj["midiEffects"], sr);
             }
 
+            } catch (const std::exception& e) {
+                LOG_WARN("Project", "Skipping corrupt track %d: %s",
+                         t + 1, e.what());
+            }
             ++t;
         }
     }
 
     // Scenes
-    if (root.contains("scenes")) {
+    if (root.contains("scenes") && root["scenes"].is_array()) {
         int s = 0;
         for (const auto& sj : root["scenes"]) {
             if (s >= numScenes) break;
-            project.scene(s).name = sj.value("name", std::to_string(s + 1));
+            try {
+                project.scene(s).name = sj.value("name", std::to_string(s + 1));
+            } catch (const std::exception& e) {
+                LOG_WARN("Project", "Skipping corrupt scene %d: %s",
+                         s + 1, e.what());
+            }
             ++s;
         }
     }
 
     // Clips
-    if (root.contains("clips")) {
+    if (root.contains("clips") && root["clips"].is_object()) {
         for (auto& [key, val] : root["clips"].items()) {
+            try {
             // Parse "track:scene" key
             auto sep = key.find(':');
             if (sep == std::string::npos) continue;
-            int trackIdx = std::stoi(key.substr(0, sep));
-            int sceneIdx = std::stoi(key.substr(sep + 1));
+            int trackIdx = -1, sceneIdx = -1;
+            if (!parseIntSafe(key.substr(0, sep), trackIdx) ||
+                !parseIntSafe(key.substr(sep + 1), sceneIdx)) {
+                LOG_WARN("Project", "Skipping clip with malformed key '%s'",
+                         key.c_str());
+                continue;
+            }
 
             std::string clipType = val.value("type", "audio");
             if (clipType == "audio") {
@@ -1620,12 +1750,20 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                     slot->followAction.chanceA  = fa.value("chanceA", 100);
                 }
             }
+            } catch (const std::exception& e) {
+                LOG_WARN("Project", "Skipping corrupt clip '%s': %s",
+                         key.c_str(), e.what());
+            }
         }
     }
 
     // Mixer
-    if (root.contains("mixer")) {
-        deserializeMixer(engine.mixer(), root["mixer"], sr, blockSize);
+    if (root.contains("mixer") && root["mixer"].is_object()) {
+        try {
+            deserializeMixer(engine.mixer(), root["mixer"], sr, blockSize);
+        } catch (const std::exception& e) {
+            LOG_WARN("Project", "Skipping corrupt mixer section: %s", e.what());
+        }
     }
 
     // MIDI Mappings
@@ -1662,6 +1800,15 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
                 }
             }
         }
+    }
+
+    } catch (const std::exception& e) {
+        // Backstop: an unexpected failure mid-load (should be
+        // unreachable with the per-entity guards above) — reject the
+        // load rather than crash or hand back a half-mutated project.
+        LOG_ERROR("Project", "Load failed in %s: %s",
+                  jsonPath.string().c_str(), e.what());
+        return false;
     }
 
     return true;

@@ -186,10 +186,20 @@ public:
     const Mixer& mixer() const { return m_mixer; }
     Metronome& metronome() { return m_metronome; }
     LinkManager& linkManager() { return m_linkManager; }
-    midi::MidiEffectChain& midiEffectChain(int track) { return m_midiEffectChains[track]; }
+    midi::MidiEffectChain& midiEffectChain(int track) {
+        // Bounds-clamped: a malformed project file used to index this
+        // array with an unclamped file-supplied track number → OOB.
+        // Loads are clamped to kMaxTracks now; this is defense-in-depth.
+        return m_midiEffectChains[
+            std::clamp(track, 0, kMaxMidiTracks - 1)];
+    }
     automation::AutomationEngine& automationEngine() { return m_automationEngine; }
-    std::vector<automation::AutomationLane>& trackAutoLanes(int track) { return m_trackAutoLanes[track]; }
-    const std::vector<automation::AutomationLane>& trackAutoLanes(int track) const { return m_trackAutoLanes[track]; }
+    std::vector<automation::AutomationLane>& trackAutoLanes(int track) {
+        return m_trackAutoLanes[std::clamp(track, 0, kMaxTracks - 1)];
+    }
+    const std::vector<automation::AutomationLane>& trackAutoLanes(int track) const {
+        return m_trackAutoLanes[std::clamp(track, 0, kMaxTracks - 1)];
+    }
 
     // Instrument management. UI thread only. The swap is safe against
     // the running audio thread: the new instrument is fully built and

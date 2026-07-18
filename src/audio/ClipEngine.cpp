@@ -370,6 +370,12 @@ void ClipEngine::processTrack(int trackIndex, float* output, int numFrames, int 
             float frac = static_cast<float>(pos - frame0);
 
             if (frame0 < 0) frame0 = 0;
+            // Upper clamp too: a corrupt loopStart/loopEnd (project
+            // files are clamped at load, but be defensive on the RT
+            // thread) can push pos past the buffer — buffer.sample()
+            // bounds-checks via assert only, which compiles out in
+            // release builds.
+            if (frame0 >= bufFrames) frame0 = bufFrames - 1;
             if (frame1 >= bufFrames) frame1 = bufFrames - 1;
 
             for (int ch = 0; ch < numChannels; ++ch) {

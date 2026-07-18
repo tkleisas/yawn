@@ -98,8 +98,14 @@ float Multisampler::readZoneSample(Voice& v) const {
     int idx0 = static_cast<int>(v.playPos);
     if (idx0 < 0 || idx0 >= z.sampleFrames) {
         if (z.loop) {
-            int loopStart = z.loopStart;
-            int loopEnd = (z.loopEnd > loopStart) ? z.loopEnd : z.sampleFrames;
+            int loopStart = std::clamp(z.loopStart, 0, z.sampleFrames);
+            // Clamp the loop window to the buffer — a hand-edited or
+            // legacy zone could carry loopEnd > sampleFrames, and the
+            // wrap below would leave playPos (hence idx0) outside the
+            // sample → OOB read on the audio thread.
+            int loopEnd = (z.loopEnd > loopStart)
+                            ? std::min(z.loopEnd, z.sampleFrames)
+                            : z.sampleFrames;
             int loopLen = loopEnd - loopStart;
             if (loopLen > 0) {
                 while (v.playPos >= loopEnd)
@@ -118,8 +124,7 @@ float Multisampler::readZoneSample(Voice& v) const {
     int idx1 = idx0 + 1;
     if (idx1 >= z.sampleFrames) {
         if (z.loop) {
-            int loopStart = z.loopStart;
-            idx1 = loopStart;
+            idx1 = std::clamp(z.loopStart, 0, z.sampleFrames - 1);
         } else {
             idx1 = z.sampleFrames - 1;
         }

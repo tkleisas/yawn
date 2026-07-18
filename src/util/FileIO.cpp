@@ -198,8 +198,14 @@ static bool saveWAV(const std::string& path,
             path.c_str(), sf_strerror(nullptr));
         return false;
     }
-    sf_writef_float(file, interleavedData, numFrames);
+    const sf_count_t written = sf_writef_float(file, interleavedData, numFrames);
+    const sf_count_t expect = numFrames;
     sf_close(file);
+    if (written != expect) {
+        LOG_ERROR("File", "Short write on '%s': %lld/%lld frames",
+            path.c_str(), (long long)written, (long long)expect);
+        return false;
+    }
     return true;
 }
 
@@ -309,9 +315,17 @@ static bool saveOGG(const std::string& path,
 
     // Flush headers
     ogg_page og;
+    // Checked page writer — a full disk previously turned every
+    // fwrite here into a silent no-op and "saved" a truncated file.
+    bool writeOk = true;
+    auto writePage = [&](const ogg_page& page) {
+        if (!writeOk) return;
+        if (fwrite(page.header, 1, page.header_len, fp) != page.header_len ||
+            fwrite(page.body, 1, page.body_len, fp) != page.body_len)
+            writeOk = false;
+    };
     while (ogg_stream_flush(&os, &og)) {
-        fwrite(og.header, 1, og.header_len, fp);
-        fwrite(og.body, 1, og.body_len, fp);
+        writePage(og);
     }
 
     // Encode audio in blocks
@@ -339,8 +353,7 @@ static bool saveOGG(const std::string& path,
                 ogg_stream_packetin(&os, &op);
                 while (!eos) {
                     if (ogg_stream_pageout(&os, &og) == 0) break;
-                    fwrite(og.header, 1, og.header_len, fp);
-                    fwrite(og.body, 1, og.body_len, fp);
+                    writePage(og);
                     if (ogg_page_eos(&og)) eos = true;
                 }
             }
@@ -354,8 +367,7 @@ static bool saveOGG(const std::string& path,
                 while (vorbis_bitrate_flushpacket(&vd, &op)) {
                     ogg_stream_packetin(&os, &op);
                     while (ogg_stream_pageout(&os, &og)) {
-                        fwrite(og.header, 1, og.header_len, fp);
-                        fwrite(og.body, 1, og.body_len, fp);
+                        writePage(og);
                         if (ogg_page_eos(&og)) eos = true;
                     }
                 }
@@ -364,12 +376,16 @@ static bool saveOGG(const std::string& path,
         }
     }
 
-    fclose(fp);
+    if (fclose(fp) != 0) writeOk = false;
     ogg_stream_clear(&os);
     vorbis_block_clear(&vb);
     vorbis_dsp_clear(&vd);
     vorbis_comment_clear(&vc);
     vorbis_info_clear(&vi);
+    if (!writeOk) {
+        LOG_ERROR("File", "Write failed for '%s' (disk full?)", path.c_str());
+        return false;
+    }
     return true;
 }
 

@@ -301,8 +301,24 @@ void App::doOpenProject(const std::filesystem::path& path) {
 
     resetEngineState();
 
+    // Backstop: the serializer is internally guarded per-entity, but a
+    // corrupt project must never take the app down through this path
+    // either (this runs from the frame loop — an escaping exception
+    // would terminate the process).
     Project loadedProject;
-    if (ProjectSerializer::loadFromFolder(projectDir, loadedProject, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
+    bool loaded = false;
+    try {
+        loaded = ProjectSerializer::loadFromFolder(
+            projectDir, loadedProject, m_audioEngine,
+            &m_midiLearnManager, &m_visualEngine);
+    } catch (const std::exception& e) {
+        LOG_ERROR("Project", "Open failed for %s: %s",
+                  projectDir.string().c_str(), e.what());
+    } catch (...) {
+        LOG_ERROR("Project", "Open failed for %s: unknown exception",
+                  projectDir.string().c_str());
+    }
+    if (loaded) {
         m_project = std::move(loadedProject);
         // Defensive cleanup: a corrupt or maliciously crafted project
         // file could carry a cyclic sidechain graph that the engine

@@ -97,7 +97,13 @@ public:
     // zone out from under a voice (see Instrument::retireObject).
     int addZone(const Zone& zone) {
         if (m_zoneCount >= kMaxZones) return -1;
-        m_zones[m_zoneCount] = std::make_shared<Zone>(zone);
+        auto z = std::make_shared<Zone>(zone);
+        // Defense against programmatic callers passing loop points
+        // outside the sample (the RT wrap math reads sampleData at
+        // playPos — see readZoneSample).
+        z->loopStart = std::clamp(z->loopStart, 0, z->sampleFrames);
+        z->loopEnd   = std::clamp(z->loopEnd, z->loopStart, z->sampleFrames);
+        m_zones[m_zoneCount] = std::move(z);
         ++m_zoneCount;
         publishZones();
         return m_zoneCount - 1;
