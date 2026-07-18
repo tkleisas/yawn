@@ -465,35 +465,10 @@ bool App::init() {
                 m_detailPanel->clear(); // force rebuild
             }));
         };
-        addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
-        addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
-        addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
-        addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
-        addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
-        addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
-        addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
-        addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
-        addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
-        addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
-        addFx("Auto Panner",     [](){ return std::make_unique<effects::AutoPanner>(); });
-        addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
-        addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
-        addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
-        addFx("Buffer Repeat",   [](){ return std::make_unique<effects::BufferRepeat>(); });
-        addFx("Resampler",       [](){ return std::make_unique<effects::Resampler>(); });
-        addFx("Clock Drift",     [](){ return std::make_unique<effects::ClockDrift>(); });
-        addFx("CD Error",        [](){ return std::make_unique<effects::CDError>(); });
-        addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
-        addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
-        addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
-        addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
-        addFx("Neural Amp",      [](){ return std::make_unique<effects::NeuralAmp>(); });
-        addFx("Conv Reverb",     [](){ return std::make_unique<effects::ConvolutionReverb>(); });
-        addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
-        addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
-        addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
-        addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
-        addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
+        // Built-in audio effects — from the single descriptor table
+        // (util/Factory.h), same as every other Add-Effect menu.
+        for (const auto& d : audioEffectDescriptors())
+            addFx(d.displayName, d.make);
 
 #ifdef YAWN_HAS_VST3
         if (m_vst3Scanner && !m_vst3Scanner->effects().empty()) {
@@ -1393,35 +1368,10 @@ bool App::init() {
                     LOG_INFO("User", "DrumRack pad %d → add fx", note);
                 }));
             };
-            addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
-            addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
-            addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
-            addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
-            addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
-            addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
-            addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
-            addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
-            addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
-            addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
-            addFx("Auto Panner",     [](){ return std::make_unique<effects::AutoPanner>(); });
-            addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
-            addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
-            addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
-            addFx("Buffer Repeat",   [](){ return std::make_unique<effects::BufferRepeat>(); });
-            addFx("Resampler",       [](){ return std::make_unique<effects::Resampler>(); });
-            addFx("Clock Drift",     [](){ return std::make_unique<effects::ClockDrift>(); });
-            addFx("CD Error",        [](){ return std::make_unique<effects::CDError>(); });
-            addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
-            addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
-            addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
-            addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
-            addFx("Neural Amp",      [](){ return std::make_unique<effects::NeuralAmp>(); });
-            addFx("Conv Reverb",     [](){ return std::make_unique<effects::ConvolutionReverb>(); });
-            addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
-            addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
-            addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
-            addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
-            addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
+            // Built-in audio effects — from the single descriptor
+            // table (util/Factory.h).
+            for (const auto& d : audioEffectDescriptors())
+                addFx(d.displayName, d.make);
             items.push_back(submenu("Add Pad FX", std::move(addItems)));
 
             // Remove submenu — only when the pad has a chain with
@@ -1505,20 +1455,13 @@ bool App::init() {
                     updateDetailForSelectedTrack();
                 }));
             };
-            addSwap("SubSynth",        [](){ return std::make_unique<instruments::SubtractiveSynth>(); });
-            addSwap("FM Synth",        [](){ return std::make_unique<instruments::FMSynth>(); });
-            addSwap("Sampler",         [](){ return std::make_unique<instruments::Sampler>(); });
-            addSwap("Drum Rack",       [](){ return std::make_unique<instruments::DrumRack>(); });
-            addSwap("Drum Synth",      [](){ return std::make_unique<instruments::DrumSynth>(); });
-            addSwap("DrumSlop",        [](){ return std::make_unique<instruments::DrumSlop>(); });
-            addSwap("Karplus-Strong",  [](){ return std::make_unique<instruments::KarplusStrong>(); });
-            addSwap("Wavetable Synth", [](){ return std::make_unique<instruments::WavetableSynth>(); });
-            addSwap("Granular Synth",  [](){ return std::make_unique<instruments::GranularSynth>(); });
-            addSwap("Vocoder",         [](){ return std::make_unique<instruments::Vocoder>(); });
-            addSwap("Multisampler",    [](){ return std::make_unique<instruments::Multisampler>(); });
-            addSwap("String Machine",  [](){ return std::make_unique<instruments::StringMachine>(); });
-            addSwap("Drawbar Organ",   [](){ return std::make_unique<instruments::DrawbarOrgan>(); });
-            addSwap("Electric Piano",  [](){ return std::make_unique<instruments::ElectricPiano>(); });
+            // Built-in instruments — from the single descriptor table
+            // (util/Factory.h). Note: the rack's swap list omits
+            // Instrument Rack itself (no nested racks).
+            for (const auto& d : instrumentDescriptors()) {
+                if (d.id == std::string("instrack")) continue;
+                addSwap(d.displayName, d.make);
+            }
             items.push_back(submenu("Change Instrument", std::move(swapItems)));
             items.push_back(separator());
 
@@ -1532,35 +1475,10 @@ bool App::init() {
                               chainIdx);
                 }));
             };
-            addFx("Reverb",          [](){ return std::make_unique<effects::Reverb>(); });
-            addFx("Delay",           [](){ return std::make_unique<effects::Delay>(); });
-            addFx("EQ",              [](){ return std::make_unique<effects::EQ>(); });
-            addFx("Compressor",      [](){ return std::make_unique<effects::Compressor>(); });
-            addFx("Limiter",         [](){ return std::make_unique<effects::Limiter>(); });
-            addFx("Filter",          [](){ return std::make_unique<effects::Filter>(); });
-            addFx("Chorus",          [](){ return std::make_unique<effects::Chorus>(); });
-            addFx("Phaser",          [](){ return std::make_unique<effects::Phaser>(); });
-            addFx("Wah",             [](){ return std::make_unique<effects::Wah>(); });
-            addFx("Rotary",          [](){ return std::make_unique<effects::Rotary>(); });
-            addFx("Auto Panner",     [](){ return std::make_unique<effects::AutoPanner>(); });
-            addFx("Distortion",      [](){ return std::make_unique<effects::Distortion>(); });
-            addFx("Bitcrusher",      [](){ return std::make_unique<effects::Bitcrusher>(); });
-            addFx("Beat Repeat",     [](){ return std::make_unique<effects::BeatRepeat>(); });
-            addFx("Buffer Repeat",   [](){ return std::make_unique<effects::BufferRepeat>(); });
-            addFx("Resampler",       [](){ return std::make_unique<effects::Resampler>(); });
-            addFx("Clock Drift",     [](){ return std::make_unique<effects::ClockDrift>(); });
-            addFx("CD Error",        [](){ return std::make_unique<effects::CDError>(); });
-            addFx("Noise Gate",      [](){ return std::make_unique<effects::NoiseGate>(); });
-            addFx("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
-            addFx("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
-            addFx("Spline EQ",       [](){ return std::make_unique<effects::SplineEQ>(); });
-            addFx("Neural Amp",      [](){ return std::make_unique<effects::NeuralAmp>(); });
-            addFx("Conv Reverb",     [](){ return std::make_unique<effects::ConvolutionReverb>(); });
-            addFx("Tape Emulation",  [](){ return std::make_unique<effects::TapeEmulation>(); });
-            addFx("Amp Simulator",   [](){ return std::make_unique<effects::AmpSimulator>(); });
-            addFx("Oscilloscope",    [](){ return std::make_unique<effects::Oscilloscope>(); });
-            addFx("Spectrum",        [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
-            addFx("Tuner",           [](){ return std::make_unique<effects::Tuner>(); });
+            // Built-in audio effects — from the single descriptor
+            // table (util/Factory.h).
+            for (const auto& d : audioEffectDescriptors())
+                addFx(d.displayName, d.make);
             items.push_back(submenu("Add Chain FX", std::move(addItems)));
 
             auto* existing = ir->chainFxChainOrNull(chainIdx);

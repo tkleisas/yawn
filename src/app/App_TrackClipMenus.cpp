@@ -222,19 +222,14 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 }, ""});
         }));
     };
-    addInstrItem("SubSynth", [](){ return std::make_unique<instruments::SubtractiveSynth>(); });
-    addInstrItem("FM Synth", [](){ return std::make_unique<instruments::FMSynth>(); });
-    addInstrItem("Sampler", [](){ return std::make_unique<instruments::Sampler>(); });
-    addInstrItem("Drum Rack", [](){ return std::make_unique<instruments::DrumRack>(); });
-    addInstrItem("Drum Synth", [](){ return std::make_unique<instruments::DrumSynth>(); });
-    addInstrItem("DrumSlop", [](){ return std::make_unique<instruments::DrumSlop>(); });
-    addInstrItem("Karplus-Strong", [](){ return std::make_unique<instruments::KarplusStrong>(); });
-    addInstrItem("Wavetable Synth", [](){ return std::make_unique<instruments::WavetableSynth>(); });
-    addInstrItem("Granular Synth", [](){ return std::make_unique<instruments::GranularSynth>(); });
-    addInstrItem("Vocoder", [](){ return std::make_unique<instruments::Vocoder>(); });
-    addInstrItem("Multisampler", [](){ return std::make_unique<instruments::Multisampler>(); });
-    addInstrItem("Instrument Rack", [](){ return std::make_unique<instruments::InstrumentRack>(); });
-    addInstrItem("String Machine", [](){ return std::make_unique<instruments::StringMachine>(); });
+    // One descriptor table drives all device menus (util/Factory.h);
+    // Drawbar Organ and Electric Piano get custom entries below
+    // (auto-insert Rotary / Phaser respectively).
+    for (const auto& d : instrumentDescriptors()) {
+        if (d.id == std::string("drawbarorgan") || d.id == std::string("electricpiano"))
+            continue;
+        addInstrItem(d.displayName, d.make);
+    }
 
     // Drawbar Organ: same as addInstrItem, but also auto-inserts a
     // Rotary effect into the track's chain (unless one is already
@@ -366,35 +361,10 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 }, ""});
         }));
     };
-    addFxItem("Reverb",      [](){ return std::make_unique<effects::Reverb>(); });
-    addFxItem("Delay",       [](){ return std::make_unique<effects::Delay>(); });
-    addFxItem("EQ",          [](){ return std::make_unique<effects::EQ>(); });
-    addFxItem("Compressor",  [](){ return std::make_unique<effects::Compressor>(); });
-    addFxItem("Limiter",     [](){ return std::make_unique<effects::Limiter>(); });
-    addFxItem("Filter",      [](){ return std::make_unique<effects::Filter>(); });
-    addFxItem("Chorus",      [](){ return std::make_unique<effects::Chorus>(); });
-    addFxItem("Phaser",      [](){ return std::make_unique<effects::Phaser>(); });
-    addFxItem("Wah",         [](){ return std::make_unique<effects::Wah>(); });
-    addFxItem("Rotary",      [](){ return std::make_unique<effects::Rotary>(); });
-    addFxItem("Auto Panner", [](){ return std::make_unique<effects::AutoPanner>(); });
-    addFxItem("Distortion",  [](){ return std::make_unique<effects::Distortion>(); });
-    addFxItem("Bitcrusher",  [](){ return std::make_unique<effects::Bitcrusher>(); });
-    addFxItem("Beat Repeat",   [](){ return std::make_unique<effects::BeatRepeat>(); });
-    addFxItem("Buffer Repeat", [](){ return std::make_unique<effects::BufferRepeat>(); });
-    addFxItem("Resampler",     [](){ return std::make_unique<effects::Resampler>(); });
-    addFxItem("Clock Drift",   [](){ return std::make_unique<effects::ClockDrift>(); });
-    addFxItem("CD Error",      [](){ return std::make_unique<effects::CDError>(); });
-    addFxItem("Noise Gate",  [](){ return std::make_unique<effects::NoiseGate>(); });
-    addFxItem("Ping-Pong Delay", [](){ return std::make_unique<effects::PingPongDelay>(); });
-    addFxItem("Envelope Follower", [](){ return std::make_unique<effects::EnvelopeFollower>(); });
-    addFxItem("Spline EQ",   [](){ return std::make_unique<effects::SplineEQ>(); });
-    addFxItem("Neural Amp",  [](){ return std::make_unique<effects::NeuralAmp>(); });
-    addFxItem("Conv Reverb", [](){ return std::make_unique<effects::ConvolutionReverb>(); });
-    addFxItem("Tape Emulation", [](){ return std::make_unique<effects::TapeEmulation>(); });
-    addFxItem("Amp Simulator",  [](){ return std::make_unique<effects::AmpSimulator>(); });
-    addFxItem("Oscilloscope",   [](){ return std::make_unique<effects::Oscilloscope>(); });
-    addFxItem("Spectrum",       [](){ return std::make_unique<effects::SpectrumAnalyzer>(); });
-    addFxItem("Tuner",          [](){ return std::make_unique<effects::Tuner>(); });
+    // Built-in audio effects — one descriptor table (util/Factory.h)
+    // drives this and every other Add-Effect menu.
+    for (const auto& d : audioEffectDescriptors())
+        addFxItem(d.displayName, d.make);
 
 #ifdef YAWN_HAS_VST3
     // VST3 effects — flat list with separator
@@ -439,14 +409,9 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                 }, ""});
         }));
     };
-    addMidiItem("Arpeggiator", [](){ return std::make_unique<midi::Arpeggiator>(); });
-    addMidiItem("Chord",       [](){ return std::make_unique<midi::Chord>(); });
-    addMidiItem("Scale",       [](){ return std::make_unique<midi::Scale>(); });
-    addMidiItem("Note Length", [](){ return std::make_unique<midi::NoteLength>(); });
-    addMidiItem("Velocity",    [](){ return std::make_unique<midi::VelocityEffect>(); });
-    addMidiItem("Random",      [](){ return std::make_unique<midi::MidiRandom>(); });
-    addMidiItem("Pitch",       [](){ return std::make_unique<midi::MidiPitch>(); });
-    addMidiItem("LFO",         [](){ return std::make_unique<midi::LFO>(); });
+    // Built-in MIDI effects — from the descriptor table (util/Factory.h).
+    for (const auto& d : midiEffectDescriptors())
+        addMidiItem(d.displayName, d.make);
     items.push_back(submenu("Add MIDI Effect", std::move(midiItems)));
 
     // Record quantize submenu

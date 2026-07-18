@@ -1,4 +1,5 @@
 #include "LibraryDatabase.h"
+#include "util/Factory.h"
 #include "util/Logger.h"
 #include <sqlite3.h>
 #include <cstdlib>
@@ -28,39 +29,30 @@ namespace library {
 // is a kInstrument or kFx, we just need to plumb the category into
 // the preset JSON on save.
 
+// Device classification for the browser's 2-bucket filter — driven by
+// the single descriptor tables (util/Factory.h), so a device added to
+// the factory is automatically classified here. Matches display name,
+// class name() (what device->name() reports), id, or legacy alias.
+static bool matchesAnyDescriptor(const std::string& n) {
+    for (const auto& d : audioEffectDescriptors())
+        if (n == d.displayName || n == d.className || n == d.id ||
+            (d.alias && n == d.alias)) return true;
+    for (const auto& d : midiEffectDescriptors())
+        if (n == d.displayName || n == d.className || n == d.id ||
+            (d.alias && n == d.alias)) return true;
+    return false;
+}
+
 static bool isBuiltInInstrument(const std::string& n) {
-    return n == "Subtractive Synth" || n == "FM Synth" || n == "Sampler" ||
-           n == "Drum Rack"         || n == "Drum Synth" ||
-           n == "DrumSlop"          || n == "Karplus-Strong" ||
-           n == "Wavetable Synth"   || n == "Granular Synth" || n == "Vocoder" ||
-           n == "Multisampler"      || n == "Instrument Rack" ||
-           n == "String Machine"    || n == "Drawbar Organ" ||
-           n == "Electric Piano";
+    for (const auto& d : instrumentDescriptors())
+        if (n == d.displayName || n == d.className || n == d.id ||
+            (d.alias && n == d.alias)) return true;
+    return false;
 }
 
 static bool isBuiltInEffect(const std::string& n) {
-    // Audio effects.
-    if (n == "Reverb"       || n == "Delay"        || n == "EQ" ||
-        n == "Compressor"   || n == "Filter"       || n == "Chorus" ||
-        n == "Distortion"   || n == "Bitcrusher"   || n == "Noise Gate" ||
-        n == "Ping-Pong Delay" || n == "Envelope Follower" ||
-        n == "Spline EQ" || n == "Neural Amp" || n == "Conv Reverb" ||
-        n == "Convolution Reverb" ||
-        n == "Tape Emulation" ||
-        n == "Amp Simulator" ||
-        n == "Phaser"       || n == "Wah"          || n == "Rotary" ||
-        n == "Oscilloscope" || n == "Spectrum Analyzer" || n == "Spectrum" ||
-        n == "Tuner" ||
-        n == "Beat Repeat"  || n == "Buffer Repeat" || n == "Resampler" ||
-        n == "Clock Drift"  || n == "CD Error")
-        return true;
-    // MIDI effects — lumped with audio effects for the 2-bucket filter.
-    if (n == "Arpeggiator"  || n == "Chord"        || n == "Scale" ||
-        n == "Note Length"  || n == "Velocity"     || n == "Random" ||
-        n == "MIDI Random"  || n == "Pitch"        || n == "MIDI Pitch" ||
-        n == "LFO")
-        return true;
-    return false;
+    // Audio + MIDI effects — lumped together for the 2-bucket filter.
+    return matchesAnyDescriptor(n);
 }
 
 const char* classifyDeviceType(const std::string& /*deviceId*/,

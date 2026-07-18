@@ -24,41 +24,85 @@ static void cleanupTestProject(const std::string& suffix = "default") {
 }
 
 // ---------------------------------------------------------------------------
-// Factory tests
+// Factory tests — data-driven over the descriptor tables (util/Factory.h).
+// A device that drifts out of any lookup path fails here immediately,
+// instead of silently breaking undo/serialization the way "Auto Panner"
+// did when createAudioEffectByName wasn't updated alongside the menus.
 // ---------------------------------------------------------------------------
 
 TEST(Factory, CreateAllInstruments) {
-    EXPECT_NE(createInstrument("subsynth"), nullptr);
-    EXPECT_NE(createInstrument("fmsynth"), nullptr);
-    EXPECT_NE(createInstrument("sampler"), nullptr);
-    EXPECT_NE(createInstrument("drumrack"), nullptr);
-    EXPECT_NE(createInstrument("drumslop"), nullptr);
-    EXPECT_NE(createInstrument("instrack"), nullptr);
+    EXPECT_FALSE(instrumentDescriptors().empty());
+    for (const auto& d : instrumentDescriptors()) {
+        auto inst = createInstrument(d.id);
+        ASSERT_NE(inst, nullptr) << "createInstrument failed for id " << d.id;
+        EXPECT_STREQ(inst->id(), d.id) << "id() mismatch for " << d.id;
+        EXPECT_STREQ(inst->name(), d.className)
+            << "name() mismatch for " << d.id
+            << " — update the descriptor's className column";
+    }
     EXPECT_EQ(createInstrument("nonexistent"), nullptr);
 }
 
 TEST(Factory, CreateAllAudioEffects) {
-    EXPECT_NE(createAudioEffect("reverb"), nullptr);
-    EXPECT_NE(createAudioEffect("delay"), nullptr);
-    EXPECT_NE(createAudioEffect("eq"), nullptr);
-    EXPECT_NE(createAudioEffect("compressor"), nullptr);
-    EXPECT_NE(createAudioEffect("filter"), nullptr);
-    EXPECT_NE(createAudioEffect("chorus"), nullptr);
-    EXPECT_NE(createAudioEffect("distortion"), nullptr);
-    EXPECT_NE(createAudioEffect("oscilloscope"), nullptr);
-    EXPECT_NE(createAudioEffect("spectrum"), nullptr);
+    EXPECT_FALSE(audioEffectDescriptors().empty());
+    for (const auto& d : audioEffectDescriptors()) {
+        auto fx = createAudioEffect(d.id);
+        ASSERT_NE(fx, nullptr) << "createAudioEffect failed for id " << d.id;
+        EXPECT_STREQ(fx->id(), d.id) << "id() mismatch for " << d.id;
+        EXPECT_STREQ(fx->name(), d.className)
+            << "name() mismatch for " << d.id
+            << " — update the descriptor's className column";
+    }
     EXPECT_EQ(createAudioEffect("nonexistent"), nullptr);
 }
 
 TEST(Factory, CreateAllMidiEffects) {
-    EXPECT_NE(createMidiEffect("arp"), nullptr);
-    EXPECT_NE(createMidiEffect("chord"), nullptr);
-    EXPECT_NE(createMidiEffect("scale"), nullptr);
-    EXPECT_NE(createMidiEffect("notelength"), nullptr);
-    EXPECT_NE(createMidiEffect("velocity"), nullptr);
-    EXPECT_NE(createMidiEffect("random"), nullptr);
-    EXPECT_NE(createMidiEffect("pitch"), nullptr);
+    EXPECT_FALSE(midiEffectDescriptors().empty());
+    for (const auto& d : midiEffectDescriptors()) {
+        auto fx = createMidiEffect(d.id);
+        ASSERT_NE(fx, nullptr) << "createMidiEffect failed for id " << d.id;
+        EXPECT_STREQ(fx->id(), d.id) << "id() mismatch for " << d.id;
+        EXPECT_STREQ(fx->name(), d.className)
+            << "name() mismatch for " << d.id
+            << " — update the descriptor's className column";
+    }
     EXPECT_EQ(createMidiEffect("nonexistent"), nullptr);
+}
+
+// The ByName lookups feed the undo system, which re-creates devices
+// from fx->name() — every descriptor must round-trip via className,
+// displayName (menu label), id, and its legacy alias.
+TEST(Factory, ByNameRoundTripsEveryDevice) {
+    for (const auto& d : instrumentDescriptors()) {
+        EXPECT_NE(createInstrumentByName(d.className), nullptr) << d.className;
+        EXPECT_NE(createInstrumentByName(d.displayName), nullptr) << d.displayName;
+        EXPECT_NE(createInstrumentByName(d.id), nullptr) << d.id;
+        if (d.alias) EXPECT_NE(createInstrumentByName(d.alias), nullptr) << d.alias;
+    }
+    for (const auto& d : audioEffectDescriptors()) {
+        EXPECT_NE(createAudioEffectByName(d.className), nullptr) << d.className;
+        EXPECT_NE(createAudioEffectByName(d.displayName), nullptr) << d.displayName;
+        EXPECT_NE(createAudioEffectByName(d.id), nullptr) << d.id;
+        if (d.alias) EXPECT_NE(createAudioEffectByName(d.alias), nullptr) << d.alias;
+    }
+    for (const auto& d : midiEffectDescriptors()) {
+        EXPECT_NE(createMidiEffectByName(d.className), nullptr) << d.className;
+        EXPECT_NE(createMidiEffectByName(d.displayName), nullptr) << d.displayName;
+        EXPECT_NE(createMidiEffectByName(d.id), nullptr) << d.id;
+        if (d.alias) EXPECT_NE(createMidiEffectByName(d.alias), nullptr) << d.alias;
+    }
+    EXPECT_EQ(createInstrumentByName("nonexistent"), nullptr);
+    EXPECT_EQ(createAudioEffectByName("nonexistent"), nullptr);
+    EXPECT_EQ(createMidiEffectByName("nonexistent"), nullptr);
+}
+
+// Regression: "Auto Panner" was missing from createAudioEffectByName,
+// so undoing the removal of an Auto Panner silently restored nothing.
+TEST(Factory, AutoPannerUndoPathWorks) {
+    auto fx = createAudioEffect("autopanner");
+    ASSERT_NE(fx, nullptr);
+    EXPECT_NE(createAudioEffectByName(fx->name()), nullptr)
+        << "undo of Remove Effect would lose an Auto Panner";
 }
 
 // ---------------------------------------------------------------------------

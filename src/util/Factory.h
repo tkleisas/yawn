@@ -2,7 +2,7 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
+#include <vector>
 #include <functional>
 
 #include "instruments/Instrument.h"
@@ -70,69 +70,180 @@
 
 namespace yawn {
 
-// Factory functions that map id strings to make_unique calls.
-// Used by the project serializer to reconstruct objects from saved state.
+// ── Device descriptor tables — the single source of truth ─────────
+//
+// Every built-in device has ONE row here. Menus iterate the table,
+// the serializer's id-based factories and the undo system's
+// name-based factories both look up in it, and the factory tests are
+// data-driven over it — so a device added in one place can't drift
+// out of another (previously the catalog was copy-pasted into 4 menu
+// lists + 2 factory if-chains + the library classifier, and "Auto
+// Panner" fell out of createAudioEffectByName, silently breaking
+// undo of its removal).
+//
+// displayName : the menu label ("Conv Reverb").
+// id          : the serializer's internal id ("convreverb").
+// className   : what an instance reports from name() ("Convolution
+//               Reverb") — used by undo, which re-creates devices
+//               from fx->name().
+// alias       : optional legacy/extra name still accepted by the
+//               name-based lookup (nullptr for most).
+
+template <typename T>
+struct DeviceDescriptor {
+    const char* displayName;
+    const char* id;
+    const char* className;
+    const char* alias;
+    std::function<std::unique_ptr<T>()> make;
+};
+
+inline const std::vector<DeviceDescriptor<effects::AudioEffect>>&
+audioEffectDescriptors() {
+    // Menu order (Add Effect menus iterate top-to-bottom).
+    static const std::vector<DeviceDescriptor<effects::AudioEffect>> table = {
+        {"Reverb",            "reverb",       "Reverb",              nullptr,
+            [] { return std::make_unique<effects::Reverb>(); }},
+        {"Delay",             "delay",        "Delay",               nullptr,
+            [] { return std::make_unique<effects::Delay>(); }},
+        {"EQ",                "eq",           "EQ",                  nullptr,
+            [] { return std::make_unique<effects::EQ>(); }},
+        {"Compressor",        "compressor",   "Compressor",          nullptr,
+            [] { return std::make_unique<effects::Compressor>(); }},
+        {"Limiter",           "limiter",      "Limiter",             nullptr,
+            [] { return std::make_unique<effects::Limiter>(); }},
+        {"Filter",            "filter",       "Filter",              nullptr,
+            [] { return std::make_unique<effects::Filter>(); }},
+        {"Chorus",            "chorus",       "Chorus",              nullptr,
+            [] { return std::make_unique<effects::Chorus>(); }},
+        {"Phaser",            "phaser",       "Phaser",              nullptr,
+            [] { return std::make_unique<effects::Phaser>(); }},
+        {"Wah",               "wah",          "Wah",                 nullptr,
+            [] { return std::make_unique<effects::Wah>(); }},
+        {"Rotary",            "rotary",       "Rotary",              nullptr,
+            [] { return std::make_unique<effects::Rotary>(); }},
+        {"Auto Panner",       "autopanner",   "Auto Panner",         nullptr,
+            [] { return std::make_unique<effects::AutoPanner>(); }},
+        {"Distortion",        "distortion",   "Distortion",          nullptr,
+            [] { return std::make_unique<effects::Distortion>(); }},
+        {"Bitcrusher",        "bitcrusher",   "Bitcrusher",          nullptr,
+            [] { return std::make_unique<effects::Bitcrusher>(); }},
+        {"Beat Repeat",       "beatrepeat",   "Beat Repeat",         nullptr,
+            [] { return std::make_unique<effects::BeatRepeat>(); }},
+        {"Buffer Repeat",     "bufferrepeat", "Buffer Repeat",       nullptr,
+            [] { return std::make_unique<effects::BufferRepeat>(); }},
+        {"Resampler",         "resampler",    "Resampler",           nullptr,
+            [] { return std::make_unique<effects::Resampler>(); }},
+        {"Clock Drift",       "clockdrift",   "Clock Drift",         nullptr,
+            [] { return std::make_unique<effects::ClockDrift>(); }},
+        {"CD Error",          "cderror",      "CD Error",            nullptr,
+            [] { return std::make_unique<effects::CDError>(); }},
+        {"Noise Gate",        "noisegate",    "Noise Gate",          nullptr,
+            [] { return std::make_unique<effects::NoiseGate>(); }},
+        {"Ping-Pong Delay",   "pingpongdelay","Ping-Pong Delay",     nullptr,
+            [] { return std::make_unique<effects::PingPongDelay>(); }},
+        {"Envelope Follower", "envfollower",  "Envelope Follower",   nullptr,
+            [] { return std::make_unique<effects::EnvelopeFollower>(); }},
+        {"Spline EQ",         "splineeq",     "Spline EQ",           nullptr,
+            [] { return std::make_unique<effects::SplineEQ>(); }},
+        {"Neural Amp",        "neuralamp",    "Neural Amp",          nullptr,
+            [] { return std::make_unique<effects::NeuralAmp>(); }},
+        {"Conv Reverb",       "convreverb",   "Convolution Reverb",  nullptr,
+            [] { return std::make_unique<effects::ConvolutionReverb>(); }},
+        {"Tape Emulation",    "tape",         "Tape Emulation",      nullptr,
+            [] { return std::make_unique<effects::TapeEmulation>(); }},
+        {"Amp Simulator",     "amp",          "Amp Simulator",       nullptr,
+            [] { return std::make_unique<effects::AmpSimulator>(); }},
+        {"Oscilloscope",      "oscilloscope", "Oscilloscope",        nullptr,
+            [] { return std::make_unique<effects::Oscilloscope>(); }},
+        {"Spectrum",          "spectrum",     "Spectrum",            "Spectrum Analyzer",
+            [] { return std::make_unique<effects::SpectrumAnalyzer>(); }},
+        {"Tuner",             "tuner",        "Tuner",               nullptr,
+            [] { return std::make_unique<effects::Tuner>(); }},
+    };
+    return table;
+}
+
+inline const std::vector<DeviceDescriptor<instruments::Instrument>>&
+instrumentDescriptors() {
+    // Menu order (Set Instrument menus). Drawbar Organ and Electric
+    // Piano are listed too, but the track menu gives them custom
+    // entries (auto-insert Rotary / Phaser) — iterate and special-case.
+    static const std::vector<DeviceDescriptor<instruments::Instrument>> table = {
+        {"SubSynth",          "subsynth",     "Subtractive Synth",   nullptr,
+            [] { return std::make_unique<instruments::SubtractiveSynth>(); }},
+        {"FM Synth",          "fmsynth",      "FM Synth",            nullptr,
+            [] { return std::make_unique<instruments::FMSynth>(); }},
+        {"Sampler",           "sampler",      "Sampler",             nullptr,
+            [] { return std::make_unique<instruments::Sampler>(); }},
+        {"Drum Rack",         "drumrack",     "Drum Rack",           nullptr,
+            [] { return std::make_unique<instruments::DrumRack>(); }},
+        {"Drum Synth",        "drumsynth",    "Drum Synth",          nullptr,
+            [] { return std::make_unique<instruments::DrumSynth>(); }},
+        {"DrumSlop",          "drumslop",     "DrumSlop",            nullptr,
+            [] { return std::make_unique<instruments::DrumSlop>(); }},
+        {"Karplus-Strong",    "karplus",      "Karplus-Strong",      nullptr,
+            [] { return std::make_unique<instruments::KarplusStrong>(); }},
+        {"Wavetable Synth",   "wavetable",    "Wavetable Synth",     nullptr,
+            [] { return std::make_unique<instruments::WavetableSynth>(); }},
+        {"Granular Synth",    "granular",     "Granular Synth",      nullptr,
+            [] { return std::make_unique<instruments::GranularSynth>(); }},
+        {"Vocoder",           "vocoder",      "Vocoder",             nullptr,
+            [] { return std::make_unique<instruments::Vocoder>(); }},
+        {"Multisampler",      "multisampler", "Multisampler",        nullptr,
+            [] { return std::make_unique<instruments::Multisampler>(); }},
+        {"Instrument Rack",   "instrack",     "Instrument Rack",     nullptr,
+            [] { return std::make_unique<instruments::InstrumentRack>(); }},
+        {"String Machine",    "stringmachine","String Machine",      nullptr,
+            [] { return std::make_unique<instruments::StringMachine>(); }},
+        {"Drawbar Organ",     "drawbarorgan", "Drawbar Organ",       nullptr,
+            [] { return std::make_unique<instruments::DrawbarOrgan>(); }},
+        {"Electric Piano",    "electricpiano","Electric Piano",      nullptr,
+            [] { return std::make_unique<instruments::ElectricPiano>(); }},
+    };
+    return table;
+}
+
+inline const std::vector<DeviceDescriptor<midi::MidiEffect>>&
+midiEffectDescriptors() {
+    static const std::vector<DeviceDescriptor<midi::MidiEffect>> table = {
+        {"Arpeggiator",       "arp",          "Arpeggiator",         nullptr,
+            [] { return std::make_unique<midi::Arpeggiator>(); }},
+        {"Chord",             "chord",        "Chord",               nullptr,
+            [] { return std::make_unique<midi::Chord>(); }},
+        {"Scale",             "scale",        "Scale",               nullptr,
+            [] { return std::make_unique<midi::Scale>(); }},
+        {"Note Length",       "notelength",   "Note Length",         nullptr,
+            [] { return std::make_unique<midi::NoteLength>(); }},
+        {"Velocity",          "velocity",     "Velocity",            nullptr,
+            [] { return std::make_unique<midi::VelocityEffect>(); }},
+        {"Random",            "random",       "Random",              "MIDI Random",
+            [] { return std::make_unique<midi::MidiRandom>(); }},
+        {"Pitch",             "pitch",        "Pitch",               "MIDI Pitch",
+            [] { return std::make_unique<midi::MidiPitch>(); }},
+        {"LFO",               "lfo",          "LFO",                 nullptr,
+            [] { return std::make_unique<midi::LFO>(); }},
+    };
+    return table;
+}
+
+// ── Factories ─────────────────────────────────────────────────────
+//
+// createX(id)   — serializer path: internal id ("subsynth").
+// createXByName — undo path: accepts displayName, className (what
+//                 name() returns), id, or the legacy alias.
+// Both are thin loops over the descriptor tables above.
 
 inline std::unique_ptr<instruments::Instrument> createInstrument(const std::string& id) {
-    // Handle VST3 instruments: id = "vst3:<classID>", modulePath needed separately
-    // For VST3, use createVST3Instrument() below instead
-    static const std::unordered_map<std::string,
-        std::function<std::unique_ptr<instruments::Instrument>()>> registry = {
-        {"subsynth",   [] { return std::make_unique<instruments::SubtractiveSynth>(); }},
-        {"fmsynth",    [] { return std::make_unique<instruments::FMSynth>(); }},
-        {"sampler",    [] { return std::make_unique<instruments::Sampler>(); }},
-        {"drumrack",   [] { return std::make_unique<instruments::DrumRack>(); }},
-        {"drumslop",   [] { return std::make_unique<instruments::DrumSlop>(); }},
-        {"karplus",    [] { return std::make_unique<instruments::KarplusStrong>(); }},
-        {"wavetable",  [] { return std::make_unique<instruments::WavetableSynth>(); }},
-        {"granular",   [] { return std::make_unique<instruments::GranularSynth>(); }},
-        {"vocoder",    [] { return std::make_unique<instruments::Vocoder>(); }},
-        {"multisampler",[] { return std::make_unique<instruments::Multisampler>(); }},
-        {"instrack",   [] { return std::make_unique<instruments::InstrumentRack>(); }},
-        {"drumsynth", [] { return std::make_unique<instruments::DrumSynth>(); }},
-        {"stringmachine", [] { return std::make_unique<instruments::StringMachine>(); }},
-        {"drawbarorgan", [] { return std::make_unique<instruments::DrawbarOrgan>(); }},
-        {"electricpiano", [] { return std::make_unique<instruments::ElectricPiano>(); }},
-    };
-    auto it = registry.find(id);
-    return (it != registry.end()) ? it->second() : nullptr;
+    for (const auto& d : instrumentDescriptors())
+        if (id == d.id) return d.make();
+    return nullptr;
 }
 
 inline std::unique_ptr<effects::AudioEffect> createAudioEffect(const std::string& id) {
-    static const std::unordered_map<std::string,
-        std::function<std::unique_ptr<effects::AudioEffect>()>> registry = {
-        {"reverb",      [] { return std::make_unique<effects::Reverb>(); }},
-        {"delay",       [] { return std::make_unique<effects::Delay>(); }},
-        {"eq",          [] { return std::make_unique<effects::EQ>(); }},
-        {"compressor",  [] { return std::make_unique<effects::Compressor>(); }},
-        {"limiter",     [] { return std::make_unique<effects::Limiter>(); }},
-        {"filter",      [] { return std::make_unique<effects::Filter>(); }},
-        {"chorus",      [] { return std::make_unique<effects::Chorus>(); }},
-        {"phaser",      [] { return std::make_unique<effects::Phaser>(); }},
-        {"wah",         [] { return std::make_unique<effects::Wah>(); }},
-        {"rotary",      [] { return std::make_unique<effects::Rotary>(); }},
-        {"distortion",  [] { return std::make_unique<effects::Distortion>(); }},
-        {"tape",        [] { return std::make_unique<effects::TapeEmulation>(); }},
-        {"amp",         [] { return std::make_unique<effects::AmpSimulator>(); }},
-        {"oscilloscope",[] { return std::make_unique<effects::Oscilloscope>(); }},
-        {"spectrum",    [] { return std::make_unique<effects::SpectrumAnalyzer>(); }},
-        {"tuner",       [] { return std::make_unique<effects::Tuner>(); }},
-        {"bitcrusher",  [] { return std::make_unique<effects::Bitcrusher>(); }},
-        {"noisegate",   [] { return std::make_unique<effects::NoiseGate>(); }},
-        {"pingpongdelay",[] { return std::make_unique<effects::PingPongDelay>(); }},
-        {"envfollower", [] { return std::make_unique<effects::EnvelopeFollower>(); }},
-        {"splineeq",    [] { return std::make_unique<effects::SplineEQ>(); }},
-        {"neuralamp",   [] { return std::make_unique<effects::NeuralAmp>(); }},
-        {"convreverb",  [] { return std::make_unique<effects::ConvolutionReverb>(); }},
-        {"beatrepeat",  [] { return std::make_unique<effects::BeatRepeat>(); }},
-        {"bufferrepeat",[] { return std::make_unique<effects::BufferRepeat>(); }},
-        {"resampler",   [] { return std::make_unique<effects::Resampler>(); }},
-        {"clockdrift",  [] { return std::make_unique<effects::ClockDrift>(); }},
-        {"cderror",     [] { return std::make_unique<effects::CDError>(); }},
-        {"autopanner",  [] { return std::make_unique<effects::AutoPanner>(); }},
-    };
-    auto it = registry.find(id);
-    return (it != registry.end()) ? it->second() : nullptr;
+    for (const auto& d : audioEffectDescriptors())
+        if (id == d.id) return d.make();
+    return nullptr;
 }
 
 #ifdef YAWN_HAS_VST3
@@ -156,85 +267,33 @@ inline std::string vst3ClassIDFromId(const std::string& id) {
 #endif
 
 inline std::unique_ptr<midi::MidiEffect> createMidiEffect(const std::string& id) {
-    static const std::unordered_map<std::string,
-        std::function<std::unique_ptr<midi::MidiEffect>()>> registry = {
-        {"arp",        [] { return std::make_unique<midi::Arpeggiator>(); }},
-        {"chord",      [] { return std::make_unique<midi::Chord>(); }},
-        {"scale",      [] { return std::make_unique<midi::Scale>(); }},
-        {"notelength", [] { return std::make_unique<midi::NoteLength>(); }},
-        {"velocity",   [] { return std::make_unique<midi::VelocityEffect>(); }},
-        {"random",     [] { return std::make_unique<midi::MidiRandom>(); }},
-        {"pitch",      [] { return std::make_unique<midi::MidiPitch>(); }},
-        {"lfo",        [] { return std::make_unique<midi::LFO>(); }},
-    };
-    auto it = registry.find(id);
-    return (it != registry.end()) ? it->second() : nullptr;
+    for (const auto& d : midiEffectDescriptors())
+        if (id == d.id) return d.make();
+    return nullptr;
+}
+
+inline std::unique_ptr<instruments::Instrument> createInstrumentByName(const std::string& n) {
+    for (const auto& d : instrumentDescriptors())
+        if (n == d.displayName || n == d.className || n == d.id ||
+            (d.alias && n == d.alias))
+            return d.make();
+    return nullptr;
+}
+
+inline std::unique_ptr<effects::AudioEffect> createAudioEffectByName(const std::string& n) {
+    for (const auto& d : audioEffectDescriptors())
+        if (n == d.displayName || n == d.className || n == d.id ||
+            (d.alias && n == d.alias))
+            return d.make();
+    return nullptr;
+}
+
+inline std::unique_ptr<midi::MidiEffect> createMidiEffectByName(const std::string& n) {
+    for (const auto& d : midiEffectDescriptors())
+        if (n == d.displayName || n == d.className || n == d.id ||
+            (d.alias && n == d.alias))
+            return d.make();
+    return nullptr;
 }
 
 } // namespace yawn
-
-// Name-based factory helpers — used by UI menus (display names → make_unique).
-// These are separate from the id-based factories above, which are used by
-// the project serializer (internal IDs like "subsynth" → make_unique).
-inline std::unique_ptr<yawn::instruments::Instrument> createInstrumentByName(const std::string& n) {
-    if (n == "Subtractive Synth") return std::make_unique<yawn::instruments::SubtractiveSynth>();
-    if (n == "FM Synth")          return std::make_unique<yawn::instruments::FMSynth>();
-    if (n == "Sampler")           return std::make_unique<yawn::instruments::Sampler>();
-    if (n == "Drum Rack")         return std::make_unique<yawn::instruments::DrumRack>();
-    if (n == "Drum Synth")        return std::make_unique<yawn::instruments::DrumSynth>();
-    if (n == "DrumSlop")          return std::make_unique<yawn::instruments::DrumSlop>();
-    if (n == "Karplus-Strong")    return std::make_unique<yawn::instruments::KarplusStrong>();
-    if (n == "Wavetable Synth")   return std::make_unique<yawn::instruments::WavetableSynth>();
-    if (n == "Granular Synth")    return std::make_unique<yawn::instruments::GranularSynth>();
-    if (n == "Vocoder")           return std::make_unique<yawn::instruments::Vocoder>();
-    if (n == "Multisampler")      return std::make_unique<yawn::instruments::Multisampler>();
-    if (n == "Instrument Rack")   return std::make_unique<yawn::instruments::InstrumentRack>();
-    if (n == "String Machine")    return std::make_unique<yawn::instruments::StringMachine>();
-    if (n == "Drawbar Organ")     return std::make_unique<yawn::instruments::DrawbarOrgan>();
-    if (n == "Electric Piano")    return std::make_unique<yawn::instruments::ElectricPiano>();
-    return nullptr;
-}
-
-inline std::unique_ptr<yawn::effects::AudioEffect> createAudioEffectByName(const std::string& n) {
-    if (n == "Reverb")            return std::make_unique<yawn::effects::Reverb>();
-    if (n == "Delay")             return std::make_unique<yawn::effects::Delay>();
-    if (n == "EQ")                return std::make_unique<yawn::effects::EQ>();
-    if (n == "Compressor")        return std::make_unique<yawn::effects::Compressor>();
-    if (n == "Limiter")           return std::make_unique<yawn::effects::Limiter>();
-    if (n == "Filter")            return std::make_unique<yawn::effects::Filter>();
-    if (n == "Chorus")            return std::make_unique<yawn::effects::Chorus>();
-    if (n == "Phaser")            return std::make_unique<yawn::effects::Phaser>();
-    if (n == "Wah")               return std::make_unique<yawn::effects::Wah>();
-    if (n == "Rotary")            return std::make_unique<yawn::effects::Rotary>();
-    if (n == "Distortion")        return std::make_unique<yawn::effects::Distortion>();
-    if (n == "Tape Emulation")    return std::make_unique<yawn::effects::TapeEmulation>();
-    if (n == "Amp Simulator")     return std::make_unique<yawn::effects::AmpSimulator>();
-    if (n == "Oscilloscope")      return std::make_unique<yawn::effects::Oscilloscope>();
-    if (n == "Spectrum Analyzer" || n == "Spectrum") return std::make_unique<yawn::effects::SpectrumAnalyzer>();
-    if (n == "Tuner")             return std::make_unique<yawn::effects::Tuner>();
-    if (n == "Bitcrusher")        return std::make_unique<yawn::effects::Bitcrusher>();
-    if (n == "Noise Gate")        return std::make_unique<yawn::effects::NoiseGate>();
-    if (n == "Ping-Pong Delay")   return std::make_unique<yawn::effects::PingPongDelay>();
-    if (n == "Envelope Follower") return std::make_unique<yawn::effects::EnvelopeFollower>();
-    if (n == "Spline EQ")         return std::make_unique<yawn::effects::SplineEQ>();
-    if (n == "Neural Amp")        return std::make_unique<yawn::effects::NeuralAmp>();
-    if (n == "Convolution Reverb")return std::make_unique<yawn::effects::ConvolutionReverb>();
-    if (n == "Beat Repeat")       return std::make_unique<yawn::effects::BeatRepeat>();
-    if (n == "Buffer Repeat")     return std::make_unique<yawn::effects::BufferRepeat>();
-    if (n == "Resampler")         return std::make_unique<yawn::effects::Resampler>();
-    if (n == "Clock Drift")       return std::make_unique<yawn::effects::ClockDrift>();
-    if (n == "CD Error")          return std::make_unique<yawn::effects::CDError>();
-    return nullptr;
-}
-
-inline std::unique_ptr<yawn::midi::MidiEffect> createMidiEffectByName(const std::string& n) {
-    if (n == "Arpeggiator")    return std::make_unique<yawn::midi::Arpeggiator>();
-    if (n == "Chord")          return std::make_unique<yawn::midi::Chord>();
-    if (n == "Scale")          return std::make_unique<yawn::midi::Scale>();
-    if (n == "Note Length")    return std::make_unique<yawn::midi::NoteLength>();
-    if (n == "Velocity")       return std::make_unique<yawn::midi::VelocityEffect>();
-    if (n == "Random" || n == "MIDI Random") return std::make_unique<yawn::midi::MidiRandom>();
-    if (n == "Pitch" || n == "MIDI Pitch")   return std::make_unique<yawn::midi::MidiPitch>();
-    if (n == "LFO")            return std::make_unique<yawn::midi::LFO>();
-    return nullptr;
-}
