@@ -225,7 +225,9 @@ jobs:
         with:
           path: ~/.cache/ccache
           key: linux-ccache-asan-${{ github.sha }}
-          restore-keys: linux-ccache-asan-,linux-ccache-
+          restore-keys: |
+            linux-ccache-asan-
+            linux-ccache-
 
       - name: Configure
         run: cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
