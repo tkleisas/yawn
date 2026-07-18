@@ -62,10 +62,16 @@ function(yawn_set_warnings target)
             -Wno-unused-parameter
             # Counterpart promote-to-error set for gcc/clang.
             -Werror=return-type            # missing return value
-            -Werror=infinite-recursion     # always-recursive function (clang + gcc 12+)
             -Werror=return-local-addr      # returning addr of local
             -Werror=uninitialized          # potentially uninitialized local
         )
+        # -Winfinite-recursion is Clang-only: GCC accepts the flag
+        # without implementing the warning, so the "always-recursive →
+        # error" gate was silently inert on the Linux (GCC) CI build.
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE
+                -Werror=infinite-recursion) # always-recursive function
+        endif()
         # A sanitizer build perturbs the optimizer enough to trip spurious
         # -Wmaybe-uninitialized in libstdc++ (<regex> / std::function), which
         # -Werror=uninitialized then promotes to an error. Relax just that
@@ -322,8 +328,9 @@ if(YAWN_HAS_STEM_SEPARATION)
     endif()
 endif()
 
-# Collect sources
-file(GLOB_RECURSE YAWN_SOURCES
+# Collect sources (CONFIGURE_DEPENDS: re-glob on build so a newly
+# added .cpp is picked up without a manual re-configure)
+file(GLOB_RECURSE YAWN_SOURCES CONFIGURE_DEPENDS
     src/*.cpp
     src/*.c
 )
@@ -708,6 +715,9 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 # VST3 editor host — separate process to isolate plugin UI from SDL
 if(YAWN_VST3 AND (WIN32 OR (UNIX AND NOT APPLE)))
     add_executable(yawn_vst3_host src/vst3/VST3EditorHost.cpp)
+    # This process loads third-party plugin UI code — it needs the
+    # same warning gate as everything else (it previously escaped it).
+    yawn_set_warnings(yawn_vst3_host)
     target_link_libraries(yawn_vst3_host PRIVATE vst3_hosting)
     target_compile_definitions(yawn_vst3_host PRIVATE YAWN_HAS_VST3=1)
     set_target_properties(yawn_vst3_host PROPERTIES

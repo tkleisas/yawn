@@ -1,12 +1,16 @@
 # Test executable — all test files, linked against yawn_core (no UI/OpenGL deps)
-file(GLOB TEST_SOURCES *.cpp)
+# CONFIGURE_DEPENDS: new test files are picked up without re-configuring.
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS *.cpp)
 
 add_executable(yawn_tests ${TEST_SOURCES})
 
 yawn_set_warnings(yawn_tests)
 target_precompile_headers(yawn_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch/yawn_test_pch.h)
 
-target_include_directories(yawn_tests SYSTEM PRIVATE
+# NOT SYSTEM: marking our own headers as system headers suppresses
+# warnings from them in the test TUs — the tests are exactly where we
+# want those warnings to fire.
+target_include_directories(yawn_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
 

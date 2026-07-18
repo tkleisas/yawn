@@ -67,15 +67,16 @@ jobs:
 
       # Prebuilt FFmpeg (shared, includes headers + import libs + DLLs +
       # ffmpeg.exe/ffprobe.exe). BtbN publishes these under their
-      # autobuild releases on GitHub; we grab the stable "latest" alias
-      # for the GPL shared variant. Exports FFMPEG_ROOT so CMake's manual
+      # autobuild releases on GitHub; pinned to a dated autobuild (the
+      # "latest" alias floats and would change the toolchain underneath
+      # us mid-release). Exports FFMPEG_ROOT so CMake's manual
       # detection path picks it up, and prepends bin/ to PATH so the
       # test binary can find the DLLs during ctest.
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip'
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-18-13-13/ffmpeg-N-125658-g0869e710e6-win64-gpl-shared.zip'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           $dest = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
           Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
@@ -99,6 +100,16 @@ jobs:
         with:
           path: build/_deps
           key: linux-deps-${{ hashFiles('cmake/**', 'CMakeLists.txt') }}
+
+      # Same for Windows — the deps were previously re-cloned from
+      # scratch on every run (and, with unpinned tags, could yield a
+      # different SDL than the Linux artifact of the same release).
+      - name: Cache FetchContent deps (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: windows-deps-${{ hashFiles('cmake/**', 'CMakeLists.txt') }}
 
       # Compiler cache so unchanged TUs (deps + YAWN) aren't recompiled.
       - name: Cache ccache (Linux)
@@ -169,3 +180,114 @@ jobs:
         with:
           name: YAWN-${{ matrix.platform }}
           path: package/
+
+  # ASan + UBSan over the full test suite. The engine's SPSC ring
+  # buffers and retire-list lifetime scheme are exactly the bug class
+  # these catch; the build already relaxes -Werror=uninitialized under
+  # sanitizers, so no special flag wrangling is needed.
+  sanitizers:
+    runs-on: ubuntu-latest
+    name: Sanitizers (ASan+UBSan, Linux)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
+            libxtst-dev libxkbcommon-dev libwayland-dev \
+            libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
+            libibus-1.0-dev libudev-dev \
+            libavcodec-dev libavformat-dev libavutil libswscale-dev \
+            libavdevice-dev ccache
+
+      - name: Install Python dependencies
+        run: pip install jinja2
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build-asan/_deps
+          key: linux-deps-${{ hashFiles('cmake/**', 'CMakeLists.txt') }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: linux-ccache-asan-${{ github.sha }}
+          restore-keys: linux-ccache-asan-,linux-ccache-
+
+      - name: Configure
+        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build-asan --parallel --target yawn_tests
+
+      - name: Test
+        working-directory: build-asan
+        run: ./bin/yawn_tests
+
+  # Debug build: the assert()s in src/ (e.g. AudioBuffer bounds checks)
+  # compile out under NDEBUG in the Release-only matrix, so this is the
+  # only job where they actually fire.
+  debug:
+    runs-on: ubuntu-latest
+    name: Debug (asserts enabled, Linux)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
+            libxtst-dev libxkbcommon-dev libwayland-dev \
+            libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
+            libibus-1.0-dev libudev-dev \
+            libavcodec-dev libavformat-dev libavutil libswscale-dev \
+            libavdevice-dev ccache
+
+      - name: Install Python dependencies
+        run: pip install jinja2
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: linux-deps-${{ hashFiles('cmake/**', 'CMakeLists.txt') }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: linux-ccache-${{ github.sha }}
+          restore-keys: linux-ccache-
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --parallel

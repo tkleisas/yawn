@@ -78,7 +78,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip'
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-18-13-13/ffmpeg-N-125658-g0869e710e6-win64-gpl-shared.zip'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           $dest = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
           Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing

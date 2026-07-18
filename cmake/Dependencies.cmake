@@ -3,10 +3,13 @@ include(FetchContent)
 # ──────────────────────────────────────────────
 # SDL3
 # ──────────────────────────────────────────────
+# Pinned to a specific commit (was: GIT_TAG main — every fresh clone
+# built a different SDL, and the Linux/Windows CI caches could embed
+# different SDL builds in the same release). Bump deliberately.
 FetchContent_Declare(
     SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG        main
+    GIT_TAG        8319d69f7286f40b3cacdb2c8216c8a6dd6a239c
     GIT_SHALLOW    TRUE
 )
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -130,7 +133,8 @@ FetchContent_MakeAvailable(libsndfile)
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG        master
+    # Pinned commit (was: master — floating). Bump deliberately.
+    GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(stb)
@@ -169,7 +173,8 @@ FetchContent_MakeAvailable(googletest)
 FetchContent_Declare(
     minimp3
     GIT_REPOSITORY https://github.com/lieff/minimp3.git
-    GIT_TAG        master
+    # Pinned commit (was: master — floating). Bump deliberately.
+    GIT_TAG        7b590fdcfa5a79c033e76eacc05d0c3e4c79f536
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(minimp3)
@@ -258,11 +263,10 @@ if(YAWN_HAS_NAM OR YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
         eigen
         GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
         # Eigen 3.4.0 (2021) lacks placeholders::lastN which NAM
-        # uses in lstm.h. NAM bundles Eigen at a newer commit on
-        # master via submodule; we mirror that with a fresh master
-        # pull. Pinned to a specific commit would be cleaner long-
-        # term but Eigen has no recent tagged release to anchor on.
-        GIT_TAG        master
+        # uses in lstm.h, and there's no recent tagged release with
+        # it — so we pin a specific master commit known to work
+        # (was: master — floating; bump deliberately).
+        GIT_TAG        e0f18b799e2cc7d416fdb0aec2075dceebbc8295
         GIT_SHALLOW    TRUE
     )
     FetchContent_GetProperties(eigen)
@@ -313,10 +317,15 @@ if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
         set(_ort_ver 1.20.1)
         if(WIN32)
             set(_ort_url https://github.com/microsoft/onnxruntime/releases/download/v${_ort_ver}/onnxruntime-win-x64-${_ort_ver}.zip)
+            set(_ort_sha256 78d447051e48bd2e1e778bba378bec4ece11191c9e538cf7b2c4a4565e8f5581)
         else()
             set(_ort_url https://github.com/microsoft/onnxruntime/releases/download/v${_ort_ver}/onnxruntime-linux-x64-${_ort_ver}.tgz)
+            set(_ort_sha256 67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105)
         endif()
-        FetchContent_Declare(onnxruntime URL ${_ort_url})
+        # Integrity-pinned: without a hash, a silently corrupted or
+        # swapped archive would unpack straight into the build.
+        FetchContent_Declare(onnxruntime URL ${_ort_url}
+            URL_HASH SHA256=${_ort_sha256})
         FetchContent_GetProperties(onnxruntime)
         if(NOT onnxruntime_POPULATED)
             FetchContent_Populate(onnxruntime)

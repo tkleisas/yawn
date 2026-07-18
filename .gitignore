@@ -38,3 +38,7 @@ images/cur_layout.png
 images/virt_inst.png
 images/virt_inst2.png
 build_debug/
+
+# Local run logs
+stderr.txt
+stdout.txt

@@ -315,18 +315,18 @@ TEST(AudioEngine, RecordedAudioDataInitialState) {
 
 // ==================== Private capture (auto-sampler side channel) ====
 
-TEST(AudioEngine, DISABLED_PrivateCaptureNoActiveByDefault) {
+TEST(AudioEngine, PrivateCaptureNoActiveByDefault) {
     AudioEngine engine;
     EXPECT_FALSE(engine.isPrivateCaptureActive());
 }
 
-TEST(AudioEngine, DISABLED_PrivateCaptureNullRequestRejected) {
+TEST(AudioEngine, PrivateCaptureNullRequestRejected) {
     AudioEngine engine;
     EXPECT_FALSE(engine.startPrivateCapture(nullptr));
     EXPECT_FALSE(engine.isPrivateCaptureActive());
 }
 
-TEST(AudioEngine, DISABLED_PrivateCaptureSecondRequestRejectedWhileFirstInFlight) {
+TEST(AudioEngine, PrivateCaptureSecondRequestRejectedWhileFirstInFlight) {
     AudioEngine engine;
     AudioEngine::PrivateCaptureRequest a, b;
     a.frames = 1024;  a.channels = 1;
@@ -341,7 +341,7 @@ TEST(AudioEngine, DISABLED_PrivateCaptureSecondRequestRejectedWhileFirstInFlight
     engine.abortPrivateCapture();
 }
 
-TEST(AudioEngine, DISABLED_PrivateCaptureAbortMarksDoneAndAborted) {
+TEST(AudioEngine, PrivateCaptureAbortMarksDoneAndAborted) {
     AudioEngine engine;
     AudioEngine::PrivateCaptureRequest req;
     req.frames = 4096;  req.channels = 1;
@@ -354,7 +354,7 @@ TEST(AudioEngine, DISABLED_PrivateCaptureAbortMarksDoneAndAborted) {
     EXPECT_FALSE(engine.isPrivateCaptureActive());
 }
 
-TEST(AudioEngine, DISABLED_PrivateCaptureFillsBufferOverMultiplePumps) {
+TEST(AudioEngine, PrivateCaptureFillsBufferOverMultiplePumps) {
     // Drives the audio-thread copy path via pumpInputForTest with a
     // synthetic input ramp. Verifies that:
     //   1. the request's buffer fills exactly `frames` samples
@@ -362,16 +362,12 @@ TEST(AudioEngine, DISABLED_PrivateCaptureFillsBufferOverMultiplePumps) {
     //   3. done flips and the slot releases when frames is reached
     //   4. extra pumps after done don't keep writing
     AudioEngine engine;
+    // No engine.init(): pumpInputForTest self-initializes the engine
+    // headlessly (initHeadlessForTest), and the private-capture path
+    // doesn't gate on a real input device.
     AudioEngineConfig cfg;
-    cfg.sampleRate = 44100.0;
-    cfg.framesPerBuffer = 256;
     cfg.inputChannels = 2;
     cfg.outputChannels = 2;
-    cfg.inputDevice = -1;
-    cfg.outputDevice = -1;
-    if (!engine.init(cfg)) {
-        GTEST_SKIP() << "PortAudio unavailable in test env";
-    }
 
     constexpr int kBufFrames = 256;
     constexpr int kCaptureFrames = 1024;   // 4 buffers' worth
@@ -410,16 +406,14 @@ TEST(AudioEngine, DISABLED_PrivateCaptureFillsBufferOverMultiplePumps) {
     }
 }
 
-TEST(AudioEngine, DISABLED_PrivateCaptureStereoChannelInterleaved) {
+TEST(AudioEngine, PrivateCaptureStereoChannelInterleaved) {
     AudioEngine engine;
+    // No engine.init(): pumpInputForTest self-initializes the engine
+    // headlessly (initHeadlessForTest), and the private-capture path
+    // doesn't gate on a real input device.
     AudioEngineConfig cfg;
     cfg.inputChannels = 2;
     cfg.outputChannels = 2;
-    cfg.inputDevice = -1;
-    cfg.outputDevice = -1;
-    if (!engine.init(cfg)) {
-        GTEST_SKIP() << "PortAudio unavailable in test env";
-    }
 
     constexpr int kBufFrames = 64;
     constexpr int kCaptureFrames = 64;
