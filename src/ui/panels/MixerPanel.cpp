@@ -467,6 +467,10 @@ void MixerPanel::setupStripCallbacks(int t) {
         if (!m_project || !m_engine) return;
         bool cur = !on;
         m_project->track(t).armed = on;
+        // Pre-allocate the recording pool on the UI thread when arming
+        // so the engine's record-start handler never resizes on the
+        // audio thread (see AudioEngine::prepareRecording).
+        if (on) m_engine->prepareRecording(t);
         m_engine->sendCommand(audio::SetTrackArmedMsg{t, on});
         if (m_onTrackArmed) m_onTrackArmed(t, on);
         if (m_undoManager) {

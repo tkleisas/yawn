@@ -556,13 +556,18 @@ void App::update() {
                 if (data.ready.load(std::memory_order_acquire)) {
                     int si = data.sceneIndex;
                     if (ti >= 0 && si >= 0 && data.frameCount > 0) {
-                        // Create AudioBuffer from recorded data
+                        // Create AudioBuffer from recorded data. The
+                        // take may be tightly packed (trim/clamp path)
+                        // or zero-copy with the recording pool's native
+                        // stride (common path) — honor strideFrames.
+                        const int64_t stride = (data.strideFrames > 0)
+                            ? data.strideFrames : data.frameCount;
                         auto audioBuffer = std::make_shared<audio::AudioBuffer>(
                             data.channels, static_cast<int>(data.frameCount));
                         for (int ch = 0; ch < data.channels; ++ch) {
                             std::memcpy(
                                 audioBuffer->channelData(ch),
-                                data.buffer.data() + ch * data.frameCount,
+                                data.buffer.data() + ch * stride,
                                 data.frameCount * sizeof(float));
                         }
 
@@ -618,9 +623,9 @@ void App::update() {
                     }
                     // Clear recording state in UI
                     m_sessionPanel->setTrackRecording(ti, false, -1);
-                    // Free the transfer buffer
-                    data.buffer.clear();
-                    data.buffer.shrink_to_fit();
+                    // Return the take buffer to the recording pool
+                    // (zero-copy round-trip for the next take).
+                    m_audioEngine.releaseRecordedAudioBuffer(ti);
                     data.ready.store(false, std::memory_order_release);
                 }
             }

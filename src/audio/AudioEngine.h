@@ -284,6 +284,7 @@ public:
             m_recordedAudio[i].buffer     = std::move(m_recordedAudio[i + 1].buffer);
             m_recordedAudio[i].channels   = m_recordedAudio[i + 1].channels;
             m_recordedAudio[i].frameCount = m_recordedAudio[i + 1].frameCount;
+            m_recordedAudio[i].strideFrames = m_recordedAudio[i + 1].strideFrames;
             m_recordedAudio[i].trackIndex = m_recordedAudio[i + 1].trackIndex;
             m_recordedAudio[i].sceneIndex = m_recordedAudio[i + 1].sceneIndex;
             m_recordedAudio[i].overdub    = m_recordedAudio[i + 1].overdub;
@@ -327,6 +328,7 @@ public:
         m_recordedMidi[last].ready.store(false);
         m_recordedAudio[last].buffer.clear();
         m_recordedAudio[last].frameCount = 0;
+        m_recordedAudio[last].strideFrames = 0;
         m_recordedAudio[last].trackIndex = -1;
         m_recordedAudio[last].sceneIndex = -1;
         m_recordedAudio[last].autoStopped = false;
@@ -373,9 +375,47 @@ public:
     // (e.g. private capture) without spinning up PortAudio. Output
     // is written to a temp buffer that the caller doesn't see.
     void pumpInputForTest(const float* input, unsigned long numFrames) {
+        initHeadlessForTest();
         std::vector<float> scratch(numFrames * m_config.outputChannels, 0.0f);
         processAudio(input, scratch.data(), numFrames);
     }
+
+    // Test helper: the non-PortAudio half of init(). processAudio
+    // dereferences the per-track buffers and sub-engine pointers that
+    // init() sets up; tests that can't open a real stream (headless
+    // CI) still need those in place. Idempotent. Keep in sync with
+    // init()'s buffer/sub-engine setup if that changes.
+    void initHeadlessForTest() {
+        if (!m_trackMidiBuffers.empty()) return;   // already done
+        m_transport.setSampleRate(m_config.sampleRate);
+        m_transport.reset();
+        m_clipEngine.setTransport(&m_transport);
+        m_clipEngine.setSampleRate(m_config.sampleRate);
+        m_midiClipEngine.setTransport(&m_transport);
+        m_midiClipEngine.setSampleRate(m_config.sampleRate);
+        m_arrPlayback.setTransport(&m_transport);
+        m_arrPlayback.setSampleRate(m_config.sampleRate);
+        m_metronome.init(m_config.sampleRate, m_config.framesPerBuffer);
+        m_trackMidiBuffers.resize(kMaxTracks);
+        m_liveInputMidi.resize(kMaxTracks);
+        for (int t = 0; t < kMaxMidiTracks; ++t)
+            m_midiEffectChains[t].init(m_config.sampleRate);
+        const int bufferStride = kMaxFramesPerBuffer * m_config.outputChannels;
+        m_trackBufferHeap.resize(kMaxTracks * bufferStride, 0.0f);
+        for (int t = 0; t < kMaxTracks; ++t) {
+            m_trackBufferPtrs[t] = m_trackBufferHeap.data() + t * bufferStride;
+            m_trackSidechainSource[t] = -1;
+            m_trackResampleSource[t] = -1;
+        }
+        m_inputBufferHeap.resize(m_config.inputChannels * kMaxFramesPerBuffer, 0.0f);
+        m_inputAsSidechainBuf.resize(m_config.outputChannels * kMaxFramesPerBuffer, 0.0f);
+    }
+
+    // Test helper: pretend an input device is present so the
+    // record-capture gate (input && m_hasInputDevice) opens under
+    // pumpInputForTest. Pair with pumpInputForTest to test the
+    // record/finalize path without PortAudio.
+    void setHasInputDeviceForTest(bool v) { m_hasInputDevice = v; }
 
     // ─── Private audio capture (auto-sampler, sample tools) ──────────
     //
@@ -427,6 +467,22 @@ public:
     // MidiEngine integration — called from App after init
     void setMidiEngine(midi::MidiEngine* me) { m_midiEngine = me; }
 
+    // ── Recording pool management (UI thread) ───────────────────────
+    // Pre-allocate the per-track recording buffers on the UI thread so
+    // the audio-thread record-start handler never has to (a ~115 MB
+    // resize + first-take MIDI vector growth at record start was a
+    // guaranteed multi-ms glitch). Idempotent and cheap after the first
+    // call for a given sample rate; call when arming a track for
+    // recording and before triggering a record start.
+    void prepareRecording(int track);
+
+    // Return the finalized audio-take buffer to the recording pool
+    // after the UI has consumed it. Only valid after
+    // AudioRecordCompleteEvent; a no-op if a new recording already
+    // started on the track. Keeps the ~115 MB pool round-tripping
+    // between takes with zero audio-thread allocation.
+    void releaseRecordedAudioBuffer(int track);
+
     // Thread-safe transfer of recorded MIDI data to UI (per-track)
     struct RecordedMidiData {
         std::vector<midi::MidiNote> notes;
@@ -445,6 +501,11 @@ public:
         std::vector<float> buffer;  // non-interleaved: [ch0_frames...][ch1_frames...]
         int channels = 2;
         int64_t frameCount = 0;
+        // Stride of each channel block inside `buffer`. 0 = tightly
+        // packed (stride == frameCount). >0 when the take was handed
+        // over zero-copy from the recording pool (stride == pool's
+        // maxFrames) — consumers must index ch * strideFrames.
+        int64_t strideFrames = 0;
         int trackIndex = -1;
         int sceneIndex = -1;
         bool overdub = false;

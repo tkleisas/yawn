@@ -26,6 +26,14 @@ public:
 
     void init(double sampleRate, int maxBlockSize, Algorithm algo = Algorithm::WSOLA);
 
+    // Allocate every buffer for every algorithm up-front (UI thread,
+    // engine init / sample-rate change). Sizes depend only on sample
+    // rate and maxBlockSize, never on the clip — after this call,
+    // init() is allocation-free and safe on the audio thread at clip
+    // launch / warp-mode change. init() still falls back to calling
+    // this when the buffers don't cover the requested rate/size.
+    void preallocate(double sampleRate, int maxBlockSize);
+
     void setSpeedRatio(double ratio) {
         m_speedRatio = std::max(0.25, std::min(4.0, ratio));
     }
@@ -99,6 +107,9 @@ private:
     double m_pvInputPos = 0.0;
     int m_pvOutputAccumSize = 0;
     int m_pvOutputReadPos = 0;
+    // True once preallocate() has sized every buffer for the current
+    // (sampleRate, maxBlockSize) — lets init() stay allocation-free.
+    bool m_preallocated = false;
 
     void initPhaseVocoder(int maxBlockSize);
     int processPhaseVocoder(const float* input, int inputAvailable,

@@ -266,6 +266,10 @@ bool App::init() {
         for (int t = 0; t < m_project.numTracks(); ++t) {
             auto& trk = m_project.track(t);
             if (!trk.armed) continue;
+            // Pre-allocate this track's recording pool on the UI
+            // thread so the engine's start handler never resizes on
+            // the audio thread.
+            m_audioEngine.prepareRecording(t);
             auto* armedSlot = m_project.getSlot(t, sceneIdx);
             const int recBars = armedSlot ? armedSlot->recordLengthBars : 0;
             if (trk.type == Track::Type::Midi) {
@@ -350,6 +354,9 @@ bool App::init() {
             for (int t = 0; t < m_project.numTracks(); ++t) {
                 const auto& trk = m_project.track(t);
                 if (!trk.armed) continue;
+                // Pre-allocate the recording pool on the UI thread
+                // (see setOnSceneLaunch).
+                m_audioEngine.prepareRecording(t);
                 auto* armedSlot = m_project.getSlot(t, targetScene);
                 const int recBars = armedSlot ? armedSlot->recordLengthBars : 0;
                 if (trk.type == Track::Type::Midi) {

@@ -131,6 +131,14 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
     m_arrPlayback.setTransport(&m_transport);
     m_arrPlayback.setSampleRate(config.sampleRate);
 
+    // Pre-allocate every time-stretcher (all modes, all tracks) here
+    // on the UI thread — clip launches and arrangement stretch entries
+    // must never allocate on the audio thread.
+    m_clipEngine.preallocateStretchers(config.sampleRate,
+                                       kMaxFramesPerBuffer);
+    m_arrPlayback.preallocateStretchers(config.sampleRate,
+                                        kMaxFramesPerBuffer);
+
     m_metronome.init(config.sampleRate, config.framesPerBuffer);
 
     // Preallocate per-track MIDI buffers on heap
@@ -270,6 +278,10 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
                 m_midiClipEngine.setSampleRate(devRate);
                 m_arrPlayback.setSampleRate(devRate);
                 m_metronome.init(devRate, config.framesPerBuffer);
+                m_clipEngine.preallocateStretchers(devRate,
+                                                   kMaxFramesPerBuffer);
+                m_arrPlayback.preallocateStretchers(devRate,
+                                                    kMaxFramesPerBuffer);
                 for (int t = 0; t < kMaxMidiTracks; ++t)
                     m_midiEffectChains[t].init(devRate);
                 // CRITICAL: also re-init instruments so their oscillator
@@ -369,6 +381,10 @@ bool AudioEngine::init(const AudioEngineConfig& config) {
             m_midiClipEngine.setSampleRate(actualRate);
             m_arrPlayback.setSampleRate(actualRate);
             m_metronome.init(actualRate, m_config.framesPerBuffer);
+            m_clipEngine.preallocateStretchers(actualRate,
+                                               kMaxFramesPerBuffer);
+            m_arrPlayback.preallocateStretchers(actualRate,
+                                                kMaxFramesPerBuffer);
             for (int t = 0; t < kMaxMidiTracks; ++t)
                 m_midiEffectChains[t].init(actualRate);
             for (int t = 0; t < kMaxTracks; ++t) {
@@ -607,6 +623,50 @@ int AudioEngine::paCallback(
         return paContinue;
     }
     return paContinue;
+}
+
+void AudioEngine::prepareRecording(int track) {
+    if (track < 0 || track >= kMaxTracks) return;
+
+    // Audio pool — same sizing as the record-start path, so the
+    // handler's resize becomes a no-op.
+    auto& ars = m_audioRecordStates[track];
+    constexpr int64_t kMaxRecSec = 300;
+    const int64_t maxFrames = static_cast<int64_t>(
+        m_config.sampleRate * kMaxRecSec);
+    const size_t need = static_cast<size_t>(
+        std::max(1, m_config.inputChannels)) * maxFrames;
+    if (ars.buffer.size() < need)
+        ars.buffer.resize(need, 0.0f);
+
+    // MIDI take vectors — first-take growth otherwise happens per
+    // note on the audio thread. Reserve generously once here.
+    auto& rs = m_trackRecordStates[track];
+    if (rs.recordedNotes.capacity() < 4096) rs.recordedNotes.reserve(4096);
+    if (rs.recordedCCs.capacity() < 2048)   rs.recordedCCs.reserve(2048);
+    if (rs.pendingNotes.capacity() < 512)   rs.pendingNotes.reserve(512);
+    if (rs.liveNotes.capacity() < TrackRecordState::kMaxLiveNotes)
+        rs.liveNotes.reserve(TrackRecordState::kMaxLiveNotes);
+}
+
+void AudioEngine::releaseRecordedAudioBuffer(int track) {
+    if (track < 0 || track >= kMaxTracks) return;
+    auto& ars  = m_audioRecordStates[track];
+    auto& xfer = m_recordedAudio[track];
+    // A new recording may already have started on this track (the
+    // start path re-filled ars.buffer) — never disturb it.
+    if (ars.recording) {
+        xfer.buffer.clear();
+        xfer.strideFrames = 0;
+        return;
+    }
+    if (ars.buffer.empty()) {
+        // Pool round-trips back for the next take.
+        ars.buffer.swap(xfer.buffer);
+    } else {
+        xfer.buffer.clear();
+    }
+    xfer.strideFrames = 0;
 }
 
 void AudioEngine::pollRetirements() {
@@ -1637,7 +1697,13 @@ void AudioEngine::processCommands() {
                             constexpr int64_t kMaxRecSec = 300;
                             ars.maxFrames = static_cast<int64_t>(
                                 m_config.sampleRate * kMaxRecSec);
-                            ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
+                            // Allocates only as a fallback — App calls
+                            // prepareRecording() on the UI thread before
+                            // triggering the start.
+                            const size_t need = static_cast<size_t>(
+                                ars.channels) * ars.maxFrames;
+                            if (ars.buffer.size() < need)
+                                ars.buffer.resize(need, 0.0f);
                             ars.recordedFrames = 0;
                             ars.recording = true;
                             ars.usedCountIn = true;
@@ -1767,16 +1833,17 @@ void AudioEngine::processCommands() {
                     ars.overdub = msg.overdub;
                     ars.targetLengthBars = msg.recordLengthBars;
                     ars.channels = m_config.inputChannels;
-                    // Pre-allocate for 5 minutes of recording. Buffer is
-                    // allocated BEFORE recording=true so the UI thread,
+                    // Buffer is sized BEFORE recording=true so the UI thread,
                     // which polls liveAudioRecording() each frame for
                     // the live-waveform preview on the session cell,
                     // never sees `recording==true` while ars.buffer is
-                    // mid-resize. Reorder is the only safety guarantee
-                    // — there's no lock here.
+                    // mid-resize. Allocates only as a fallback — App
+                    // calls prepareRecording() on the UI thread first.
                     static constexpr int64_t kMaxRecordSec = 300;
                     ars.maxFrames = static_cast<int64_t>(m_config.sampleRate * kMaxRecordSec);
-                    ars.buffer.resize(ars.channels * ars.maxFrames, 0.0f);
+                    const size_t need = static_cast<size_t>(ars.channels) * ars.maxFrames;
+                    if (ars.buffer.size() < need)
+                        ars.buffer.resize(need, 0.0f);
                     ars.recordedFrames = 0;
                     ars.recording = true;   // publish — UI may now read
 
@@ -2131,8 +2198,12 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
     }
 
     auto& xfer = m_recordedMidi[trackIndex];
-    xfer.notes = rs.recordedNotes;
-    xfer.ccs = rs.recordedCCs;
+    // Move the take out (no per-note copy on the audio thread); the
+    // record state's vectors are re-reserved by the UI-side
+    // prepareRecording() before the next take.
+    const int noteCount = static_cast<int>(rs.recordedNotes.size());
+    xfer.notes = std::move(rs.recordedNotes);
+    xfer.ccs = std::move(rs.recordedCCs);
     xfer.trackIndex = trackIndex;
     xfer.sceneIndex = rs.targetScene;
     xfer.overdub = rs.overdub;
@@ -2150,7 +2221,7 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
     MidiRecordCompleteEvent evt;
     evt.trackIndex = trackIndex;
     evt.sceneIndex = rs.targetScene;
-    evt.noteCount = static_cast<int>(rs.recordedNotes.size());
+    evt.noteCount = noteCount;
     m_eventQueue.push(evt);
 
     rs.recording = false;
@@ -2221,12 +2292,25 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     xfer.sceneIndex = ars.targetScene;
     xfer.overdub = ars.overdub;
     xfer.autoStopped = (ars.targetLengthBars > 0);
-    xfer.buffer.resize(ars.channels * effectiveFrames);
-    for (int ch = 0; ch < ars.channels; ++ch) {
-        std::memcpy(
-            xfer.buffer.data() + ch * effectiveFrames,
-            ars.buffer.data() + ch * ars.maxFrames + trimFrames,
-            effectiveFrames * sizeof(float));
+    if (trimFrames == 0 && effectiveFrames == ars.recordedFrames) {
+        // Zero-copy handoff (the common session-record path): swap the
+        // whole pool into the transfer slot with its native stride
+        // instead of memcpy'ing up to ~115 MB on the audio thread.
+        // The UI consumes with strideFrames and returns the buffer via
+        // releaseRecordedAudioBuffer() for the next take.
+        xfer.strideFrames = ars.maxFrames;
+        xfer.buffer.swap(ars.buffer);
+    } else {
+        // Trim/clamp path: the take doesn't start at pool offset 0, so
+        // compact-copy it (stride == frameCount).
+        xfer.strideFrames = 0;
+        xfer.buffer.resize(ars.channels * effectiveFrames);
+        for (int ch = 0; ch < ars.channels; ++ch) {
+            std::memcpy(
+                xfer.buffer.data() + ch * effectiveFrames,
+                ars.buffer.data() + ch * ars.maxFrames + trimFrames,
+                effectiveFrames * sizeof(float));
+        }
     }
     xfer.ready.store(true, std::memory_order_release);
 
@@ -2237,8 +2321,11 @@ void AudioEngine::finalizeAudioRecord(int trackIndex) {
     evt.overdub = ars.overdub;
     m_eventQueue.push(evt);
 
-    // Buffer is left allocated (see comment in the early-return
-    // branch above). Next StartAudioRecord reuses it via resize().
+    // Pool note: on the zero-copy path ars.buffer is now the
+    // transfer slot's previous (empty) vector; the UI returns the
+    // take buffer via releaseRecordedAudioBuffer(), restoring the
+    // pool for the next take. prepareRecording() re-sizes it either
+    // way before the next start.
     ars.recording = false;
     ars.pendingStopQuantize = QuantizeMode::None;
     maybeStopTransportRecording();

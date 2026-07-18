@@ -49,6 +49,18 @@ struct TrackStretcher {
     // Fractional read position for pitch-shift resampling (post-stretch)
     double resamplePos[kMaxChannels]{};
 
+    // Allocate every per-mode buffer up-front (UI thread, engine
+    // init). After this, init() is allocation-free on the audio
+    // thread; it still self-heals (fallback allocation) if the engine
+    // wasn't pre-inited or the sample rate changed underneath us.
+    void preallocate(double sampleRate, int blockSize) {
+        for (int ch = 0; ch < kMaxChannels; ++ch) {
+            stretchers[ch].preallocate(sampleRate, blockSize);
+            if (static_cast<int>(outBuf[ch].size()) < kOutBufSize)
+                outBuf[ch].resize(kOutBufSize, 0.0f);
+        }
+    }
+
     void init(double sampleRate, int blockSize, WarpMode mode, int channels) {
         // PGHI variant maps to its own algorithm; classic PV
         // covers Tones / Texture; everything else falls back to
@@ -63,10 +75,11 @@ struct TrackStretcher {
             algo = TimeStretcher::Algorithm::WSOLA;
         }
         numChannels = std::min(channels, kMaxChannels);
-        for (int ch = 0; ch < numChannels; ++ch) {
+        // Cheap once preallocate() has run (engine init); allocates
+        // only as a fallback.
+        preallocate(sampleRate, blockSize);
+        for (int ch = 0; ch < numChannels; ++ch)
             stretchers[ch].init(sampleRate, blockSize, algo);
-            outBuf[ch].resize(kOutBufSize, 0.0f);
-        }
         activeMode = mode;
         initialized = true;
         for (int ch = 0; ch < kMaxChannels; ++ch) {
@@ -103,6 +116,14 @@ public:
     void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
     void setQuantizeMode(QuantizeMode mode) { m_quantizeMode = mode; }
     QuantizeMode quantizeMode() const { return m_quantizeMode; }
+
+    // Pre-allocate all per-track stretchers (UI thread, engine init).
+    // After this, clip launches / warp-mode changes never allocate on
+    // the audio thread. Call again on sample-rate change.
+    void preallocateStretchers(double sampleRate, int blockSize) {
+        for (auto& ts : m_stretchers)
+            ts.preallocate(sampleRate, blockSize);
+    }
 
     // Schedule a clip to launch on a track (called from audio thread after command processing)
     void scheduleClip(int trackIndex, int sceneIndex, const Clip* clip,

@@ -161,9 +161,13 @@ bool ArrangementPlayback::fillStretch(ArrTrackState& st, const ArrClipRef& clip,
     const int srcStart = static_cast<int>(st.arrStretchSrcPos);
     if (srcStart >= totalFrames) return false;   // source consumed + drained
 
-    static thread_local std::vector<float> gather;
+    // Member scratch — sized in preallocateStretchers(); the size
+    // fallback keeps tests/standalone use allocation-correct (a
+    // one-time alloc, never per-block).
     constexpr int kGather = 4096;
-    if (static_cast<int>(gather.size()) < kGather) gather.assign(kGather, 0.0f);
+    if (static_cast<int>(m_stretchGather.size()) < kGather)
+        m_stretchGather.assign(kGather, 0.0f);
+    float* gather = m_stretchGather.data();
 
     int consumed0 = 0;
     for (int ch = 0; ch < sc; ++ch) {
@@ -181,7 +185,7 @@ bool ArrangementPlayback::fillStretch(ArrTrackState& st, const ArrClipRef& clip,
         std::memset(st.arrStretchOut[ch].data(), 0, cap * sizeof(float));
         int consumed = 0;
         const int produced = st.arrStretch[ch].process(
-            gather.data(), gathered, st.arrStretchOut[ch].data(), cap, consumed);
+            gather, gathered, st.arrStretchOut[ch].data(), cap, consumed);
         st.arrStretchAvail[ch] = produced;
         st.arrStretchRead[ch]  = 0;
         if (ch == 0) consumed0 = consumed;

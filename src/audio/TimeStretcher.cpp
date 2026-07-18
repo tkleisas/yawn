@@ -6,19 +6,24 @@ namespace yawn {
 namespace audio {
 
 void TimeStretcher::init(double sampleRate, int maxBlockSize, Algorithm algo) {
+    // Allocation is the fallback path — engine init preallocates all
+    // modes up-front, so in steady state this is alloc-free and safe
+    // to call from the audio thread at clip launch / mode change.
+    preallocate(sampleRate, maxBlockSize);
     m_sampleRate = sampleRate;
     m_algorithm = algo;
+    reset();
+}
 
-    switch (algo) {
-        case Algorithm::WSOLA:           initWSOLA(maxBlockSize); break;
-        case Algorithm::PhaseVocoder:    initPhaseVocoder(maxBlockSize); break;
-        case Algorithm::PhaseVocoderPGHI:
-            // Shares the FFT buffers / window / output accumulator
-            // with the classic PV; layered init.
-            initPhaseVocoder(maxBlockSize);
-            initPhaseVocoderPGHI(maxBlockSize);
-            break;
-    }
+void TimeStretcher::preallocate(double sampleRate, int maxBlockSize) {
+    if (m_preallocated && m_sampleRate == sampleRate &&
+        maxBlockSize * 4 <= m_pvOutputAccumSize)
+        return;
+    m_sampleRate = sampleRate;
+    initWSOLA(maxBlockSize);
+    initPhaseVocoder(maxBlockSize);
+    initPhaseVocoderPGHI(maxBlockSize);
+    m_preallocated = true;
 }
 
 void TimeStretcher::reset() {
@@ -29,6 +34,7 @@ void TimeStretcher::reset() {
     if (!m_phaseAccum.empty())
         std::fill(m_phaseAccum.begin(), m_phaseAccum.end(), 0.0f);
     m_pvInputPos = 0.0;
+    m_pvOutputReadPos = 0;
     // PGHI per-frame history — clearing forces the next first frame
     // to skip propagation (no previous frame to integrate from).
     m_pghiHasPrev = false;

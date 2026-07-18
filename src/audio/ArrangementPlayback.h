@@ -94,6 +94,22 @@ public:
     void setTransport(Transport* t) { m_transport = t; }
     void setSampleRate(double sr)   { m_sampleRate = sr; }
 
+    // Pre-allocate all per-track stretch state + the gather scratch
+    // (UI thread, engine init). After this, entering a stretched clip
+    // never allocates on the audio thread.
+    void preallocateStretchers(double sampleRate, int blockSize) {
+        for (auto& ts : m_tracks) {
+            for (int ch = 0; ch < 2; ++ch) {
+                ts.arrStretch[ch].preallocate(sampleRate, blockSize);
+                if (static_cast<int>(ts.arrStretchOut[ch].size()) <
+                        ArrTrackState::kArrStretchOutSize)
+                    ts.arrStretchOut[ch].assign(
+                        ArrTrackState::kArrStretchOutSize, 0.0f);
+            }
+        }
+        m_stretchGather.assign(4096, 0.0f);
+    }
+
     // Called from audio thread (via command processing)
     void setTrackActive(int track, bool active) {
         if (track < 0 || track >= kMaxTracks) return;
@@ -231,6 +247,11 @@ private:
     Transport* m_transport = nullptr;
     double m_sampleRate = kDefaultSampleRate;
     std::array<ArrTrackState, kMaxTracks> m_tracks{};
+    // Scratch for fillStretch's source gather — sized once in
+    // preallocateStretchers (the previous thread_local copy allocated
+    // on first use on the audio thread). Audio thread only, fully
+    // rewritten per call.
+    std::vector<float> m_stretchGather;
 
     // Lock-free clip submission (UI→audio): per-track mailbox of the
     // latest submitted list, plus a stack of consumed nodes awaiting
