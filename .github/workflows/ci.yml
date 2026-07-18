@@ -208,7 +208,7 @@ jobs:
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
             libibus-1.0-dev libudev-dev \
-            libavcodec-dev libavformat-dev libavutil libswscale-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libavdevice-dev ccache
 
       - name: Install Python dependencies
@@ -263,7 +263,7 @@ jobs:
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
             libibus-1.0-dev libudev-dev \
-            libavcodec-dev libavformat-dev libavutil libswscale-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libavdevice-dev ccache
 
       - name: Install Python dependencies
