@@ -114,6 +114,22 @@ public:
     void scheduleStop(int trackIndex,
                       QuantizeMode quantize = QuantizeMode::NextBar);
 
+    // Re-point a playing/pending clip at its slot's current automation
+    // box (audio thread, via UpdateClipAutomationMsg). The UI swapped
+    // the box; the retired old one lives in the project graveyard
+    // until its TTL elapses, so re-pointing here never dangles.
+    void updateClipAutomation(
+        int trackIndex, int sceneIndex,
+        const std::vector<automation::AutomationLane>* lanes) {
+        if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
+        if (m_tracks[trackIndex].active &&
+            m_tracks[trackIndex].sceneIndex == sceneIndex)
+            m_tracks[trackIndex].clipAutomation = lanes;
+        if (m_pending[trackIndex].valid &&
+            m_pending[trackIndex].sceneIndex == sceneIndex)
+            m_pending[trackIndex].clipAutomation = lanes;
+    }
+
     // Process one audio buffer worth of frames. Writes into output (interleaved stereo).
     void process(float* output, int numFrames, int numChannels);
 

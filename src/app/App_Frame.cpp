@@ -163,6 +163,10 @@ void App::update() {
     // retired; they can hold the last shared_ptr to clip data.
     m_audioEngine.arrangementPlayback().collectRetired();
 
+    // Free engine-side retired objects (instruments, effects, sample
+    // buffers) whose audio-callback grace period has elapsed.
+    m_audioEngine.pollRetirements();
+
     // Piano roll holds a raw midi::MidiClip* pointer to whatever the
     // user opened for editing. Several slot-mutation paths (recording
     // finalize, paste, scene insert, project load) can replace the
@@ -537,7 +541,7 @@ void App::update() {
                             auto lq = data.autoStopped ? audio::QuantizeMode::None
                                 : (slot ? slot->launchQuantize : audio::QuantizeMode::NextBar);
                             m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{ti, si, clipPtr, lq,
-                                slot ? &slot->clipAutomation : nullptr,
+                                slot ? &slot->clipAutomation->lanes : nullptr,
                                 slot ? slot->followAction : FollowAction{}});
                         }
                     }
@@ -608,7 +612,7 @@ void App::update() {
                             auto lq = data.autoStopped ? audio::QuantizeMode::None
                                 : (recSlot ? recSlot->launchQuantize : audio::QuantizeMode::NextBar);
                             m_audioEngine.sendCommand(audio::LaunchClipMsg{ti, si, clipPtr, lq,
-                                recSlot ? &recSlot->clipAutomation : nullptr,
+                                recSlot ? &recSlot->clipAutomation->lanes : nullptr,
                                 recSlot ? recSlot->followAction : FollowAction{}});
                         }
                     }
@@ -690,11 +694,11 @@ void App::update() {
                 if (slot->audioClip) {
                     m_audioEngine.sendCommand(audio::LaunchClipMsg{
                         ti, targetScene, slot->audioClip.get(), lq,
-                        &slot->clipAutomation, slot->followAction});
+                        &slot->clipAutomation->lanes, slot->followAction});
                 } else if (slot->midiClip) {
                     m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
                         ti, targetScene, slot->midiClip.get(), lq,
-                        &slot->clipAutomation, slot->followAction});
+                        &slot->clipAutomation->lanes, slot->followAction});
                 }
             }
         }, evt);

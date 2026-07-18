@@ -56,6 +56,17 @@ struct StopClipMsg {
     QuantizeMode quantize = QuantizeMode::NextBar;
 };
 
+// Re-point a playing/pending clip at its slot's current automation
+// box. Sent by the UI after every box swap (Project::
+// replaceSlotAutomation) so automation edits take effect on the
+// next block instead of the next launch. The retired old box stays
+// alive in the project's graveyard until its TTL elapses.
+struct UpdateClipAutomationMsg {
+    int trackIndex;
+    int sceneIndex;
+    const std::vector<automation::AutomationLane>* clipAutomation = nullptr;
+};
+
 struct SetQuantizeMsg {
     QuantizeMode mode;
 };
@@ -342,6 +353,7 @@ using AudioCommand = std::variant<
     TestToneMsg,
     LaunchClipMsg,
     StopClipMsg,
+    UpdateClipAutomationMsg,
     SetQuantizeMsg,
     SetTrackVolumeMsg,
     SetTrackPanMsg,

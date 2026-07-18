@@ -732,7 +732,7 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
         struct SlotBackup {
             std::unique_ptr<audio::Clip> audioClip;
             std::unique_ptr<midi::MidiClip> midiClip;
-            audio::QuantizeMode launchQuantize;
+            audio::QuantizeMode launchQuantize = audio::QuantizeMode::NextBar;
             FollowAction followAction;
             std::vector<automation::AutomationLane> clipAutomation;
         };
@@ -746,7 +746,7 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                 if (slot->midiClip)  b.midiClip  = slot->midiClip->clone();
                 b.launchQuantize = slot->launchQuantize;
                 b.followAction   = slot->followAction;
-                b.clipAutomation = slot->clipAutomation;
+                b.clipAutomation = slot->clipAutomation->lanes;
             }
             backups.push_back(std::move(b));
         }
@@ -768,7 +768,8 @@ void App::showSceneContextMenu(int sceneIndex, float mx, float my) {
                         if (b.midiClip)  slot->midiClip  = b.midiClip->clone();
                         slot->launchQuantize = b.launchQuantize;
                         slot->followAction   = b.followAction;
-                        slot->clipAutomation = b.clipAutomation;
+                        m_project.replaceSlotAutomation(*slot, b.clipAutomation);
+                        publishClipAutomation(t, sceneIndex);
                     }
                 }
                 markDirty();

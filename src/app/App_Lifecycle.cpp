@@ -292,13 +292,13 @@ bool App::init() {
             if (slot && slot->audioClip) {
                 m_audioEngine.sendCommand(audio::LaunchClipMsg{
                     t, sceneIdx, slot->audioClip.get(),
-                    slot->launchQuantize, &slot->clipAutomation,
+                    slot->launchQuantize, &slot->clipAutomation->lanes,
                     slot->followAction, slot->autoRecordDisabled});
                 trk.defaultScene = sceneIdx;
             } else if (slot && slot->midiClip) {
                 m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
                     t, sceneIdx, slot->midiClip.get(),
-                    slot->launchQuantize, &slot->clipAutomation,
+                    slot->launchQuantize, &slot->clipAutomation->lanes,
                     slot->followAction, slot->autoRecordDisabled});
                 trk.defaultScene = sceneIdx;
             } else if (slot && slot->visualClip) {
@@ -375,12 +375,12 @@ bool App::init() {
                 if (slot->audioClip) {
                     m_audioEngine.sendCommand(audio::LaunchClipMsg{
                         t, targetScene, slot->audioClip.get(), lq,
-                        &slot->clipAutomation, slot->followAction,
+                        &slot->clipAutomation->lanes, slot->followAction,
                         slot->autoRecordDisabled});
                 } else if (slot->midiClip) {
                     m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{
                         t, targetScene, slot->midiClip.get(), lq,
-                        &slot->clipAutomation, slot->followAction,
+                        &slot->clipAutomation->lanes, slot->followAction,
                         slot->autoRecordDisabled});
                 } else if (slot->visualClip) {
                     launchVisualClipQuantized(t, targetScene,
@@ -450,7 +450,7 @@ bool App::init() {
                 std::string fxName = label;
                 m_undoManager.push({"Add Effect: " + fxName,
                     [this, resolveChain, slot]{
-                        if (auto* c = resolveChain()) c->remove(slot);
+                        if (auto* c = resolveChain()) c->removeRetired(slot);
                         m_detailPanel->clear(); markDirty();
                     },
                     [this, resolveChain, factory]{
@@ -890,7 +890,7 @@ bool App::init() {
                 if (t < 0 || t >= m_project.numTracks()) break;
                 auto* fx = m_audioEngine.midiEffectChain(t).effect(chainIndex);
                 std::string fxName = fx ? fx->name() : "";
-                m_audioEngine.midiEffectChain(t).removeEffect(chainIndex);
+                m_audioEngine.midiEffectChain(t).removeEffectRetired(chainIndex);
                 m_audioEngine.sendCommand(audio::SendMidiToTrackMsg{
                     t, (uint8_t)midi::MidiMessage::Type::ControlChange, 0, 0, 0, 0, 123});
                 LOG_INFO("MIDI", "Removed MIDI effect %d from track %d", chainIndex, t + 1);
@@ -906,7 +906,7 @@ bool App::init() {
                         m_detailPanel->clear(); markDirty();
                     },
                     [this, t, chainIndex]{
-                        m_audioEngine.midiEffectChain(t).removeEffect(chainIndex);
+                        m_audioEngine.midiEffectChain(t).removeEffectRetired(chainIndex);
                         m_detailPanel->clear(); markDirty();
                     }, ""});
                 break;
@@ -916,7 +916,7 @@ bool App::init() {
                 if (!chain) break;
                 auto* fx = chain->effectAt(chainIndex);
                 std::string fxName = fx ? fx->name() : "";
-                chain->remove(chainIndex);
+                chain->removeRetired(chainIndex);
 
                 // Capture target state for undo
                 auto target = m_detailTarget;
@@ -945,7 +945,7 @@ bool App::init() {
                         m_detailPanel->clear(); markDirty();
                     },
                     [this, resolveChain, chainIndex]{
-                        if (auto* c = resolveChain()) c->remove(chainIndex);
+                        if (auto* c = resolveChain()) c->removeRetired(chainIndex);
                         m_detailPanel->clear(); markDirty();
                     }, ""});
                 break;
@@ -1036,6 +1036,21 @@ bool App::init() {
     m_detailPanel->setOnParamTouch([this](int track, uint8_t tt, int ci, int pi, float v, bool touching) {
         m_audioEngine.sendCommand(audio::AutoParamTouchMsg{track, tt, ci, pi, v, touching});
     });
+
+    // Clip-automation edit commit (lane add / point add from the
+    // envelope editor). Copy-on-write: swap the slot's automation box
+    // via replaceSlotAutomation (old box retires to the graveyard),
+    // notify the engine so a playing clip re-points next block, then
+    // rebind the panel to the new box.
+    m_detailPanel->setOnClipAutomationCommit(
+        [this](int track, std::vector<automation::AutomationLane> lanes) {
+            auto* slot = m_project.getSlot(track, m_selectedScene);
+            if (!slot) return;
+            m_project.replaceSlotAutomation(*slot, std::move(lanes));
+            publishClipAutomation(track, m_selectedScene);
+            m_detailPanel->setClipAutomation(&slot->clipAutomation->lanes, track);
+            markDirty();
+        });
 
     // Right-click on an instrument / audio FX / MIDI FX knob →
     // build the MacroTarget for it and open the macro-mapping
@@ -1421,7 +1436,7 @@ bool App::init() {
                     int slot = i;
                     remItems.push_back(item(label, [this, dr, note, slot]() {
                         auto* chain = dr->padFxChain(note);
-                        if (chain) chain->remove(slot);
+                        if (chain) chain->removeRetired(slot);
                         LOG_INFO("User", "DrumRack pad %d → remove fx slot %d", note, slot);
                     }));
                 }
@@ -1558,7 +1573,7 @@ bool App::init() {
                     int slot = i;
                     remItems.push_back(item(label, [this, ir, chainIdx, slot]() {
                         auto* chain = ir->chainFxChain(chainIdx);
-                        if (chain) chain->remove(slot);
+                        if (chain) chain->removeRetired(slot);
                         LOG_INFO("User", "InstrumentRack chain %d → "
                                           "remove fx slot %d",
                                   chainIdx, slot);

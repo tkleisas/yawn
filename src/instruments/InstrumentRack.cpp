@@ -77,9 +77,12 @@ void InstrumentRack::process(float* buffer, int numFrames, int numChannels,
         // the instrument fills it but BEFORE we apply chain
         // volume/pan, so the effects see the instrument's natural
         // signal level (compressors / saturation feel right). Same
-        // pre-mix routing as DrumRack PadFx.
-        if (chain.fx)
-            chain.fx->process(m_chainBufPtrs[c], numFrames, numChannels);
+        // pre-mix routing as DrumRack PadFx. Pinned per block — the
+        // chain is lazy-created/cleared on the UI thread outside the
+        // beginChainEdit handshake.
+        auto fxRef = std::atomic_load_explicit(&chain.fx, std::memory_order_acquire);
+        if (fxRef)
+            fxRef->process(m_chainBufPtrs[c], numFrames, numChannels);
 
         // Mix into output with volume/pan
         float angle = (chain.pan + 1.0f) * 0.25f * (float)M_PI;

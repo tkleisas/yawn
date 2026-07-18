@@ -564,10 +564,10 @@ void App::handleKeyEvent(const SDL_Event& event) {
                     if (!slot) continue;
                     if (slot->audioClip)
                         m_audioEngine.sendCommand(audio::LaunchClipMsg{t, ds, slot->audioClip.get(),
-                            audio::QuantizeMode::None, &slot->clipAutomation, slot->followAction});
+                            audio::QuantizeMode::None, &slot->clipAutomation->lanes, slot->followAction});
                     else if (slot->midiClip)
                         m_audioEngine.sendCommand(audio::LaunchMidiClipMsg{t, ds, slot->midiClip.get(),
-                            audio::QuantizeMode::None, &slot->clipAutomation, slot->followAction});
+                            audio::QuantizeMode::None, &slot->clipAutomation->lanes, slot->followAction});
                     else if (slot->visualClip) {
                         launchVisualClipData(t, *slot->visualClip,
                                               slot->visualClip->firstShaderPath());

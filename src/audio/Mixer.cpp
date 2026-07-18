@@ -119,7 +119,11 @@ void BandAnalyzer::feedBlock(const float* interleaved, int nFrames, int nCh, flo
 }
 // ──────────────────────────────────────────────────────────────────────────
 
-Mixer::Mixer() {
+Mixer::Mixer(util::RtRetireList* retire) : m_retireList(retire) {
+    for (auto& chain : m_trackFx)  chain.setRetireList(retire);
+    for (auto& chain : m_returnFx) chain.setRetireList(retire);
+    m_masterFx.setRetireList(retire);
+
     // Preallocate return bus scratch buffers on heap
     m_returnBufferHeap.resize(kMaxReturnBuses * kMaxBufferSize, 0.0f);
     for (int r = 0; r < kMaxReturnBuses; ++r) {

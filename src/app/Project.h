@@ -116,7 +116,7 @@ struct ClipSlot {
         audioClip.reset();
         midiClip.reset();
         visualClip.reset();
-        clipAutomation.clear();
+        clipAutomation = std::make_unique<automation::ClipAutomation>();
     }
 
     std::unique_ptr<audio::Clip> audioClip;
@@ -135,8 +135,15 @@ struct ClipSlot {
     // Follow action — triggers after clip plays for N bars
     FollowAction followAction;
 
-    // Per-clip automation lanes (times relative to clip start, loop with clip)
-    std::vector<automation::AutomationLane> clipAutomation;
+    // Per-clip automation lanes (times relative to clip start, loop with
+    // clip). Boxed so the pointer the audio thread caches at launch
+    // (&clipAutomation->lanes) survives clip-slot vector reallocation
+    // (scene insert/duplicate moves ClipSlots; the box doesn't move) —
+    // see automation::ClipAutomation. NEVER mutate the lanes of a box
+    // the engine might be reading; swap the whole box via
+    // Project::replaceSlotAutomation instead.
+    std::unique_ptr<automation::ClipAutomation> clipAutomation =
+        std::make_unique<automation::ClipAutomation>();
 
     // Per-clip override for automation recording. The automation
     // engine writes into clipAutomation only when the global arm is
@@ -190,15 +197,20 @@ public:
     // in the recorded-takes sense, so they're untouched. Each scope
     // is meant to be paired with an UndoManager push at the call
     // site so the operation is reversible.
+    //
+    // The slot lanes are swapped (old box retired to the graveyard),
+    // never cleared in place — the audio thread may be iterating
+    // them on a playing clip. Callers should follow with
+    // App::publishClipAutomation so the engine re-points promptly.
     void clearClipAutomation(int trackIndex, int sceneIndex) {
         auto* slot = getSlot(trackIndex, sceneIndex);
-        if (slot) slot->clipAutomation.clear();
+        if (slot) replaceSlotAutomation(*slot, {});
     }
     void clearTrackAutomation(int trackIndex) {
         if (trackIndex < 0 || trackIndex >= numTracks()) return;
         m_tracks[trackIndex].automationLanes.clear();
         for (auto& slot : m_clipSlots[trackIndex])
-            slot.clipAutomation.clear();
+            replaceSlotAutomation(slot, {});
     }
     void clearAllAutomation() {
         for (int t = 0; t < numTracks(); ++t)
@@ -282,14 +294,17 @@ public:
         // dst's existing clips are about to be overwritten — graveyard
         // them so the audio thread doesn't UAF on its cached pointer.
         graveyardSlotClips(*dst);
+        retireSlotAutomation(*dst);
         dst->audioClip      = std::move(src->audioClip);
         dst->midiClip       = std::move(src->midiClip);
         dst->visualClip     = std::move(src->visualClip);
         dst->followAction   = src->followAction;
+        // The box itself moves (address unchanged), so any cached
+        // engine pointer to the lanes stays valid.
         dst->clipAutomation = std::move(src->clipAutomation);
         dst->launchQuantize = src->launchQuantize;
         src->followAction   = FollowAction{};
-        src->clipAutomation.clear();
+        src->clipAutomation = std::make_unique<automation::ClipAutomation>();
         src->launchQuantize = audio::QuantizeMode::NextBar;
     }
 
@@ -299,11 +314,13 @@ public:
         auto* dst = getSlot(dstTrack, dstScene);
         if (!src || !dst || src == dst) return;
         graveyardSlotClips(*dst);
+        retireSlotAutomation(*dst);
         if (src->audioClip)   dst->audioClip  = src->audioClip->clone();
         if (src->midiClip)    dst->midiClip   = src->midiClip->clone();
         if (src->visualClip)  dst->visualClip = src->visualClip->clone();
         dst->followAction   = src->followAction;
-        dst->clipAutomation = src->clipAutomation;
+        dst->clipAutomation = std::make_unique<automation::ClipAutomation>();
+        dst->clipAutomation->lanes = src->clipAutomation->lanes;
         dst->launchQuantize = src->launchQuantize;
     }
 
@@ -314,7 +331,7 @@ public:
         auto* slot = getSlot(trackIndex, sceneIndex);
         if (!slot) return;
         graveyardSlotClips(*slot);
-        slot->clipAutomation.clear();
+        replaceSlotAutomation(*slot, {});
     }
 
     // ── Clip-pointer graveyard ─────────────────────────────────────
@@ -339,6 +356,32 @@ public:
         e.midiClip   = std::move(slot.midiClip);
         e.visualClip = std::move(slot.visualClip);
         m_clipGraveyard.push_back(std::move(e));
+    }
+
+    // Park a slot's automation box in the graveyard. The audio thread
+    // may be iterating the lanes right now (ClipPlayState::
+    // clipAutomation cached at launch); the box stays alive until
+    // purgeClipGraveyard() drops it, same TTL as the clips.
+    void retireSlotAutomation(ClipSlot& slot) {
+        if (!slot.clipAutomation) return;
+        GraveyardEntry e;
+        e.timeMs     = nowMs();
+        e.automation = std::move(slot.clipAutomation);
+        m_clipGraveyard.push_back(std::move(e));
+    }
+
+    // Swap a slot's automation for a fresh box holding `lanes`,
+    // retiring the old box. This is the ONLY way to change a slot's
+    // automation once the project is live — never edit
+    // slot->clipAutomation->lanes in place (the audio thread reads
+    // them lock-free). Callers should follow with
+    // App::publishClipAutomation(track, scene) so a currently-playing
+    // clip re-points on the next audio block.
+    void replaceSlotAutomation(ClipSlot& slot,
+                               std::vector<automation::AutomationLane> lanes) {
+        retireSlotAutomation(slot);
+        slot.clipAutomation = std::make_unique<automation::ClipAutomation>();
+        slot.clipAutomation->lanes = std::move(lanes);
     }
 
     void purgeClipGraveyard() {
@@ -386,6 +429,10 @@ public:
     // Remove the last track (used by undo of Add Track)
     void removeLastTrack() {
         if (m_tracks.empty()) return;
+        for (auto& slot : m_clipSlots.back()) {
+            graveyardSlotClips(slot);
+            retireSlotAutomation(slot);
+        }
         m_tracks.pop_back();
         m_clipSlots.pop_back();
     }
@@ -419,6 +466,11 @@ public:
         if (m_scenes.size() <= 1) return; // keep at least 1 scene
         m_scenes.erase(m_scenes.begin() + index);
         for (auto& trackSlots : m_clipSlots) {
+            // The erased slot's clips + automation box must outlive
+            // any engine-cached pointers to them — retire, don't
+            // let the vector destroy them.
+            graveyardSlotClips(trackSlots[index]);
+            retireSlotAutomation(trackSlots[index]);
             trackSlots.erase(trackSlots.begin() + index);
         }
         for (auto& t : m_tracks) {
@@ -442,7 +494,8 @@ public:
             if (orig.visualClip) srcSlot.visualClip = orig.visualClip->clone();
             srcSlot.launchQuantize = orig.launchQuantize;
             srcSlot.followAction = orig.followAction;
-            srcSlot.clipAutomation = orig.clipAutomation;
+            // Fresh local box, not yet published — in-place copy is safe.
+            srcSlot.clipAutomation->lanes = orig.clipAutomation->lanes;
             trackSlots.insert(trackSlots.begin() + dst, std::move(srcSlot));
         }
         for (auto& t : m_tracks) {
@@ -506,6 +559,12 @@ public:
     void deleteTrack(int index) {
         if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
         if (m_tracks.size() <= 1) return; // keep at least 1 track
+        for (auto& slot : m_clipSlots[index]) {
+            // Retire the deleted track's clips + automation boxes —
+            // the engine may hold pointers into them.
+            graveyardSlotClips(slot);
+            retireSlotAutomation(slot);
+        }
         m_tracks.erase(m_tracks.begin() + index);
         m_clipSlots.erase(m_clipSlots.begin() + index);
         // Fix sidechain/resample references
@@ -561,6 +620,7 @@ private:
         std::unique_ptr<audio::Clip>        audioClip;
         std::unique_ptr<midi::MidiClip>     midiClip;
         std::unique_ptr<visual::VisualClip> visualClip;
+        std::unique_ptr<automation::ClipAutomation> automation;
     };
 
     std::vector<Track> m_tracks;

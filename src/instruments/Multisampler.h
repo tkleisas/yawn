@@ -5,7 +5,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "instruments/SampleData.h"
 #include "effects/FreqMap.h"
+#include <array>
+#include <atomic>
 #include <vector>
 #include <cmath>
 #include <cstdio>
@@ -75,23 +78,36 @@ public:
     const char* name() const override { return "Multisampler"; }
     const char* id() const override { return "multisampler"; }
 
+    // Instruments are destroyed only after the audio grace period
+    // (retire list), so no process() call can still hold the
+    // published snapshot — safe to delete it here.
+    ~Multisampler() override {
+        delete m_zoneSnap.load(std::memory_order_relaxed);
+    }
+
     void init(double sampleRate, int maxBlockSize) override;
     void reset() override;
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override;
 
-    // ── Zone management ──
+    // ── Zone management (UI thread only) ──
+    // Every structural change publishes an immutable ZoneSnapshot the
+    // audio thread scans; removed zones are retired, and playing
+    // voices pin their zone with a shared_ptr, so no edit can free a
+    // zone out from under a voice (see Instrument::retireObject).
     int addZone(const Zone& zone) {
         if (m_zoneCount >= kMaxZones) return -1;
-        m_zones[m_zoneCount] = std::make_unique<Zone>(zone);
-        return m_zoneCount++;
+        m_zones[m_zoneCount] = std::make_shared<Zone>(zone);
+        ++m_zoneCount;
+        publishZones();
+        return m_zoneCount - 1;
     }
 
     int addZone(const float* data, int numFrames, int numChannels,
                 int rootNote, int lowKey, int highKey,
                 int lowVel = 0, int highVel = 127) {
         if (m_zoneCount >= kMaxZones) return -1;
-        auto z = std::make_unique<Zone>();
+        auto z = std::make_shared<Zone>();
         z->sampleData.assign(data, data + numFrames * numChannels);
         z->sampleFrames = numFrames;
         z->sampleChannels = numChannels;
@@ -102,25 +118,29 @@ public:
         z->highVel = highVel;
         z->loopEnd = numFrames;
         m_zones[m_zoneCount] = std::move(z);
-        return m_zoneCount++;
+        ++m_zoneCount;
+        publishZones();
+        return m_zoneCount - 1;
     }
 
     void clearZones() {
         for (int i = 0; i < m_zoneCount; ++i)
-            m_zones[i].reset();
+            retireObject(std::move(m_zones[i]));
         m_zoneCount = 0;
+        publishZones();
     }
 
     // Remove a single zone, sliding remaining zones down to keep
-    // contiguous indices. Same UI-thread / no-mid-audio caveat as
-    // addZone — the audio thread reads m_zoneCount + zone pointers
-    // without a lock.
+    // contiguous indices. UI thread only; voices already playing the
+    // removed zone keep it alive via their pinned shared_ptr.
     void removeZone(int idx) {
         if (idx < 0 || idx >= m_zoneCount) return;
+        retireObject(std::move(m_zones[idx]));
         for (int i = idx; i < m_zoneCount - 1; ++i)
             m_zones[i] = std::move(m_zones[i + 1]);
         m_zones[m_zoneCount - 1].reset();
         --m_zoneCount;
+        publishZones();
     }
 
     int zoneCount() const { return m_zoneCount; }
@@ -194,23 +214,51 @@ private:
         double playSpeed = 1.0;
         float zoneVolume = 1.0f;
         float zonePan = 0.0f;
-        const Zone* zone = nullptr;
+        // Pinned at note-on: the zone object (and its sample data)
+        // stays alive for the whole render even if the UI removes it.
+        std::shared_ptr<const Zone> zone;
         Envelope ampEnv;
         Envelope filtEnv;
         float filterIc[2] = {};
     };
 
+    // Immutable zone list published to the audio thread. Holds
+    // shared_ptrs so zones can't die while a snapshot is parked in
+    // the retire list, and voices pin from it at note-on.
+    struct ZoneSnapshot {
+        std::array<std::shared_ptr<const Zone>, kMaxZones> zones;
+        int count = 0;
+    };
+
     float readZoneSample(Voice& v) const;
-    void noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfade);
+    void noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfade,
+                const ZoneSnapshot* snap);
     void noteOff(uint8_t note, uint8_t ch);
     void resetParams();
+
+    // Rebuild + publish the zone snapshot (UI thread only; allocates).
+    void publishZones() {
+        auto* snap = new ZoneSnapshot();
+        snap->count = m_zoneCount;
+        for (int i = 0; i < m_zoneCount; ++i)
+            snap->zones[i] = m_zones[i];
+        const ZoneSnapshot* old =
+            m_zoneSnap.exchange(snap, std::memory_order_acq_rel);
+        if (old) {
+            if (m_retireList)
+                m_retireList->retire(std::unique_ptr<const ZoneSnapshot>(old));
+            else
+                delete old;
+        }
+    }
 
     // ── State ──
     float m_params[kParamCount] = {};
     Voice m_voices[kMaxVoices] = {};
 
-    std::unique_ptr<Zone> m_zones[kMaxZones];
+    std::shared_ptr<Zone> m_zones[kMaxZones];
     int m_zoneCount = 0;
+    std::atomic<const ZoneSnapshot*> m_zoneSnap{nullptr};
 
     int64_t m_voiceCounter = 0;
 };

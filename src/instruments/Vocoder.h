@@ -5,8 +5,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "instruments/SampleData.h"
 #include "effects/FreqMap.h"
 #include <atomic>
+#include <memory>
 #include <vector>
 #include <algorithm>
 
@@ -55,28 +57,42 @@ public:
                  const midi::MidiBuffer& midi) override;
 
     void loadModulatorSample(const float* data, int numFrames, int numChannels) {
-        // Store as mono
-        m_modSample.resize(numFrames);
+        // Store as mono, atomically published to the audio thread
+        // (see Sampler::loadSample — the old buffer is retired, so
+        // an in-flight block finishes on valid memory).
+        auto sd = std::make_shared<SampleData>();
+        sd->samples.resize(numFrames);
         for (int i = 0; i < numFrames; ++i) {
             float sum = 0.0f;
             for (int ch = 0; ch < numChannels; ++ch)
                 sum += data[i * numChannels + ch];
-            m_modSample[i] = sum / numChannels;
+            sd->samples[i] = sum / numChannels;
         }
-        m_modSampleFrames = numFrames;
+        sd->frames = numFrames;
+        sd->channels = 1;
+        m_rtModSample.store(sd.get(), std::memory_order_release);
+        auto old = std::move(m_uiModSample);
+        m_uiModSample = std::move(sd);
+        if (old) retireObject(std::move(old));
     }
 
     void clearModulatorSample() {
-        m_modSample.clear();
-        m_modSampleFrames = 0;
+        m_rtModSample.store(nullptr, std::memory_order_release);
+        auto old = std::move(m_uiModSample);
+        if (old) retireObject(std::move(old));
     }
 
-    bool hasModulatorSample() const { return m_modSampleFrames > 0; }
-    int modulatorFrames() const { return m_modSampleFrames; }
-    const float* modulatorData() const { return m_modSample.empty() ? nullptr : m_modSample.data(); }
+    // UI-thread accessors (read the UI-owned copy).
+    bool hasModulatorSample() const { return m_uiModSample && m_uiModSample->frames > 0; }
+    int modulatorFrames() const { return m_uiModSample ? m_uiModSample->frames : 0; }
+    const float* modulatorData() const {
+        return (m_uiModSample && !m_uiModSample->samples.empty())
+                 ? m_uiModSample->samples.data() : nullptr;
+    }
     float modulatorPlayhead() const {
-        if (m_modSampleFrames <= 0) return 0.0f;
-        return static_cast<float>(m_modPlayPos / m_modSampleFrames);
+        const int frames = modulatorFrames();
+        if (frames <= 0) return 0.0f;
+        return static_cast<float>(m_modPlayPos / frames);
     }
     bool isPlaying() const {
         for (auto& v : m_voices) if (v.active) return true;
@@ -246,9 +262,12 @@ private:
     Voice m_voices[kMaxVoices] = {};
     BandState m_bandState[kMaxBands] = {};
 
-    // Modulator sample
-    std::vector<float> m_modSample;
-    int m_modSampleFrames = 0;
+    // Modulator sample (mono), atomically swapped (see Sampler).
+    // m_blockModSample caches the published pointer for one process()
+    // call so getModulatorSample doesn't load the atomic per sample.
+    std::shared_ptr<const SampleData> m_uiModSample;
+    std::atomic<const SampleData*> m_rtModSample{nullptr};
+    const SampleData* m_blockModSample = nullptr;
     double m_modPlayPos = 0.0;
 
     // ── Internal formant synthesizer ──

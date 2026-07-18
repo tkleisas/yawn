@@ -1,9 +1,11 @@
 #pragma once
 
 #include "core/ParameterInfo.h"
+#include "util/RtRetireList.h"
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 
 namespace yawn {
 namespace effects {
@@ -125,13 +127,31 @@ public:
         (void)state; (void)assetDir;
     }
 
+    // Retire list for cross-thread buffer swaps (see util/RtRetireList.h).
+    // Injected by EffectChain::insert. Effects that swap large internal
+    // buffers live park the old one here so the audio thread's in-flight
+    // block can finish on it.
+    virtual void setRetireList(util::RtRetireList* rl) { m_retireList = rl; }
+
 protected:
+    // Park a swapped-out object for deferred destruction. Immediate
+    // when no retire list is set (unit tests, single-threaded use).
+    template <typename T>
+    void retireObject(std::unique_ptr<T> obj) {
+        if (m_retireList) m_retireList->retire(std::move(obj));
+    }
+    template <typename T>
+    void retireObject(std::shared_ptr<T> obj) {
+        if (m_retireList) m_retireList->retire(std::move(obj));
+    }
+
     double m_sampleRate = kDefaultSampleRate;
     int    m_maxBlockSize = 4096;
     bool   m_bypassed = false;
     float  m_mix = 1.0f;
     const float* m_sidechainBuffer = nullptr;
     std::string m_currentPresetName;
+    util::RtRetireList* m_retireList = nullptr;
 };
 
 } // namespace effects

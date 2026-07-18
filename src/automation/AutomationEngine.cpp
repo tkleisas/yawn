@@ -23,14 +23,14 @@ void AutomationEngine::applyValue(const Context& ctx, const AutomationTarget& tg
 
     case TargetType::AudioEffect:
         if (ctx.trackFx[t]) {
-            auto* fx = ctx.trackFx[t]->effectAt(tgt.chainIndex);
+            auto* fx = ctx.trackFx[t]->effectAtRt(tgt.chainIndex);
             if (fx) fx->setParameter(tgt.paramIndex, value);
         }
         break;
 
     case TargetType::MidiEffect:
         if (ctx.midiEffectChains[t]) {
-            auto* mfx = ctx.midiEffectChains[t]->effect(tgt.chainIndex);
+            auto* mfx = ctx.midiEffectChains[t]->effectRt(tgt.chainIndex);
             if (mfx) mfx->setParameter(tgt.paramIndex, value);
         }
         break;

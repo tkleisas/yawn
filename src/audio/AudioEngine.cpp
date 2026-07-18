@@ -44,7 +44,12 @@
 namespace yawn {
 namespace audio {
 
-AudioEngine::AudioEngine() = default;
+AudioEngine::AudioEngine()
+    : m_mixer(&m_retireList) {
+    m_retireList.setHeartbeat(&m_rtSeq);
+    for (auto& chain : m_midiEffectChains)
+        chain.setRetireList(&m_retireList);
+}
 
 AudioEngine::~AudioEngine() {
     shutdown();
@@ -582,6 +587,10 @@ int AudioEngine::paCallback(
     // toggle m_running; the flag is read with acquire ordering to pair
     // with the release store in start/stop.
     if (!engine->m_running.load(std::memory_order_acquire)) {
+        // Keep the retirement heartbeat ticking while suspended so the
+        // UI-side retire list's grace period still elapses (the
+        // processAudio increment below is skipped on this path).
+        engine->m_rtSeq.fetch_add(1, std::memory_order_relaxed);
         fillSilence();
         return paContinue;
     }
@@ -598,6 +607,16 @@ int AudioEngine::paCallback(
         return paContinue;
     }
     return paContinue;
+}
+
+void AudioEngine::pollRetirements() {
+    // No live stream → no audio callback can be running → safe to
+    // destroy everything immediately (device lost, stop(), shutdown).
+    if (!m_stream || Pa_IsStreamActive(m_stream) == 0) {
+        m_retireList.clear();
+        return;
+    }
+    m_retireList.purge();
 }
 
 void AudioEngine::pollLatencyLog() {
@@ -642,6 +661,13 @@ void AudioEngine::pollLatencyLog() {
 }
 
 void AudioEngine::processAudio(const float* input, float* output, unsigned long numFrames) {
+    // Retirement heartbeat — exactly one tick per processAudio call
+    // (suspended callbacks tick separately in paCallback). The UI-side
+    // retire list frees swapped-out objects once this advances past
+    // the grace window; relaxed is fine because only the relative
+    // count matters, not data visibility (publish uses acq_rel).
+    m_rtSeq.fetch_add(1, std::memory_order_relaxed);
+
     // Process any pending commands from the UI thread
     // (also populates m_liveInputMidi for virtual keyboard MIDI)
     for (int t = 0; t < kMaxTracks; ++t) m_liveInputMidi[t].clear();
@@ -1013,7 +1039,11 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
 
     // Process instruments: MIDI effects → instrument
     for (int t = 0; t < kMaxTracks; ++t) {
-        if (!m_instruments[t]) {
+        // Read the atomic published slot, not the owning unique_ptr —
+        // the UI may swap instruments mid-callback via setInstrument;
+        // the retired old object stays alive past this block.
+        auto* inst = m_instrumentsPub[t].load(std::memory_order_acquire);
+        if (!inst) {
             m_trackMidiBuffers[t].clear();
             continue;
         }
@@ -1031,7 +1061,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             scBuf = m_inputAsSidechainBuf.data();
         else if (scSrc >= 0 && scSrc < kMaxTracks && scSrc != t)
             scBuf = m_trackBufferPtrs[scSrc];
-        m_instruments[t]->setSidechainInput(scBuf);
+        inst->setSidechainInput(scBuf);
         // Same routing for the track's audio-effect chain — the
         // sidechain-aware effects (Noise Gate, Envelope Follower,
         // future sidechain-compressor) consume it the same way the
@@ -1069,8 +1099,8 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         }
 
         // Render instrument into track buffer (adds to existing audio)
-        m_instruments[t]->process(m_trackBufferPtrs[t], nf, nc,
-                                  m_trackMidiBuffers[t]);
+        inst->process(m_trackBufferPtrs[t], nf, nc,
+                      m_trackMidiBuffers[t]);
         m_trackMidiBuffers[t].clear();
     }
 
@@ -1081,7 +1111,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         actx.isPlaying = m_transport.isPlaying() && !m_transport.isCountingIn();
         actx.mixer = &m_mixer;
         for (int t = 0; t < kMaxTracks; ++t) {
-            actx.instruments[t] = m_instruments[t].get();
+            actx.instruments[t] = m_instrumentsPub[t].load(std::memory_order_acquire);
             actx.trackFx[t] = &m_mixer.trackEffects(t);
             actx.midiEffectChains[t] = &m_midiEffectChains[t];
             actx.trackLanes[t] = &m_trackAutoLanes[t];
@@ -1122,8 +1152,10 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Resolve LFO phase links: linked LFOs recompute output using leader's base phase
     for (int t = 0; t < kMaxTracks; ++t) {
         auto& chain = m_midiEffectChains[t];
-        for (int e = 0; e < chain.count(); ++e) {
-            auto* fx = chain.effect(e);
+        const auto* snap = chain.rtSnapshot();
+        if (!snap) continue;
+        for (int e = 0; e < snap->count; ++e) {
+            auto* fx = snap->ptrs[e];
             if (!fx || fx->bypassed() || !fx->isLinkedToSource()) continue;
 
             uint32_t targetId = fx->linkSourceId();
@@ -1132,9 +1164,10 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             // Scan all chains for leader with matching instanceId
             midi::MidiEffect* leader = nullptr;
             for (int lt = 0; lt < kMaxTracks && !leader; ++lt) {
-                auto& lchain = m_midiEffectChains[lt];
-                for (int le = 0; le < lchain.count(); ++le) {
-                    auto* lfx = lchain.effect(le);
+                const auto* lsnap = m_midiEffectChains[lt].rtSnapshot();
+                if (!lsnap) continue;
+                for (int le = 0; le < lsnap->count; ++le) {
+                    auto* lfx = lsnap->ptrs[le];
                     if (lfx && lfx->instanceId() == targetId) {
                         leader = lfx;
                         break;
@@ -1149,8 +1182,10 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Apply LFO modulation offsets (after automation sets base values)
     for (int t = 0; t < kMaxTracks; ++t) {
         auto& chain = m_midiEffectChains[t];
-        for (int e = 0; e < chain.count(); ++e) {
-            auto* fx = chain.effect(e);
+        const auto* snap = chain.rtSnapshot();
+        if (!snap) continue;
+        for (int e = 0; e < snap->count; ++e) {
+            auto* fx = snap->ptrs[e];
             if (!fx) continue;
 
             // Visual targets (types 4/5) can't be applied here — the visual
@@ -1176,16 +1211,16 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                     const int tparam = fx->modulationTargetParam();
                     switch (ttype) {
                     case 0:
-                        if (m_instruments[t])
-                            m_instruments[t]->setParameter(
-                                tparam, m_instruments[t]->getParameter(tparam) - prev);
+                        if (auto* i2 = m_instrumentsPub[t].load(std::memory_order_acquire))
+                            i2->setParameter(
+                                tparam, i2->getParameter(tparam) - prev);
                         break;
                     case 1:
-                        if (auto* afx = m_mixer.trackEffects(t).effectAt(tchain))
+                        if (auto* afx = m_mixer.trackEffects(t).effectAtRt(tchain))
                             afx->setParameter(tparam, afx->getParameter(tparam) - prev);
                         break;
                     case 2:
-                        if (auto* mfx = chain.effect(tchain); mfx && tchain != e)
+                        if (auto* mfx = chain.effectRt(tchain); mfx && tchain != e)
                             mfx->setParameter(tparam, mfx->getParameter(tparam) - prev);
                         break;
                     case 3: {
@@ -1218,18 +1253,18 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             // Apply modulation as offset on current parameter value
             switch (tgtType) {
             case 0: // Instrument
-                if (m_instruments[t]) {
-                    auto info = m_instruments[t]->parameterInfo(tgtParam);
+                if (auto* i2 = m_instrumentsPub[t].load(std::memory_order_acquire)) {
+                    auto info = i2->parameterInfo(tgtParam);
                     float range = info.maxValue - info.minValue;
                     float offset = modVal * range;
-                    float base = m_instruments[t]->getParameter(tgtParam) - prevOffset;
+                    float base = i2->getParameter(tgtParam) - prevOffset;
                     float newVal = std::clamp(base + offset, info.minValue, info.maxValue);
-                    m_instruments[t]->setParameter(tgtParam, newVal);
+                    i2->setParameter(tgtParam, newVal);
                     fx->setLastAppliedOffset(newVal - base);
                 }
                 break;
             case 1: { // Audio effect
-                auto* afx = m_mixer.trackEffects(t).effectAt(tgtChain);
+                auto* afx = m_mixer.trackEffects(t).effectAtRt(tgtChain);
                 if (afx) {
                     auto info = afx->parameterInfo(tgtParam);
                     float range = info.maxValue - info.minValue;
@@ -1242,7 +1277,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
                 break;
             }
             case 2: { // MIDI effect (on same track, different slot)
-                auto* mfx = chain.effect(tgtChain);
+                auto* mfx = chain.effectRt(tgtChain);
                 if (mfx && tgtChain != e) { // don't self-modulate
                     auto info = mfx->parameterInfo(tgtParam);
                     float range = info.maxValue - info.minValue;
@@ -1441,6 +1476,12 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, StopClipMsg>) {
                 m_clipEngine.scheduleStop(msg.trackIndex, msg.quantize);
             }
+            else if constexpr (std::is_same_v<T, UpdateClipAutomationMsg>) {
+                m_clipEngine.updateClipAutomation(msg.trackIndex, msg.sceneIndex,
+                                                  msg.clipAutomation);
+                m_midiClipEngine.updateClipAutomation(msg.trackIndex, msg.sceneIndex,
+                                                      msg.clipAutomation);
+            }
             else if constexpr (std::is_same_v<T, SetQuantizeMsg>) {
                 m_clipEngine.setQuantizeMode(msg.mode);
             }
@@ -1504,7 +1545,8 @@ void AudioEngine::processCommands() {
                     if (m.isNoteOn())
                         LOG_DEBUG("MIDI", "NoteOn track=%d note=%d vel=%d inst=%s",
                                     msg.trackIndex, msg.note, msg.velocity,
-                                    m_instruments[msg.trackIndex] ? m_instruments[msg.trackIndex]->name() : "NONE");
+                                    m_instrumentsPub[msg.trackIndex].load(std::memory_order_acquire)
+                                        ? m_instrumentsPub[msg.trackIndex].load(std::memory_order_relaxed)->name() : "NONE");
                 }
             }
             else if constexpr (std::is_same_v<T, LaunchMidiClipMsg>) {
@@ -1840,19 +1882,10 @@ void AudioEngine::processCommands() {
                     m_trackMidiOutCh[msg.trackIndex] = msg.channel;
                 }
             }
-            else if constexpr (std::is_same_v<T, MoveMidiEffectMsg>) {
-                // Move already done directly; kept for compatibility
-                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
-                    m_midiEffectChains[msg.trackIndex].moveEffect(msg.fromIndex, msg.toIndex);
-            }
-            else if constexpr (std::is_same_v<T, MoveAudioEffectMsg>) {
-                if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks)
-                    m_mixer.trackEffects(msg.trackIndex).moveEffect(msg.fromIndex, msg.toIndex);
-            }
             else if constexpr (std::is_same_v<T, ResetMidiEffectChainMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     // Send all-notes-off to avoid stuck notes after reorder
-                    if (m_instruments[msg.trackIndex]) {
+                    if (auto* inst = m_instrumentsPub[msg.trackIndex].load(std::memory_order_acquire)) {
                         midi::MidiBuffer killBuf;
                         midi::MidiMessage allOff{};
                         allOff.type = midi::MidiMessage::Type::ControlChange;
@@ -1861,7 +1894,7 @@ void AudioEngine::processCommands() {
                         allOff.channel = 0;
                         killBuf.addMessage(allOff);
                         float silence[512] = {};
-                        m_instruments[msg.trackIndex]->process(silence, 1, 2, killBuf);
+                        inst->process(silence, 1, 2, killBuf);
                     }
                     // Reset all MIDI effects on this track to clear stale state
                     m_midiEffectChains[msg.trackIndex].reset();
@@ -1884,11 +1917,11 @@ void AudioEngine::processCommands() {
             }
             else if constexpr (std::is_same_v<T, SetEffectParamMsg>) {
                 if (msg.isAudioEffect) {
-                    auto* afx = m_mixer.trackEffects(msg.trackIndex).effectAt(msg.chainIndex);
+                    auto* afx = m_mixer.trackEffects(msg.trackIndex).effectAtRt(msg.chainIndex);
                     if (afx && msg.paramIndex < afx->parameterCount())
                         afx->setParameter(msg.paramIndex, msg.value);
                 } else {
-                    auto* mfx = m_midiEffectChains[msg.trackIndex].effect(msg.chainIndex);
+                    auto* mfx = m_midiEffectChains[msg.trackIndex].effectRt(msg.chainIndex);
                     if (mfx && msg.paramIndex < mfx->parameterCount())
                         mfx->setParameter(msg.paramIndex, msg.value);
                 }
@@ -2034,7 +2067,7 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
     m_midiEffectChains[trackIndex].reset();
 
     // Send all-notes-off to the instrument to silence any lingering arp notes
-    if (m_instruments[trackIndex]) {
+    if (auto* inst = m_instrumentsPub[trackIndex].load(std::memory_order_acquire)) {
         midi::MidiBuffer killBuf;
         midi::MidiMessage allOff{};
         allOff.type = midi::MidiMessage::Type::ControlChange;
@@ -2043,7 +2076,7 @@ void AudioEngine::finalizeMidiRecord(int trackIndex) {
         allOff.channel = 0;
         killBuf.addMessage(allOff);
         float silence[512] = {};
-        m_instruments[trackIndex]->process(silence, 1, 2, killBuf);
+        inst->process(silence, 1, 2, killBuf);
     }
 
     // Trim leading bars equal to count-in duration (only for arrangement recording

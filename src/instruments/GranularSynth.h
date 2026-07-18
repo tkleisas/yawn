@@ -2,7 +2,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "instruments/SampleData.h"
 #include "effects/FreqMap.h"
+#include <atomic>
+#include <memory>
 #include <vector>
 #include <cmath>
 #include <cstdio>
@@ -58,10 +61,15 @@ public:
                     int rootNote = 60);
     void clearSample();
 
-    bool hasSample() const { return m_sampleFrames > 0; }
-    int  sampleFrames() const { return m_sampleFrames; }
-    int  sampleChannels() const { return m_sampleChannels; }
-    const float* sampleData() const { return m_sampleData.empty() ? nullptr : m_sampleData.data(); }
+    // UI-thread accessors (read the UI-owned copy). The audio thread
+    // uses the atomically published view — see Sampler's loadSample.
+    bool hasSample() const { return m_uiSample && m_uiSample->frames > 0; }
+    int  sampleFrames() const { return m_uiSample ? m_uiSample->frames : 0; }
+    int  sampleChannels() const { return m_uiSample ? m_uiSample->channels : 1; }
+    const float* sampleData() const {
+        return (m_uiSample && !m_uiSample->samples.empty())
+                 ? m_uiSample->samples.data() : nullptr;
+    }
     float scanPosition() const { return static_cast<float>(m_scanPos); }
     float currentPosition() const { return m_params[kPosition]; }
     bool  isPlaying() const {
@@ -139,14 +147,18 @@ private:
     void noteOn(uint8_t note, uint16_t vel16, uint8_t ch);
     void noteOff(uint8_t note, uint8_t ch);
     void resetParams();
+    void publishSample(std::shared_ptr<const SampleData> sd);
 
     float m_params[kParamCount] = {};
     Voice m_voices[kMaxVoices] = {};
     Grain m_grains[kMaxGrains] = {};
 
-    std::vector<float> m_sampleData;
-    int m_sampleFrames = 0;
-    int m_sampleChannels = 1;
+    // Atomically-swapped immutable sample buffer (see Sampler).
+    // m_blockSample caches the published pointer for one process()
+    // call so readSample/spawnGrain don't load the atomic per grain.
+    std::shared_ptr<const SampleData> m_uiSample;
+    std::atomic<const SampleData*> m_rtSample{nullptr};
+    const SampleData* m_blockSample = nullptr;
     int m_rootNote = 60;
 
     double m_grainTimer = 0.0;

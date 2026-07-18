@@ -15,6 +15,7 @@
 #include "midi/MidiEngine.h"
 #include "automation/AutomationEngine.h"
 #include "util/MessageQueue.h"
+#include "util/RtRetireList.h"
 #include <portaudio.h>
 #include <algorithm>
 #include <atomic>
@@ -155,6 +156,23 @@ public:
     // log file. Cheap and a no-op between intervals.
     void pollLatencyLog();
 
+    // Audio-callback heartbeat — incremented once per callback (and
+    // once per suspended callback), relaxed. The UI reads it to drive
+    // the retire list's grace period (see util/RtRetireList.h).
+    uint64_t rtSeq() const { return m_rtSeq.load(std::memory_order_acquire); }
+
+    // Retire list holding objects the UI swapped out from under the
+    // audio thread (instruments, effects, sample buffers). UI thread
+    // only. Exposed so device-delete code paths can park removed
+    // effects instead of destroying them synchronously.
+    util::RtRetireList& retireList() { return m_retireList; }
+
+    // Call once per UI frame (next to Project::purgeClipGraveyard):
+    // frees retired objects whose grace period elapsed. When the
+    // stream is stopped there is no audio thread, so everything
+    // retires immediately.
+    void pollRetirements();
+
     // True when the PA stream is live. False after handleDeviceLost()
     // or shutdown() — callers should treat this as "needs re-init".
     bool hasStream() const { return m_stream != nullptr; }
@@ -173,12 +191,22 @@ public:
     std::vector<automation::AutomationLane>& trackAutoLanes(int track) { return m_trackAutoLanes[track]; }
     const std::vector<automation::AutomationLane>& trackAutoLanes(int track) const { return m_trackAutoLanes[track]; }
 
-    // Instrument management (call before start or with appropriate sync)
+    // Instrument management. UI thread only. The swap is safe against
+    // the running audio thread: the new instrument is fully built and
+    // init'd, then published to the atomic slot the audio thread reads;
+    // the old one goes to the retire list and is destroyed only after
+    // the audio heartbeat has passed it (see util/RtRetireList.h).
     void setInstrument(int track, std::unique_ptr<instruments::Instrument> inst) {
         if (track < 0 || track >= kMaxTracks) return;
+        if (inst) {
+            inst->setRetireList(&m_retireList);
+            inst->init(m_config.sampleRate, m_config.framesPerBuffer);
+        }
+        // Publish before retiring: the audio thread always sees either
+        // the old or the new valid pointer, never a dangling one.
+        m_instrumentsPub[track].store(inst.get(), std::memory_order_release);
+        m_retireList.retire(std::move(m_instruments[track]));
         m_instruments[track] = std::move(inst);
-        if (m_instruments[track])
-            m_instruments[track]->init(m_config.sampleRate, m_config.framesPerBuffer);
     }
     instruments::Instrument* instrument(int track) {
         return (track >= 0 && track < kMaxTracks) ? m_instruments[track].get() : nullptr;
@@ -251,8 +279,15 @@ public:
             m_recordedAudio[i].overdub    = m_recordedAudio[i + 1].overdub;
             m_recordedAudio[i].ready.store(m_recordedAudio[i + 1].ready.load());
         }
+        // Repoint the audio-thread view at the shifted owners. No
+        // object is created or destroyed by the shuffle itself, so a
+        // plain pointer resync keeps both arrays consistent.
+        for (int i = index; i < last; ++i)
+            m_instrumentsPub[i].store(m_instruments[i].get(),
+                                      std::memory_order_release);
         // Clear the freed last slot
-        m_instruments[last].reset();
+        m_retireList.retire(std::move(m_instruments[last]));
+        m_instrumentsPub[last].store(nullptr, std::memory_order_release);
         m_midiEffectChains[last].clear();
         m_trackAutoLanes[last].clear();
         m_trackArmed[last] = false;
@@ -521,6 +556,15 @@ private:
     };
 
     AudioEngineConfig m_config;
+
+    // Cross-thread object retirement (see util/RtRetireList.h).
+    // m_rtSeq is the audio-thread heartbeat; m_retireList is UI-thread
+    // only and purged from pollRetirements() once per frame. Declared
+    // before the subsystems so its address is stable for their
+    // constructors (Mixer, MIDI chains, instruments).
+    std::atomic<uint64_t> m_rtSeq{0};
+    util::RtRetireList m_retireList;
+
     Transport m_transport;
     ClipEngine m_clipEngine;
     MidiClipEngine m_midiClipEngine;
@@ -533,6 +577,11 @@ private:
     std::vector<automation::AutomationLane> m_trackAutoLanes[kMaxTracks];
     midi::MidiEffectChain m_midiEffectChains[kMaxMidiTracks];
     std::unique_ptr<instruments::Instrument> m_instruments[kMaxTracks];
+    // Audio-thread view of m_instruments. Written (release) only by
+    // setInstrument/removeTrackSlot on the UI thread; read (acquire)
+    // once per track per block in processAudio. Retired owners keep
+    // the pointee alive until the grace period elapses.
+    std::atomic<instruments::Instrument*> m_instrumentsPub[kMaxTracks]{};
     // Heap-allocated to avoid stack overflow (~1MB for 64 MidiBuffers)
     std::vector<midi::MidiBuffer> m_trackMidiBuffers;
     // Captures virtual keyboard / UI MIDI input for recording

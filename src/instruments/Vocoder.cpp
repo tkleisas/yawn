@@ -139,15 +139,18 @@ static constexpr float s_vowelFormants[5][3] = {
 static constexpr float s_formantAmp[3] = { 1.0f, 0.5f, 0.25f };
 
 float Vocoder::getModulatorSample(int source) {
-    if (source == 0 && m_modSampleFrames > 0) {
+    const SampleData* sd = m_blockModSample;
+    if (source == 0 && sd && sd->frames > 0) {
         // Sample playback (looped)
+        const int frames = sd->frames;
+        const float* data = sd->samples.data();
         int idx = static_cast<int>(m_modPlayPos);
         float frac = static_cast<float>(m_modPlayPos - idx);
-        int next = (idx + 1) % m_modSampleFrames;
-        idx %= m_modSampleFrames;
-        float s = m_modSample[idx] + frac * (m_modSample[next] - m_modSample[idx]);
+        int next = (idx + 1) % frames;
+        idx %= frames;
+        float s = data[idx] + frac * (data[next] - data[idx]);
         m_modPlayPos += 1.0;
-        if (m_modPlayPos >= m_modSampleFrames) m_modPlayPos -= m_modSampleFrames;
+        if (m_modPlayPos >= frames) m_modPlayPos -= frames;
         return s;
     }
 
@@ -268,6 +271,10 @@ void Vocoder::resetParams() {
 void Vocoder::process(float* buffer, int numFrames, int numChannels,
              const midi::MidiBuffer& midi) {
     if (m_bypassed) return;
+
+    // Load the published modulator sample once for this block (see
+    // Sampler) — a UI-side swap can't change or free it mid-render.
+    m_blockModSample = m_rtModSample.load(std::memory_order_acquire);
 
     const int   numBands     = static_cast<int>(m_params[kBands]);
     // Band-count compensation. The synthesis sum is N parallel

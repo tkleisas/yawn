@@ -36,7 +36,11 @@ public:
         // effects pay zero memory + zero CPU. Process order:
         // chain.instrument → fx (if any) → mix into rack output
         // with vol/pan. Mirrors DrumRack's per-pad fx pattern.
-        std::unique_ptr<effects::EffectChain> fx;
+        //
+        // UI owns the shared_ptr; creation/clearing goes through
+        // atomic_store so process() can pin a per-block ref with
+        // atomic_load (creation is NOT covered by beginChainEdit).
+        std::shared_ptr<effects::EffectChain> fx;
     };
 
     // Auto-populates one default chain (SubtractiveSynth, full key /
@@ -61,6 +65,7 @@ public:
         ch.instrument = std::move(instrument);
         ch.keyLow = keyLow; ch.keyHigh = keyHigh;
         ch.velLow = velLow; ch.velHigh = velHigh;
+        if (ch.instrument) ch.instrument->setRetireList(m_retireList);
         if (m_sampleRate > 0 && ch.instrument)
             ch.instrument->init(m_sampleRate, m_maxBlockSize);
         ++m_numChains;
@@ -125,24 +130,42 @@ public:
     // Per-chain effect chain access. Lazy-allocates on first call so
     // the user can directly start adding effects to the returned
     // chain. Returns nullptr only for an out-of-range chain index.
+    // UI thread only.
     effects::EffectChain* chainFxChain(int idx) {
         if (idx < 0 || idx >= m_numChains) return nullptr;
         if (!m_chains[idx].fx) {
-            m_chains[idx].fx = std::make_unique<effects::EffectChain>();
+            auto chain = std::make_shared<effects::EffectChain>();
+            chain->setRetireList(m_retireList);
             if (m_sampleRate > 0)
-                m_chains[idx].fx->init(m_sampleRate, m_maxBlockSize);
+                chain->init(m_sampleRate, m_maxBlockSize);
+            std::atomic_store_explicit(&m_chains[idx].fx, std::move(chain),
+                                       std::memory_order_release);
         }
         return m_chains[idx].fx.get();
     }
     // Const view — returns nullptr if no chain has been allocated
     // (no effects added yet). Project / preset save uses this so
-    // chains with no fx don't pollute JSON.
+    // chains with no fx don't pollute JSON. UI thread only.
     const effects::EffectChain* chainFxChainOrNull(int idx) const {
         if (idx < 0 || idx >= m_numChains) return nullptr;
         return m_chains[idx].fx.get();
     }
     void clearChainFx(int idx) {
-        if (idx >= 0 && idx < m_numChains) m_chains[idx].fx.reset();
+        if (idx < 0 || idx >= m_numChains) return;
+        auto old = std::atomic_exchange_explicit(
+            &m_chains[idx].fx, std::shared_ptr<effects::EffectChain>{},
+            std::memory_order_acq_rel);
+        if (old) retireObject(std::move(old));
+    }
+
+    // Forward the retire list to sub-instruments and any allocated
+    // fx chains (later allocations pick it up in chainFxChain()).
+    void setRetireList(util::RtRetireList* rl) override {
+        Instrument::setRetireList(rl);
+        for (auto& ch : m_chains) {
+            if (ch.instrument) ch.instrument->setRetireList(rl);
+            if (ch.fx) ch.fx->setRetireList(rl);
+        }
     }
 
     // Selected chain for UI editing

@@ -691,6 +691,19 @@ public:
     void setClipPlaying(bool playing)     { m_waveformWidget.setPlaying(playing); }
     void setTransportBPM(double bpm)      { m_waveformWidget.setTransportBPM(bpm); }
 
+    // Inject the copy-on-write commit for clip automation edits
+    // (lane add / point add). The audio thread may be iterating the
+    // current lanes on a playing clip, so reallocating mutations must
+    // go through App's swap-and-retire path (Project::
+    // replaceSlotAutomation) instead of editing the vector in place.
+    // In-place edits (point move/remove) don't reallocate and stay
+    // direct. The commit handler rebinds this panel's lanes pointer
+    // via setClipAutomation.
+    void setOnClipAutomationCommit(
+        std::function<void(int, std::vector<automation::AutomationLane>)> cb) {
+        m_onClipAutoCommit = std::move(cb);
+    }
+
     // Set clip automation context for the envelope editor
     void setClipAutomation(std::vector<automation::AutomationLane>* lanes, int trackIndex) {
         // Skip rebuild if nothing changed — prevents resetting dropdown selection
@@ -699,7 +712,6 @@ public:
 
         m_clipAutoLanes = lanes;
         m_autoTrackIndex = trackIndex;
-
         buildAutoTargetList();
         m_autoTargetDropdown.setOnChange([this](int idx, const std::string&) {
             if (idx <= 0) {
@@ -710,8 +722,12 @@ public:
             auto tgt = targetFromDropdownIndex(idx);
             int laneIdx = findAutoLaneForTarget(tgt);
             if (laneIdx < 0 && m_clipAutoLanes) {
-                // Create a new lane
-                m_clipAutoLanes->push_back({tgt, {}, false});
+                // Create a new lane — copy-on-write: push_back can
+                // reallocate the lanes vector the audio thread is
+                // iterating, so it goes through the commit hook.
+                auto lanes = *m_clipAutoLanes;
+                lanes.push_back({tgt, {}, false});
+                commitClipAutomation(std::move(lanes));
                 laneIdx = static_cast<int>(m_clipAutoLanes->size()) - 1;
             }
             m_autoSelectedLaneIdx = laneIdx;
@@ -721,7 +737,10 @@ public:
         m_autoEnvelopeWidget.setOnPointAdd([this](double time, float value) {
             if (!m_clipAutoLanes || m_autoSelectedLaneIdx < 0 ||
                 m_autoSelectedLaneIdx >= static_cast<int>(m_clipAutoLanes->size())) return;
-            (*m_clipAutoLanes)[m_autoSelectedLaneIdx].envelope.addPoint(time, value);
+            // Copy-on-write (addPoint inserts → may reallocate).
+            auto lanes = *m_clipAutoLanes;
+            lanes[m_autoSelectedLaneIdx].envelope.addPoint(time, value);
+            commitClipAutomation(std::move(lanes));
             syncEnvelopeFromLane();
         });
         m_autoEnvelopeWidget.setOnPointMove([this](int idx, double time, float value) {
@@ -1643,7 +1662,7 @@ private:
             dw->setOnRemove([this, dr, note, chainIdx]() {
                 if (!dr) return;
                 if (auto* chain = dr->padFxChain(note))
-                    chain->remove(chainIdx);
+                    chain->removeRetired(chainIdx);
                 // tick() will see the chain count drop and rebuild.
             });
         } else if (ref.type == DeviceType::ChainFx) {
@@ -1653,7 +1672,7 @@ private:
             dw->setOnRemove([this, ir, rackChain, chainIdx]() {
                 if (!ir) return;
                 if (auto* chain = ir->chainFxChain(rackChain))
-                    chain->remove(chainIdx);
+                    chain->removeRetired(chainIdx);
             });
         } else {
             dw->setOnRemove([this, type = ref.type, chainIdx = ref.chainIndex]() {
@@ -2651,6 +2670,15 @@ private:
     int m_autoSelectedLaneIdx = -1;
     std::vector<automation::AutomationLane>* m_clipAutoLanes = nullptr;
     int m_autoTrackIndex = -1;
+    std::function<void(int, std::vector<automation::AutomationLane>)> m_onClipAutoCommit;
+
+    // Route a copy-on-write automation edit through the injected
+    // commit hook; falls back to in-place assignment when no hook is
+    // set (tests / detached panel).
+    void commitClipAutomation(std::vector<automation::AutomationLane> lanes) {
+        if (m_onClipAutoCommit) m_onClipAutoCommit(m_autoTrackIndex, std::move(lanes));
+        else if (m_clipAutoLanes) *m_clipAutoLanes = std::move(lanes);
+    }
 
     // MIDI Learn
     midi::MidiLearnManager* m_learnManager = nullptr;

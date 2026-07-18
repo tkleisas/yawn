@@ -22,18 +22,27 @@ void GranularSynth::reset() {
     m_rngState = 12345u;
 }
 
+void GranularSynth::publishSample(std::shared_ptr<const SampleData> sd) {
+    // Publish first, then retire the previous owner — the audio thread
+    // always sees a valid buffer (old or new). See Sampler.
+    m_rtSample.store(sd.get(), std::memory_order_release);
+    auto old = std::move(m_uiSample);
+    m_uiSample = std::move(sd);
+    if (old) retireObject(std::move(old));
+}
+
 void GranularSynth::loadSample(const float* data, int numFrames,
                                 int numChannels, int rootNote) {
-    m_sampleData.assign(data, data + numFrames * numChannels);
-    m_sampleFrames = numFrames;
-    m_sampleChannels = numChannels;
+    auto sd = std::make_shared<SampleData>();
+    sd->samples.assign(data, data + numFrames * numChannels);
+    sd->frames = numFrames;
+    sd->channels = numChannels;
+    publishSample(std::move(sd));
     m_rootNote = rootNote;
 }
 
 void GranularSynth::clearSample() {
-    m_sampleData.clear();
-    m_sampleFrames = 0;
-    m_sampleChannels = 1;
+    publishSample(nullptr);
 }
 
 void GranularSynth::process(float* buffer, int numFrames, int numChannels,
@@ -51,8 +60,10 @@ void GranularSynth::process(float* buffer, int numFrames, int numChannels,
         }
     }
 
-    if (!useSidechain && m_sampleFrames == 0) return;
-
+    // Load the published sample buffer once for this block (see Sampler).
+    m_blockSample = m_rtSample.load(std::memory_order_acquire);
+    const int sampleFrames = m_blockSample ? m_blockSample->frames : 0;
+    if (!useSidechain && sampleFrames == 0) { m_blockSample = nullptr; return; }
     const float position    = m_params[kPosition];
     const float grainSizeMs = m_params[kGrainSize];
     const float density     = m_params[kDensity];
@@ -125,7 +136,7 @@ void GranularSynth::process(float* buffer, int numFrames, int numChannels,
             mixR += val * grain.panR;
 
             grain.readPos += grain.speed;
-            int wrapLen = grain.fromSidechain ? m_scFilled : m_sampleFrames;
+            int wrapLen = grain.fromSidechain ? m_scFilled : sampleFrames;
             if (wrapLen > 0) {
                 if (grain.readPos < 0) grain.readPos += wrapLen;
                 if (grain.readPos >= wrapLen) grain.readPos -= wrapLen;
@@ -210,20 +221,23 @@ float GranularSynth::readSample(double pos, bool fromSidechain) const {
         return s0 + frac * (s1 - s0);
     }
 
-    if (m_sampleFrames == 0) return 0.0f;
+    const SampleData* sd = m_blockSample;
+    if (!sd || sd->frames == 0) return 0.0f;
+    const int sampleFrames = sd->frames;
+    const int sampleChannels = sd->channels;
     int idx0 = static_cast<int>(pos);
     int idx1 = idx0 + 1;
-    if (idx0 < 0) idx0 += m_sampleFrames;
-    if (idx1 >= m_sampleFrames) idx1 -= m_sampleFrames;
+    if (idx0 < 0) idx0 += sampleFrames;
+    if (idx1 >= sampleFrames) idx1 -= sampleFrames;
     float frac = static_cast<float>(pos - std::floor(pos));
 
     float s0 = 0.0f, s1 = 0.0f;
-    for (int ch = 0; ch < m_sampleChannels; ++ch) {
-        s0 += m_sampleData[static_cast<size_t>(idx0) * m_sampleChannels + ch];
-        s1 += m_sampleData[static_cast<size_t>(idx1) * m_sampleChannels + ch];
+    for (int ch = 0; ch < sampleChannels; ++ch) {
+        s0 += sd->samples[static_cast<size_t>(idx0) * sampleChannels + ch];
+        s1 += sd->samples[static_cast<size_t>(idx1) * sampleChannels + ch];
     }
-    s0 /= m_sampleChannels;
-    s1 /= m_sampleChannels;
+    s0 /= sampleChannels;
+    s1 /= sampleChannels;
     return s0 + frac * (s1 - s0);
 }
 
@@ -251,7 +265,8 @@ void GranularSynth::spawnGrain(Voice& v, float position, float spread,
     }
     if (!slot) return;
 
-    int effLen = fromSidechain ? m_scFilled : m_sampleFrames;
+    int effLen = fromSidechain ? m_scFilled
+                 : (m_blockSample ? m_blockSample->frames : 0);
     if (effLen <= 0) return;
 
     float pos = position + static_cast<float>(m_scanPos);

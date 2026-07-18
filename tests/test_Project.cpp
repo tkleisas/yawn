@@ -172,7 +172,7 @@ static void seedClipAuto(Project& p, int t, int s) {
     automation::AutomationLane lane;
     lane.target = automation::AutomationTarget::instrument(t, 0);
     lane.envelope.addPoint(0.0, 0.5f);
-    slot->clipAutomation.push_back(lane);
+    slot->clipAutomation->lanes.push_back(lane);
 }
 
 // Same for track-level (arrangement) automation.
@@ -189,12 +189,12 @@ TEST(ProjectAutomation, ClearClipAutomationEmptiesSlot) {
     p.init(1, 2);
     seedClipAuto(p, 0, 0);
     seedClipAuto(p, 0, 1);
-    EXPECT_FALSE(p.getSlot(0, 0)->clipAutomation.empty());
+    EXPECT_FALSE(p.getSlot(0, 0)->clipAutomation->lanes.empty());
 
     p.clearClipAutomation(0, 0);
-    EXPECT_TRUE(p.getSlot(0, 0)->clipAutomation.empty());
+    EXPECT_TRUE(p.getSlot(0, 0)->clipAutomation->lanes.empty());
     // Other slot on the same track is untouched.
-    EXPECT_FALSE(p.getSlot(0, 1)->clipAutomation.empty());
+    EXPECT_FALSE(p.getSlot(0, 1)->clipAutomation->lanes.empty());
 }
 
 TEST(ProjectAutomation, ClearTrackAutomationEmptiesEverythingOnTrack) {
@@ -210,11 +210,11 @@ TEST(ProjectAutomation, ClearTrackAutomationEmptiesEverythingOnTrack) {
 
     // Track 0: arrangement lanes + every slot's clip lanes wiped.
     EXPECT_TRUE(p.track(0).automationLanes.empty());
-    EXPECT_TRUE(p.getSlot(0, 0)->clipAutomation.empty());
-    EXPECT_TRUE(p.getSlot(0, 1)->clipAutomation.empty());
+    EXPECT_TRUE(p.getSlot(0, 0)->clipAutomation->lanes.empty());
+    EXPECT_TRUE(p.getSlot(0, 1)->clipAutomation->lanes.empty());
     // Track 1 untouched.
     EXPECT_FALSE(p.track(1).automationLanes.empty());
-    EXPECT_FALSE(p.getSlot(1, 0)->clipAutomation.empty());
+    EXPECT_FALSE(p.getSlot(1, 0)->clipAutomation->lanes.empty());
 }
 
 TEST(ProjectAutomation, ClearAllAutomationEmptiesEverything) {
@@ -231,7 +231,7 @@ TEST(ProjectAutomation, ClearAllAutomationEmptiesEverything) {
         EXPECT_TRUE(p.track(t).automationLanes.empty())
             << "track " << t << " arrangement lanes not cleared";
         for (int s = 0; s < 2; ++s) {
-            EXPECT_TRUE(p.getSlot(t, s)->clipAutomation.empty())
+            EXPECT_TRUE(p.getSlot(t, s)->clipAutomation->lanes.empty())
                 << "track " << t << " scene " << s
                 << " clip lanes not cleared";
         }

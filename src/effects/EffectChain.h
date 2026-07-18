@@ -22,14 +22,22 @@ public:
     }
 
     void reset() {
-        for (auto& slot : m_slots) {
-            if (slot) slot->reset();
+        // Iterate the published snapshot: reset() is also called from
+        // the audio thread (engine command handlers), where m_slots is
+        // off-limits. Effects are alive in both views — the retire list
+        // keeps removed ones until the grace period elapses.
+        const Snapshot* s = rtSnapshot();
+        if (!s) return;
+        for (int i = 0; i < s->count; ++i) {
+            if (s->ptrs[i]) s->ptrs[i]->reset();
         }
     }
 
     void process(float* buffer, int numFrames, int numChannels) {
-        for (int i = 0; i < m_count; ++i) {
-            auto& fx = m_slots[i];
+        const Snapshot* s = rtSnapshot();
+        if (!s) return;
+        for (int i = 0; i < s->count; ++i) {
+            auto* fx = s->ptrs[i];
             if (fx && !fx->bypassed())
                 fx->process(buffer, numFrames, numChannels);
         }
@@ -39,25 +47,34 @@ public:
     // chain. Same routing as the instrument — effects on a track read
     // the same source the instrument does. Called by AudioEngine each
     // block from the per-track sidechain dispatch (alongside the
-    // existing m_instruments[t]->setSidechainInput call). Effects
+    // existing instrument setSidechainInput call). Effects
     // that don't override supportsSidechain() simply ignore the
     // pointer.
     void setSidechainInput(const float* buffer) {
-        for (auto& slot : m_slots)
-            if (slot) slot->setSidechainInput(buffer);
+        const Snapshot* s = rtSnapshot();
+        if (!s) return;
+        for (int i = 0; i < s->count; ++i)
+            if (s->ptrs[i]) s->ptrs[i]->setSidechainInput(buffer);
     }
 
     // Fan the host tempo out to every effect (see AudioEffect::setTempo).
     void setTempo(double bpm, double beatPosition, bool playing) {
-        for (auto& slot : m_slots)
-            if (slot) slot->setTempo(bpm, beatPosition, playing);
+        const Snapshot* s = rtSnapshot();
+        if (!s) return;
+        for (int i = 0; i < s->count; ++i)
+            if (s->ptrs[i]) s->ptrs[i]->setTempo(bpm, beatPosition, playing);
     }
 
+    // UI thread only. The published snapshot is rebuilt before return,
+    // so the audio thread sees the new effect on its next block.
     AudioEffect* insert(int slot, std::unique_ptr<AudioEffect> effect) {
         if (slot < 0 || slot >= kMaxEffectsPerChain) return nullptr;
         effect->init(m_sampleRate, m_maxBlockSize);
+        effect->setRetireList(retireList());
+        retireEffect(std::move(m_slots[slot]));  // replaced occupant, if any
         m_slots[slot] = std::move(effect);
         recountSlots();
+        publishSnapshot();
         return m_slots[slot].get();
     }
 
@@ -68,11 +85,24 @@ public:
         return nullptr;
     }
 
+    // Unlink the effect at `slot` and hand ownership to the caller.
+    // The audio thread may still be processing it — callers that
+    // intend to destroy it MUST park it in the engine's retire list
+    // (AudioEngine::retireList()) instead of letting the unique_ptr
+    // go out of scope. The snapshot is republished either way.
     std::unique_ptr<AudioEffect> remove(int slot) {
         if (slot < 0 || slot >= kMaxEffectsPerChain) return nullptr;
         auto fx = std::move(m_slots[slot]);
         recountSlots();
+        publishSnapshot();
         return fx;
+    }
+
+    // Remove + deferred destruction via the retire list. Use this for
+    // delete flows; remove() only when the effect stays alive
+    // somewhere else (e.g. an undo command holding the unique_ptr).
+    void removeRetired(int slot) {
+        retireEffect(remove(slot));
     }
 
     AudioEffect* effectAt(int slot) const {
@@ -85,12 +115,15 @@ public:
     // process() is a no-op for them — the audio passes through with
     // zero delay. Used by Mixer to expose per-track / per-bus /
     // master latency totals for the UI and (Latency P2) for auto-
-    // delay-compensation.
+    // delay-compensation. Called from the audio thread (PDC) and the
+    // UI — both read the published snapshot.
     int latencySamples() const {
+        const Snapshot* s = rtSnapshot();
+        if (!s) return 0;
         int total = 0;
-        for (auto& slot : m_slots) {
-            if (slot && !slot->bypassed())
-                total += slot->latencySamples();
+        for (int i = 0; i < s->count; ++i) {
+            if (s->ptrs[i] && !s->ptrs[i]->bypassed())
+                total += s->ptrs[i]->latencySamples();
         }
         return total;
     }

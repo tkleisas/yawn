@@ -696,13 +696,13 @@ void App::pollVisualKnobAutomation() {
         if (m_visualLaunchBeat[t] != kNoVisualLaunch &&
             m_visualLaunchScene[t] >= 0) {
             auto* slot = m_project.getSlot(t, m_visualLaunchScene[t]);
-            if (slot && slot->visualClip && !slot->clipAutomation.empty()) {
+            if (slot && slot->visualClip && !slot->clipAutomation->lanes.empty()) {
                 const double launchBeat = m_visualLaunchBeat[t];
                 const double lenBeats   = std::max(0.25,
                                                     slot->visualClip->lengthBeats);
                 double clipBeat = std::fmod(transportBeat - launchBeat, lenBeats);
                 if (clipBeat < 0.0) clipBeat += lenBeats;
-                for (const auto& lane : slot->clipAutomation) {
+                for (const auto& lane : slot->clipAutomation->lanes) {
                     if (lane.envelope.empty()) continue;
                     const float v = lane.envelope.valueAt(clipBeat);
                     if (lane.target.type == automation::TargetType::VisualKnob) {

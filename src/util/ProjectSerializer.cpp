@@ -270,13 +270,13 @@ json serializeInstrument(const instruments::Instrument& inst,
         json pads = json::array();
         for (int note = 0; note < 128; ++note) {
             const auto& p = rack.pad(note);
-            if (p.sampleFrames <= 0) continue;
+            if (!p.sample || p.sample->frames <= 0) continue;
             std::string filename = "pad_" + std::to_string(note) + "_" +
                                    std::to_string(sampleCounter++) + ".wav";
             fs::path samplePath = samplesDir / filename;
             FileIO::saveAudioFile(samplePath.string(),
-                                  p.sampleData.data(), p.sampleFrames,
-                                  p.sampleChannels, static_cast<int>(kDefaultSampleRate));
+                                  p.sample->samples.data(), p.sample->frames,
+                                  p.sample->channels, static_cast<int>(kDefaultSampleRate));
             json padJ;
             padJ["note"] = note;
             padJ["sampleFile"] = "samples/" + filename;
@@ -1284,8 +1284,8 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
                 clipJ["type"] = "visual";
                 serializeVisualClipFields(*slot->visualClip, clipJ);
             }
-            if (!slot->clipAutomation.empty())
-                clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation);
+            if (!slot->clipAutomation->lanes.empty())
+                clipJ["clipAutomation"] = automation::lanesToJson(slot->clipAutomation->lanes);
             if (slot->autoRecordDisabled)
                 clipJ["autoRecordDisabled"] = true;
             // Per-slot record settings — also missing from earlier
@@ -1587,7 +1587,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             if (val.contains("clipAutomation")) {
                 auto* slot = project.getSlot(trackIdx, sceneIdx);
                 if (slot)
-                    slot->clipAutomation = automation::lanesFromJson(val["clipAutomation"]);
+                    project.replaceSlotAutomation(*slot, automation::lanesFromJson(val["clipAutomation"]));
             }
             // Per-clip auto-rec disable flag
             if (val.contains("autoRecordDisabled")) {

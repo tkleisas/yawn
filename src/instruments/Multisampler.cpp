@@ -18,12 +18,14 @@ void Multisampler::init(double sampleRate, int maxBlockSize) {
 }
 
 void Multisampler::reset() {
-    for (auto& v : m_voices) v.active = false;
+    for (auto& v : m_voices) { v.active = false; v.zone.reset(); }
 }
 
 void Multisampler::process(float* buffer, int numFrames, int numChannels,
              const midi::MidiBuffer& midi) {
-    if (m_bypassed || m_zoneCount == 0) return;
+    if (m_bypassed) return;
+    const ZoneSnapshot* snap = m_zoneSnap.load(std::memory_order_acquire);
+    if (!snap || snap->count == 0) return;
 
     const float volume     = m_params[kVolume];
     // filterCut is stored normalized 0..1 → convert to Hz for filter math.
@@ -36,7 +38,7 @@ void Multisampler::process(float* buffer, int numFrames, int numChannels,
     for (int i = 0; i < midi.count(); ++i) {
         const auto& msg = midi[i];
         if (msg.isNoteOn())
-            noteOn(msg.note, msg.velocity, msg.channel, velXfade);
+            noteOn(msg.note, msg.velocity, msg.channel, velXfade, snap);
         else if (msg.isNoteOff())
             noteOff(msg.note, msg.channel);
         else if (msg.isCC() && msg.ccNumber == 123)
@@ -51,7 +53,7 @@ void Multisampler::process(float* buffer, int numFrames, int numChannels,
 
             float ampE = v.ampEnv.process();
             float filtE = v.filtEnv.process();
-            if (v.ampEnv.isIdle()) { v.active = false; continue; }
+            if (v.ampEnv.isIdle()) { v.active = false; v.zone.reset(); continue; }
 
             // Read sample from zone
             float samp = readZoneSample(v);
@@ -108,6 +110,7 @@ float Multisampler::readZoneSample(Voice& v) const {
             }
         } else {
             v.active = false;
+            v.zone.reset();
             return 0.0f;
         }
     }
@@ -137,16 +140,19 @@ float Multisampler::readZoneSample(Voice& v) const {
     return s0 + frac * (s1 - s0);
 }
 
-void Multisampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfade) {
+void Multisampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfade,
+                          const ZoneSnapshot* snap) {
     int vel7 = std::min(127, static_cast<int>(vel16 >> 9)); // 16-bit → 7-bit
 
-    // Collect matching zones
-    struct Match { int zoneIdx; float gain; };
+    // Collect matching zones from the published snapshot (the UI may
+    // be editing the owner list concurrently — the snapshot is stable
+    // and pins each zone it references).
+    struct Match { std::shared_ptr<const Zone> zone; float gain; };
     Match matches[kMaxZones];
     int matchCount = 0;
 
-    for (int z = 0; z < m_zoneCount; ++z) {
-        const Zone& zone = *m_zones[z];
+    for (int z = 0; z < snap->count; ++z) {
+        const Zone& zone = *snap->zones[z];
         if (note < zone.lowKey || note > zone.highKey) continue;
 
         // Velocity matching with optional crossfade
@@ -158,12 +164,12 @@ void Multisampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfa
             if (dist > 1.0f + velXfade) continue;
             float gain = std::clamp(1.0f - (dist - 1.0f) / std::max(0.01f, velXfade), 0.0f, 1.0f);
             if (gain > 0.0f && matchCount < kMaxZones)
-                matches[matchCount++] = {z, gain};
+                matches[matchCount++] = {snap->zones[z], gain};
         } else {
             // Hard velocity matching
             if (vel7 < zone.lowVel || vel7 > zone.highVel) continue;
             if (matchCount < kMaxZones)
-                matches[matchCount++] = {z, 1.0f};
+                matches[matchCount++] = {snap->zones[z], 1.0f};
         }
     }
 
@@ -179,7 +185,7 @@ void Multisampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfa
         }
         if (!slot) break;
 
-        const Zone& zone = *m_zones[matches[m].zoneIdx];
+        const Zone& zone = *matches[m].zone;
         float pitchShift = static_cast<float>(static_cast<int>(note) - zone.rootNote) + zone.tune;
 
         slot->active = true;
@@ -201,7 +207,7 @@ void Multisampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch, float velXfa
         slot->playSpeed = std::pow(2.0, pitchShift / 12.0) * srRatio;
         slot->zoneVolume = zone.volume;
         slot->zonePan = zone.pan;
-        slot->zone = &zone;
+        slot->zone = matches[m].zone;   // pinned for the whole render
         slot->filterIc[0] = slot->filterIc[1] = 0.0f;
 
         slot->ampEnv.setSampleRate(m_sampleRate);

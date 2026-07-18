@@ -310,17 +310,26 @@ private:
     void insertSceneAtSelection();
 
     // Structural scene edits reallocate Project::m_clipSlots, moving every
-    // ClipSlot and dangling the &slot->clipAutomation pointers the audio
-    // thread reads in AutomationEngine::process. These wrappers stop every
-    // launched clip first (immediate, so the engine drops those pointers),
-    // then mutate — route ALL scene insert/delete/duplicate through them,
-    // including undo/redo lambdas. See stopAllClipsForSceneEdit().
+    // ClipSlot. Slot automation boxes (ClipSlot::clipAutomation) and
+    // deleted slots' clips are graveyard-protected, so the engine's
+    // cached pointers can't dangle — but stopping every launched clip
+    // first (immediate, so the engine drops those pointers) keeps the
+    // graveyard small and the audible result predictable. Route ALL
+    // scene insert/delete/duplicate through these wrappers, including
+    // undo/redo lambdas. See stopAllClipsForSceneEdit().
     void stopAllClipsForSceneEdit();
     void sceneInsert(int index);
     void sceneDelete(int index);
     void sceneDuplicate(int index);
     void updateWindowTitle();
     void markDirty() { m_projectDirty = true; updateWindowTitle(); }
+
+    // Notify the engine that a slot's automation box was swapped
+    // (Project::replaceSlotAutomation): sends UpdateClipAutomationMsg
+    // with the slot's CURRENT lanes so a playing/pending clip re-points
+    // on the next block. Call after every automation box mutation —
+    // clears, undo/paste restores, envelope-editor commits.
+    void publishClipAutomation(int track, int scene);
 
     // SDL3 async file dialog callbacks
     static void SDLCALL onOpenFolderResult(void* userdata, const char* const* filelist, int filter);

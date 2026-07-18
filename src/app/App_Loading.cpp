@@ -162,7 +162,7 @@ void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCop
     std::unique_ptr<audio::Clip> oldDstAudio;
     std::unique_ptr<midi::MidiClip> oldDstMidi;
     FollowAction oldDstFA = dstSlot->followAction;
-    auto oldDstAuto = dstSlot->clipAutomation;
+    auto oldDstAuto = dstSlot->clipAutomation->lanes;
     auto oldDstQuant = dstSlot->launchQuantize;
     if (dstSlot->audioClip) oldDstAudio = dstSlot->audioClip->clone();
     if (dstSlot->midiClip) oldDstMidi = dstSlot->midiClip->clone();
@@ -170,7 +170,7 @@ void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCop
     std::unique_ptr<audio::Clip> oldSrcAudio;
     std::unique_ptr<midi::MidiClip> oldSrcMidi;
     FollowAction oldSrcFA = srcSlot->followAction;
-    auto oldSrcAuto = srcSlot->clipAutomation;
+    auto oldSrcAuto = srcSlot->clipAutomation->lanes;
     auto oldSrcQuant = srcSlot->launchQuantize;
     if (srcSlot->audioClip) oldSrcAudio = srcSlot->audioClip->clone();
     if (srcSlot->midiClip) oldSrcMidi = srcSlot->midiClip->clone();
@@ -215,12 +215,14 @@ void App::performClipDragDrop(int srcT, int srcS, int dstT, int dstS, bool isCop
             src->audioClip = srcAudio ? srcAudio->clone() : nullptr;
             src->midiClip  = srcMidi  ? srcMidi->clone()  : nullptr;
             src->followAction = srcFA;
-            src->clipAutomation = srcAuto;
+            m_project.replaceSlotAutomation(*src, srcAuto);
+            publishClipAutomation(srcT, srcS);
             src->launchQuantize = srcQuant;
             dst->audioClip = dstAudio ? dstAudio->clone() : nullptr;
             dst->midiClip  = dstMidi  ? dstMidi->clone()  : nullptr;
             dst->followAction = dstFA;
-            dst->clipAutomation = dstAuto;
+            m_project.replaceSlotAutomation(*dst, dstAuto);
+            publishClipAutomation(dstT, dstS);
             dst->launchQuantize = dstQuant;
             markDirty();
         },

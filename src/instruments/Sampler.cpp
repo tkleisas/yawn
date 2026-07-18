@@ -18,29 +18,46 @@ void Sampler::reset() {
     m_voiceCounter = 0;
 }
 
+void Sampler::publishSample(std::shared_ptr<const SampleData> sd) {
+    // Publish first, then retire the previous owner — the audio thread
+    // always sees a valid buffer (old or new), and the retired one
+    // outlives any in-flight block.
+    m_rtSample.store(sd.get(), std::memory_order_release);
+    auto old = std::move(m_uiSample);
+    m_uiSample = std::move(sd);
+    if (old) retireObject(std::move(old));
+}
+
 void Sampler::loadSample(const float* data, int numFrames, int numChannels,
                 int rootNote) {
-    m_sampleData.assign(data, data + numFrames * numChannels);
-    m_sampleFrames = numFrames;
-    m_sampleChannels = numChannels;
+    auto sd = std::make_shared<SampleData>();
+    sd->samples.assign(data, data + numFrames * numChannels);
+    sd->frames = numFrames;
+    sd->channels = numChannels;
+    publishSample(std::move(sd));
     m_rootNote = rootNote;
     m_loopStart = 0.0f;
     m_loopEnd = 1.0f;
 }
 
 void Sampler::clearSample() {
-    m_sampleData.clear();
-    m_sampleFrames = 0;
-    m_sampleChannels = 1;
+    publishSample(nullptr);
 }
 
 void Sampler::process(float* buffer, int numFrames, int numChannels,
              const midi::MidiBuffer& midi) {
-    if (m_sampleFrames == 0) return;
+    // Load the published buffer once per block; voices read through
+    // this local for the whole block, so a UI-side swap can't change
+    // (or free) the data mid-render.
+    const SampleData* sd = m_rtSample.load(std::memory_order_acquire);
+    if (!sd || sd->frames == 0) return;
+    const int sampleFrames = sd->frames;
+    const int sampleChannels = sd->channels;
+    const float* sampleData = sd->samples.data();
 
     for (int i = 0; i < midi.count(); ++i) {
         const auto& msg = midi[i];
-        if (msg.isNoteOn()) noteOn(msg.note, msg.velocity, msg.channel);
+        if (msg.isNoteOn()) noteOn(msg.note, msg.velocity, msg.channel, sampleFrames);
         else if (msg.isNoteOff()) noteOff(msg.note, msg.channel);
         else if (msg.isCC() && msg.ccNumber == 123) {
             for (auto& v : m_voices)
@@ -49,9 +66,9 @@ void Sampler::process(float* buffer, int numFrames, int numChannels,
     }
 
     // Compute loop boundaries in frames
-    int loopStartFrame = static_cast<int>(m_loopStart * m_sampleFrames);
-    int loopEndFrame   = static_cast<int>(m_loopEnd * m_sampleFrames);
-    if (loopEndFrame <= loopStartFrame) loopEndFrame = m_sampleFrames;
+    int loopStartFrame = static_cast<int>(m_loopStart * sampleFrames);
+    int loopEndFrame   = static_cast<int>(m_loopEnd * sampleFrames);
+    if (loopEndFrame <= loopStartFrame) loopEndFrame = sampleFrames;
     bool looping = (m_loopStart > 0.001f || m_loopEnd < 0.999f);
 
     for (int v = 0; v < kMaxVoices; ++v) {
@@ -71,25 +88,25 @@ void Sampler::process(float* buffer, int numFrames, int numChannels,
                     pos0 = loopEndFrame - 1;
                 }
             } else {
-                if (!m_reverse && pos0 >= m_sampleFrames) {
+                if (!m_reverse && pos0 >= sampleFrames) {
                     voice.active = false; break;
                 } else if (m_reverse && pos0 < 0) {
                     voice.active = false; break;
                 }
             }
 
-            pos0 = std::clamp(pos0, 0, m_sampleFrames - 1);
-            int pos1 = std::clamp(pos0 + (m_reverse ? -1 : 1), 0, m_sampleFrames - 1);
+            pos0 = std::clamp(pos0, 0, sampleFrames - 1);
+            int pos1 = std::clamp(pos0 + (m_reverse ? -1 : 1), 0, sampleFrames - 1);
             float frac = (float)(voice.playPos - pos0);
             if (frac < 0) frac = -frac;
 
             // Linear interpolation
-            float sL = m_sampleData[pos0 * m_sampleChannels] * (1.0f - frac)
-                     + m_sampleData[pos1 * m_sampleChannels] * frac;
+            float sL = sampleData[pos0 * sampleChannels] * (1.0f - frac)
+                     + sampleData[pos1 * sampleChannels] * frac;
             float sR = sL;
-            if (m_sampleChannels > 1) {
-                sR = m_sampleData[pos0 * m_sampleChannels + 1] * (1.0f - frac)
-                   + m_sampleData[pos1 * m_sampleChannels + 1] * frac;
+            if (sampleChannels > 1) {
+                sR = sampleData[pos0 * sampleChannels + 1] * (1.0f - frac)
+                   + sampleData[pos1 * sampleChannels + 1] * frac;
             }
 
             // Apply sample gain
@@ -104,7 +121,7 @@ void Sampler::process(float* buffer, int numFrames, int numChannels,
             voice.filterBand += f * highL;
             voice.filterLow  += f * voice.filterBand;
             float filteredL = voice.filterLow;
-            if (m_sampleChannels > 1) {
+            if (sampleChannels > 1) {
                 float filterRatio = (std::abs(sL) > 0.0001f) ? filteredL / sL : 1.0f;
                 sR *= filterRatio;
             } else {
@@ -127,7 +144,7 @@ void Sampler::process(float* buffer, int numFrames, int numChannels,
     }
 }
 
-void Sampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch) {
+void Sampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch, int sampleFrames) {
     int slot = findFreeVoice();
     auto& v = m_voices[slot];
     v.active = true;
@@ -135,9 +152,9 @@ void Sampler::noteOn(uint8_t note, uint16_t vel16, uint8_t ch) {
     v.velocity = velocityToGain(vel16);
     // Start from loop end if reversed, loop start otherwise
     if (m_reverse)
-        v.playPos = static_cast<double>(m_loopEnd * m_sampleFrames) - 1.0;
+        v.playPos = static_cast<double>(m_loopEnd * sampleFrames) - 1.0;
     else
-        v.playPos = static_cast<double>(m_loopStart * m_sampleFrames);
+        v.playPos = static_cast<double>(m_loopStart * sampleFrames);
     v.playSpeed = std::pow(2.0, ((int)note - m_rootNote) / 12.0);
     v.startOrder = m_voiceCounter++;
     v.filterLow = v.filterBand = 0.0f;

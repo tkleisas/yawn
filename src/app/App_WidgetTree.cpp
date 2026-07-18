@@ -137,10 +137,13 @@ void App::setupMenuBar() {
                         snap->slotLanes[t].resize(m_project.numScenes());
                         for (int s = 0; s < m_project.numScenes(); ++s) {
                             auto* slot = m_project.getSlot(t, s);
-                            if (slot) snap->slotLanes[t][s] = slot->clipAutomation;
+                            if (slot) snap->slotLanes[t][s] = slot->clipAutomation->lanes;
                         }
                     }
                     m_project.clearAllAutomation();
+                    for (int t = 0; t < m_project.numTracks(); ++t)
+                        for (int s = 0; s < m_project.numScenes(); ++s)
+                            publishClipAutomation(t, s);
                     m_undoManager.push({"Clear All Automation",
                         [this, snap]{
                             for (int t = 0; t < (int)snap->trackLanes.size() &&
@@ -149,13 +152,19 @@ void App::setupMenuBar() {
                                 for (int s = 0; s < (int)snap->slotLanes[t].size() &&
                                                 s < m_project.numScenes(); ++s) {
                                     auto* slot = m_project.getSlot(t, s);
-                                    if (slot) slot->clipAutomation = snap->slotLanes[t][s];
+                                    if (slot) {
+                                        m_project.replaceSlotAutomation(*slot, snap->slotLanes[t][s]);
+                                        publishClipAutomation(t, s);
+                                    }
                                 }
                             }
                             markDirty();
                         },
                         [this]{
                             m_project.clearAllAutomation();
+                            for (int t = 0; t < m_project.numTracks(); ++t)
+                                for (int s = 0; s < m_project.numScenes(); ++s)
+                                    publishClipAutomation(t, s);
                             markDirty();
                         }, ""});
                     markDirty();
@@ -1121,7 +1130,7 @@ void App::updateDetailForSelectedTrack() {
             paramNames.reserve(params.size());
             for (const auto& p : params) paramNames.push_back(p.name);
             m_browserPanel->setVisualClipAutomation(
-                &vslot->clipAutomation,
+                &vslot->clipAutomation->lanes,
                 m_selectedTrack,
                 vslot->visualClip->lengthBeats > 0.25
                     ? vslot->visualClip->lengthBeats : 4.0,
@@ -1150,7 +1159,7 @@ void App::updateDetailForSelectedTrack() {
         auto* fxChain = &m_audioEngine.mixer().trackEffects(m_selectedTrack);
         m_detailPanel->setAudioClip(audioClip, fxChain,
                                      static_cast<int>(m_audioEngine.sampleRate()));
-        m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
+        m_detailPanel->setClipAutomation(&slot->clipAutomation->lanes, m_selectedTrack);
         return;
     }
 
@@ -1162,7 +1171,7 @@ void App::updateDetailForSelectedTrack() {
 
     // Wire clip automation if a MIDI clip is selected
     if (slot && slot->midiClip) {
-        m_detailPanel->setClipAutomation(&slot->clipAutomation, m_selectedTrack);
+        m_detailPanel->setClipAutomation(&slot->clipAutomation->lanes, m_selectedTrack);
     }
 }
 

@@ -2,8 +2,10 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "instruments/SampleData.h"
 #include "effects/EffectChain.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -23,9 +25,19 @@ public:
     static constexpr int kNumPads = 128;
 
     struct Pad {
-        std::vector<float> sampleData;
-        int   sampleFrames    = 0;
-        int   sampleChannels  = 1;
+        // Sample buffer, swapped atomically (see Sampler::loadSample).
+        // `sample` is the UI-side owner, accessed via the C++17
+        // std::atomic_load/store free functions so the audio thread
+        // can safely pin a ref in `playData` at trigger time. The pin
+        // (not a retire grace) keeps the buffer alive for the whole
+        // render — drum tails (10 s decay) outlive any grace period.
+        std::shared_ptr<const SampleData> sample;
+        // Audio thread only: the buffer the current render is reading.
+        // Set at note-on, cleared when the pad stops. A UI-side
+        // loadPad/clearPad mid-render does NOT disturb it — the pad
+        // finishes on the old buffer, next trigger uses the new one.
+        std::shared_ptr<const SampleData> playData;
+
         float volume          = 1.0f;
         float pan             = 0.0f;
         float pitchAdjust     = 0.0f; // semitones
@@ -72,7 +84,12 @@ public:
         // ringing" after a choke or natural end. process() always
         // runs the chain when it exists, with zero input when the
         // pad isn't currently rendering audio.
-        std::unique_ptr<effects::EffectChain> fx;
+        //
+        // UI owns the shared_ptr (created/cleared via atomic_store so
+        // the audio thread can pin a per-block ref with atomic_load —
+        // the chain can't die mid-block even if clearPadFx lands
+        // between callbacks).
+        std::shared_ptr<effects::EffectChain> fx;
 
         // Playback state
         bool   playing   = false;
@@ -93,20 +110,36 @@ public:
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override;
 
+    // Forward the retire list to any already-allocated pad chains
+    // (later allocations pick it up in padFxChain()).
+    void setRetireList(util::RtRetireList* rl) override {
+        Instrument::setRetireList(rl);
+        for (auto& p : m_pads)
+            if (p.fx) p.fx->setRetireList(rl);
+    }
+
     // Load a sample into a pad. Note = MIDI note number (0-127).
+    // UI thread only — safe against the running audio thread: the new
+    // buffer is atomically published, the old one retired; a pad
+    // currently playing finishes on its pinned copy.
     void loadPad(int note, const float* data, int numFrames, int numChannels) {
         if (note < 0 || note >= kNumPads || !data || numFrames <= 0) return;
-        auto& pad = m_pads[note];
-        pad.sampleData.assign(data, data + numFrames * numChannels);
-        pad.sampleFrames = numFrames;
-        pad.sampleChannels = numChannels;
+        auto sd = std::make_shared<SampleData>();
+        sd->samples.assign(data, data + numFrames * numChannels);
+        sd->frames = numFrames;
+        sd->channels = numChannels;
+        auto old = std::atomic_exchange_explicit(
+            &m_pads[note].sample, std::shared_ptr<const SampleData>(std::move(sd)),
+            std::memory_order_acq_rel);
+        if (old) retireObject(std::move(old));
     }
 
     void clearPad(int note) {
         if (note < 0 || note >= kNumPads) return;
-        m_pads[note].sampleData.clear();
-        m_pads[note].sampleFrames = 0;
-        m_pads[note].sampleChannels = 1;
+        auto old = std::atomic_exchange_explicit(
+            &m_pads[note].sample, std::shared_ptr<const SampleData>{},
+            std::memory_order_acq_rel);
+        if (old) retireObject(std::move(old));
     }
 
     void setPadVolume(int note, float v)     { if (note >= 0 && note < kNumPads) m_pads[note].volume = std::clamp(v, 0.0f, 2.0f); }
@@ -126,24 +159,33 @@ public:
     // Per-pad effect chain access. Lazy-allocates on first call so
     // the user can directly start adding effects to the returned
     // chain. Returns nullptr only for an out-of-range note.
+    // UI thread only.
     effects::EffectChain* padFxChain(int note) {
         if (note < 0 || note >= kNumPads) return nullptr;
-        if (!m_pads[note].fx) {
-            m_pads[note].fx = std::make_unique<effects::EffectChain>();
+        auto& p = m_pads[note];
+        if (!p.fx) {
+            auto chain = std::make_shared<effects::EffectChain>();
+            chain->setRetireList(m_retireList);
             if (m_sampleRate > 0)
-                m_pads[note].fx->init(m_sampleRate, m_maxBlockSize);
+                chain->init(m_sampleRate, m_maxBlockSize);
+            std::atomic_store_explicit(&p.fx, std::move(chain),
+                                       std::memory_order_release);
         }
-        return m_pads[note].fx.get();
+        return p.fx.get();
     }
     // Const view — returns nullptr if no chain has been allocated
     // (no effects added yet). Project / preset save uses this so
-    // unused pads don't pollute JSON.
+    // unused pads don't pollute JSON. UI thread only.
     const effects::EffectChain* padFxChainOrNull(int note) const {
         if (note < 0 || note >= kNumPads) return nullptr;
         return m_pads[note].fx.get();
     }
     void clearPadFx(int note) {
-        if (note >= 0 && note < kNumPads) m_pads[note].fx.reset();
+        if (note < 0 || note >= kNumPads) return;
+        auto old = std::atomic_exchange_explicit(
+            &m_pads[note].fx, std::shared_ptr<effects::EffectChain>{},
+            std::memory_order_acq_rel);
+        if (old) retireObject(std::move(old));
     }
 
     Pad&       pad(int note)       { return m_pads[note & 0x7F]; }
@@ -158,19 +200,23 @@ public:
     }
 
     bool hasSample(int note) const {
-        return (note >= 0 && note < kNumPads) ? m_pads[note].sampleFrames > 0 : false;
+        return (note >= 0 && note < kNumPads)
+                 ? (m_pads[note].sample && m_pads[note].sample->frames > 0) : false;
     }
 
-    // Sample data accessors for waveform display
+    // Sample data accessors for waveform display (UI thread)
     const float* padSampleData(int note) const {
-        if (note < 0 || note >= kNumPads || m_pads[note].sampleFrames <= 0) return nullptr;
-        return m_pads[note].sampleData.data();
+        if (note < 0 || note >= kNumPads) return nullptr;
+        const auto& s = m_pads[note].sample;
+        return (s && s->frames > 0) ? s->samples.data() : nullptr;
     }
     int padSampleFrames(int note) const {
-        return (note >= 0 && note < kNumPads) ? m_pads[note].sampleFrames : 0;
+        return (note >= 0 && note < kNumPads && m_pads[note].sample)
+                 ? m_pads[note].sample->frames : 0;
     }
     int padSampleChannels(int note) const {
-        return (note >= 0 && note < kNumPads) ? m_pads[note].sampleChannels : 1;
+        return (note >= 0 && note < kNumPads && m_pads[note].sample)
+                 ? m_pads[note].sample->channels : 1;
     }
 
     const char* name() const override { return "Drum Rack"; }

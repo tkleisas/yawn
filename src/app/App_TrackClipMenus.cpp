@@ -357,7 +357,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             std::string fxName = label;
             m_undoManager.push({"Add Effect: " + fxName,
                 [this, trackIndex, slot]{
-                    m_audioEngine.mixer().trackEffects(trackIndex).remove(slot);
+                    m_audioEngine.mixer().trackEffects(trackIndex).removeRetired(slot);
                     markDirty();
                 },
                 [this, trackIndex, factory]{
@@ -430,7 +430,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
             std::string fxName = label;
             m_undoManager.push({"Add MIDI Effect: " + fxName,
                 [this, trackIndex, slot]{
-                    m_audioEngine.midiEffectChain(trackIndex).removeEffect(slot);
+                    m_audioEngine.midiEffectChain(trackIndex).removeEffectRetired(slot);
                     markDirty();
                 },
                 [this, trackIndex, factory]{
@@ -564,7 +564,7 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
         if (!hasAny) {
             for (int s = 0; s < m_project.numScenes(); ++s) {
                 const auto* slot = m_project.getSlot(trackIndex, s);
-                if (slot && !slot->clipAutomation.empty()) {
+                if (slot && !slot->clipAutomation->lanes.empty()) {
                     hasAny = true;
                     break;
                 }
@@ -609,21 +609,28 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
                         m_project.numScenes());
                     for (int s = 0; s < m_project.numScenes(); ++s) {
                         auto* slot = m_project.getSlot(trackIndex, s);
-                        if (slot) savedSlots[s] = slot->clipAutomation;
+                        if (slot) savedSlots[s] = slot->clipAutomation->lanes;
                     }
                     m_project.clearTrackAutomation(trackIndex);
+                    for (int s = 0; s < m_project.numScenes(); ++s)
+                        publishClipAutomation(trackIndex, s);
                     m_undoManager.push({"Clear Track Automation",
                         [this, trackIndex, savedTrack, savedSlots]{
                             if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
                             m_project.track(trackIndex).automationLanes = savedTrack;
                             for (int s = 0; s < (int)savedSlots.size(); ++s) {
                                 auto* slot = m_project.getSlot(trackIndex, s);
-                                if (slot) slot->clipAutomation = savedSlots[s];
+                                if (slot) {
+                                    m_project.replaceSlotAutomation(*slot, savedSlots[s]);
+                                    publishClipAutomation(trackIndex, s);
+                                }
                             }
                             markDirty();
                         },
                         [this, trackIndex]{
                             m_project.clearTrackAutomation(trackIndex);
+                            for (int s = 0; s < m_project.numScenes(); ++s)
+                                publishClipAutomation(trackIndex, s);
                             markDirty();
                         }, ""});
                     markDirty();
@@ -1981,23 +1988,30 @@ void App::showClipContextMenu(int trackIndex, int sceneIndex, float mx, float my
     {
         auto* slotForAuto = m_project.getSlot(trackIndex, sceneIndex);
         const bool hasClipAuto = slotForAuto &&
-                                   !slotForAuto->clipAutomation.empty();
+                                   !slotForAuto->clipAutomation->lanes.empty();
         if (hasClipAuto) {
             items.push_back(item("Clear Clip Automation",
                 [this, trackIndex, sceneIndex]() {
                     auto* s = m_project.getSlot(trackIndex, sceneIndex);
                     if (!s) return;
-                    auto saved = s->clipAutomation;   // copy for undo
-                    s->clipAutomation.clear();
+                    auto saved = s->clipAutomation->lanes;   // copy for undo
+                    m_project.replaceSlotAutomation(*s, {});
+                    publishClipAutomation(trackIndex, sceneIndex);
                     m_undoManager.push({"Clear Clip Automation",
                         [this, trackIndex, sceneIndex, saved]{
                             auto* ss = m_project.getSlot(trackIndex, sceneIndex);
-                            if (ss) ss->clipAutomation = saved;
+                            if (ss) {
+                                m_project.replaceSlotAutomation(*ss, saved);
+                                publishClipAutomation(trackIndex, sceneIndex);
+                            }
                             markDirty();
                         },
                         [this, trackIndex, sceneIndex]{
                             auto* ss = m_project.getSlot(trackIndex, sceneIndex);
-                            if (ss) ss->clipAutomation.clear();
+                            if (ss) {
+                                m_project.replaceSlotAutomation(*ss, {});
+                                publishClipAutomation(trackIndex, sceneIndex);
+                            }
                             markDirty();
                         }, ""});
                     markDirty();

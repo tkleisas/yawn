@@ -42,7 +42,11 @@ void DrumRack::process(float* buffer, int numFrames, int numChannels,
         if (msg.isNoteOn()) {
             const int  noteIdx = msg.note & 0x7F;
             auto&      p       = m_pads[noteIdx];
-            if (p.sampleFrames > 0) {
+            // Pin the published sample buffer for this render — a
+            // UI-side loadPad/clearPad after this point swaps what
+            // the NEXT trigger sees, never this one.
+            auto sd = std::atomic_load_explicit(&p.sample, std::memory_order_acquire);
+            if (sd && sd->frames > 0) {
                 // Choke group — silence every OTHER pad currently
                 // playing in the same mute group before retriggering
                 // this one. Group 0 means "no choking" so the check
@@ -58,15 +62,17 @@ void DrumRack::process(float* buffer, int numFrames, int numChannels,
                 // values. If end < start, play backwards — gives
                 // the user a free reverse mode by just dragging
                 // the End knob past Start.
-                int sFr = static_cast<int>(p.startNorm * p.sampleFrames);
-                int eFr = static_cast<int>(p.endNorm   * p.sampleFrames);
-                sFr = std::clamp(sFr, 0, p.sampleFrames - 1);
-                eFr = std::clamp(eFr, 0, p.sampleFrames);
+                const int sampleFrames = sd->frames;
+                int sFr = static_cast<int>(p.startNorm * sampleFrames);
+                int eFr = static_cast<int>(p.endNorm   * sampleFrames);
+                sFr = std::clamp(sFr, 0, sampleFrames - 1);
+                eFr = std::clamp(eFr, 0, sampleFrames);
                 if (sFr == eFr) continue;   // zero-length region — don't trigger
                 const double baseSpeed = std::pow(2.0, p.pitchAdjust / 12.0);
                 p.playSpeed = (eFr > sFr) ? baseSpeed : -baseSpeed;
                 p.playPos   = static_cast<double>(sFr);
                 p.endFrameI = eFr;
+                p.playData  = std::move(sd);
                 p.playing   = true;
                 p.velocity  = velocityToGain(msg.velocity);
                 // Re-arm the per-pad AR envelope. Sustain held at 0
@@ -88,7 +94,10 @@ void DrumRack::process(float* buffer, int numFrames, int numChannels,
     const int scratchSamples = numFrames * numChannels;
     for (int n = 0; n < kNumPads; ++n) {
         auto& p = m_pads[n];
-        const bool needsFx = (p.fx != nullptr);
+        // Pin the chain for this block (lazy-allocated on the UI
+        // thread; can't die mid-block while we hold a ref).
+        auto fxRef = std::atomic_load_explicit(&p.fx, std::memory_order_acquire);
+        const bool needsFx = (fxRef != nullptr);
         if (!p.playing && !needsFx) continue;
 
         // Zero the scratch — when a pad's render-loop bails early
@@ -99,6 +108,11 @@ void DrumRack::process(float* buffer, int numFrames, int numChannels,
                   m_scratch.begin() + scratchSamples, 0.0f);
 
         if (p.playing) {
+            const SampleData* pd = p.playData.get();
+            if (!pd) { p.playing = false; continue; }
+            const int sampleFrames = pd->frames;
+            const int sampleChannels = pd->channels;
+            const float* sampleData = pd->samples.data();
             // Pre-fx pan + per-pad volume + velocity. m_volume (rack
             // master) is applied AFTER the fx chain, on accumulation
             // — that way the master fader doesn't change how a
@@ -114,15 +128,15 @@ void DrumRack::process(float* buffer, int numFrames, int numChannels,
                 const bool reachedEnd = forward
                     ? (pos >= p.endFrameI)
                     : (pos <= p.endFrameI);
-                if (reachedEnd || pos < 0 || pos >= p.sampleFrames) {
+                if (reachedEnd || pos < 0 || pos >= sampleFrames) {
                     p.playing = false; break;
                 }
                 const float envVal = p.env.process();
                 if (p.env.isIdle()) { p.playing = false; break; }
 
-                float sL = p.sampleData[pos * p.sampleChannels];
-                float sR = (p.sampleChannels > 1)
-                    ? p.sampleData[pos * p.sampleChannels + 1] : sL;
+                float sL = sampleData[pos * sampleChannels];
+                float sR = (sampleChannels > 1)
+                    ? sampleData[pos * sampleChannels + 1] : sL;
 
                 m_scratch[i * numChannels + 0] = sL * gL * envVal;
                 if (numChannels > 1)
@@ -130,13 +144,14 @@ void DrumRack::process(float* buffer, int numFrames, int numChannels,
 
                 p.playPos += p.playSpeed;
             }
+            if (!p.playing) p.playData.reset();
         }
 
         // Per-pad fx chain. Always run when present so any tail
         // (reverb / delay) keeps decaying after the dry signal has
         // ended — including when the pad was choked mid-tail.
         if (needsFx)
-            p.fx->process(m_scratch.data(), numFrames, numChannels);
+            fxRef->process(m_scratch.data(), numFrames, numChannels);
 
         // Accumulate scratch into the rack output, scaled by the
         // rack-master volume.
@@ -178,13 +193,13 @@ json DrumRack::saveExtraState(const fs::path& assetDir) const {
     json pads = json::array();
     for (int n = 0; n < kNumPads; ++n) {
         const auto& p = m_pads[n];
-        if (p.sampleFrames <= 0) continue;
+        if (!p.sample || p.sample->frames <= 0) continue;
         char fnameBuf[32];
         std::snprintf(fnameBuf, sizeof(fnameBuf), "pad_%03d.wav", n);
         const fs::path samplePath = assetDir / fnameBuf;
         if (!util::saveAudioFile(samplePath.string(),
-                                  p.sampleData.data(),
-                                  p.sampleFrames, p.sampleChannels,
+                                  p.sample->samples.data(),
+                                  p.sample->frames, p.sample->channels,
                                   static_cast<int>(m_sampleRate))) {
             LOG_WARN("Preset", "DrumRack: failed to write '%s' for pad %d",
                      samplePath.string().c_str(), n);
@@ -235,8 +250,9 @@ void DrumRack::loadExtraState(const json& state, const fs::path& assetDir) {
         m_pads[n].endNorm     = 1.0f;
         m_pads[n].playing     = false;
         // Drop any chain from a previous kit so we don't end up
-        // with reverbs from kit A on pads of kit B.
-        m_pads[n].fx.reset();
+        // with reverbs from kit A on pads of kit B. (Retired, not
+        // destroyed — the audio thread may be mid-block on it.)
+        clearPadFx(n);
     }
 
     if (state.contains("volume"))

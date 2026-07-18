@@ -16,6 +16,21 @@ struct AutomationLane {
     bool armed = false;  // for Touch/Latch recording
 };
 
+// Heap-stable box for a clip slot's automation lanes.
+//
+// The audio thread caches a pointer to a slot's lanes at clip launch
+// (ClipPlayState::clipAutomation) and dereferences it every block.
+// Boxing the lanes keeps that pointer valid across clip-slot vector
+// reallocation (scene insert/duplicate moves ClipSlots; the box does
+// not move). UI-side mutations never edit a published box in place —
+// they swap in a fresh box and retire the old one to the project's
+// graveyard (Project::retireSlotAutomation), so a playing clip either
+// keeps reading the retired box (valid memory) or picks up the new
+// one on its next launch.
+struct ClipAutomation {
+    std::vector<AutomationLane> lanes;
+};
+
 // --- JSON helpers (inline, header-only) ---
 
 inline nlohmann::json targetToJson(const AutomationTarget& t) {

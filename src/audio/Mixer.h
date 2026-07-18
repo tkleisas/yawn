@@ -103,7 +103,10 @@ struct MasterChannel {
 // Runs entirely on the audio thread.
 class Mixer {
 public:
-    Mixer();
+    // `retire` is forwarded to every effect chain so UI-side structural
+    // edits defer destruction until the audio heartbeat passes them
+    // (see core/ChainBase.h). Null is fine for standalone tests.
+    explicit Mixer(util::RtRetireList* retire = nullptr);
 
     void initEffectChains(double sampleRate, int maxBlockSize);
     void reset();
@@ -279,6 +282,10 @@ public:
         }
         m_tracks[last] = TrackChannel{};
         m_trackFx[last] = effects::EffectChain{};
+        // The fresh chain above came from a temporary and lost the
+        // retire-list pointer — restore it so future edits on this
+        // slot still defer destruction across the audio thread.
+        m_trackFx[last].setRetireList(m_retireList);
         updateSoloState();
     }
 
@@ -303,6 +310,7 @@ private:
     std::array<effects::EffectChain, kMaxTracks> m_trackFx;
     std::array<effects::EffectChain, kMaxReturnBuses> m_returnFx;
     effects::EffectChain m_masterFx;
+    util::RtRetireList* m_retireList = nullptr;
 
     // Scratch buffers for return bus accumulation (heap-allocated, preallocated in ctor)
     static constexpr int kMaxBufferSize = 4096 * 2; // max frames * max channels

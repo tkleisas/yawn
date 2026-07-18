@@ -74,6 +74,20 @@ public:
     void scheduleStop(int trackIndex,
                       QuantizeMode quantize = QuantizeMode::NextBar);
 
+    // Re-point a playing/pending clip at its slot's current automation
+    // box (see ClipEngine::updateClipAutomation).
+    void updateClipAutomation(
+        int trackIndex, int sceneIndex,
+        const std::vector<automation::AutomationLane>* lanes) {
+        if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
+        if (m_tracks[trackIndex].active &&
+            m_tracks[trackIndex].sceneIndex == sceneIndex)
+            m_tracks[trackIndex].clipAutomation = lanes;
+        if (m_pending[trackIndex].valid &&
+            m_pending[trackIndex].sceneIndex == sceneIndex)
+            m_pending[trackIndex].clipAutomation = lanes;
+    }
+
     // Re-point a track's active (and/or quantized-pending) clip from
     // oldClip to newClip without restarting playback. No-op unless the
     // track is currently referencing oldClip. Play position is clamped

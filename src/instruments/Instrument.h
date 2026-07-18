@@ -2,6 +2,7 @@
 
 #include "midi/MidiTypes.h"
 #include "core/ParameterInfo.h"
+#include "util/RtRetireList.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -57,6 +58,27 @@ public:
     const float* sidechainInput() const { return m_sidechainBuffer; }
     virtual bool supportsSidechain() const { return false; }
 
+    // Retire list for cross-thread buffer swaps (see util/RtRetireList.h).
+    // Injected by AudioEngine::setInstrument before init. Instruments
+    // that swap sample data live (Sampler, GranularSynth, Multisampler,
+    // DrumRack, Vocoder) park the old buffer here so the audio thread's
+    // in-flight block can finish on it. Instruments holding sub-devices
+    // (InstrumentRack, DrumRack) override to forward the pointer.
+    virtual void setRetireList(util::RtRetireList* rl) { m_retireList = rl; }
+
+protected:
+    // Park a swapped-out object for deferred destruction. Immediate
+    // when no retire list is set (unit tests, single-threaded use).
+    template <typename T>
+    void retireObject(std::unique_ptr<T> obj) {
+        if (m_retireList) m_retireList->retire(std::move(obj));
+    }
+    template <typename T>
+    void retireObject(std::shared_ptr<T> obj) {
+        if (m_retireList) m_retireList->retire(std::move(obj));
+    }
+
+public:
     // ── Preset extra state ──────────────────────────────────────────
     // Optional hook for instrument-specific state that lives outside
     // the parameter list (e.g. Multisampler zones, DrumRack pads,
@@ -91,6 +113,7 @@ protected:
     bool   m_bypassed     = false;
     const float* m_sidechainBuffer = nullptr;
     std::string m_currentPresetName;
+    util::RtRetireList* m_retireList = nullptr;
 };
 
 } // namespace instruments

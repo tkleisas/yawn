@@ -147,10 +147,10 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
             for (int t = 0; t < m_project->numTracks(); ++t) {
                 auto* slot = m_project->getSlot(t, si);
                 if (slot && slot->audioClip) {
-                    m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                    m_engine->sendCommand(audio::LaunchClipMsg{t, si, slot->audioClip.get(), slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
                     m_project->track(t).defaultScene = si;
                 } else if (slot && slot->midiClip) {
-                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                    m_engine->sendCommand(audio::LaunchMidiClipMsg{t, si, slot->midiClip.get(), slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
                     m_project->track(t).defaultScene = si;
                 } else if (slot && slot->visualClip) {
                     if (m_onLaunchVisualClip)
@@ -309,9 +309,9 @@ bool SessionPanel::onMouseDownWithClicks(MouseEvent& e, int clickCount) {
                              slot->midiClip  ? "midi"  :
                              slot->visualClip ? "visual" : "?");
                     if (slot->audioClip)
-                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation, slot->followAction});
+                        m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(), lq, &slot->clipAutomation->lanes, slot->followAction});
                     else if (slot->midiClip)
-                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation, slot->followAction});
+                        m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(), lq, &slot->clipAutomation->lanes, slot->followAction});
                     else if (slot->visualClip) {
                         if (m_onLaunchVisualClip)
                             m_onLaunchVisualClip(ti, si, slot->visualClip->firstShaderPath());
@@ -421,11 +421,11 @@ bool SessionPanel::launchOrStopSlot(int ti, int si) {
         m_project->track(ti).defaultScene = -1;
     } else if (slot && slot->audioClip) {
         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
-            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+            slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
         m_project->track(ti).defaultScene = si;
     } else if (slot && slot->midiClip) {
         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
-            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+            slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
         m_project->track(ti).defaultScene = si;
     } else if (slot && slot->visualClip) {
         if (m_onLaunchVisualClip)
@@ -454,11 +454,11 @@ void SessionPanel::launchSlotAt(int ti, int si) {
     auto* slot = m_project->getSlot(ti, si);
     if (slot && slot->audioClip) {
         m_engine->sendCommand(audio::LaunchClipMsg{ti, si, slot->audioClip.get(),
-            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+            slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
         m_project->track(ti).defaultScene = si;
     } else if (slot && slot->midiClip) {
         m_engine->sendCommand(audio::LaunchMidiClipMsg{ti, si, slot->midiClip.get(),
-            slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+            slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
         m_project->track(ti).defaultScene = si;
     } else if (slot && slot->visualClip) {
         if (m_onLaunchVisualClip)
@@ -476,11 +476,11 @@ void SessionPanel::launchScene(int scene) {
         auto* slot = m_project->getSlot(t, scene);
         if (slot && slot->audioClip) {
             m_engine->sendCommand(audio::LaunchClipMsg{t, scene, slot->audioClip.get(),
-                slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
             m_project->track(t).defaultScene = scene;
         } else if (slot && slot->midiClip) {
             m_engine->sendCommand(audio::LaunchMidiClipMsg{t, scene, slot->midiClip.get(),
-                slot->launchQuantize, &slot->clipAutomation, slot->followAction});
+                slot->launchQuantize, &slot->clipAutomation->lanes, slot->followAction});
             m_project->track(t).defaultScene = scene;
         } else if (slot && slot->visualClip) {
             if (m_onLaunchVisualClip)

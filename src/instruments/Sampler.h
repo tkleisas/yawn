@@ -2,10 +2,13 @@
 
 #include "instruments/Instrument.h"
 #include "instruments/Envelope.h"
+#include "instruments/SampleData.h"
 #include "effects/FreqMap.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace yawn {
@@ -36,15 +39,22 @@ public:
     void process(float* buffer, int numFrames, int numChannels,
                  const midi::MidiBuffer& midi) override;
 
-    // Load sample data (copies into internal buffer).
+    // Load sample data (copies into internal buffer). UI thread only —
+    // safe against the running audio thread: the new buffer is fully
+    // built, then atomically published; the old one is retired and
+    // destroyed after the audio grace period (see Instrument::
+    // retireObject). Voices mid-block finish on the old buffer.
     void loadSample(const float* data, int numFrames, int numChannels,
                     int rootNote = 60);
     void clearSample();
 
-    bool hasSample() const { return m_sampleFrames > 0; }
-    const float* sampleData() const { return m_sampleData.data(); }
-    int sampleFrames() const { return m_sampleFrames; }
-    int sampleChannels() const { return m_sampleChannels; }
+    // UI-thread accessors (read the UI-owned copy).
+    bool hasSample() const { return m_uiSample && m_uiSample->frames > 0; }
+    const float* sampleData() const {
+        return m_uiSample ? m_uiSample->samples.data() : nullptr;
+    }
+    int sampleFrames() const { return m_uiSample ? m_uiSample->frames : 0; }
+    int sampleChannels() const { return m_uiSample ? m_uiSample->channels : 1; }
 
     // Normalized playhead position (0..1) of the most recently triggered voice
     float playheadPosition() const {
@@ -55,8 +65,9 @@ public:
                 best = i; bestOrder = m_voices[i].startOrder;
             }
         }
-        if (best < 0 || m_sampleFrames <= 0) return 0.0f;
-        return std::clamp(static_cast<float>(m_voices[best].playPos / m_sampleFrames), 0.0f, 1.0f);
+        const int frames = sampleFrames();
+        if (best < 0 || frames <= 0) return 0.0f;
+        return std::clamp(static_cast<float>(m_voices[best].playPos / frames), 0.0f, 1.0f);
     }
 
     bool isPlaying() const {
@@ -135,17 +146,22 @@ private:
         float filterLow = 0.0f, filterBand = 0.0f;
     };
 
-    void noteOn(uint8_t note, uint16_t vel16, uint8_t ch);
+    void noteOn(uint8_t note, uint16_t vel16, uint8_t ch, int sampleFrames);
     void noteOff(uint8_t note, uint8_t ch);
     int findFreeVoice();
     void applyDefaults();
+    void publishSample(std::shared_ptr<const SampleData> sd);
 
     Voice m_voices[kMaxVoices];
     int64_t m_voiceCounter = 0;
 
-    std::vector<float> m_sampleData;
-    int m_sampleFrames    = 0;
-    int m_sampleChannels  = 1;
+    // Immutable sample buffer, atomically swapped (see loadSample).
+    // m_uiSample owns it (UI thread); m_rtSample is the audio thread's
+    // view, loaded once per block in process(). The retired previous
+    // buffer stays alive past any in-flight block.
+    std::shared_ptr<const SampleData> m_uiSample;
+    std::atomic<const SampleData*> m_rtSample{nullptr};
+
     int m_rootNote        = 60;
 
     float m_attack = 0.005f, m_decay = 0.1f, m_sustain = 1.0f, m_release = 0.1f;

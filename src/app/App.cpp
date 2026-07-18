@@ -90,12 +90,14 @@ void App::insertSceneAtSelection() {
 
 // Stop every launched clip immediately so the audio engine drops the
 // per-slot pointers (ClipPlayState::clip / clipAutomation) it caches from
-// LaunchClipMsg/LaunchMidiClipMsg. MUST run before any structural scene
-// edit: Project::insertScene/deleteScene/duplicateScene reallocate the
-// per-track clip-slot vectors, moving every ClipSlot and dangling
-// &slot->clipAutomation — which AutomationEngine::process dereferences on
-// the audio thread every buffer (→ SIGSEGV). QuantizeMode::None makes the
-// stop take effect on the engine's next callback rather than the next bar.
+// LaunchClipMsg/LaunchMidiClipMsg. Runs before structural scene edits:
+// Project::insertScene/deleteScene/duplicateScene reallocate the
+// per-track clip-slot vectors. The automation lanes are boxed
+// (ClipSlot::clipAutomation) and deleted slots' clips/boxes are
+// graveyard-retired, so the pointers can't dangle anymore — the stop
+// is kept so the graveyard stays small and quantized stops don't
+// linger past the edit. QuantizeMode::None makes the stop take effect
+// on the engine's next callback rather than the next bar.
 void App::stopAllClipsForSceneEdit() {
     for (int t = 0; t < m_project.numTracks(); ++t) {
         m_audioEngine.sendCommand(
@@ -118,6 +120,13 @@ void App::sceneDelete(int index) {
 void App::sceneDuplicate(int index) {
     stopAllClipsForSceneEdit();
     m_project.duplicateScene(index);
+}
+
+void App::publishClipAutomation(int track, int scene) {
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot || !slot->clipAutomation) return;
+    m_audioEngine.sendCommand(audio::UpdateClipAutomationMsg{
+        track, scene, &slot->clipAutomation->lanes});
 }
 
 // Starter track mix for fresh / new projects. Leaves tracks created by
