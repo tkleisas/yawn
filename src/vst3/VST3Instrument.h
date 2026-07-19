@@ -56,6 +56,9 @@ private:
     std::string m_pluginID;    // "vst3:<classID>"
 
     std::unique_ptr<VST3PluginInstance> m_instance;
+    // Set when the plugin's process() reports failure on the audio
+    // thread — the device hard-bypasses from then on (see process()).
+    std::atomic<bool> m_pluginFailed{false};
 
     // Parameter cache
     std::vector<instruments::InstrumentParameterInfo> m_paramInfos;

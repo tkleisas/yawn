@@ -12,6 +12,7 @@
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -67,6 +68,9 @@ private:
     std::string m_pluginID;    // "vst3:<classID>"
 
     std::unique_ptr<VST3PluginInstance> m_instance;
+    // Set when the plugin's process() reports failure on the audio
+    // thread — the device hard-bypasses from then on (see process()).
+    std::atomic<bool> m_pluginFailed{false};
 
     // Parameter cache
     std::vector<effects::ParameterInfo> m_paramInfos;

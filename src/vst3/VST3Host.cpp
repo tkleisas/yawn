@@ -7,6 +7,7 @@
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/processdata.h"
 #include "public.sdk/source/vst/utility/uid.h"
+#include "util/Logger.h"
 
 #if defined(__linux__)
 #include "pluginterfaces/gui/iplugview.h"
@@ -15,9 +16,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <exception>
 #include <vector>
 
 namespace yawn {
+
 namespace vst3 {
 
 // ── UID conversion helpers ──
@@ -241,6 +244,11 @@ std::unique_ptr<VST3PluginInstance> VST3PluginInstance::create(
 {
     if (!module) return nullptr;
 
+    // Plugin code runs in this function (factory createInstance,
+    // initialize, controller setup) — a C++ exception from a broken
+    // plugin must fail the load, not escape into the app.
+    try {
+
     auto optUid = VST3::UID::fromString(classIDString, false);
     if (!optUid) return nullptr;
     auto uid = *optUid;
@@ -326,6 +334,16 @@ std::unique_ptr<VST3PluginInstance> VST3PluginInstance::create(
     }
 
     return inst;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("VST3", "Plugin create() threw for class %s: %s",
+                  classIDString.c_str(), e.what());
+        return nullptr;
+    } catch (...) {
+        LOG_ERROR("VST3", "Plugin create() threw (unknown) for class %s",
+                  classIDString.c_str());
+        return nullptr;
+    }
 }
 
 bool VST3PluginInstance::initBusInfo() {
@@ -390,6 +408,8 @@ bool VST3PluginInstance::connectComponents() {
 bool VST3PluginInstance::setupProcessing(double sampleRate, int maxBlockSize) {
     if (!m_processor) return false;
 
+    try {
+
     Steinberg::Vst::ProcessSetup setup;
     setup.processMode = Steinberg::Vst::kRealtime;
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
@@ -398,6 +418,16 @@ bool VST3PluginInstance::setupProcessing(double sampleRate, int maxBlockSize) {
 
     if (m_processor->setupProcessing(setup) != Steinberg::kResultOk)
         return false;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("VST3", "setupProcessing threw in '%s': %s",
+                  m_name.c_str(), e.what());
+        return false;
+    } catch (...) {
+        LOG_ERROR("VST3", "setupProcessing threw (unknown) in '%s'",
+                  m_name.c_str());
+        return false;
+    }
 
     // Allocate scratch channel buffers for every declared audio bus. Buffers
     // are owned by the instance so buildOutputBuses/buildInputBuses can hand
@@ -490,6 +520,7 @@ void VST3PluginInstance::buildInputBuses(Steinberg::Vst::AudioBusBuffers* inBuse
 
 bool VST3PluginInstance::setActive(bool active) {
     if (!m_component) return false;
+    try {
     // Caveat: setActive/setProcessing take a TBool (0 or 1) — NOT a tresult.
     // kResultTrue is 0 in the SDK and kResultFalse is 1, so passing those
     // inverts the meaning and leaves the plugin uninitialized (JUCE plugins
@@ -498,14 +529,23 @@ bool VST3PluginInstance::setActive(bool active) {
     if (result == Steinberg::kResultOk || result == Steinberg::kResultTrue)
         m_isActive = active;
     return m_isActive == active;
+    } catch (...) {
+        LOG_ERROR("VST3", "setActive threw in '%s'", m_name.c_str());
+        return false;
+    }
 }
 
 bool VST3PluginInstance::setProcessing(bool processing) {
     if (!m_processor) return false;
+    try {
     auto result = m_processor->setProcessing(processing ? 1 : 0);
     if (result == Steinberg::kResultOk || result == Steinberg::kResultTrue)
         m_isProcessing = processing;
     return m_isProcessing == processing;
+    } catch (...) {
+        LOG_ERROR("VST3", "setProcessing threw in '%s'", m_name.c_str());
+        return false;
+    }
 }
 
 int VST3PluginInstance::parameterCount() const {
@@ -552,15 +592,29 @@ void VST3PluginInstance::drainParameterChanges(Steinberg::Vst::ParameterChanges&
 
 bool VST3PluginInstance::getProcessorState(std::vector<uint8_t>& outData) const {
     if (!m_component) return false;
+    try {
     auto* stream = new MemoryStream();
     Steinberg::IPtr<Steinberg::IBStream> streamPtr(stream, false);
     if (m_component->getState(stream) != Steinberg::kResultOk) return false;
     outData = stream->data();
     return true;
+    } catch (...) {
+        LOG_WARN("VST3", "getProcessorState threw in '%s'", m_name.c_str());
+        return false;
+    }
 }
 
 bool VST3PluginInstance::setProcessorState(const std::vector<uint8_t>& data) {
+    // Untrusted bytes (project file, editor-host pipe) go straight
+    // into third-party plugin code — cap the size, and never let a
+    // plugin exception escape into the caller (serializer, UI).
+    if (data.size() > kMaxPluginStateBytes) {
+        LOG_WARN("VST3", "Refusing %zu-byte processor state for '%s' (cap %zu)",
+                 data.size(), m_name.c_str(), kMaxPluginStateBytes);
+        return false;
+    }
     if (!m_component) return false;
+    try {
     auto* stream = new MemoryStream(data);
     Steinberg::IPtr<Steinberg::IBStream> streamPtr(stream, false);
     if (m_component->setState(stream) != Steinberg::kResultOk) return false;
@@ -572,22 +626,51 @@ bool VST3PluginInstance::setProcessorState(const std::vector<uint8_t>& data) {
         m_controller->setComponentState(stream2);
     }
     return true;
+    } catch (const std::exception& e) {
+        LOG_WARN("VST3", "setProcessorState threw in '%s': %s",
+                 m_name.c_str(), e.what());
+        return false;
+    } catch (...) {
+        LOG_WARN("VST3", "setProcessorState threw (unknown) in '%s'",
+                 m_name.c_str());
+        return false;
+    }
 }
 
 bool VST3PluginInstance::getControllerState(std::vector<uint8_t>& outData) const {
     if (!m_controller) return false;
+    try {
     auto* stream = new MemoryStream();
     Steinberg::IPtr<Steinberg::IBStream> streamPtr(stream, false);
     if (m_controller->getState(stream) != Steinberg::kResultOk) return false;
     outData = stream->data();
     return true;
+    } catch (...) {
+        LOG_WARN("VST3", "getControllerState threw in '%s'", m_name.c_str());
+        return false;
+    }
 }
 
 bool VST3PluginInstance::setControllerState(const std::vector<uint8_t>& data) {
+    if (data.size() > kMaxPluginStateBytes) {
+        LOG_WARN("VST3", "Refusing %zu-byte controller state for '%s' (cap %zu)",
+                 data.size(), m_name.c_str(), kMaxPluginStateBytes);
+        return false;
+    }
     if (!m_controller) return false;
+    try {
     auto* stream = new MemoryStream(data);
     Steinberg::IPtr<Steinberg::IBStream> streamPtr(stream, false);
     return m_controller->setState(stream) == Steinberg::kResultOk;
+    } catch (const std::exception& e) {
+        LOG_WARN("VST3", "setControllerState threw in '%s': %s",
+                 m_name.c_str(), e.what());
+        return false;
+    } catch (...) {
+        LOG_WARN("VST3", "setControllerState threw (unknown) in '%s'",
+                 m_name.c_str());
+        return false;
+    }
 }
 
 Steinberg::IPtr<Steinberg::IPlugView> VST3PluginInstance::createView() const {

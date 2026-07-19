@@ -213,4 +213,21 @@ TEST(VST3Scanner, V1LegacyCacheStillLoads) {
     EXPECT_EQ(scanner.instruments().size(), 0u);
     std::filesystem::remove(cache);
 }
+
+// ── Plugin state hardening ──
+
+TEST(VST3PluginInstance, OverCapStateRejectedBeforePluginAccess) {
+    using namespace yawn::vst3;
+    // An instance with no plugin loaded: the size cap must fire
+    // BEFORE any plugin interaction — a corrupt project's arbitrary
+    // base64 blob must never reach plugin code.
+    VST3PluginInstance inst;
+    std::vector<uint8_t> blob(kMaxPluginStateBytes + 1, 0xAB);
+    EXPECT_FALSE(inst.setProcessorState(blob));
+    EXPECT_FALSE(inst.setControllerState(blob));
+    // Under-cap input takes the normal path (here: no component).
+    std::vector<uint8_t> small(64, 0x01);
+    EXPECT_FALSE(inst.setProcessorState(small));
+    EXPECT_FALSE(inst.setControllerState(small));
+}
 #endif

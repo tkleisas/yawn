@@ -2,6 +2,7 @@
 
 #include "vst3/VST3Instrument.h"
 #include "pluginterfaces/vst/vsttypes.h"
+#include "util/Logger.h"
 #include <cstring>
 
 namespace yawn {
@@ -65,7 +66,8 @@ void VST3Instrument::reset() {
 
 void VST3Instrument::process(float* buffer, int numFrames, int numChannels,
                                const midi::MidiBuffer& midi) {
-    if (!m_instance || !m_instance->processor() || m_bypassed) return;
+    if (!m_instance || !m_instance->processor() || m_bypassed ||
+        m_pluginFailed.load(std::memory_order_acquire)) return;
 
     // Convert YAWN MIDI to VST3 EventList
     Steinberg::Vst::EventList inputEvents;
@@ -119,8 +121,21 @@ void VST3Instrument::process(float* buffer, int numFrames, int numChannels,
     processData.outputParameterChanges = &outParamChanges;
     processData.processContext = &processContext;
 
-    // Process
-    m_instance->processor()->process(processData);
+    // Process — a plugin reporting failure is hard-bypassed rather
+    // than called every block forever (see VST3Effect::process for
+    // the full rationale; one log line on first failure, then quiet).
+    const Steinberg::tresult result = m_instance->processor()->process(processData);
+    if (result != Steinberg::kResultOk) {
+        bool expected = false;
+        if (m_pluginFailed.compare_exchange_strong(expected, true,
+                std::memory_order_acq_rel)) {
+            LOG_ERROR("VST3",
+                      "Plugin '%s' failed in process() (result=%d) — bypassed",
+                      m_displayName.c_str(), static_cast<int>(result));
+            m_displayName = "[Failed] " + m_displayName;
+        }
+        return;
+    }
 
     // ADD non-interleaved output to YAWN's interleaved buffer
     if (numChannels >= 2) {

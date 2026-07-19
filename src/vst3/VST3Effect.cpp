@@ -2,6 +2,7 @@
 
 #include "vst3/VST3Effect.h"
 #include "pluginterfaces/vst/vsttypes.h"
+#include "util/Logger.h"
 #include <cstring>
 
 namespace yawn {
@@ -66,7 +67,8 @@ void VST3Effect::reset() {
 }
 
 void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
-    if (!m_instance || !m_instance->processor() || m_bypassed) return;
+    if (!m_instance || !m_instance->processor() || m_bypassed ||
+        m_pluginFailed.load(std::memory_order_acquire)) return;
 
     int ch = (numChannels >= 2) ? 2 : 1;
 
@@ -130,8 +132,24 @@ void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
     processData.outputParameterChanges = &outParamChanges;
     processData.processContext = &processContext;
 
-    // Process
-    m_instance->processor()->process(processData);
+    // Process. A plugin that starts reporting failure gets hard-
+    // bypassed rather than hammered every block forever; a true crash
+    // (SIGSEGV) can't be caught in-process — editors already run
+    // out-of-process for that reason, and full audio-process
+    // sandboxing is out of scope. One log line on the first failure,
+    // then silence (this is the audio thread).
+    const Steinberg::tresult result = m_instance->processor()->process(processData);
+    if (result != Steinberg::kResultOk) {
+        bool expected = false;
+        if (m_pluginFailed.compare_exchange_strong(expected, true,
+                std::memory_order_acq_rel)) {
+            LOG_ERROR("VST3",
+                      "Plugin '%s' failed in process() (result=%d) — bypassed",
+                      m_displayName.c_str(), static_cast<int>(result));
+            m_displayName = "[Failed] " + m_displayName;
+        }
+        return;
+    }
 
     // Apply wet/dry mix and reinterleave to YAWN's buffer
     float wet = m_mix;

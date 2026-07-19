@@ -39,6 +39,11 @@ struct VST3PluginInfo {
     bool isInstrument = false;    // true if subcategories contain "Instrument"
 };
 
+// Cap for state blobs handed to third-party plugins (project files
+// and the editor-host pipe both feed arbitrary bytes into setState).
+// Generous for legit presets, bounds a corrupt/hostile blob.
+static constexpr size_t kMaxPluginStateBytes = 64 * 1024 * 1024;
+
 // Holds a loaded VST3 module and provides access to its factory
 class VST3ModuleHandle {
 public:
@@ -63,6 +68,10 @@ private:
 // A fully instantiated VST3 plugin: processor + controller, ready to process
 class VST3PluginInstance {
 public:
+    // Default-constructible (an empty instance — every method safely
+    // no-ops/returns false without a component). Instances with an
+    // actual plugin are built via create().
+    VST3PluginInstance() = default;
     ~VST3PluginInstance();
 
     // Create a plugin instance from a loaded module and class ID
@@ -130,8 +139,6 @@ public:
     Steinberg::IPtr<Steinberg::IPlugView> createView() const;
 
 private:
-    VST3PluginInstance() = default;
-
     bool initBusInfo();
     bool connectComponents();
 
