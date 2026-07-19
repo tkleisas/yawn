@@ -955,6 +955,17 @@ float VisualEngine::getLayerKnobDisplayValue(int track, int idx) const {
     return it->second.knobDisplayValues[idx];
 }
 
+bool VisualEngine::isLayerKnobUsedByShader(int track, int idx) const {
+    if (idx < 0 || idx >= 8) return false;
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return false;
+    const Layer& L = it->second;
+    if (L.loc_knobs[idx] >= 0) return true;
+    for (const auto& cp : L.additionalPasses)
+        if (cp.loc_knobs[idx] >= 0) return true;
+    return false;
+}
+
 void VisualEngine::setLayerText(int track, const std::string& text) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return;

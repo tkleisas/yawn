@@ -124,7 +124,6 @@ private:
     void layoutAndRenderDefaultsTab(UIContext& ctx, Rect content);
     void layoutAndRenderMetronomeTab(UIContext& ctx, Rect content);
     void layoutAndRenderLinkTab(UIContext& ctx, Rect content);
-    void layoutAndRenderThemeTab(UIContext& ctx, Rect content);
     void drawLabeledRow(UIContext& ctx, const char* label,
                         Rect labelArea, float textScale);
 

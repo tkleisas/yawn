@@ -280,6 +280,10 @@ public:
     void  setLayerKnobLFO(int track, int idx, const VisualLFO& lfo);
     // Most recent evaluated (base+LFO) knob value — for UI feedback only.
     float getLayerKnobDisplayValue(int track, int idx) const;
+    // True when the layer's current shader program (main pass or any
+    // chain pass) actually declares/reads knob idx. The params panel
+    // dims unused knobs so the letters that DO something stand out.
+    bool isLayerKnobUsedByShader(int track, int idx) const;
 
 private:
     struct ContextScope {

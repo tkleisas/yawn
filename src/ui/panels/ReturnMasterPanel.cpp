@@ -195,17 +195,21 @@ void ReturnMasterPanel::paintStripCommon(UIContext& ctx, StripWidgets& sw,
     const float faderBottom = y + h - 22;
     const float faderH = std::max(20.0f, faderBottom - curY);
 
+    // Fader + meter centered in the strip (same look as the master).
+    const float groupW = kFaderWidth + 3.0f + kMeterWidth * 2;
+    const float groupX = x + std::max(4.0f, (w - groupW) * 0.5f);
+
     // Skip sync during drag so the engine's lagging value doesn't
     // rubber-band the thumb the user is holding.
     if (!sw.fader.isDragging())
         sw.fader.setValue(volume, ValueChangeSource::Automation);
     sw.fader.measure(Constraints::tight(kFaderWidth, faderH), ctx);
-    sw.fader.layout(Rect{x + 4, curY, kFaderWidth, faderH}, ctx);
+    sw.fader.layout(Rect{groupX, curY, kFaderWidth, faderH}, ctx);
     sw.fader.render(ctx);
 
     sw.meter.setPeak(peakL, peakR);
     sw.meter.measure(Constraints::tight(kMeterWidth * 2, faderH), ctx);
-    sw.meter.layout(Rect{x + 4 + kFaderWidth + 3, curY,
+    sw.meter.layout(Rect{groupX + kFaderWidth + 3, curY,
                           kMeterWidth * 2, faderH}, ctx);
     sw.meter.render(ctx);
 
@@ -276,30 +280,28 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
                     nameSize, ::yawn::ui::Theme::textPrimary);
     }
 
-    // Stop-all button with overlaid square icon.
+    // Stop-all-clips button — labeled (the bare overlaid square icon
+    // read as a broken checkbox). Stops every clip on every track.
+    m_stopAllBtn.setLabel("Stop All");
     m_stopAllBtn.measure(Constraints::tight(w - 8, kButtonHeight), ctx);
     m_stopAllBtn.layout(Rect{x + 4, y + 22, w - 8, kButtonHeight}, ctx);
     m_stopAllBtn.render(ctx);
-    {
-        const auto& sb = m_stopAllBtn.bounds();
-        const float iconSize = 8.0f;
-        const float iconX = sb.x + (sb.w - iconSize) * 0.5f;
-        const float iconY = sb.y + (sb.h - iconSize) * 0.5f;
-        r.drawRect(iconX, iconY, iconSize, iconSize,
-                    ::yawn::ui::Theme::textSecondary);
-    }
 
+    // Fader + meter centered in the strip — the left-hugged pair used
+    // to leave the right half of the column dead.
     const float curY = y + 22 + kButtonHeight + 4;
     const float faderBottom = y + h - 22;
     const float faderH = std::max(20.0f, faderBottom - curY);
+    const float groupW = kFaderWidth + 2 + 6.0f + kMeterWidth * 2 + 2;
+    const float groupX = x + std::max(4.0f, (w - groupW) * 0.5f);
 
     m_masterStrip.fader.measure(Constraints::tight(kFaderWidth + 2, faderH), ctx);
-    m_masterStrip.fader.layout(Rect{x + 4, curY, kFaderWidth + 2, faderH}, ctx);
+    m_masterStrip.fader.layout(Rect{groupX, curY, kFaderWidth + 2, faderH}, ctx);
     m_masterStrip.fader.render(ctx);
 
     m_masterStrip.meter.setPeak(m_masterMeter.peakL, m_masterMeter.peakR);
     m_masterStrip.meter.measure(Constraints::tight(kMeterWidth * 2 + 2, faderH), ctx);
-    m_masterStrip.meter.layout(Rect{x + kFaderWidth + 10, curY,
+    m_masterStrip.meter.layout(Rect{groupX + kFaderWidth + 8, curY,
                                       kMeterWidth * 2 + 2, faderH}, ctx);
     m_masterStrip.meter.render(ctx);
 

@@ -188,7 +188,9 @@ void TransportPanel::onLayout(Rect bounds, UIContext& ctx) {
     m_arrBtnW  = arrBtnW;                          m_arrBtnH  = btnSize;
 
     // ── Right side: Link toggle (rightmost), velocity selector left of it ──
-    const float linkW = 52.0f;
+    // Wide enough for the state label ("LINK off"/"LINK on") — a bare
+    // "LINK" read as a status text, not a button.
+    const float linkW = 68.0f;
     m_linkBtnX = bounds.x + bounds.w - 12.0f - linkW;
     m_linkBtnY = btnY;
     m_linkBtnW = linkW;
@@ -426,9 +428,11 @@ void TransportPanel::render(UIContext& ctx) {
                               : m_linkEnabled ? Color{140, 150, 160, 255}
                                               : Color{100, 105, 110, 255};
         }
+        // State in the label — a bare "LINK" left users guessing
+        // whether it was a status readout or a clickable toggle.
         const char* lbl = m_linkEnabled
-            ? (m_linkPeers > 0 ? "LINK" : "LINK")
-            : "LINK";
+            ? (m_linkPeers > 0 ? "LINK" : "LINK on")
+            : "LINK off";
 
         const float tw = tm.textWidth(lbl, fs);
         const float lh = tm.lineHeight(fs);

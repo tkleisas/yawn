@@ -186,6 +186,15 @@ public:
         for (int i = 0; i < 8; ++i) m_knobAH[i]->setModulatedValue(vals8[i]);
     }
 
+    // Which of the A..H knobs the current shader actually reads.
+    // Unused knobs render dimmed — the letters that DO something stand
+    // out. Null / all-ones = no dimming (default before the engine
+    // reports, and for non-visual tracks).
+    void setKnobUsedFlags(const uint8_t* used8) {
+        for (int i = 0; i < 8; ++i)
+            m_knobUsed[i] = used8 ? used8[i] : uint8_t{1};
+    }
+
     // ─── Inline knob text-edit (double-click) routing ───────────────
     // Mirrors the API DetailPanelWidget exposes to App.cpp's
     // SDL_EVENT_TEXT_INPUT / KEYDOWN handlers. Without these, double-
@@ -558,13 +567,20 @@ protected:
             cx += cardW + 8.0f;
         }
         // "+ Add Pass" button — vertically centred on the card row.
-        constexpr float kAddBtnW = 72.0f, kAddBtnH = 22.0f;
-        if (cx + kAddBtnW > bounds.x + bounds.w - kPad && cx > x0) {
+        // Width follows the label (the fixed 72 px pill let the text
+        // touch the pill's rounded ends).
+        float addBtnW = 72.0f;
+        if (ctx.textMetrics) {
+            addBtnW = std::max(72.0f, ctx.textMetrics->textWidth(
+                "+ Add Pass", theme().metrics.fontSizeSmall) + 18.0f);
+        }
+        const float kAddBtnH = 22.0f;
+        if (cx + addBtnW > bounds.x + bounds.w - kPad && cx > x0) {
             cx = x0;
             cy += kCardH + kKnobGapY;
         }
         m_chainAddRect = Rect{cx, cy + (kCardH - kAddBtnH) * 0.5f,
-                              kAddBtnW, kAddBtnH};
+                              addBtnW, kAddBtnH};
 
         // ── Post-FX section ─────────────────────────────────────────
         // Post-FX cards mirror the chain card geometry (stripe +
@@ -826,6 +842,18 @@ public:
                     titleSize, ::yawn::ui::Theme::textSecondary);
 
         for (int i = 0; i < 8; ++i) m_knobAH[i]->render(ctx);
+        // Dim knobs the current shader doesn't read (a translucent
+        // panel-coloured veil — the knob stays usable, just visibly
+        // "not wired to anything").
+        {
+            const Color veil = ::yawn::ui::Theme::panelBg;
+            const Color veilA{veil.r, veil.g, veil.b, 170};
+            for (int i = 0; i < 8; ++i) {
+                if (m_knobUsed[i]) continue;
+                const Rect& b = m_knobAH[i]->bounds();
+                r.drawRect(b.x, b.y, b.w, b.h, veilA);
+            }
+        }
         for (auto& k : m_customKnobs) k->render(ctx);
 
         // ── Shader Chain header + cards + "+ Add Pass" ──────────────
@@ -1034,8 +1062,13 @@ private:
                 }
                 cx += cardW + 8.0f;
             }
-            constexpr float kAddBtnW = 72.0f;
-            if (cx + kAddBtnW > panelW - kPad && cx > kPad) {
+            // Same width rule as the layout pass above (label-sized).
+            float addBtnW = 72.0f;
+            if (ctx.textMetrics) {
+                addBtnW = std::max(72.0f, ctx.textMetrics->textWidth(
+                    "+ Add Pass", theme().metrics.fontSizeSmall) + 18.0f);
+            }
+            if (cx + addBtnW > panelW - kPad && cx > kPad) {
                 cx = kPad;
                 cy += cardRowH;
             }
@@ -1062,6 +1095,7 @@ private:
     }
 
     std::unique_ptr<FwKnob> m_knobAH[8];
+    uint8_t                 m_knobUsed[8] = {1, 1, 1, 1, 1, 1, 1, 1};
     std::vector<std::unique_ptr<FwKnob>> m_customKnobs;
     struct CustomSig { std::string name; float min, max, defVal; };
     std::vector<CustomSig> m_customSig;

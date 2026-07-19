@@ -61,12 +61,12 @@ public:
         m_ioToggle.setState(m_showIO);
         m_ioToggle.setOnChange([this](bool on) { m_showIO = on; });
 
-        m_sendToggle.setLabel("S");
+        m_sendToggle.setLabel("Snd");
         m_sendToggle.setAccentColor(kSoftBlue);
         m_sendToggle.setState(m_showSends);
         m_sendToggle.setOnChange([this](bool on) { m_showSends = on; });
 
-        m_returnToggle.setLabel("R");
+        m_returnToggle.setLabel("Rtn");
         m_returnToggle.setAccentColor(kSoftBlue);
         m_returnToggle.setState(m_showReturns);
         m_returnToggle.setOnChange([this](bool on) {

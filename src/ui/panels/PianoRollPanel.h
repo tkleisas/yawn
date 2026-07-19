@@ -64,7 +64,7 @@ public:
     static constexpr float kMinPxBeat   = 15.0f;
     static constexpr float kMaxPxBeat   = 500.0f;
     static constexpr float kRulerH      = 16.0f;
-    static constexpr float kClipOpsW    = 44.0f;
+    static constexpr float kClipOpsW    = 56.0f;
     static constexpr float kVelLaneH   = 60.0f;
     static constexpr int   kNPitch      = 128;
 

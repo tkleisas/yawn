@@ -313,16 +313,24 @@ void App::update() {
 
     // Push live modulated knob values into the visual-params panel so the
     // A..H arcs breathe with their LFOs. Only active while the panel is
-    // visible — audio/midi tracks get cleared overrides.
+    // visible — audio/midi tracks get cleared overrides. Alongside the
+    // values go the "shader actually reads this knob" flags so unused
+    // knobs render dimmed.
     if (m_visualParamsPanel->isVisible() &&
         m_selectedTrack >= 0 && m_selectedTrack < m_project.numTracks() &&
         m_project.track(m_selectedTrack).type == Track::Type::Visual) {
         float disp[8];
-        for (int i = 0; i < 8; ++i)
+        uint8_t used[8];
+        for (int i = 0; i < 8; ++i) {
             disp[i] = m_visualEngine.getLayerKnobDisplayValue(m_selectedTrack, i);
+            used[i] = m_visualEngine.isLayerKnobUsedByShader(m_selectedTrack, i)
+                      ? uint8_t{1} : uint8_t{0};
+        }
         m_visualParamsPanel->setKnobDisplayValues(disp);
+        m_visualParamsPanel->setKnobUsedFlags(used);
     } else {
         m_visualParamsPanel->setKnobDisplayValues(nullptr);
+        m_visualParamsPanel->setKnobUsedFlags(nullptr);
     }
 
     // Poll controller scripts (MIDI input → Lua callbacks)

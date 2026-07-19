@@ -57,7 +57,8 @@ FwPreferencesDialog::FwPreferencesDialog() {
     m_tabStrip.addTab("defaults",  "Defaults",  nullptr);
     m_tabStrip.addTab("metronome", "Metronome", nullptr);
     m_tabStrip.addTab("link",      "Link",      nullptr);
-    m_tabStrip.addTab("theme",     "Theme",     nullptr);
+    // (The one-control "Theme" tab was merged into Defaults — two
+    // near-empty tabs read as broken; see layoutAndRenderDefaultsTab.)
     m_tabStrip.setOnActivated([this](const std::string& id) {
         // Keep the dialog's m_tab index in sync + close any open
         // dropdown popup so it doesn't dangle on a now-invisible
@@ -473,8 +474,7 @@ void FwPreferencesDialog::paintBody(UIContext& ctx) {
         case 1: layoutAndRenderMidiTab(ctx, content); break;
         case 2: layoutAndRenderDefaultsTab(ctx, content); break;
         case 3: layoutAndRenderMetronomeTab(ctx, content); break;
-        case 4: layoutAndRenderLinkTab(ctx, content); break;
-        default: layoutAndRenderThemeTab(ctx, content); break;
+        default: layoutAndRenderLinkTab(ctx, content); break;
     }
 
     paintFooter(ctx);
@@ -627,11 +627,14 @@ void FwPreferencesDialog::layoutAndRenderMidiTab(UIContext& ctx, Rect content) {
 }
 
 void FwPreferencesDialog::layoutAndRenderDefaultsTab(UIContext& ctx, Rect content) {
+    auto& r  = *ctx.renderer;
+    auto& tm = *ctx.textMetrics;
     const float ctrlH = theme().metrics.controlHeight;
     const float rowH  = std::max(kRowH, ctrlH + 4.0f);
     const float dropW = std::min(content.w * kDropWFactor, kDropWMax);
     const float dropX = content.x + content.w - dropW;
     const float textScale = theme().metrics.fontSizeSmall;
+    const float textH     = tm.lineHeight(textScale);
 
     float y = content.y;
     drawLabeledRow(ctx, "Default Launch Quantize", Rect{content.x, y, dropX - content.x, rowH}, textScale);
@@ -640,6 +643,25 @@ void FwPreferencesDialog::layoutAndRenderDefaultsTab(UIContext& ctx, Rect conten
 
     drawLabeledRow(ctx, "Default Record Quantize", Rect{content.x, y, dropX - content.x, rowH}, textScale);
     placeAndRender(m_recordQDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
+    y += rowH + kRowGap;
+
+    // Formerly its own one-control "Theme" tab.
+    drawLabeledRow(ctx, "UI Font Size", Rect{content.x, y, dropX - content.x, rowH}, textScale);
+    placeAndRender(m_fontScaleDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
+    y += rowH + kRowGap * 2.0f;
+
+    // Help text — same pattern as the Link tab, so the section
+    // doesn't read as empty space.
+    const char* lines[] = {
+        "Launch Quantize snaps clip launches to the chosen grid;",
+        "Record Quantize does the same for clips you record.",
+        "UI Font Size scales all text and controls.",
+    };
+    for (const char* line : lines) {
+        tm.drawText(r, line, content.x, y,
+                    textScale, ::yawn::ui::Theme::textSecondary);
+        y += textH + 2.0f;
+    }
 }
 
 void FwPreferencesDialog::layoutAndRenderMetronomeTab(UIContext& ctx, Rect content) {
@@ -715,18 +737,6 @@ void FwPreferencesDialog::layoutAndRenderLinkTab(UIContext& ctx, Rect content) {
     }
 }
 
-void FwPreferencesDialog::layoutAndRenderThemeTab(UIContext& ctx, Rect content) {
-    const float ctrlH = theme().metrics.controlHeight;
-    const float rowH  = std::max(kRowH, ctrlH + 4.0f);
-    const float dropW = std::min(content.w * kDropWFactor, kDropWMax);
-    const float dropX = content.x + content.w - dropW;
-    const float textScale = theme().metrics.fontSizeSmall;
-
-    float y = content.y;
-    drawLabeledRow(ctx, "UI Font Size", Rect{content.x, y, dropX - content.x, rowH}, textScale);
-    placeAndRender(m_fontScaleDD, ctx, Rect{dropX, y + (rowH - ctrlH) * 0.5f, dropW, ctrlH});
-}
-
 // ───────────────────────────────────────────────────────────────────
 // Event dispatch
 // ───────────────────────────────────────────────────────────────────
@@ -749,6 +759,7 @@ std::vector<Widget*> FwPreferencesDialog::visibleWidgets() {
         case 2:
             out.push_back(&m_launchQDD);
             out.push_back(&m_recordQDD);
+            out.push_back(&m_fontScaleDD);
             break;
         case 3:
             out.push_back(&m_metroModeDD);
@@ -756,12 +767,9 @@ std::vector<Widget*> FwPreferencesDialog::visibleWidgets() {
             out.push_back(&m_metroVolumeDD);
             out.push_back(&m_vizStyleDD);
             break;
-        case 4:
+        default:
             out.push_back(&m_linkCheckbox);
             out.push_back(&m_linkStartStopCheckbox);
-            break;
-        default:
-            out.push_back(&m_fontScaleDD);
             break;
     }
     return out;

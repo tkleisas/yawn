@@ -1056,7 +1056,11 @@ void PianoRollPanel::renderClipOps(::yawn::ui::Renderer2D& r, TextMetrics& tm) {
 
     r.drawRect(x, y, w, m_gh, Color{32, 32, 36});
 
-    static const char* labels[] = {"Dup", "x2", "/2", "Rev", "Clr", "1.1.1"};
+    // Clip-ops buttons. Labels: Dup = duplicate selection, x2 and /2 =
+    // double/halve clip length, Rev = reverse notes, Clear = delete
+    // all notes, 1.1.1 = crop clip to loop start (Ableton's "1.1.1
+    // here" convention). "Clear" spelled out — "Clr" read as noise.
+    static const char* labels[] = {"Dup", "x2", "/2", "Rev", "Clear", "1.1.1"};
     static const Color btnColors[] = {
         Color{80, 180, 255},
         Color{120, 230, 100},

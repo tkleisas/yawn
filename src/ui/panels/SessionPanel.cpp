@@ -40,8 +40,9 @@ void SessionPanel::render(UIContext& ctx) {
     paintHScrollbar(r, gridX, gridY + gridH, gridW);
 
     // Stop-all-clips button — the empty corner cell where the scene-label
-    // column meets the track-header row. A red stop square; stops every
-    // clip and clears launch memory on click.
+    // column meets the track-header row. A red stop square + "Stop" text;
+    // stops every clip and clears launch memory on click. (The bare red
+    // square alone read as cryptic.)
     {
         float bx, by, bw, bh;
         stopAllButtonRect(bx, by, bw, bh);
@@ -49,12 +50,16 @@ void SessionPanel::render(UIContext& ctx) {
             ? ::yawn::ui::Color{70, 70, 78, 255}
             : ::yawn::ui::Color{40, 40, 45, 255};
         r.drawRect(bx, by, bw, bh, bg);
-        float half = std::min(bw, bh) * 0.26f;
-        float cx = bx + bw * 0.5f, cy = by + bh * 0.5f;
         ::yawn::ui::Color sq = m_stopAllHovered
             ? ::yawn::ui::Color{240, 95, 95, 255}
             : ::yawn::ui::Color{205, 75, 75, 255};
-        r.drawRect(cx - half, cy - half, half * 2.0f, half * 2.0f, sq);
+        const float sqHalf = 4.5f;
+        const float cy = by + bh * 0.5f;
+        r.drawRect(bx + 5.0f, cy - sqHalf, sqHalf * 2.0f, sqHalf * 2.0f, sq);
+        const float fs = theme().metrics.fontSizeSmall;
+        const float lh = tm.lineHeight(fs);
+        tm.drawText(r, "Stop", bx + 17.0f, cy - lh * 0.5f - lh * 0.15f,
+                    fs, ::yawn::ui::Theme::textSecondary);
     }
 }
 
