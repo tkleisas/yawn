@@ -291,8 +291,12 @@ jobs:
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
+      # -j2, not --parallel: Debug-info TUs (ONNX/Eigen C++20 + SDL)
+      # peak at multiple GB each — 4-way parallel OOM'd the 16 GB
+      # runner mid-build (Build step died with conclusion: null).
+      # Same fix as the sanitizers job above.
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel 2
 
       - name: Test
         working-directory: build
