@@ -25,8 +25,99 @@
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 
 #include <string>
+#include <vector>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+
+// ── Scan mode: enumerate a module's plugins as JSON on stdout ─────
+//
+//   yawn_vst3_host --scan <module_path>
+//
+// YAWN's VST3Scanner spawns this per module (see
+// VST3Scanner::scanOutOfProcess). Loading a module runs its static
+// initializers + factory queries, which a broken plugin can crash —
+// in a subprocess that takes down only itself, never the host DAW
+// (previously an in-process startup scan turned one crashy plugin
+// into a launch-crash loop, made worse by the cache only being
+// written after a *complete* scan).
+//
+// Output: one JSON array of plugin infos on stdout, exit 0.
+// Failure: message on stderr, exit 1.
+
+namespace {
+
+std::string scanJsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof buf, "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
+int runScanMode(const char* modulePath) {
+    std::string error;
+    auto module = VST3::Hosting::Module::create(modulePath, error);
+    if (!module) {
+        std::fprintf(stderr, "scan: failed to load '%s': %s\n",
+                     modulePath, error.c_str());
+        return 1;
+    }
+
+    auto& factory = module->getFactory();
+    auto classInfos = factory.classInfos();
+
+    std::string out = "[";
+    bool first = true;
+    for (const auto& ci : classInfos) {
+        // Only list audio processor classes (same filter as
+        // VST3ModuleHandle::enumerate in the main app).
+        if (ci.category() != "Audio Module Class") continue;
+
+        bool isInstrument = false;
+        for (const auto& s : ci.subCategories()) {
+            if (s == "Instrument") { isInstrument = true; break; }
+        }
+        const std::string uid =
+            VST3::UID::fromTUID(ci.ID().data()).toString(false);
+
+        if (!first) out += ",";
+        first = false;
+        out += "\n{\"name\":\""            + scanJsonEscape(ci.name())
+             + "\",\"vendor\":\""          + scanJsonEscape(ci.vendor())
+             + "\",\"version\":\""         + scanJsonEscape(ci.version())
+             + "\",\"category\":\""        + scanJsonEscape(ci.category())
+             + "\",\"subcategories\":\""   + scanJsonEscape(ci.subCategoriesString())
+             + "\",\"classID\":\""         + scanJsonEscape(uid)
+             + "\",\"modulePath\":\""      + scanJsonEscape(modulePath)
+             + "\",\"isInstrument\":"      + (isInstrument ? "true" : "false")
+             + "}";
+    }
+    out += "\n]\n";
+
+    std::fputs(out.c_str(), stdout);
+    std::fflush(stdout);
+    return 0;
+}
+
+} // namespace
 
 #ifdef _WIN32
 
@@ -300,8 +391,14 @@ static DWORD WINAPI pipeReaderThread(LPVOID param) {
 // ── Main ──
 
 int main(int argc, char* argv[]) {
+    // Scan mode: enumerate a module's plugins as JSON and exit —
+    // see runScanMode above. Checked before the editor usage gate.
+    if (argc == 3 && std::strcmp(argv[1], "--scan") == 0)
+        return runScanMode(argv[2]);
+
     if (argc < 4) {
-        fprintf(stderr, "Usage: yawn_vst3_host <vst3_path> <class_id> <window_title>\n");
+        fprintf(stderr, "Usage: yawn_vst3_host <vst3_path> <class_id> <window_title>\n"
+                        "       yawn_vst3_host --scan <vst3_path>\n");
         return 1;
     }
 
@@ -865,10 +962,16 @@ int main(int argc, char* argv[]) {
     // Unbuffered stderr so diagnostics survive even on abrupt exit.
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 
+    // Scan mode: enumerate a module's plugins as JSON and exit —
+    // see runScanMode above. Checked before the editor usage gate.
+    if (argc == 3 && std::strcmp(argv[1], "--scan") == 0)
+        return runScanMode(argv[2]);
+
     std::fprintf(stderr, "[yawn_vst3_host] starting, argc=%d\n", argc);
 
     if (argc < 4) {
-        std::fprintf(stderr, "Usage: yawn_vst3_host <vst3_path> <class_id> <window_title>\n");
+        std::fprintf(stderr, "Usage: yawn_vst3_host <vst3_path> <class_id> <window_title>\n"
+                             "       yawn_vst3_host --scan <vst3_path>\n");
         return 1;
     }
     std::string vst3Path    = argv[1];

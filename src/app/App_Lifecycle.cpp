@@ -1553,10 +1553,28 @@ bool App::init() {
     m_vst3Scanner = std::make_unique<vst3::VST3Scanner>();
     std::string vst3CachePath = (util::AppSettings::settingsPath().parent_path()
                                   / "vst3_cache.json").string();
-    if (!m_vst3Scanner->loadCache(vst3CachePath)) {
-        LOG_INFO("VST3", "Scanning for VST3 plugins...");
-        m_vst3Scanner->scan();
-        m_vst3Scanner->saveCache(vst3CachePath);
+    m_vst3Scanner->loadCache(vst3CachePath);
+    if (!m_vst3Scanner->scanComplete()) {
+        // Scan out-of-process: each module is enumerated by the
+        // yawn_vst3_host subprocess, so a crashy plugin only fails
+        // its own cache entry instead of taking down the app at
+        // startup (and looping, since the old cache only existed
+        // after a *complete* in-process scan). The v2 cache is
+        // written incrementally, so a killed scan resumes.
+        const std::string hostExe = vst3::VST3Scanner::hostExePath();
+        namespace fs = std::filesystem;
+        if (!hostExe.empty() && fs::exists(hostExe)) {
+            LOG_INFO("VST3", "Scanning for VST3 plugins (subprocess)...");
+            m_vst3Scanner->scanOutOfProcess(vst3CachePath, hostExe);
+        } else {
+            LOG_WARN("VST3",
+                     "yawn_vst3_host not found next to the app binary — "
+                     "falling back to in-process scan (a crashy plugin "
+                     "can crash this scan)");
+            LOG_INFO("VST3", "Scanning for VST3 plugins...");
+            m_vst3Scanner->scan();
+            m_vst3Scanner->saveCache(vst3CachePath);
+        }
     }
     LOG_INFO("VST3", "Found %d VST3 plugins (%d instruments, %d effects)",
              (int)m_vst3Scanner->plugins().size(),
