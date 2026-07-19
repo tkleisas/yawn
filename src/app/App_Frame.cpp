@@ -167,6 +167,10 @@ void App::update() {
     // buffers) whose audio-callback grace period has elapsed.
     m_audioEngine.pollRetirements();
 
+    // TCP UI command channel (YAWN_CMD) — accept/read/flush client
+    // lines. No-op when the env var wasn't set at startup.
+    pumpUiCommands();
+
     // Piano roll holds a raw midi::MidiClip* pointer to whatever the
     // user opened for editing. Several slot-mutation paths (recording
     // finalize, paste, scene insert, project load) can replace the
@@ -807,6 +811,19 @@ void App::render() {
                       static_cast<float>(m_mainWindow.getHeight())});
 
     m_renderer.endFrame();
+
+    // Deferred `shot` ack (UI command channel): capture the finished
+    // frame while the back buffer is still valid, then reply to the
+    // requesting client on the next pump.
+    if (!m_pendingShotPath.empty()) {
+        const bool ok = m_mainWindow.captureToPng(m_pendingShotPath);
+        if (m_uiCmdServer && m_pendingShotClient >= 0) {
+            m_uiCmdServer->queueResponse(m_pendingShotClient,
+                ok ? "OK shot" : "ERR shot failed");
+        }
+        m_pendingShotPath.clear();
+        m_pendingShotClient = -1;
+    }
 
     m_mainWindow.swap();
 

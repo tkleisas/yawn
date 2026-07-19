@@ -1615,6 +1615,11 @@ bool App::init() {
                         6.0f, ui::ToastManager::Severity::Warn);
 #endif
 
+    // TCP UI command channel — off unless YAWN_CMD names a port.
+    // Started last so every verb (menus, dialogs, device adds) acts
+    // on a fully-built UI.
+    initUiCommandServer();
+
     updateWindowTitle();
     return true;
 }

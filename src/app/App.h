@@ -44,6 +44,7 @@
 #include "util/UndoManager.h"
 #include "transcribe/StemSeparation.h"
 #include "util/IconLoader.h"
+#include "util/TcpLineServer.h"
 #include "visual/VideoImporter.h"
 #include <vector>
 #include <memory>
@@ -279,6 +280,23 @@ private:
     void doSaveProject(const std::filesystem::path& path);
     void doOpenProject(const std::filesystem::path& path);
     void openExportDialog();
+    void openPreferencesDialog();
+    void showAboutDialog();
+    void showKeyboardShortcutsDialog();
+
+    // Shared menu actions, factored so the Track menu and the TCP UI
+    // command channel (below) run through one implementation.
+    void addTrackOfType(Track::Type type);
+    bool addInstrumentToTrack(int trackIndex, const std::string& displayName);
+    bool addAudioEffectToTrack(int trackIndex, const std::string& displayName);
+
+    // TCP UI command channel (App_UiCommands.cpp). Off unless the
+    // YAWN_CMD env var names a port; scripts send line-based verbs
+    // (ping / shot / key / click / menu / addtrack / …) instead of
+    // synthesizing X11 input.
+    void initUiCommandServer();
+    void pumpUiCommands();
+    std::string executeUiCommand(const std::string& line);
 
     // Procedural preset generation (Tools menu). Runs the generator on
     // a detached worker thread (full catalog ≈ 6 s) and posts a
@@ -694,6 +712,15 @@ private:
     // UI state from audio thread
     double m_displayBeats = 0.0;
     bool m_displayPlaying = false;
+
+    // TCP UI command channel state (null when YAWN_CMD is unset).
+    // m_uiCmdClientId is the connection whose line is currently being
+    // dispatched — `shot` stashes it together with the path so the
+    // end-of-frame capture can ack the right client.
+    std::unique_ptr<util::TcpLineServer> m_uiCmdServer;
+    int         m_uiCmdClientId = -1;
+    std::string m_pendingShotPath;
+    int         m_pendingShotClient = -1;
 
 #ifdef YAWN_HAS_VST3
     std::unique_ptr<vst3::VST3Scanner> m_vst3Scanner;

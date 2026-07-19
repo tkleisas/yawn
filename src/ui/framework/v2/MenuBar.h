@@ -47,6 +47,12 @@ public:
     bool isOpen() const;
     void close();
 
+    // Open the menu whose title matches `label` exactly (case-
+    // sensitive), as if its title strip had been clicked. Returns
+    // false when no menu carries that title. Used by the UI command
+    // channel (App_UiCommands.cpp).
+    bool openMenuByTitle(const std::string& label);
+
     // ─── Title-bar hit test (callers used to ask v1 `contains()`) ─
     // Returns true when the pointer is inside the bar strip itself.
     // The open popup is owned by the LayerStack overlay; callers
@@ -70,7 +76,7 @@ public:
         float       w = 0;
     };
     const std::vector<TitleStrip>& titleStrips() const { return m_strips; }
-    int  openIndex()  const { return m_openIndex; }
+    int  openIndex()  const { return menuStillOurs() ? m_openIndex : -1; }
     int  hoverIndex() const { return m_hoverIndex; }
     float titleBarHeight() const { return bounds().h; }
 
@@ -84,10 +90,20 @@ private:
     // open menu first.
     void openAt(int i);
 
+    // True only while the menu chain currently open on the
+    // ContextMenuManager is the one THIS bar opened. m_openIndex
+    // alone goes stale when the chain closes without us — Escape
+    // (LayerStack onEscape), outside-click dismiss, item activation,
+    // or a right-click context menu replacing it — and a stale index
+    // both suppresses hover-switching and turns the next title click
+    // into a phantom "re-click → close" (the swallowed-click bug).
+    bool menuStillOurs() const;
+
     std::vector<MenuDef>    m_menus;
     std::vector<TitleStrip> m_strips;
     int                     m_openIndex  = -1;
     int                     m_hoverIndex = -1;
+    std::uint32_t           m_openGeneration = 0;   // chain id from openAt
 
     // Cached font size the strips were built for. Rebuild if theme
     // changes beneath us.

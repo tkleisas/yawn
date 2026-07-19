@@ -91,6 +91,22 @@ TEST_F(ContextMenuHarness, RootShiftsLeftWhenClippedRightEdge) {
     EXPECT_LE(b.x + b.w, 1024.0f + 0.01f);
 }
 
+TEST_F(ContextMenuHarness, ShortcutColumnKeepsMinimumGap) {
+    // Regression for "Insert SceneIns": with the monospace UI font an
+    // 8 px label→shortcut gap read as glued. The floor is 12 px.
+    // Fallback metrics are 8 px/char (no textMetrics in tests).
+    auto widthOf = [](std::vector<MenuEntry> entries) {
+        ContextMenu::show(std::move(entries), Point{100, 100});
+        const float w = ContextMenuManager::instance().level(0).bounds.w;
+        ContextMenu::close();
+        return w;
+    };
+    const float withShortcut = widthOf({Menu::item("Insert Scene", []{}, "Ins")});
+    const float without      = widthOf({Menu::item("Insert Scene", []{})});
+    const float shortcutTextW = 3.0f * 8.0f;   // "Ins" at 8 px/char
+    EXPECT_GE(withShortcut - without, shortcutTextW + 12.0f);
+}
+
 TEST_F(ContextMenuHarness, RootShiftsUpWhenClippedBottomEdge) {
     ContextMenu::show({Menu::item("A", []{}), Menu::item("B", []{}),
                         Menu::item("C", []{}), Menu::item("D", []{})},

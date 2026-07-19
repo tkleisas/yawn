@@ -327,14 +327,23 @@ public:
         const float h = bounds.h;
 
         if (m_display) {
-            // Ask the display what height it prefers at the slot width;
-            // cap to our body height so it never overflows. Keeps sub-
-            // displays (OSC / Filter / AMP / FILT envelopes) at their
-            // intended ~4:3 aspect instead of stretching vertically.
-            auto ps = m_display->measure(
-                Constraints::loose(m_displayWidth, h), ctx);
-            const float displayH = std::min(h, std::max(48.0f, ps.h));
-            m_display->layout({x, y, m_displayWidth, displayH}, ctx);
+            if (m_display->alignsToKnobGrid()) {
+                // Span the knob grid exactly: from the first knob
+                // row's top (below the section-label row) to the last
+                // row's bottom.
+                m_display->layout(
+                    {x, y + kLabelRowH, m_displayWidth,
+                     (kMaxRows - 1) * kRowH + kKnobH}, ctx);
+            } else {
+                // Ask the display what height it prefers at the slot width;
+                // cap to our body height so it never overflows. Keeps sub-
+                // displays (OSC / Filter / AMP / FILT envelopes) at their
+                // intended ~4:3 aspect instead of stretching vertically.
+                auto ps = m_display->measure(
+                    Constraints::loose(m_displayWidth, h), ctx);
+                const float displayH = std::min(h, std::max(48.0f, ps.h));
+                m_display->layout({x, y, m_displayWidth, displayH}, ctx);
+            }
             x += m_displayWidth + kSectionGap;
         }
 

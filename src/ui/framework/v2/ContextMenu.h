@@ -143,6 +143,20 @@ public:
     const Level&  level(int i) const { return m_levels[i]; }
     const std::vector<Level>& levels() const { return m_levels; }
 
+    // Activate the selectable entry whose label matches `label`
+    // exactly, searching the deepest open level first (so a submenu
+    // item wins over a same-labeled parent row). Fires the entry's
+    // callback and closes the chain, exactly like a click. Returns
+    // false when nothing matches. Used by the UI command channel.
+    bool activateItemByLabel(const std::string& label);
+
+    // Monotonic counter bumped every time the whole menu chain is
+    // replaced (show) or torn down (close / outside-click dismiss).
+    // Lets owners of a chain (e.g. FwMenuBar) tell "my menu is still
+    // the open one" apart from "some other chain replaced / survived
+    // it" — isOpen() alone can't make that distinction.
+    std::uint32_t generation() const { return m_generation; }
+
     // ─── Painter hook ────────────────────────────────────────────
     // Main exe installs in Fw2Painters.cpp. Null in tests → paint is
     // a no-op, state still advances.
@@ -211,6 +225,7 @@ private:
 
     std::vector<Level> m_levels;
     OverlayHandle      m_handle;
+    std::uint32_t      m_generation = 0;   // see generation()
     float              m_submenuHoverTimer = 0.0f;
     float              m_submenuHoverDelay = 0.2f;
     // Tracks the row the pointer currently hovers on the DEEPEST level

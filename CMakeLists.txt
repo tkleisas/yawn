@@ -348,6 +348,9 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/MidiFileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
+    # Line-based TCP server (UI command channel) — UI-free, loopback
+    # only, so tests can drive it over real sockets.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util/TcpLineServer.cpp
     # stb_image single-TU implementation. Lives in yawn_core so every
     # downstream binary (main exe, tests, tinygltf impl) resolves the
     # stbi_* symbols without needing its own dedicated TU.
@@ -492,6 +495,13 @@ target_include_directories(yawn_core PUBLIC
     ${stb_SOURCE_DIR}
 )
 target_compile_definitions(yawn_core PUBLIC YAWN_CORE_BUILD)
+
+# TcpLineServer uses winsock2 on Windows; PUBLIC so the test binary
+# (which links yawn_core and opens its own client sockets) gets it too.
+if(WIN32)
+    target_link_libraries(yawn_core PUBLIC ws2_32)
+endif()
+
 target_link_libraries(yawn_core PUBLIC
     PortAudio
     sndfile

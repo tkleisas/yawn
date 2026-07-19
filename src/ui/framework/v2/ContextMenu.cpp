@@ -153,11 +153,13 @@ void ContextMenuManager::show(std::vector<MenuEntry> entries, Point screenPos) {
     root.contentHeight = computeSize(ctx, root.entries).h;
     root.bounds        = computeRootBounds(ctx, root.entries, screenPos);
     m_levels.push_back(std::move(root));
+    ++m_generation;   // new chain — invalidate owners of the old one
 
     pushOrRefreshEntry(ctx);
 }
 
 void ContextMenuManager::close() {
+    if (!m_levels.empty()) ++m_generation;   // chain torn down
     m_levels.clear();
     m_hoverLevel = -1;
     m_hoverRow   = -1;
@@ -224,6 +226,7 @@ void ContextMenuManager::pushOrRefreshEntry(UIContext& ctx) {
         // state — detach handle first so close() doesn't re-enter
         // remove().
         m_handle.detach_noRemove();
+        if (!m_levels.empty()) ++m_generation;   // chain torn down
         m_levels.clear();
         m_hoverLevel = -1;
         m_hoverRow   = -1;
@@ -483,6 +486,21 @@ void ContextMenuManager::activateRow(int levelIdx, int row) {
     if (cb) cb();
 }
 
+bool ContextMenuManager::activateItemByLabel(const std::string& label) {
+    for (int lvl = static_cast<int>(m_levels.size()) - 1; lvl >= 0; --lvl) {
+        const auto& entries = m_levels[lvl].entries;
+        for (int row = 0; row < static_cast<int>(entries.size()); ++row) {
+            const MenuEntry& e = entries[row];
+            if (e.label == label && isSelectable(e) &&
+                e.kind != MenuEntryKind::Submenu) {
+                activateRow(lvl, row);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void ContextMenuManager::openSubmenuForRow(int parentLevelIdx, int parentRow,
                                            UIContext& ctx) {
     if (parentLevelIdx < 0 || parentLevelIdx >= static_cast<int>(m_levels.size())) return;
@@ -553,9 +571,15 @@ Size ContextMenuManager::computeSize(UIContext& ctx,
     const float fontSize   = m.fontSize;
     const float padX       = m.baseUnit * 2.0f;
     const float padY       = m.baseUnit * 0.5f;
-    const float columnGap  = m.baseUnit * 2.0f;
+    // Gap between the label column and the shortcut column. 8 px read
+    // as glued with the monospace UI font ("Insert SceneIns").
+    const float columnGap  = m.baseUnit * 4.0f;
     const float leftMarker = fontSize;         // reserved for check/radio/spacer
-    const float rightArrow = fontSize * 0.75f; // submenu chevron
+    // Right gutter holding the submenu chevron. The painter anchors
+    // the glyph to the right edge, so widening this only adds air
+    // between the label and the chevron (was 0.75× — chevron sat ~2 px
+    // off the label: "Record Length: Unlimited▸").
+    const float rightArrow = fontSize * 1.25f;
 
     float maxLabelW    = 0.0f;
     float maxShortcutW = 0.0f;

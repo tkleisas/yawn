@@ -32,14 +32,16 @@ void FwMenuBar::clearMenus() {
     invalidate();
 }
 
+bool FwMenuBar::menuStillOurs() const {
+    return m_openIndex >= 0 &&
+           ContextMenuManager::instance().isOpen() &&
+           ContextMenuManager::instance().generation() == m_openGeneration;
+}
+
 bool FwMenuBar::isOpen() const {
-    // A menu we opened is still visible on the context-menu stack.
-    // Checking the manager's isOpen() isn't quite right because any
-    // context menu (right-click, etc.) would count; but since the
-    // v2 ContextMenuManager is a singleton that can only show one
-    // stack at a time, and we track m_openIndex ourselves, the
-    // local flag is authoritative.
-    return m_openIndex >= 0 && ContextMenuManager::instance().isOpen();
+    // The manager is a singleton showing one chain at a time; our menu
+    // counts as open only while the open chain is the one we pushed.
+    return menuStillOurs();
 }
 
 void FwMenuBar::close() {
@@ -51,6 +53,16 @@ void FwMenuBar::close() {
 bool FwMenuBar::pointerInBar(float mx, float my) const {
     const Rect& b = bounds();
     return mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h;
+}
+
+bool FwMenuBar::openMenuByTitle(const std::string& label) {
+    for (int i = 0; i < static_cast<int>(m_menus.size()); ++i) {
+        if (m_menus[i].label == label) {
+            openAt(i);
+            return true;
+        }
+    }
+    return false;
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -113,9 +125,10 @@ bool FwMenuBar::onMouseDown(MouseEvent& e) {
     if (e.button != MouseButton::Left) return false;
     const int i = hitTest(e.x, e.y);
     if (i < 0) return false;
-    // Re-click on the same open title closes the menu. Otherwise
-    // open (switches if another is already open).
-    if (i == m_openIndex) {
+    // Re-click on the same open title closes the menu — but only while
+    // the open chain is genuinely ours (a stale m_openIndex from an
+    // externally-closed menu must not turn this click into a close).
+    if (i == m_openIndex && menuStillOurs()) {
         close();
     } else {
         openAt(i);
@@ -129,9 +142,10 @@ bool FwMenuBar::onMouseMove(MouseMoveEvent& e) {
         m_hoverIndex = hit;
         // If a menu is already open and the user hovers onto another
         // title, switch to that menu — standard menubar affordance.
-        // Skip when hover leaves the bar entirely (hit == -1); let
-        // the user commit to clicking elsewhere to dismiss.
-        if (m_openIndex >= 0 && hit >= 0 && hit != m_openIndex) {
+        // Only while OUR chain is actually open: with a stale
+        // m_openIndex this would phantom-open the hovered title and
+        // make the following click "re-click → close" itself.
+        if (menuStillOurs() && hit >= 0 && hit != m_openIndex) {
             openAt(hit);
         }
     }
@@ -147,6 +161,8 @@ void FwMenuBar::openAt(int i) {
     // ContextMenu::show closes any existing menu and opens this one.
     ContextMenuManager::instance().show(m_menus[i].items, screenPos);
     m_openIndex = i;
+    // Capture AFTER show() bumped it — this is the chain we now own.
+    m_openGeneration = ContextMenuManager::instance().generation();
 }
 
 } // namespace fw2

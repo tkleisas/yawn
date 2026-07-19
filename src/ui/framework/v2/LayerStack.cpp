@@ -121,8 +121,14 @@ bool LayerStack::dispatchMouseDown(MouseEvent& e) {
     for (int i = static_cast<int>(overlays.size()) - 1; i >= 0; --i) {
         OverlayEntry& entry = overlays[i];
         if (entryContains(entry, e.x, e.y)) {
-            if (entry.onMouseDown && entry.onMouseDown(e)) return true;
-            if (entry.modal) return true;
+            // Copy the handler + flags before invoking: the handler may
+            // remove this very entry from the stack (context-menu item
+            // activation, dialog OK/Cancel on mouse-down), leaving
+            // `entry` dangling.
+            auto handler = entry.onMouseDown;
+            const bool isModal = entry.modal;
+            if (handler && handler(e)) return true;
+            if (isModal) return true;
             return false;   // non-handling, non-modal — event passes through
         }
     }
@@ -145,7 +151,9 @@ bool LayerStack::dispatchMouseDown(MouseEvent& e) {
     if (!modals.empty()) {
         OverlayEntry& top = modals.back();
         if (entryContains(top, e.x, e.y)) {
-            if (top.onMouseDown && top.onMouseDown(e)) return true;
+            // Same mid-call removal hazard as the overlay branch above.
+            auto handler = top.onMouseDown;
+            if (handler && handler(e)) return true;
             return true;   // modal always blocks even if no handler
         }
         // Outside the modal body → scrim. Consume always; optionally
@@ -167,8 +175,12 @@ bool LayerStack::dispatchMouseUp(MouseEvent& e) {
     for (int i = static_cast<int>(overlays.size()) - 1; i >= 0; --i) {
         OverlayEntry& entry = overlays[i];
         if (entryContains(entry, e.x, e.y)) {
-            if (entry.onMouseUp && entry.onMouseUp(e)) return true;
-            if (entry.modal) return true;
+            // Copy before invoking — handlers may remove the entry
+            // mid-call (e.g. a dialog button firing on mouse-up).
+            auto handler = entry.onMouseUp;
+            const bool isModal = entry.modal;
+            if (handler && handler(e)) return true;
+            if (isModal) return true;
             return false;
         }
     }
@@ -176,7 +188,8 @@ bool LayerStack::dispatchMouseUp(MouseEvent& e) {
     if (!modals.empty()) {
         OverlayEntry& top = modals.back();
         if (entryContains(top, e.x, e.y)) {
-            if (top.onMouseUp && top.onMouseUp(e)) return true;
+            auto handler = top.onMouseUp;
+            if (handler && handler(e)) return true;
         }
         return true;   // modal blocks mouse-up too
     }
@@ -236,14 +249,18 @@ bool LayerStack::dispatchKey(KeyEvent& e) {
         if (vec.empty()) return false;
         OverlayEntry& top = vec.back();
         if (e.key == Key::Escape && !e.consumed) {
-            if (top.onEscape) {
-                top.onEscape();
+            // Copy before invoking — onEscape/onKey may remove the
+            // entry (menu Escape, dialog Enter/Escape).
+            auto escapeHandler = top.onEscape;
+            if (escapeHandler) {
+                escapeHandler();
             } else {
                 removeById(layer, top.id, /*fireDismiss*/ true);
             }
             return true;
         }
-        if (top.onKey && top.onKey(e)) return true;
+        auto keyHandler = top.onKey;
+        if (keyHandler && keyHandler(e)) return true;
         if (layer == OverlayLayer::Modal) return true;   // modals swallow keys
         return false;
     };

@@ -1,8 +1,11 @@
 #include "ui/Window.h"
 #include "ui/GlCaps.h"
 #include "util/Logger.h"
+#include "stb_image_write.h"
 #include <glad/gl.h>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace yawn {
 namespace ui {
@@ -185,6 +188,21 @@ void Window::swap() {
     if (m_window) {
         SDL_GL_SwapWindow(m_window);
     }
+}
+
+// Screenshot path for the UI command channel (App_UiCommands.cpp,
+// YAWN_CMD env var). Reads the finished frame straight out of the
+// back buffer — works on any windowing system (xwd/x11grab see
+// nothing under Wayland).
+bool Window::captureToPng(const std::string& path) {
+    if (!m_window) return false;
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(m_window, &w, &h);
+    if (w <= 0 || h <= 0) return false;
+    std::vector<unsigned char> px(static_cast<size_t>(w) * h * 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    stbi_flip_vertically_on_write(1);
+    return stbi_write_png(path.c_str(), w, h, 4, px.data(), w * 4) != 0;
 }
 
 int Window::getWidth() const {

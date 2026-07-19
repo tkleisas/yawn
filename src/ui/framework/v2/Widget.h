@@ -195,6 +195,13 @@ public:
     const Rect& bounds() const { return m_bounds; }
     Rect globalBounds() const;
     Point toLocal(float sx, float sy) const;
+
+    // When this widget is used as a GroupedKnobBody's left-side
+    // display: return true to be vertically aligned with the knob
+    // grid (first knob row's top → last knob row's bottom) instead of
+    // the body's top edge with the widget's own measured height.
+    // Default false — most displays keep their own aspect/height.
+    virtual bool alignsToKnobGrid() const { return false; }
     Point toGlobal(float lx, float ly) const;
     bool  hitTest(float lx, float ly) const {
         return lx >= 0 && lx < m_bounds.w && ly >= 0 && ly < m_bounds.h;

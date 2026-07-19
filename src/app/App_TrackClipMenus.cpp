@@ -69,6 +69,79 @@
 
 namespace yawn {
 
+// Set a track's instrument by device-table display name ("FM Synth").
+// Shared by the track context menu's Add Instrument submenu and the
+// TCP UI command channel. Same flow as the menu path: switch the
+// track to MIDI, swap the engine instrument, wrap in undo. Returns
+// false on a bad track index or unknown name. Note: Drawbar Organ /
+// Electric Piano go through the generic path here — the context
+// menu's custom entries (auto-insert Rotary / Phaser) stay menu-only.
+bool App::addInstrumentToTrack(int trackIndex, const std::string& displayName) {
+    if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return false;
+    const DeviceDescriptor<instruments::Instrument>* desc = nullptr;
+    for (const auto& d : instrumentDescriptors()) {
+        if (displayName == d.displayName) { desc = &d; break; }
+    }
+    if (!desc) return false;
+    auto factory = desc->make;
+    auto oldType = m_project.track(trackIndex).type;
+    std::string oldInstr;
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    if (inst) oldInstr = inst->name();
+    uint8_t oldTypeVal = (oldType == Track::Type::Audio)  ? 0
+                        : (oldType == Track::Type::Midi)   ? 1
+                                                            : 2;
+    m_project.track(trackIndex).type = Track::Type::Midi;
+    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+    m_audioEngine.setInstrument(trackIndex, factory());
+    markDirty();
+    std::string newInstr = displayName;
+    m_undoManager.push({"Set Instrument: " + newInstr,
+        [this, trackIndex, oldType, oldTypeVal, oldInstr]{
+            m_project.track(trackIndex).type = oldType;
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, oldTypeVal});
+            m_audioEngine.setInstrument(trackIndex, createInstrumentByName(oldInstr));
+            markDirty();
+        },
+        [this, trackIndex, factory]{
+            m_project.track(trackIndex).type = Track::Type::Midi;
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
+            m_audioEngine.setInstrument(trackIndex, factory());
+            markDirty();
+        }, ""});
+    return true;
+}
+
+// Append an audio effect to a track's chain by device-table display
+// name ("Spline EQ"). Shared by the track context menu's Add Audio
+// Effect submenu and the UI command channel. Returns false on a bad
+// track index or unknown name.
+bool App::addAudioEffectToTrack(int trackIndex, const std::string& displayName) {
+    if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return false;
+    const DeviceDescriptor<effects::AudioEffect>* desc = nullptr;
+    for (const auto& d : audioEffectDescriptors()) {
+        if (displayName == d.displayName) { desc = &d; break; }
+    }
+    if (!desc) return false;
+    auto factory = desc->make;
+    LOG_INFO("User", "addFx '%s' to track %d", displayName.c_str(), trackIndex);
+    auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
+    chain.append(factory());
+    int slot = chain.count() - 1;
+    markDirty();
+    std::string fxName = displayName;
+    m_undoManager.push({"Add Effect: " + fxName,
+        [this, trackIndex, slot]{
+            m_audioEngine.mixer().trackEffects(trackIndex).removeRetired(slot);
+            markDirty();
+        },
+        [this, trackIndex, factory]{
+            m_audioEngine.mixer().trackEffects(trackIndex).append(factory());
+            markDirty();
+        }, ""});
+    return true;
+}
+
 void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     if (trackIndex < 0 || trackIndex >= m_project.numTracks()) return;
     auto& track = m_project.track(trackIndex);
@@ -193,42 +266,16 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
 
     // Separator + Instruments submenu
     std::vector<MenuEntry> instrItems;
-    auto addInstrItem = [&](const char* label, auto factory) {
-        instrItems.push_back(item(label, [this, trackIndex, label, factory]() {
-            auto oldType = m_project.track(trackIndex).type;
-            std::string oldInstr;
-            auto* inst = m_audioEngine.instrument(trackIndex);
-            if (inst) oldInstr = inst->name();
-            uint8_t oldTypeVal = (oldType == Track::Type::Audio)  ? 0
-                                : (oldType == Track::Type::Midi)   ? 1
-                                                                    : 2;
-            m_project.track(trackIndex).type = Track::Type::Midi;
-            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-            m_audioEngine.setInstrument(trackIndex, factory());
-            markDirty();
-            std::string newInstr = label;
-            m_undoManager.push({"Set Instrument: " + newInstr,
-                [this, trackIndex, oldType, oldTypeVal, oldInstr]{
-                    m_project.track(trackIndex).type = oldType;
-                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, oldTypeVal});
-                    m_audioEngine.setInstrument(trackIndex, createInstrumentByName(oldInstr));
-                    markDirty();
-                },
-                [this, trackIndex, factory]{
-                    m_project.track(trackIndex).type = Track::Type::Midi;
-                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{trackIndex, 1});
-                    m_audioEngine.setInstrument(trackIndex, factory());
-                    markDirty();
-                }, ""});
-        }));
-    };
     // One descriptor table drives all device menus (util/Factory.h);
     // Drawbar Organ and Electric Piano get custom entries below
     // (auto-insert Rotary / Phaser respectively).
     for (const auto& d : instrumentDescriptors()) {
         if (d.id == std::string("drawbarorgan") || d.id == std::string("electricpiano"))
             continue;
-        addInstrItem(d.displayName, d.make);
+        instrItems.push_back(item(d.displayName,
+            [this, trackIndex, name = std::string(d.displayName)]() {
+                addInstrumentToTrack(trackIndex, name);
+            }));
     }
 
     // Drawbar Organ: same as addInstrItem, but also auto-inserts a
@@ -340,31 +387,15 @@ void App::showTrackContextMenu(int trackIndex, float mx, float my) {
     items.push_back(separator());
     items.push_back(submenu("Add Instrument", std::move(instrItems)));
 
-    // Audio effects submenu
+    // Audio effects submenu — built-ins come from the descriptor
+    // table (util/Factory.h) and share the UI-command add path.
     std::vector<MenuEntry> fxItems;
-    auto addFxItem = [&](const char* label, auto factory) {
-        fxItems.push_back(item(label, [this, trackIndex, label, factory]() {
-            LOG_INFO("User", "addFx '%s' to track %d", label, trackIndex);
-            auto& chain = m_audioEngine.mixer().trackEffects(trackIndex);
-            chain.append(factory());
-            int slot = chain.count() - 1;
-            markDirty();
-            std::string fxName = label;
-            m_undoManager.push({"Add Effect: " + fxName,
-                [this, trackIndex, slot]{
-                    m_audioEngine.mixer().trackEffects(trackIndex).removeRetired(slot);
-                    markDirty();
-                },
-                [this, trackIndex, factory]{
-                    m_audioEngine.mixer().trackEffects(trackIndex).append(factory());
-                    markDirty();
-                }, ""});
-        }));
-    };
-    // Built-in audio effects — one descriptor table (util/Factory.h)
-    // drives this and every other Add-Effect menu.
-    for (const auto& d : audioEffectDescriptors())
-        addFxItem(d.displayName, d.make);
+    for (const auto& d : audioEffectDescriptors()) {
+        fxItems.push_back(item(d.displayName,
+            [this, trackIndex, name = std::string(d.displayName)]() {
+                addAudioEffectToTrack(trackIndex, name);
+            }));
+    }
 
 #ifdef YAWN_HAS_VST3
     // VST3 effects — flat list with separator

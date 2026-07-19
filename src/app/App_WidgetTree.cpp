@@ -92,6 +92,186 @@ bool App::loadFont() {
     return false;
 }
 
+// Add-track handler shared by the Track menu items and the TCP UI
+// command channel — one implementation, one undo entry shape.
+void App::addTrackOfType(Track::Type type) {
+    switch (type) {
+        case Track::Type::Audio: {
+            int idx = m_project.numTracks();
+            m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
+            m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{idx, m_project.track(idx).audioInputCh});
+            markDirty();
+            m_undoManager.push({"Add Audio Track",
+                [this]{ m_project.removeLastTrack(); markDirty(); },
+                [this]{
+                    int i = m_project.numTracks();
+                    m_project.addTrack("Audio " + std::to_string(i + 1), Track::Type::Audio);
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 0});
+                    m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, m_project.track(i).audioInputCh});
+                    markDirty();
+                }, ""});
+            LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
+            break;
+        }
+        case Track::Type::Midi: {
+            int idx = m_project.numTracks();
+            m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
+            m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
+            markDirty();
+            m_undoManager.push({"Add MIDI Track",
+                [this, idx]{
+                    m_audioEngine.setInstrument(idx, nullptr);
+                    m_project.removeLastTrack(); markDirty();
+                },
+                [this]{
+                    int i = m_project.numTracks();
+                    m_project.addTrack("MIDI " + std::to_string(i + 1), Track::Type::Midi);
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 1});
+                    m_audioEngine.setInstrument(i, std::make_unique<instruments::SubtractiveSynth>());
+                    markDirty();
+                }, ""});
+            LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
+            break;
+        }
+        case Track::Type::Visual: {
+            int idx = m_project.numTracks();
+            m_project.addTrack("Visual " + std::to_string(idx + 1), Track::Type::Visual);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 2});
+            markDirty();
+            m_undoManager.push({"Add Visual Track",
+                [this]{ m_project.removeLastTrack(); markDirty(); },
+                [this]{
+                    int i = m_project.numTracks();
+                    m_project.addTrack("Visual " + std::to_string(i + 1), Track::Type::Visual);
+                    m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 2});
+                    markDirty();
+                }, ""});
+            LOG_INFO("Visual", "Added Visual track %d", m_project.numTracks());
+            break;
+        }
+    }
+}
+
+// Dialog openers — the menu items and the UI command channel call
+// these so both paths build identical dialogs.
+void App::openPreferencesDialog() {
+    ui::fw2::FwPreferencesDialog::State state;
+    state.selectedOutputDevice = m_audioEngine.config().outputDevice;
+    state.selectedInputDevice = m_audioEngine.config().inputDevice;
+    state.sampleRate = m_audioEngine.config().sampleRate;
+    state.bufferSize = static_cast<int>(m_audioEngine.config().framesPerBuffer);
+    state.defaultLaunchQuantize = static_cast<audio::QuantizeMode>(m_settings.defaultLaunchQuantize);
+    state.defaultRecordQuantize = static_cast<audio::QuantizeMode>(m_settings.defaultRecordQuantize);
+    m_midiEngine.refreshPorts();
+    state.enabledMidiInputs.clear();
+    for (int i = 0; i < m_midiEngine.openInputPortCount(); ++i) {
+        if (i < m_midiEngine.availableInputCount())
+            state.enabledMidiInputs.push_back(i);
+    }
+    if (state.enabledMidiInputs.empty()) {
+        for (int i = 0; i < m_midiEngine.availableInputCount(); ++i)
+            state.enabledMidiInputs.push_back(i);
+    }
+    state.enabledMidiOutputs = m_settings.enabledMidiOutputs;
+    state.metronomeVolume = m_settings.metronomeVolume;
+    state.metronomeMode = m_settings.metronomeMode;
+    state.countInBars = m_settings.countInBars;
+    state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
+    state.fontScale = m_settings.fontScale;
+    state.latencyCompensation = m_audioEngine.mixer().pdcEnabled();
+    state.masterOversample = m_audioEngine.mixer().masterOversample();
+    state.linkEnabled = m_audioEngine.linkManager().enabled();
+    state.linkStartStopSync = m_audioEngine.linkManager().startStopSyncEnabled();
+    m_preferencesDialog.open(state, &m_audioEngine, &m_midiEngine);
+}
+
+void App::showAboutDialog() {
+    ui::fw2::DialogSpec spec;
+    spec.title = "Y.A.W.N";
+    spec.message =
+        "Yetanother Audio Workstation New\n"
+        "Version " YAWN_VERSION_STRING "\n"
+        "\n"
+        "Made with AI-Sloptronic(TM) technology\n"
+        "\n"
+        "PM: Tasos Kleisas\n"
+        "Chief Engineer: Claude (Anthropic)\n"
+        "Where \"it compiles\" is the new \"it works\"";
+    // Show the YAWN logo above the title (loaded at startup,
+    // see m_iconTexture init).
+    if (m_iconTexture) {
+        spec.iconTextureId = static_cast<unsigned int>(m_iconTexture);
+        spec.iconSize      = 128.0f;
+    }
+    ui::fw2::DialogButton ok;
+    ok.label   = "OK";
+    ok.primary = true;
+    ok.cancel  = true;
+    spec.buttons.push_back(std::move(ok));
+    ui::fw2::Dialog::show(std::move(spec));
+}
+
+void App::showKeyboardShortcutsDialog() {
+    ui::fw2::DialogSpec spec;
+    spec.title = "Keyboard Shortcuts";
+    // Two columns separated by spaces. Using a proportional
+    // font means alignment is approximate, but key combos
+    // are short and consistent so it reads cleanly enough.
+    // Group with blank lines + section headers.
+    spec.message =
+        "FILE\n"
+        "  Ctrl+N           New Project\n"
+        "  Ctrl+O           Open Project\n"
+        "  Ctrl+S           Save Project\n"
+        "  Ctrl+Shift+S     Save As...\n"
+        "  Ctrl+Q           Quit\n"
+        "\n"
+        "EDIT\n"
+        "  Ctrl+Z           Undo\n"
+        "  Ctrl+Y           Redo\n"
+        "\n"
+        "VIEW\n"
+        "  Tab              Switch Session / Arrangement\n"
+        "  M                Toggle Mixer\n"
+        "  D                Toggle Detail Panel\n"
+        "  F11              Toggle Visual Output Fullscreen\n"
+        "\n"
+        "TRANSPORT\n"
+        "  Space            Play / Stop (launches default clips)\n"
+        "  Home             Return to Zero\n"
+        "  + / =            Tempo +1 BPM\n"
+        "  - / _            Tempo -1 BPM\n"
+        "\n"
+        "SESSION VIEW\n"
+        "  Arrows           Move clip selection\n"
+        "  Shift+Arrows     Move controller grid region\n"
+        "  Enter            Launch / Stop selected clip\n"
+        "  Delete / Bksp    Clear selected clip\n"
+        "  Ctrl+C / X / V   Copy / Cut / Paste clip\n"
+        "  Ctrl+D           Duplicate clip to next empty slot\n"
+        "  G                Toggle controller grid overlay\n"
+        "  Ins              Insert Scene below selection\n"
+        "\n"
+        "ARRANGEMENT VIEW\n"
+        "  L                Toggle Loop\n"
+        "  F                Toggle Follow Playhead\n"
+        "  [                Set Loop Start at playhead\n"
+        "  ]                Set Loop End at playhead\n"
+        "  Ctrl+D           Duplicate selection\n"
+        "  Delete / Bksp    Delete selection\n"
+        "\n"
+        "OTHER\n"
+        "  Esc              Close menu / exit fullscreen / quit";
+    ui::fw2::DialogButton ok;
+    ok.label   = "OK";
+    ok.primary = true;
+    ok.cancel  = true;
+    spec.buttons.push_back(std::move(ok));
+    ui::fw2::Dialog::show(std::move(spec));
+}
+
 void App::setupMenuBar() {
     using ::yawn::ui::fw2::MenuEntry;
     namespace M = ::yawn::ui::fw2::Menu;
@@ -170,36 +350,7 @@ void App::setupMenuBar() {
                     markDirty();
                 });
         }),
-        M::item("Preferences", [this]() {
-            ui::fw2::FwPreferencesDialog::State state;
-            state.selectedOutputDevice = m_audioEngine.config().outputDevice;
-            state.selectedInputDevice = m_audioEngine.config().inputDevice;
-            state.sampleRate = m_audioEngine.config().sampleRate;
-            state.bufferSize = static_cast<int>(m_audioEngine.config().framesPerBuffer);
-            state.defaultLaunchQuantize = static_cast<audio::QuantizeMode>(m_settings.defaultLaunchQuantize);
-            state.defaultRecordQuantize = static_cast<audio::QuantizeMode>(m_settings.defaultRecordQuantize);
-            m_midiEngine.refreshPorts();
-            state.enabledMidiInputs.clear();
-            for (int i = 0; i < m_midiEngine.openInputPortCount(); ++i) {
-                if (i < m_midiEngine.availableInputCount())
-                    state.enabledMidiInputs.push_back(i);
-            }
-            if (state.enabledMidiInputs.empty()) {
-                for (int i = 0; i < m_midiEngine.availableInputCount(); ++i)
-                    state.enabledMidiInputs.push_back(i);
-            }
-            state.enabledMidiOutputs = m_settings.enabledMidiOutputs;
-            state.metronomeVolume = m_settings.metronomeVolume;
-            state.metronomeMode = m_settings.metronomeMode;
-            state.countInBars = m_settings.countInBars;
-            state.metronomeVisualStyle = m_settings.metronomeVisualStyle;
-            state.fontScale = m_settings.fontScale;
-            state.latencyCompensation = m_audioEngine.mixer().pdcEnabled();
-            state.masterOversample = m_audioEngine.mixer().masterOversample();
-            state.linkEnabled = m_audioEngine.linkManager().enabled();
-            state.linkStartStopSync = m_audioEngine.linkManager().startStopSyncEnabled();
-            m_preferencesDialog.open(state, &m_audioEngine, &m_midiEngine);
-        }),
+        M::item("Preferences", [this]() { openPreferencesDialog(); }),
     });
 
     // View menu
@@ -287,56 +438,13 @@ void App::setupMenuBar() {
     {
         m_menuBar.addMenu("Track", {
             M::item("Add Audio Track", [this]() {
-                int idx = m_project.numTracks();
-                m_project.addTrack("Audio " + std::to_string(idx + 1), Track::Type::Audio);
-                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 0});
-                m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{idx, m_project.track(idx).audioInputCh});
-                markDirty();
-                m_undoManager.push({"Add Audio Track",
-                    [this]{ m_project.removeLastTrack(); markDirty(); },
-                    [this]{
-                        int i = m_project.numTracks();
-                        m_project.addTrack("Audio " + std::to_string(i + 1), Track::Type::Audio);
-                        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 0});
-                        m_audioEngine.sendCommand(audio::SetTrackAudioInputChMsg{i, m_project.track(i).audioInputCh});
-                        markDirty();
-                    }, ""});
-                LOG_INFO("Audio", "Added Audio track %d", m_project.numTracks());
+                addTrackOfType(Track::Type::Audio);
             }),
             M::item("Add MIDI Track", [this]() {
-                int idx = m_project.numTracks();
-                m_project.addTrack("MIDI " + std::to_string(idx + 1), Track::Type::Midi);
-                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
-                m_audioEngine.setInstrument(idx, std::make_unique<instruments::SubtractiveSynth>());
-                markDirty();
-                m_undoManager.push({"Add MIDI Track",
-                    [this, idx]{
-                        m_audioEngine.setInstrument(idx, nullptr);
-                        m_project.removeLastTrack(); markDirty();
-                    },
-                    [this]{
-                        int i = m_project.numTracks();
-                        m_project.addTrack("MIDI " + std::to_string(i + 1), Track::Type::Midi);
-                        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 1});
-                        m_audioEngine.setInstrument(i, std::make_unique<instruments::SubtractiveSynth>());
-                        markDirty();
-                    }, ""});
-                LOG_INFO("MIDI", "Added MIDI track %d (with SubSynth)", m_project.numTracks());
+                addTrackOfType(Track::Type::Midi);
             }),
             M::item("Add Visual Track", [this]() {
-                int idx = m_project.numTracks();
-                m_project.addTrack("Visual " + std::to_string(idx + 1), Track::Type::Visual);
-                m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 2});
-                markDirty();
-                m_undoManager.push({"Add Visual Track",
-                    [this]{ m_project.removeLastTrack(); markDirty(); },
-                    [this]{
-                        int i = m_project.numTracks();
-                        m_project.addTrack("Visual " + std::to_string(i + 1), Track::Type::Visual);
-                        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{i, 2});
-                        markDirty();
-                    }, ""});
-                LOG_INFO("Visual", "Added Visual track %d", m_project.numTracks());
+                addTrackOfType(Track::Type::Visual);
             }),
             M::separator(),
             M::item("Rename Track", [this]() {
@@ -355,9 +463,9 @@ void App::setupMenuBar() {
     // keyboard-accessible. Right-click on a scene label offers the
     // full Insert/Duplicate/Delete/Rename set.
     m_menuBar.addMenu("Scene", {
-        M::item("Insert Scene\tIns", [this]() {
+        M::item("Insert Scene", [this]() {
             insertSceneAtSelection();
-        }),
+        }, "Ins"),
     });
 
     // (MIDI device + Link sync config live in Edit → Preferences; the
@@ -385,89 +493,8 @@ void App::setupMenuBar() {
 
     // Help menu
     m_menuBar.addMenu("Help", {
-        M::item("About Y.A.W.N", [this]() {
-            ui::fw2::DialogSpec spec;
-            spec.title = "Y.A.W.N";
-            spec.message =
-                "Yetanother Audio Workstation New\n"
-                "Version " YAWN_VERSION_STRING "\n"
-                "\n"
-                "Made with AI-Sloptronic(TM) technology\n"
-                "\n"
-                "PM: Tasos Kleisas\n"
-                "Chief Engineer: Claude (Anthropic)\n"
-                "Where \"it compiles\" is the new \"it works\"";
-            // Show the YAWN logo above the title (loaded at startup,
-            // see m_iconTexture init).
-            if (m_iconTexture) {
-                spec.iconTextureId = static_cast<unsigned int>(m_iconTexture);
-                spec.iconSize      = 128.0f;
-            }
-            ui::fw2::DialogButton ok;
-            ok.label   = "OK";
-            ok.primary = true;
-            ok.cancel  = true;
-            spec.buttons.push_back(std::move(ok));
-            ui::fw2::Dialog::show(std::move(spec));
-        }),
-        M::item("Keyboard Shortcuts", []() {
-            ui::fw2::DialogSpec spec;
-            spec.title = "Keyboard Shortcuts";
-            // Two columns separated by spaces. Using a proportional
-            // font means alignment is approximate, but key combos
-            // are short and consistent so it reads cleanly enough.
-            // Group with blank lines + section headers.
-            spec.message =
-                "FILE\n"
-                "  Ctrl+N           New Project\n"
-                "  Ctrl+O           Open Project\n"
-                "  Ctrl+S           Save Project\n"
-                "  Ctrl+Shift+S     Save As...\n"
-                "  Ctrl+Q           Quit\n"
-                "\n"
-                "EDIT\n"
-                "  Ctrl+Z           Undo\n"
-                "  Ctrl+Y           Redo\n"
-                "\n"
-                "VIEW\n"
-                "  Tab              Switch Session / Arrangement\n"
-                "  M                Toggle Mixer\n"
-                "  D                Toggle Detail Panel\n"
-                "  F11              Toggle Visual Output Fullscreen\n"
-                "\n"
-                "TRANSPORT\n"
-                "  Space            Play / Stop (launches default clips)\n"
-                "  Home             Return to Zero\n"
-                "  + / =            Tempo +1 BPM\n"
-                "  - / _            Tempo -1 BPM\n"
-                "\n"
-                "SESSION VIEW\n"
-                "  Arrows           Move clip selection\n"
-                "  Shift+Arrows     Move controller grid region\n"
-                "  Enter            Launch / Stop selected clip\n"
-                "  Delete / Bksp    Clear selected clip\n"
-                "  Ctrl+C / X / V   Copy / Cut / Paste clip\n"
-                "  Ctrl+D           Duplicate clip to next empty slot\n"
-                "  G                Toggle controller grid overlay\n"
-                "  Ins              Insert Scene below selection\n"
-                "\n"
-                "ARRANGEMENT VIEW\n"
-                "  L                Toggle Loop\n"
-                "  F                Toggle Follow Playhead\n"
-                "  [                Set Loop Start at playhead\n"
-                "  ]                Set Loop End at playhead\n"
-                "  Ctrl+D           Duplicate selection\n"
-                "  Delete / Bksp    Delete selection\n"
-                "\n"
-                "OTHER\n"
-                "  Esc              Close menu / exit fullscreen / quit";
-            ui::fw2::DialogButton ok;
-            ok.label   = "OK";
-            ok.primary = true;
-            ok.cancel  = true;
-            spec.buttons.push_back(std::move(ok));
-            ui::fw2::Dialog::show(std::move(spec));
-        }),
+        M::item("About Y.A.W.N", [this]() { showAboutDialog(); }),
+        M::item("Keyboard Shortcuts", [this]() { showKeyboardShortcutsDialog(); }),
     });
 }
 

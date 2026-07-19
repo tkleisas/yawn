@@ -419,9 +419,12 @@ static void paintContextMenuLevels(
 
             if (e.kind == MenuEntryKind::Separator) {
                 const float ly = rowY + sepH * 0.5f;
+                // borderSubtle ({55,55,58}) is 3 RGB units off the
+                // elevated popup bg — effectively invisible. Use the
+                // same border color as the popup outline.
                 ctx.renderer->drawLine(b.x + padX, ly,
                                         b.x + b.w - padX, ly,
-                                        p.borderSubtle, 1.0f);
+                                        p.border, 1.0f);
                 rowY += sepH;
                 continue;
             }
@@ -584,18 +587,43 @@ static void paintDialog(const DialogManager::State& s, UIContext& ctx) {
         ctx.renderer->popClip();
 
         // Scrollbar — only when the message overflows its region.
+        // The earlier 3 px / alpha-30 styling was effectively invisible
+        // against the dark body (finding: shortcuts dialog read as
+        // "cut off with no scrollbar"). Wider, more opaque, and paired
+        // with ▲/▼ affordances below so the scrollability is obvious.
         const float maxS = s.scrollMax();
         if (maxS > 0.0f && s.msgContentH > 0.0f) {
-            const float trackX = b.x + b.w - 6.0f;
+            const float trackX = b.x + b.w - 9.0f;
             const float trackY = s.msgRect.y;
             const float trackH = s.msgRect.h;
-            ctx.renderer->drawRect(trackX, trackY, 3.0f, trackH,
-                                   Color{255, 255, 255, 30});
+            ctx.renderer->drawRect(trackX, trackY, 4.0f, trackH,
+                                   Color{255, 255, 255, 45});
             const float thumbH = std::max(20.0f,
                 trackH * (s.msgRect.h / s.msgContentH));
             const float thumbY = trackY + (trackH - thumbH) * (s.scrollOffset / maxS);
-            ctx.renderer->drawRect(trackX, thumbY, 3.0f, thumbH,
-                                   Color{255, 255, 255, 110});
+            ctx.renderer->drawRect(trackX, thumbY, 4.0f, thumbH,
+                                   Color{255, 255, 255, 160});
+        }
+    }
+
+    // Scroll affordance chevrons — same idiom as the context menu:
+    // ▲ at the top when content is scrolled off above, ▼ at the
+    // bottom while more remains below. Drawn over the clipped text.
+    if (!s.spec.message.empty() && ctx.textMetrics && s.msgRect.h > 0.0f) {
+        const float maxS = s.scrollMax();
+        if (maxS > 0.0f) {
+            const float cw = m.fontSize * 0.5f;
+            const float cx = b.x + b.w * 0.5f;
+            if (s.scrollOffset > 0.5f) {                 // ▲ more above
+                const float cy = s.msgRect.y + 4.0f;
+                ctx.renderer->drawTriangle(cx - cw, cy + cw, cx + cw, cy + cw, cx, cy,
+                                           p.textSecondary);
+            }
+            if (s.scrollOffset < maxS - 0.5f) {          // ▼ more below
+                const float cy = s.msgRect.y + s.msgRect.h - 4.0f;
+                ctx.renderer->drawTriangle(cx - cw, cy - cw, cx + cw, cy - cw, cx, cy,
+                                           p.textSecondary);
+            }
         }
     }
 

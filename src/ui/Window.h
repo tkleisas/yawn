@@ -31,6 +31,11 @@ public:
     void makeCurrent();
     void swap();
 
+    // Dump the current back buffer to a PNG (glReadPixels + stb).
+    // Call after the frame is fully rendered, before swap(). Returns
+    // false when the window/back buffer isn't readable.
+    bool captureToPng(const std::string& path);
+
     SDL_Window* getHandle() const { return m_window; }
     SDL_GLContext getGLContext() const { return m_glContext; }
     bool isOpen() const { return m_window != nullptr; }
