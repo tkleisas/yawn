@@ -191,7 +191,7 @@ void App::showAboutDialog() {
     ui::fw2::DialogSpec spec;
     spec.title = "Y.A.W.N";
     spec.message =
-        "Yetanother Audio Workstation New\n"
+        "Yet another Audio Workstation New\n"
         "Version " YAWN_VERSION_STRING "\n"
         "\n"
         "Made with AI-Sloptronic(TM) technology\n"

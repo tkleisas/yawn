@@ -19,6 +19,22 @@ namespace midi {
 // Lock-free ring buffer for raw MIDI messages from callback → audio thread
 using MidiRingBuffer = util::RingBuffer<MidiMessage, 4096>;
 
+// ALSA client name we give our own RtMidi instances. Every input we
+// open registers a writable port under this client, which would then
+// show up in the OUTPUT port list (and our outputs in the input
+// list) — our own ports reflected back at us, offering a feedback
+// loop that was even enabled by default. Naming the client lets the
+// enumerators below filter our own ports out of the lists.
+inline constexpr const char kOwnClientName[] = "YAWN";
+
+// True when an enumerated port name belongs to our own client
+// (ALSA names ports "client:port clientNum:portNum", e.g.
+// "YAWN:YAWN 130:0"). Kept as a free function so tests can cover it
+// without touching RtMidi.
+inline bool isOwnPortName(const std::string& name) {
+    return name.compare(0, sizeof(kOwnClientName), std::string(kOwnClientName) + ':') == 0;
+}
+
 class MidiPort {
 public:
     enum class Direction { Input, Output };
@@ -51,29 +67,62 @@ public:
         catch (...) { return ""; }
     }
 
-    // Enumerate all input port names atomically using a single RtMidiIn instance,
-    // avoiding TOCTOU crashes when devices disconnect between count and name queries.
-    static std::vector<std::string> enumerateInputPorts() {
-        std::vector<std::string> names;
+    // One enumerated port: raw RtMidi index + display name, with our
+    // own client's ports already filtered out (see kOwnClientName).
+    // The UI lists ports in THIS filtered space, so open() must map
+    // back to the raw index — otherwise filtering would shift every
+    // port after the removed one off by one.
+    struct EnumeratedPort {
+        int         rawIndex;
+        std::string name;
+    };
+
+    static std::vector<EnumeratedPort> enumerateInputPortsDetailed() {
+        std::vector<EnumeratedPort> out;
         try {
             RtMidiIn in;
             int n = static_cast<int>(in.getPortCount());
-            names.reserve(n);
-            for (int i = 0; i < n; ++i)
-                names.push_back(in.getPortName(i));
+            out.reserve(n);
+            for (int i = 0; i < n; ++i) {
+                std::string name = in.getPortName(i);
+                if (!isOwnPortName(name))
+                    out.push_back({i, std::move(name)});
+            }
         } catch (...) {}
+        return out;
+    }
+
+    static std::vector<EnumeratedPort> enumerateOutputPortsDetailed() {
+        std::vector<EnumeratedPort> out;
+        try {
+            RtMidiOut out_;
+            int n = static_cast<int>(out_.getPortCount());
+            out.reserve(n);
+            for (int i = 0; i < n; ++i) {
+                std::string name = out_.getPortName(i);
+                if (!isOwnPortName(name))
+                    out.push_back({i, std::move(name)});
+            }
+        } catch (...) {}
+        return out;
+    }
+
+    // Enumerate all input port names atomically using a single RtMidiIn instance,
+    // avoiding TOCTOU crashes when devices disconnect between count and name queries.
+    // Ports belonging to our own client are skipped — see kOwnClientName.
+    static std::vector<std::string> enumerateInputPorts() {
+        auto detailed = enumerateInputPortsDetailed();
+        std::vector<std::string> names;
+        names.reserve(detailed.size());
+        for (auto& p : detailed) names.push_back(std::move(p.name));
         return names;
     }
 
     static std::vector<std::string> enumerateOutputPorts() {
+        auto detailed = enumerateOutputPortsDetailed();
         std::vector<std::string> names;
-        try {
-            RtMidiOut out;
-            int n = static_cast<int>(out.getPortCount());
-            names.reserve(n);
-            for (int i = 0; i < n; ++i)
-                names.push_back(out.getPortName(i));
-        } catch (...) {}
+        names.reserve(detailed.size());
+        for (auto& p : detailed) names.push_back(std::move(p.name));
         return names;
     }
 
@@ -82,18 +131,24 @@ public:
     bool open(int portIndex) {
         close();
         try {
+            // portIndex is in the FILTERED enumeration space (what the
+            // UI lists) — map to the raw RtMidi index before opening.
+            const auto list = (m_direction == Direction::Input)
+                ? enumerateInputPortsDetailed() : enumerateOutputPortsDetailed();
+            if (portIndex < 0 || portIndex >= static_cast<int>(list.size()))
+                return false;
+            const int rawIndex = list[portIndex].rawIndex;
             if (m_direction == Direction::Input) {
-                m_midiIn = std::make_unique<RtMidiIn>();
-                m_midiIn->openPort(portIndex);
+                m_midiIn = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, kOwnClientName);
+                m_midiIn->openPort(rawIndex);
                 m_midiIn->setCallback(midiInCallback, this);
                 m_midiIn->ignoreTypes(false, false, false); // receive sysex, timing, active sensing
             } else {
-                m_midiOut = std::make_unique<RtMidiOut>();
-                m_midiOut->openPort(portIndex);
+                m_midiOut = std::make_unique<RtMidiOut>(RtMidi::UNSPECIFIED, kOwnClientName);
+                m_midiOut->openPort(rawIndex);
             }
             m_open = true;
-            m_portName = (m_direction == Direction::Input)
-                ? inputPortName(portIndex) : outputPortName(portIndex);
+            m_portName = list[portIndex].name;
             return true;
         } catch (const RtMidiError& e) {
             LOG_ERROR("MIDI", "MidiPort::open error: %s", e.getMessage().c_str());
@@ -106,12 +161,12 @@ public:
         close();
         try {
             if (m_direction == Direction::Input) {
-                m_midiIn = std::make_unique<RtMidiIn>();
+                m_midiIn = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, kOwnClientName);
                 m_midiIn->openVirtualPort(name);
                 m_midiIn->setCallback(midiInCallback, this);
                 m_midiIn->ignoreTypes(false, false, false);
             } else {
-                m_midiOut = std::make_unique<RtMidiOut>();
+                m_midiOut = std::make_unique<RtMidiOut>(RtMidi::UNSPECIFIED, kOwnClientName);
                 m_midiOut->openVirtualPort(name);
             }
             m_open = true;

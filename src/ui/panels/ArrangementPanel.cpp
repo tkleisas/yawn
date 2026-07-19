@@ -393,23 +393,27 @@ bool ArrangementPanel::onMouseDown(MouseEvent& e) {
                 return true;
             }
 
-            // S/A toggle button [Ses/Arr]
+            // S/A segmented control [Ses|Arr] — clicking a segment
+            // selects that mode directly (no-op on the active one).
             float saBtnX = expBtnX + expW + btnGap;
-            float saW = 36.0f;
+            float saW = 64.0f;
             if (e.x >= saBtnX && e.x < saBtnX + saW &&
                 e.y >= btnRowY && e.y < btnRowY + btnH) {
                 auto& tr = m_project->track(track);
-                bool oldVal = tr.arrangementActive;
-                tr.arrangementActive = !oldVal;
-                if (m_onTrackArrToggle)
-                    m_onTrackArrToggle(track, tr.arrangementActive);
-                if (m_undoManager) {
-                    m_undoManager->push({"Toggle Arrangement Active",
-                        [this, track, oldVal]{ m_project->track(track).arrangementActive = oldVal;
-                            if (m_onTrackArrToggle) m_onTrackArrToggle(track, oldVal); },
-                        [this, track, oldVal]{ m_project->track(track).arrangementActive = !oldVal;
-                            if (m_onTrackArrToggle) m_onTrackArrToggle(track, !oldVal); },
-                        ""});
+                const bool wantArr = (e.x >= saBtnX + saW * 0.5f);
+                if (wantArr != tr.arrangementActive) {
+                    bool oldVal = tr.arrangementActive;
+                    tr.arrangementActive = wantArr;
+                    if (m_onTrackArrToggle)
+                        m_onTrackArrToggle(track, tr.arrangementActive);
+                    if (m_undoManager) {
+                        m_undoManager->push({"Toggle Arrangement Active",
+                            [this, track, oldVal]{ m_project->track(track).arrangementActive = oldVal;
+                                if (m_onTrackArrToggle) m_onTrackArrToggle(track, oldVal); },
+                            [this, track, oldVal]{ m_project->track(track).arrangementActive = !oldVal;
+                                if (m_onTrackArrToggle) m_onTrackArrToggle(track, !oldVal); },
+                            ""});
+                    }
                 }
                 return true;
             }
@@ -1436,18 +1440,29 @@ void ArrangementPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm,
         }
         bx += expW + btnGap;
 
-        // S/A toggle button — text centered inside
-        float saW = 36.0f;
+        // S/A segmented control — [Ses|Arr] showing both modes with
+        // the active one lit. The old single 36 px state label
+        // ("Ses"/"Arr") read as cryptic; a two-segment switch makes
+        // the session/arrangement meaning self-evident.
+        float saW = 64.0f;
+        const float segW = saW * 0.5f;
         bool arrActive = tr.arrangementActive;
-        Color saBg = arrActive ? Color{60, 130, 70, 255} : Color{60, 60, 65, 255};
-        r.drawRoundedRect(bx, btnRowY, saW, btnH, 3.0f, saBg, 4);
-        {
-            const char* saLabel = arrActive ? "Arr" : "Ses";
-            float tw = tm.textWidth(saLabel, fsSmall);
-            float saTextX = bx + (saW - tw) * 0.5f;
-            float saTextY = btnRowY + (btnH - tm.lineHeight(fsSmall)) * 0.5f;
-            tm.drawText(r, saLabel, saTextX, saTextY, fsSmall,
-                        Color{255, 255, 255, 220});
+        for (int seg = 0; seg < 2; ++seg) {
+            const bool segArr = (seg == 1);
+            const bool on     = (segArr == arrActive);
+            Color segBg = on ? (segArr ? Color{60, 130, 70, 255}     // Arr: green
+                                        : Color{70, 85, 110, 255})   // Ses: slate blue
+                             : Color{48, 48, 52, 255};
+            r.drawRoundedRect(bx + seg * segW, btnRowY, segW - 1.0f, btnH,
+                              3.0f, segBg, 4);
+            const char* segLabel = segArr ? "Arr" : "Ses";
+            float tw = tm.textWidth(segLabel, fsSmall);
+            tm.drawText(r, segLabel,
+                        bx + seg * segW + (segW - tw) * 0.5f,
+                        btnRowY + (btnH - tm.lineHeight(fsSmall)) * 0.5f,
+                        fsSmall,
+                        on ? Color{255, 255, 255, 230}
+                           : Color{150, 150, 155, 180});
         }
 
         // Bottom border — slightly thicker as resize handle hint

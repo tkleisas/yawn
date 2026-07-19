@@ -239,7 +239,10 @@ public:
 
         const float lh      = tm.lineHeight(fs);
         const float lhSmall = tm.lineHeight(fsSmall);
-        for (int i = 0; i < visibleRows + 1 && (i + m_scrollOffset) < totalRows; ++i) {
+        // Only fully-visible rows: the previous "+ 1" drew a row that
+        // could only fit partially at the panel bottom, clipping its
+        // text mid-glyph. Scrolling is in whole rows anyway.
+        for (int i = 0; i < visibleRows && (i + m_scrollOffset) < totalRows; ++i) {
             int idx = i + m_scrollOffset;
             auto& entry = m_entries[idx];
             float ry = listY + i * rowH;

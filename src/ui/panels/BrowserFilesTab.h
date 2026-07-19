@@ -52,7 +52,7 @@ public:
         m_searchInput.setOnCommit([this](const std::string&) { doSearch(); });
         // Live search on every keystroke.
         m_searchInput.setOnChange([this](const std::string&) { doSearch(); });
-        m_addFolderBtn.setLabel("+");
+        m_addFolderBtn.setLabel("+ Folder");
         setFocusable(false);
     }
 
@@ -133,11 +133,19 @@ protected:
     void onLayout(Rect bounds, UIContext& ctx) override {
         m_bounds = bounds;
         // Position the search input + add-folder button in the top row.
+        // The button is sized to its "+ Folder" label — a bare "+"
+        // gave no hint what it adds (and contradicted the empty-list
+        // hint text that names it "+ Folder").
         const float x = bounds.x, y = bounds.y, w = bounds.w;
-        m_searchInput.measure(Constraints::tight(w - 30, 20), ctx);
-        m_searchInput.layout(Rect{x + 4, y + 4, w - 30, 20}, ctx);
-        m_addFolderBtn.measure(Constraints::tight(20, 20), ctx);
-        m_addFolderBtn.layout(Rect{x + w - 24, y + 4, 20, 20}, ctx);
+        float btnW = 66.0f;   // fallback when text metrics unavailable
+        if (ctx.textMetrics) {
+            btnW = ctx.textMetrics->textWidth("+ Folder", theme().metrics.fontSizeSmall)
+                   + 16.0f;   // horizontal padding inside the button
+        }
+        m_addFolderBtn.measure(Constraints::tight(btnW, 20), ctx);
+        m_addFolderBtn.layout(Rect{x + w - 4 - btnW, y + 4, btnW, 20}, ctx);
+        m_searchInput.measure(Constraints::tight(w - btnW - 12, 20), ctx);
+        m_searchInput.layout(Rect{x + 4, y + 4, w - btnW - 12, 20}, ctx);
     }
 
     bool onMouseDown(MouseEvent& e) override {
@@ -288,7 +296,10 @@ public:
         r.pushClip(x, listY, w, listH);
 
         const float lh = tm.lineHeight(fs);
-        for (int i = 0; i < visibleRows + 1 && (i + m_scrollOffset) < totalRows; ++i) {
+        // Only fully-visible rows: the previous "+ 1" drew a row that
+        // could only fit partially at the panel bottom, clipping its
+        // text mid-glyph. Scrolling is in whole rows anyway.
+        for (int i = 0; i < visibleRows && (i + m_scrollOffset) < totalRows; ++i) {
             int idx = i + m_scrollOffset;
             auto* node = items[idx];
             float ry = listY + i * rowH;
