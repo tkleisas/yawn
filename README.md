@@ -123,6 +123,7 @@ self-contained releases are built, and the stem-separation model) are in
 
 | Doc | What's in it |
 |---|---|
+| [docs/manual.md](docs/manual.md) | **The user manual** — concepts, tour, how-tos, reference |
 | [docs/features.md](docs/features.md) | The full, exhaustive feature list |
 | [docs/building.md](docs/building.md) | Prerequisites, build flags, releases, the stem model |
 | [docs/controls.md](docs/controls.md) | Keyboard + mouse controls reference |
