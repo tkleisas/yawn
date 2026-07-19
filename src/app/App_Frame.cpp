@@ -228,13 +228,9 @@ void App::update() {
     // transport is already stopped), clear every visual layer so
     // session-launched shaders / models / videos go dark in lockstep
     // with the audio / MIDI scheduleStop path.
-    if (!vExport) {
-        const uint64_t stopCount = m_audioEngine.transport().stopCounter();
-        if (stopCount != m_lastSeenStopCounter) {
-            stopAllVisualLayers();
-            m_lastSeenStopCounter = stopCount;
-        }
-    }
+    if (!vExport)
+        m_visualController->onTransportStopCounter(
+            m_audioEngine.transport().stopCounter());
 
     // Arrangement-driven visual clip playback: detect which clip is
     // under the transport head on each visual track and fire launch /
@@ -265,24 +261,7 @@ void App::update() {
     if (!vExport) pollVisualFollowActions();
 
     // Video imports — advance each background transcode, apply results.
-    for (auto it = m_pendingImports.begin(); it != m_pendingImports.end(); ) {
-        it->importer->poll();
-        auto st = it->importer->state();
-        m_sessionPanel->setSlotImportProgress(it->track, it->scene,
-                                                it->importer->progress());
-        if (st == visual::VideoImporter::State::Done) {
-            onVideoImportDone(*it);
-            it = m_pendingImports.erase(it);
-        } else if (st == visual::VideoImporter::State::Failed) {
-            LOG_ERROR("Video", "Import failed: %s", it->importer->error().c_str());
-            m_sessionPanel->setSlotImporting(it->track, it->scene, false);
-            m_toastManager.show("Video import failed",
-                                2.5f, ui::ToastManager::Severity::Error);
-            it = m_pendingImports.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    m_visualController->pollVideoImports();
 
     // Poll the Demucs stem-separation worker (one at a time). On completion
     // apply on the main thread (track creation). Live progress is drawn as
@@ -297,25 +276,7 @@ void App::update() {
     // Audio thread writes, UI thread reads once per frame. Hardware
     // controllers (Push / Move encoders 1..8) feed straight into the
     // track macros via this path.
-    for (int t = 0; t < m_project.numTracks() && t < kMaxTracks; ++t) {
-        if (m_project.track(t).type != Track::Type::Visual) continue;
-        for (int k = 0; k < MacroDevice::kNumMacros; ++k) {
-            float v;
-            if (!visual::VisualKnobBus::instance().readIfChanged(
-                    t, k, m_visualKnobBusVersions[t][k], &v)) continue;
-            m_project.track(t).macros.values[k] = v;
-            m_visualEngine.setLayerKnob(t, k, v);
-            markDirty();
-            // Reflect into the panel immediately if this is the
-            // selected visual track.
-            if (t == m_selectedTrack) {
-                float knobs[8];
-                for (int i = 0; i < MacroDevice::kNumMacros; ++i)
-                    knobs[i] = m_project.track(t).macros.values[i];
-                m_visualParamsPanel->setKnobValues(knobs);
-            }
-        }
-    }
+    m_visualController->pollVisualKnobBus();
 
     // Apply MIDI-LFO → visual modulation. A midi::LFO living in any track's
     // MIDI effect chain can target a visual layer's A..H knob or shader

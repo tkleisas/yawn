@@ -863,7 +863,7 @@ void App::showArrangementClipContextMenu(int trackIndex, int clipIdx,
             auto& cs = m_project.track(tr).arrangementClips;
             if (ci >= 0 && ci < static_cast<int>(cs.size()) &&
                 cs[ci].type == ArrangementClip::Type::Visual &&
-                m_activeArrVisualClip[tr] == ci) {
+                m_visualController->arrActiveClip(tr) == ci) {
                 const auto& c = cs[ci];
                 const int vmode = c.stretch ? 1 : (c.loop ? 0 : 2);
                 m_visualEngine.setLayerArrangementVideo(tr, vmode,

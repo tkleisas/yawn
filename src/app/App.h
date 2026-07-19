@@ -4,6 +4,7 @@
 #include "ui/Renderer.h"
 #include "visual/VisualEngine.h"
 #include "visual/ShaderLibrary.h"
+#include "app/VisualClipController.h"
 #include "ui/Font.h"
 #include "ui/ToastManager.h"
 #include "ui/Widget.h"
@@ -68,7 +69,7 @@ namespace yawn {
 namespace effects { class ConvolutionReverb; class NeuralAmp; }
 namespace midi { class LFO; }
 
-class App {
+class App : public VisualClipHost {
 public:
     App() = default;
     ~App();
@@ -337,6 +338,26 @@ private:
 
     ui::Window m_mainWindow;
     visual::VisualEngine m_visualEngine;
+    // Visual-clip state machine (launch queue, follow actions,
+    // arrangement playback, knob automation, macro mappings, video
+    // imports, asset localization) — extracted from this class.
+    // Created in init() after the engine + project exist.
+    std::unique_ptr<VisualClipController> m_visualController;
+    VisualClipController& visual() { return *m_visualController; }
+
+    // VisualClipHost implementation (services the controller needs).
+    void vccMarkDirty() override { markDirty(); }
+    void vccToast(const std::string& msg, float seconds, int severity) override;
+    void vccUpdateClipState(int track, bool playing, int64_t playPos, int scene) override;
+    void vccSetSlotImporting(int track, int scene, bool importing) override;
+    void vccSetSlotImportProgress(int track, int scene, float progress) override;
+    void vccSetPanelKnobValues(const float* knobs) override;
+    bool vccLoadClipToSlot(const std::string& path, int track, int scene) override;
+    void vccSyncTracksToEngine() override { syncTracksToEngine(); }
+    std::filesystem::path vccProjectPath() const override { return m_projectPath; }
+    int vccSelectedTrack() const override { return m_selectedTrack; }
+    int vccSelectedScene() const override { return m_selectedScene; }
+
     visual::ShaderLibrary m_shaderLibrary;
     ui::Renderer2D m_renderer;
     ui::Font m_font;
@@ -599,17 +620,10 @@ private:
     };
     std::unique_ptr<PendingStem> m_pendingStem;
 
-    // Active video imports (transcoding in the background via ffmpeg).
-    struct PendingVideoImport {
-        int track;
-        int scene;
-        std::string sourcePath;
-        std::unique_ptr<visual::VideoImporter> importer;
-    };
-    std::vector<PendingVideoImport> m_pendingImports;
-
+    // Video imports, visual-clip launches, follow actions, knob
+    // automation, macro mappings, and shader/model/scene asset
+    // localization live in VisualClipController (m_visualController).
     void startVideoImport(int track, int scene, const std::string& sourcePath);
-    void onVideoImportDone(PendingVideoImport& pi);
     // Static image (PNG/JPG/…) dropped on a visual track → set it as the
     // slot's iChannel2 source (no transcode; references the file in place).
     void addImageToSlot(int track, int scene, const std::string& sourcePath);
@@ -656,38 +670,9 @@ private:
     std::string localizeScene(const std::string& sourcePath);
     std::string resolveScenePath(const std::string& storedPath) const;
 
-    // Per-(track, knob) last-seen version from VisualKnobBus, so we only
-    // act on fresh MIDI CC writes (avoids stomping on user drags).
-    uint32_t m_visualKnobBusVersions[kMaxTracks][8] = {};
-
-    // Arrangement playback tracking — per visual track, the index of
-    // the currently-active arrangement clip (-1 = none / in a gap).
-    // Compared against each frame's lookup to detect transitions.
-    int m_activeArrVisualClip[kMaxTracks] = {};
-    bool m_activeArrInit = false;
-
-    // Tracks the last-seen transport stop counter so we can clear
-    // visual layers exactly once per stop-press — including stops
-    // fired while the transport wasn't playing (session-only visual
-    // launches), which a play→stop edge detector would miss.
-    uint64_t m_lastSeenStopCounter = 0;
-
-    // Per-track launch beat of the currently-playing session visual
-    // clip (used by the follow-action poller to decide when barCount
-    // bars have elapsed). NaN-equivalent = not launched.
-    static constexpr double kNoVisualLaunch = -1.0;
-    double m_visualLaunchBeat[kMaxTracks] = {};
-    int    m_visualLaunchScene[kMaxTracks] = {};
-    bool   m_visualLaunchInit = false;
-
-    // Pending quantized visual-clip launches (UI thread). Audio/MIDI clips
-    // honour slot.launchQuantize — the audio engine defers them to a
-    // bar/beat boundary. Visual clips must defer to the SAME boundary or
-    // the video starts before the audio on a scene launch. m_visualHasPending
-    // zero-inits to false = nothing pending, so no explicit init is needed.
-    bool   m_visualHasPending[kMaxTracks] = {};
-    int    m_visualPendingScene[kMaxTracks] = {};
-    double m_visualPendingFireBeat[kMaxTracks] = {};
+    // Per-track visual-clip launch/playback/follow-action/automation/
+    // import state moved into VisualClipController — see
+    // m_visualController below.
 
     // ── Record session → arrangement (Ableton-style capture) ──
     // While armed, each frame we poll the actually-playing session clip

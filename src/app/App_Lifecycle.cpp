@@ -140,6 +140,11 @@ bool App::init() {
 
     m_project.init();  // uses kDefaultNumTracks / kDefaultNumScenes
     setupDefaultTracks();
+    // The visual-clip state machine — needs project + engine + visual
+    // engine + host (this) in place; created before any launch path
+    // can fire (menus/panels wire up in buildWidgetTree just below).
+    m_visualController = std::make_unique<VisualClipController>(
+        m_project, m_audioEngine, m_visualEngine, *this);
     m_virtualKeyboard.init(&m_audioEngine);
     setupMenuBar();
     buildWidgetTree();

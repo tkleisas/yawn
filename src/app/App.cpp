@@ -548,7 +548,7 @@ void App::clearTrackArrangement(int trackIdx) {
         syncArrangementClipsToEngine(trackIdx);
         if (t.type == Track::Type::Visual) {
             m_visualEngine.clearLayer(trackIdx);
-            m_activeArrVisualClip[trackIdx] = -1;
+            m_visualController->resetArrangementTracking(trackIdx);
         }
         m_project.updateArrangementLength();
         markDirty();
@@ -590,7 +590,7 @@ void App::clearAllArrangements() {
             syncArrangementClipsToEngine(t);
             if (tr.type == Track::Type::Visual) {
                 m_visualEngine.clearLayer(t);
-                m_activeArrVisualClip[t] = -1;
+                m_visualController->resetArrangementTracking(t);
             }
         }
         m_project.updateArrangementLength();
@@ -630,7 +630,7 @@ int App::currentSessionScene(int track) {
         default:
             // Visual: the App tracks the launched session visual clip's scene
             // per track (set on launch, cleared to -1 on stop/follow-stop).
-            return m_visualLaunchScene[track];
+            return m_visualController->activeVisualScene(track);
     }
 }
 
@@ -983,8 +983,7 @@ void App::pollVideoExport() {
         // Hand off to the frame render (main thread owns the GL from here).
         auto& transport = m_audioEngine.transport();
         transport.stop();   // we set the position per frame; don't advance it
-        for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
-        m_activeArrInit = true;
+        m_visualController->resetAllArrangementTracking();
         m_visualEngine.beginOfflineRender();
         j.w = m_visualEngine.compositeWidth();
         j.h = m_visualEngine.compositeHeight();
@@ -1116,7 +1115,7 @@ void App::finalizeVideoExport(bool ok, bool cancelled) {
         m_project.track(t).arrangementActive = (j.restoreArr[t] != 0);
         m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, j.restoreArr[t] != 0});
     }
-    for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
+    m_visualController->resetAllArrangementTracking();
 
     const std::string fname = fs::path(j.outPath).filename().string();
     m_exportDialog.setRendering(false);

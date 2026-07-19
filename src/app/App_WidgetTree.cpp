@@ -935,9 +935,8 @@ void App::buildWidgetTree() {
         [this](int track) {
             if (track < 0 || track >= kMaxTracks) return;
             m_visualEngine.clearLayer(track);
-            m_activeArrVisualClip[track]  = -1;
-            m_visualLaunchBeat[track]     = kNoVisualLaunch;
-            m_visualLaunchScene[track]    = -1;
+            m_visualController->resetArrangementTracking(track);
+            m_visualController->resetLaunchState(track);
         });
 
     m_sessionPanel->setOnLaunchVisualClip(

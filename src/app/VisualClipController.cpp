@@ -1,0 +1,1151 @@
+// VisualClipController.cpp — the visual-clip state machine, extracted
+// from App_Visual.cpp / App_Frame.cpp. See VisualClipController.h for
+// the ownership contract. Everything here runs on the UI thread.
+#include "app/VisualClipController.h"
+
+#include "app/Project.h"
+#include "audio/AudioEngine.h"
+#include "visual/VisualEngine.h"
+#include "visual/VisualKnobBus.h"
+#include "util/Logger.h"
+
+#include <cmath>
+#include <chrono>
+#include <cstdint>
+
+namespace yawn {
+
+namespace {
+
+// Linear scan for a parameter by name on any device that exposes
+// the parameterCount() + parameterInfo(idx).name pair (instruments,
+// audio effects, midi effects all qualify). Returns -1 when the
+// name doesn't resolve. Per-frame call site, but the param counts
+// are tiny so a hash isn't worth the upkeep.
+template <typename Device>
+int findParamByName(const Device& dev, const std::string& name) {
+    const int n = dev.parameterCount();
+    for (int i = 0; i < n; ++i) {
+        const char* pn = dev.parameterInfo(i).name;
+        if (pn && name == pn) return i;
+    }
+    return -1;
+}
+
+// Stateless evaluation of a SavedKnobLFO — matches visual::VisualLFO::evaluate
+// (sample&hold recomputed from the cycle index, so no persistent state needed,
+// which keeps it usable from the offline render worker). Returns the raw shape
+// value in [-1,1]; the caller scales by depth.
+float evalSavedLFO(const SavedKnobLFO& lfo, double beat, double wall) {
+    if (!lfo.enabled || lfo.depth <= 0.0f) return 0.0f;
+    const double r    = (lfo.rate > 0.0001f) ? static_cast<double>(lfo.rate) : 0.0001;
+    const double ph   = lfo.sync ? (beat / r) : (wall * r);
+    const double frac = ph - std::floor(ph);
+    switch (lfo.shape) {
+        case 0: return static_cast<float>(std::sin(frac * 6.28318530718));      // Sine
+        case 1: return static_cast<float>(frac < 0.5 ? 4.0 * frac - 1.0
+                                                     : 3.0 - 4.0 * frac);       // Triangle
+        case 2: return static_cast<float>(2.0 * frac - 1.0);                    // Saw
+        case 3: return frac < 0.5 ? 1.0f : -1.0f;                               // Square
+        case 4: {                                                              // Sample & Hold
+            uint32_t x = static_cast<uint32_t>(static_cast<int>(std::floor(ph)))
+                       * 2654435761u;
+            x ^= x >> 16;
+            return static_cast<float>(x & 0xFFFFFFu)
+                 / static_cast<float>(0xFFFFFF) * 2.0f - 1.0f;
+        }
+        default: return 0.0f;
+    }
+}
+
+// A macro's knob value with its LFO applied, clamped to [0,1].
+float macroValueWithLFO(const MacroDevice& md, int idx, double beat, double wall) {
+    if (idx < 0 || idx >= MacroDevice::kNumMacros) return 0.0f;
+    float v = md.values[idx]
+            + evalSavedLFO(md.lfos[idx], beat, wall) * md.lfos[idx].depth;
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+} // namespace
+
+VisualClipController::VisualClipController(Project& project,
+                                           audio::AudioEngine& engine,
+                                           visual::VisualEngine& visualEngine,
+                                           VisualClipHost& host)
+    : m_project(project), m_engine(engine), m_visual(visualEngine),
+      m_host(host) {}
+
+// ── Launch / playback ─────────────────────────────────────────────
+
+void VisualClipController::stampVisualLaunch(int track, int scene) {
+    if (track < 0 || track >= kMaxTracks) return;
+    // Session launches use wall-clock iTime (starts at 0, advances with
+    // real time). Stamping the launch beat + scene gives the per-clip
+    // visual envelope poller its time origin — without it the poller is
+    // gated out and the envelope stays frozen until the clip is clicked.
+    m_visual.setLayerWallClock(track);
+    m_visualLaunchBeat[track]  = m_engine.transport().positionInBeats();
+    m_visualLaunchScene[track] = scene;
+}
+
+void VisualClipController::launchVisualClipQuantized(int track, int scene,
+                                                     bool transportWillPlay) {
+    if (track < 0 || track >= kMaxTracks) return;
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot || !slot->visualClip) return;
+
+    const auto q = slot->launchQuantize;
+    const bool playing = m_engine.transport().isPlaying();
+
+    // Launch immediately when there's no quantize, or when nothing is going
+    // to advance the transport for us to sync against (a lone visual launch
+    // while stopped). Otherwise defer to the boundary the audio/MIDI clips
+    // will start on — including the from-stopped case, where the transport
+    // spins up at the parked position and the clips fire on the next bar
+    // (see ClipEngine::checkPendingLaunches).
+    if (q == audio::QuantizeMode::None || (!playing && !transportWillPlay)) {
+        m_visualHasPending[track] = false;
+        launchVisualClipData(track, *slot->visualClip, slot->visualClip->firstShaderPath());
+        stampVisualLaunch(track, scene);
+        // A tempo-synced clip is driven by the transport beat clock, so it
+        // needs the transport running to advance. Audio/MIDI launches
+        // auto-start it (AudioEngine LaunchClipMsg); a lone visual launch
+        // does not, so start it here — otherwise a synced clip would sit
+        // frozen at beat 0. Free-running clips (wall-clock) don't need it.
+        if (slot->visualClip->tempoSync &&
+            !m_engine.transport().isPlaying())
+            m_engine.sendCommand(audio::TransportPlayMsg{});
+        return;
+    }
+
+    // Defer to the next bar/beat boundary, matching the audio engine's
+    // quantize so video and audio start together.
+    const double cur = m_engine.transport().positionInBeats();
+    const int beatsPerBar = std::max(1, m_engine.transport().numerator());
+    double fire = (q == audio::QuantizeMode::NextBeat)
+        ? std::floor(cur) + 1.0
+        : (std::floor(cur / beatsPerBar) + 1.0) * beatsPerBar;
+
+    m_visualHasPending[track]    = true;
+    m_visualPendingScene[track]  = scene;
+    m_visualPendingFireBeat[track] = fire;
+}
+
+void VisualClipController::pollVisualLaunchQueue() {
+    const bool playing = m_engine.transport().isPlaying();
+    const double beat = m_engine.transport().positionInBeats();
+    for (int t = 0; t < kMaxTracks; ++t) {
+        if (!m_visualHasPending[t]) continue;
+        // Fire once the transport is playing and has reached the boundary.
+        // Pending launches are only created when something will advance the
+        // transport, so this won't get stuck while stopped.
+        if (!playing || beat < m_visualPendingFireBeat[t]) continue;
+        const int scene = m_visualPendingScene[t];
+        m_visualHasPending[t] = false;
+        auto* slot = m_project.getSlot(t, scene);
+        if (slot && slot->visualClip) {
+            launchVisualClipData(t, *slot->visualClip, slot->visualClip->firstShaderPath());
+            stampVisualLaunch(t, scene);
+        }
+    }
+}
+
+void VisualClipController::launchVisualClipData(int track,
+                                                const visual::VisualClip& vc,
+                                                const std::string& shaderPath) {
+    const int audioSource = vc.audioSource;
+
+    // Clip without a custom shader → fall back to the bundled
+    // passthrough so whatever's feeding iChannel2 (file video, live
+    // input, or 3D model render) shows up full-frame.
+    std::string effectiveShader = shaderPath;
+    const bool hasFileVideo = !vc.videoPath.empty();
+    const bool hasLiveVideo = vc.liveInput && !vc.liveUrl.empty();
+    const bool hasModel     = !vc.modelPath.empty();
+    const bool hasImage     = !vc.imagePath.empty();
+    if (effectiveShader.empty() && hasModel) {
+        effectiveShader = "assets/shaders/model_passthrough.frag";
+    } else if (effectiveShader.empty() && hasImage) {
+        effectiveShader = "assets/shaders/image_fit.frag";
+    } else if (effectiveShader.empty() &&
+                (hasFileVideo || hasLiveVideo)) {
+        effectiveShader = "assets/shaders/video_passthrough.frag";
+    }
+    if (effectiveShader.empty()) return;
+
+    std::string resolved = resolveShaderPath(effectiveShader);
+    m_visual.loadLayer(track, resolved, audioSource);
+    m_visual.setLayerBlendMode(track,
+        static_cast<visual::VisualEngine::BlendMode>(
+            m_project.track(track).visualBlendMode));
+
+    m_visual.applyLayerParamValues(track, vc.firstPassParamValues());
+
+    // Effect chain — additional passes after the source. The chain
+    // lives on the *track* (audio-FX-style) so it persists across
+    // clip switches; we just re-push it here whenever the layer is
+    // re-launched. Empty chain clears any prior extras. Bypassed
+    // passes are still pushed (and compiled) so toggling them on is
+    // instant; the engine skips them at render time.
+    {
+        std::vector<visual::VisualEngine::ChainPassSpec> extras;
+        if (track >= 0 && track < m_project.numTracks()) {
+            const auto& chain = m_project.track(track).visualEffectChain;
+            extras.reserve(chain.size());
+            for (const auto& p : chain) {
+                visual::VisualEngine::ChainPassSpec spec;
+                spec.shaderPath  = resolveShaderPath(p.shaderPath);
+                spec.paramValues = p.paramValues;
+                spec.bypassed    = p.bypassed;
+                extras.push_back(std::move(spec));
+            }
+        }
+        m_visual.setLayerAdditionalPasses(track, extras);
+    }
+
+    // Macro values + LFO config flow from the *track*, not the clip.
+    // Phase 4.1 — track.macros owns the 8 knob values and modulators;
+    // launching a clip just re-pushes the current track-level state
+    // into the freshly loaded layer so visuals start in sync.
+    if (track >= 0 && track < m_project.numTracks()) {
+        const auto& macros = m_project.track(track).macros;
+        for (int i = 0; i < MacroDevice::kNumMacros; ++i) {
+            m_visual.setLayerKnob(track, i, macros.values[i]);
+            const auto& s = macros.lfos[i];
+            visual::VisualLFO lfo;
+            lfo.enabled = s.enabled;
+            lfo.shape   = static_cast<visual::VisualLFO::Shape>(s.shape);
+            lfo.rate    = s.rate;
+            lfo.depth   = s.depth;
+            lfo.sync    = s.sync;
+            m_visual.setLayerKnobLFO(track, i, lfo);
+        }
+    }
+    m_visual.setLayerText(track, vc.text);
+
+    // Tempo sync — applies to every clip kind (a synced shader/scene
+    // gets a beat-driven iTime; a synced video stretches to lengthBeats).
+    m_visual.setLayerTempoSync(track, vc.tempoSync, vc.lengthBeats);
+
+    // iChannel2 source selection — mutually exclusive per layer.
+    // Priority: model > live > file. Engine enforces the teardown
+    // either way; we skip the non-winning setters so we don't churn
+    // decoder threads / uploads unnecessarily.
+    if (!vc.imagePath.empty()) {
+        m_visual.setLayerImage(track, vc.imagePath);
+    } else if (!vc.modelPath.empty()) {
+        std::vector<std::string> extraResolved;
+        for (const auto& p : vc.extraModelPaths)
+            if (!p.empty()) extraResolved.push_back(resolveModelPath(p));
+        m_visual.setLayerModel(track,
+            resolveModelPath(vc.modelPath), extraResolved);
+        m_visual.setLayerAnimation(track, vc.animClip, vc.animSpeed);
+        m_visual.setLayerSceneScript(track,
+            resolveScenePath(vc.scenePath));
+    } else if (vc.liveInput && !vc.liveUrl.empty()) {
+        m_visual.setLayerLiveInput(track, vc.liveUrl);
+    } else {
+        m_visual.setLayerVideo(track, vc.videoPath);
+        m_visual.setLayerVideoTiming(track,
+            vc.videoLoopBars, vc.videoRate);
+        m_visual.setLayerVideoTrim(track,
+            vc.videoIn, vc.videoOut);
+    }
+}
+
+void VisualClipController::pollArrangementVisualPlayback() {
+    // Initialize the per-track "last active" state on first call so
+    // we don't mis-detect a transition on startup.
+    if (!m_activeArrInit) {
+        for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
+        m_activeArrInit = true;
+    }
+
+    // Poll regardless of play state so that dragging the playhead
+    // while paused previews whatever clip sits under it — that's
+    // what makes scrubbing feel right. The underlying launch/clear
+    // are idempotent on the same activeIdx.
+    const double beat = m_engine.transport().positionInBeats();
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        auto& track = m_project.track(t);
+        if (track.type != Track::Type::Visual) continue;
+        if (!track.arrangementActive) continue;
+
+        int activeIdx = -1;
+        for (int ci = 0; ci < static_cast<int>(track.arrangementClips.size()); ++ci) {
+            const auto& c = track.arrangementClips[ci];
+            if (c.type != ArrangementClip::Type::Visual) continue;
+            if (beat >= c.startBeat && beat < c.endBeat()) {
+                activeIdx = ci;   // last-match-wins for overlapping clips
+            }
+        }
+
+        if (activeIdx == m_activeArrVisualClip[t]) continue;
+
+        // Transition detected.
+        if (activeIdx < 0) {
+            // Leaving a clip into a gap → clear the layer so the
+            // arrangement goes quiet on this track.
+            m_visual.clearLayer(t);
+        } else {
+            const auto& nc = track.arrangementClips[activeIdx];
+            if (nc.visualClip) {
+                launchVisualClipData(t, *nc.visualClip,
+                                      resolveShaderPath(nc.visualClip->firstShaderPath()));
+                // Arrangement clips use transport-driven clock so
+                // scrubbing the playhead seeks the visuals. Origin =
+                // the clip's start beat on the arrangement timeline.
+                m_visual.setLayerTransportClock(t, nc.startBeat);
+                // loop/stretch decide how a video fills the slot. Engine
+                // modes: 0=loop, 1=stretch, 2=hold-last-frame (loop off).
+                const int vmode = nc.stretch ? 1 : (nc.loop ? 0 : 2);
+                m_visual.setLayerArrangementVideo(t, vmode,
+                    nc.lengthBeats, nc.offsetBeats);
+            }
+        }
+        m_activeArrVisualClip[t] = activeIdx;
+    }
+}
+
+int VisualClipController::resolveFollowActionScene(int track, int currentScene,
+                                                   FollowActionType action) const {
+    const int numScenes = m_project.numScenes();
+    if (track < 0 || track >= m_project.numTracks() || numScenes <= 0)
+        return -1;
+
+    // Build the set of occupied scenes on this track (same convention
+    // as the audio follow-action handler — visual and audio/MIDI slots
+    // all count as "occupied" for navigation purposes).
+    std::vector<int> occupied;
+    for (int s = 0; s < numScenes; ++s) {
+        auto* slot = m_project.getSlot(track, s);
+        if (slot && !slot->empty()) occupied.push_back(s);
+    }
+    if (occupied.empty()) return -1;
+
+    switch (action) {
+        case FollowActionType::Next: {
+            for (int s : occupied) if (s > currentScene) return s;
+            return occupied.front();  // wrap
+        }
+        case FollowActionType::Previous: {
+            for (int i = static_cast<int>(occupied.size()) - 1; i >= 0; --i)
+                if (occupied[i] < currentScene) return occupied[i];
+            return occupied.back();   // wrap
+        }
+        case FollowActionType::First:
+            return occupied.front();
+        case FollowActionType::Last:
+            return occupied.back();
+        case FollowActionType::Random:
+            return occupied[std::rand() % occupied.size()];
+        case FollowActionType::Any: {
+            std::vector<int> others;
+            for (int s : occupied) if (s != currentScene) others.push_back(s);
+            if (!others.empty()) return others[std::rand() % others.size()];
+            return currentScene;
+        }
+        case FollowActionType::PlayAgain:
+            return currentScene;
+        default:
+            return -1;
+    }
+}
+
+void VisualClipController::pollVisualFollowActions() {
+    // One-shot init: mark all tracks as "not launched" on first call.
+    if (!m_visualLaunchInit) {
+        for (int i = 0; i < kMaxTracks; ++i) {
+            m_visualLaunchBeat[i]  = kNoVisualLaunch;
+            m_visualLaunchScene[i] = -1;
+        }
+        m_visualLaunchInit = true;
+    }
+
+    // Follow actions only fire while transport is actively advancing
+    // bars — matches the audio ClipEngine behavior. Stop-then-play
+    // resets each clip's bar counter (the set-launch-beat path).
+    if (!m_engine.transport().isPlaying()) return;
+
+    const double beat = m_engine.transport().positionInBeats();
+    const int beatsPerBar = std::max(1, m_engine.transport().numerator());
+
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        if (m_project.track(t).type != Track::Type::Visual) continue;
+        if (m_visualLaunchBeat[t] == kNoVisualLaunch) continue;
+
+        const int scene = m_visualLaunchScene[t];
+        if (scene < 0) continue;
+        auto* slot = m_project.getSlot(t, scene);
+        if (!slot || !slot->visualClip) continue;
+        const auto& fa = slot->followAction;
+        if (!fa.enabled || fa.barCount <= 0) continue;
+
+        const double elapsedBeats = beat - m_visualLaunchBeat[t];
+        if (elapsedBeats < fa.barCount * beatsPerBar) continue;
+
+        // Roll A/B probability, pick action, resolve target scene.
+        const int roll = std::rand() % 100;
+        FollowActionType action = (roll < fa.chanceA) ? fa.actionA : fa.actionB;
+        if (action == FollowActionType::None) {
+            // Restart the bar timer so we roll again N bars later —
+            // None means "loop", not "disarm".
+            m_visualLaunchBeat[t] += fa.barCount * beatsPerBar;
+            continue;
+        }
+        if (action == FollowActionType::Stop) {
+            m_visual.clearLayer(t);
+            m_visualLaunchBeat[t]  = kNoVisualLaunch;
+            m_visualLaunchScene[t] = -1;
+            m_host.vccUpdateClipState(t, false, 0, -1);
+            continue;
+        }
+
+        const int target = resolveFollowActionScene(t, scene, action);
+        if (target < 0) {
+            // No valid target — stop to avoid infinite no-op retries.
+            m_visual.clearLayer(t);
+            m_visualLaunchBeat[t]  = kNoVisualLaunch;
+            m_visualLaunchScene[t] = -1;
+            m_host.vccUpdateClipState(t, false, 0, -1);
+            continue;
+        }
+        auto* tslot = m_project.getSlot(t, target);
+        if (!tslot || !tslot->visualClip) continue;
+
+        launchVisualClipData(t, *tslot->visualClip,
+                              resolveShaderPath(tslot->visualClip->firstShaderPath()));
+        m_visual.setLayerWallClock(t);
+        m_project.track(t).defaultScene = target;
+        m_visualLaunchBeat[t]  = beat;
+        m_visualLaunchScene[t] = target;
+        // Mirror the scene change into the session grid so the play
+        // indicator follows the active clip instead of staying stuck
+        // on the originally-launched row.
+        m_host.vccUpdateClipState(t, /*playing*/true,
+                                  /*playPos*/0,
+                                  /*playingScene*/target);
+    }
+}
+
+void VisualClipController::stopAllVisualLayers() {
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        if (m_project.track(t).type != Track::Type::Visual) continue;
+        m_visual.clearLayer(t);
+        m_activeArrVisualClip[t]  = -1;
+        m_visualLaunchBeat[t]     = kNoVisualLaunch;
+        m_visualLaunchScene[t]    = -1;
+        m_host.vccUpdateClipState(t, false, 0, -1);
+    }
+}
+
+void VisualClipController::onTransportStopCounter(uint64_t stopCount) {
+    // Whenever the stop-counter advances (even while transport is
+    // already stopped), clear every visual layer so session-launched
+    // shaders / models / videos go dark in lockstep with the
+    // audio / MIDI scheduleStop path.
+    if (stopCount == m_lastSeenStopCounter) return;
+    stopAllVisualLayers();
+    m_lastSeenStopCounter = stopCount;
+}
+
+// ── Automation / modulation ───────────────────────────────────────
+
+void VisualClipController::pollVisualKnobAutomation() {
+    // Evaluate visual-knob automation on the main thread. We reuse
+    // the existing AutomationLane data model (TargetType::VisualKnob
+    // with paramIndex = 0..7 for A..H) but bypass the audio-thread
+    // AutomationEngine — visual knobs don't need audio-thread jitter
+    // guarantees, and the project → audio-engine lane sync isn't
+    // wired for drawn envelopes anyway.
+    //
+    // Precedence (per the H.3 design):
+    //   1. Per-clip envelope (on the active arrangement clip)  — lower
+    //   2. Per-track arrangement lane                          — higher
+    // Applied in that order → the track lane's write wins when both
+    // target the same knob. LFOs still compose on top via the
+    // existing knobDisplayValues pipeline.
+    const double transportBeat = m_engine.transport().positionInBeats();
+    const int nTracks = std::min(m_project.numTracks(), kMaxTracks);
+    for (int t = 0; t < nTracks; ++t) {
+        auto& track = m_project.track(t);
+        if (track.type != Track::Type::Visual) continue;
+
+        // Pass 1a: session-grid clip envelopes. Clip-local beat is
+        // (transportBeat - launchBeat) wrapped mod lengthBeats, so
+        // envelopes loop with the clip. Session launches populate
+        // m_visualLaunchBeat[t] via the launch callback.
+        if (m_visualLaunchBeat[t] != kNoVisualLaunch &&
+            m_visualLaunchScene[t] >= 0) {
+            auto* slot = m_project.getSlot(t, m_visualLaunchScene[t]);
+            if (slot && slot->visualClip && !slot->clipAutomation->lanes.empty()) {
+                const double launchBeat = m_visualLaunchBeat[t];
+                const double lenBeats   = std::max(0.25,
+                                                    slot->visualClip->lengthBeats);
+                double clipBeat = std::fmod(transportBeat - launchBeat, lenBeats);
+                if (clipBeat < 0.0) clipBeat += lenBeats;
+                for (const auto& lane : slot->clipAutomation->lanes) {
+                    if (lane.envelope.empty()) continue;
+                    const float v = lane.envelope.valueAt(clipBeat);
+                    if (lane.target.type == automation::TargetType::VisualKnob) {
+                        const int knob = lane.target.paramIndex;
+                        if (knob >= 0 && knob < 8)
+                            m_visual.setLayerKnob(t, knob, v);
+                    } else if (lane.target.type == automation::TargetType::VisualParam) {
+                        if (!lane.target.paramName.empty())
+                            m_visual.setLayerParam(t, lane.target.paramName, v);
+                    }
+                }
+            }
+        }
+
+        // Pass 1b: arrangement-clip envelopes — deferred; ArrangementClip
+        // doesn't store clipAutomation yet. Placeholder for that phase.
+
+        // Pass 2: per-track arrangement lanes (absolute beat time).
+        // Only applied when autoMode isn't Off. Track lanes run AFTER
+        // clip envelopes so the arrangement layer always wins per the
+        // H.3 precedence design.
+        if (track.autoMode == automation::AutoMode::Off) continue;
+        for (const auto& lane : track.automationLanes) {
+            if (lane.target.trackIndex != t) continue;
+            if (lane.envelope.empty()) continue;
+            const float v = lane.envelope.valueAt(transportBeat);
+            if (lane.target.type == automation::TargetType::VisualKnob) {
+                const int knob = lane.target.paramIndex;
+                if (knob >= 0 && knob < 8)
+                    m_visual.setLayerKnob(t, knob, v);
+            } else if (lane.target.type == automation::TargetType::VisualParam) {
+                if (!lane.target.paramName.empty())
+                    m_visual.setLayerParam(t, lane.target.paramName, v);
+            }
+        }
+    }
+}
+
+void VisualClipController::pollVisualKnobBus() {
+    // Pull any fresh MIDI CC values for visual-knob targets off the bus
+    // and apply them to the layer + the track-level macro device.
+    // Audio thread writes, UI thread reads once per frame. Hardware
+    // controllers (Push / Move encoders 1..8) feed straight into the
+    // track macros via this path.
+    for (int t = 0; t < m_project.numTracks() && t < kMaxTracks; ++t) {
+        if (m_project.track(t).type != Track::Type::Visual) continue;
+        for (int k = 0; k < MacroDevice::kNumMacros; ++k) {
+            float v;
+            if (!visual::VisualKnobBus::instance().readIfChanged(
+                    t, k, m_visualKnobBusVersions[t][k], &v)) continue;
+            m_project.track(t).macros.values[k] = v;
+            m_visual.setLayerKnob(t, k, v);
+            m_host.vccMarkDirty();
+            // Reflect into the panel immediately if this is the
+            // selected visual track.
+            if (t == m_host.vccSelectedTrack()) {
+                float knobs[8];
+                for (int i = 0; i < MacroDevice::kNumMacros; ++i)
+                    knobs[i] = m_project.track(t).macros.values[i];
+                m_host.vccSetPanelKnobValues(knobs);
+            }
+        }
+    }
+}
+
+void VisualClipController::applyMacroMappings() {
+    // Walk every track's MacroDevice once per frame; each mapping
+    // reads the live (LFO-modulated) macro value, lerps it through
+    // [rangeMin, rangeMax] (a 0..1 sub-range), then unnormalises into
+    // the target parameter's *natural* range and pushes it. Inverted
+    // sub-ranges (rangeMin > rangeMax) drop straight out of the lerp
+    // arithmetic — no special case.
+    //
+    // Reading the engine's *display* value (rather than the raw
+    // track.macros.values entry) keeps mapped targets in lock-step
+    // with what the same macro does to the shader's knob[idx]
+    // uniform — so an LFO breathing the macro pulses every mapped
+    // target in unison.
+    const int nTracks = m_project.numTracks();
+    const double beat = m_engine.transport().positionInBeats();
+    const double wall = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    for (int t = 0; t < nTracks; ++t) {
+        auto& track = m_project.track(t);
+        if (track.macros.mappings.empty()) continue;
+
+        for (const auto& m : track.macros.mappings) {
+            if (m.macroIdx < 0 ||
+                m.macroIdx >= MacroDevice::kNumMacros) continue;
+
+            // Visual macros pull the modulated value from the engine (which
+            // holds the LFO state); audio/MIDI tracks evaluate the macro's
+            // LFO on the CPU here so they breathe their mapped device params
+            // the same way (and so the offline bounce can reproduce it).
+            const float macroV = (track.type == Track::Type::Visual)
+                ? m_visual.getLayerKnobDisplayValue(t, m.macroIdx)
+                : macroValueWithLFO(track.macros, m.macroIdx, beat, wall);
+            const float normV = m.rangeMin
+                + (m.rangeMax - m.rangeMin) * macroV;
+
+            switch (m.target.kind) {
+                case MacroTarget::Kind::VisualSourceParam: {
+                    if (track.type != Track::Type::Visual) break;
+                    float pmin = 0.0f, pmax = 1.0f;
+                    if (!m_visual.getLayerParamRange(
+                            t, m.target.paramName, &pmin, &pmax))
+                        break;
+                    const float v = pmin + normV * (pmax - pmin);
+                    m_visual.setLayerParam(t, m.target.paramName, v);
+                    break;
+                }
+                case MacroTarget::Kind::VisualChainParam: {
+                    if (track.type != Track::Type::Visual) break;
+                    float pmin = 0.0f, pmax = 1.0f;
+                    if (!m_visual.getLayerChainPassParamRange(
+                            t, m.target.index, m.target.paramName,
+                            &pmin, &pmax))
+                        break;
+                    const float v = pmin + normV * (pmax - pmin);
+                    m_visual.setLayerChainPassParam(
+                        t, m.target.index, m.target.paramName, v);
+                    break;
+                }
+                case MacroTarget::Kind::AudioInstrumentParam: {
+                    auto* inst = m_engine.instrument(t);
+                    if (!inst) break;
+                    int pi = findParamByName(*inst, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = inst->parameterInfo(pi);
+                    const float v =
+                        info.minValue + normV * (info.maxValue - info.minValue);
+                    inst->setParameter(pi, v);
+                    break;
+                }
+                case MacroTarget::Kind::AudioEffectParam: {
+                    auto& chain = m_engine.mixer().trackEffects(t);
+                    auto* fx = chain.effectAt(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    const float v =
+                        info.minValue + normV * (info.maxValue - info.minValue);
+                    fx->setParameter(pi, v);
+                    break;
+                }
+                case MacroTarget::Kind::MidiEffectParam: {
+                    auto& chain = m_engine.midiEffectChain(t);
+                    auto* fx = chain.effect(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    const float v =
+                        info.minValue + normV * (info.maxValue - info.minValue);
+                    fx->setParameter(pi, v);
+                    break;
+                }
+                case MacroTarget::Kind::TrackVolume: {
+                    // Linear gain 0..2 (matches the mixer fader).
+                    m_engine.mixer().setTrackVolume(t, normV * 2.0f);
+                    break;
+                }
+                case MacroTarget::Kind::TrackPan: {
+                    // -1 left … +1 right.
+                    m_engine.mixer().setTrackPan(t, normV * 2.0f - 1.0f);
+                    break;
+                }
+                case MacroTarget::Kind::None:
+                    break;
+            }
+        }
+    }
+}
+
+void VisualClipController::applyAudioMacroModulation(double beat, double wall) {
+    // Audio-only macro application — no visual-engine access, so it's safe to
+    // call from the offline-render worker. Pushes each track's LFO-modulated
+    // macro value to its audio targets at the given transport beat, so the
+    // bounced audio carries the same macro modulation as live playback.
+    const int nTracks = m_project.numTracks();
+    for (int t = 0; t < nTracks; ++t) {
+        const auto& track = m_project.track(t);
+        if (track.macros.mappings.empty()) continue;
+        for (const auto& m : track.macros.mappings) {
+            if (m.macroIdx < 0 || m.macroIdx >= MacroDevice::kNumMacros) continue;
+            const float macroV = macroValueWithLFO(track.macros, m.macroIdx, beat, wall);
+            const float normV  = m.rangeMin + (m.rangeMax - m.rangeMin) * macroV;
+            switch (m.target.kind) {
+                case MacroTarget::Kind::AudioInstrumentParam: {
+                    auto* inst = m_engine.instrument(t);
+                    if (!inst) break;
+                    int pi = findParamByName(*inst, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = inst->parameterInfo(pi);
+                    inst->setParameter(pi, info.minValue + normV * (info.maxValue - info.minValue));
+                    break;
+                }
+                case MacroTarget::Kind::AudioEffectParam: {
+                    auto& chain = m_engine.mixer().trackEffects(t);
+                    auto* fx = chain.effectAt(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    fx->setParameter(pi, info.minValue + normV * (info.maxValue - info.minValue));
+                    break;
+                }
+                case MacroTarget::Kind::MidiEffectParam: {
+                    auto& chain = m_engine.midiEffectChain(t);
+                    auto* fx = chain.effect(m.target.index);
+                    if (!fx) break;
+                    int pi = findParamByName(*fx, m.target.paramName);
+                    if (pi < 0) break;
+                    const auto& info = fx->parameterInfo(pi);
+                    fx->setParameter(pi, info.minValue + normV * (info.maxValue - info.minValue));
+                    break;
+                }
+                case MacroTarget::Kind::TrackVolume:
+                    m_engine.mixer().setTrackVolume(t, normV * 2.0f);
+                    break;
+                case MacroTarget::Kind::TrackPan:
+                    m_engine.mixer().setTrackPan(t, normV * 2.0f - 1.0f);
+                    break;
+                default: break;
+            }
+        }
+    }
+}
+
+// ── Video imports ─────────────────────────────────────────────────
+
+void VisualClipController::startVideoImport(int track, int scene,
+                                            const std::string& sourcePath) {
+    if (m_host.vccProjectPath().empty()) return;
+
+    // Ensure the slot has a VisualClip — create one named after the file
+    // if necessary. The videoPath gets filled when the import finishes.
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot) return;
+    if (!slot->visualClip) {
+        auto vc = std::make_unique<visual::VisualClip>();
+        std::filesystem::path p(sourcePath);
+        vc->name       = p.stem().string();
+        vc->colorIndex = m_project.track(track).colorIndex;
+        m_project.setVisualClip(track, scene, std::move(vc));
+    }
+
+    auto importer = std::make_unique<visual::VideoImporter>();
+    std::filesystem::path mediaDir = m_host.vccProjectPath() / "media";
+    if (!importer->start(sourcePath, mediaDir)) {
+        LOG_ERROR("Video", "Import failed to start: %s", sourcePath.c_str());
+        m_host.vccToast(std::string("Video import failed: ") + importer->error(),
+                        3.0f, 2 /*Severity::Error*/);
+        return;
+    }
+
+    PendingVideoImport pi;
+    pi.track      = track;
+    pi.scene      = scene;
+    pi.sourcePath = sourcePath;
+    pi.importer   = std::move(importer);
+    m_pendingImports.push_back(std::move(pi));
+
+    m_host.vccSetSlotImporting(track, scene, true);
+    LOG_INFO("Video", "Import started: %s", sourcePath.c_str());
+}
+
+void VisualClipController::pollVideoImports() {
+    // Advance each background transcode, apply results.
+    for (auto it = m_pendingImports.begin(); it != m_pendingImports.end(); ) {
+        it->importer->poll();
+        auto st = it->importer->state();
+        m_host.vccSetSlotImportProgress(it->track, it->scene,
+                                        it->importer->progress());
+        if (st == visual::VideoImporter::State::Done) {
+            onVideoImportDone(*it);
+            it = m_pendingImports.erase(it);
+        } else if (st == visual::VideoImporter::State::Failed) {
+            LOG_ERROR("Video", "Import failed: %s", it->importer->error().c_str());
+            m_host.vccSetSlotImporting(it->track, it->scene, false);
+            m_host.vccToast("Video import failed", 2.5f, 2 /*Severity::Error*/);
+            it = m_pendingImports.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void VisualClipController::onVideoImportDone(PendingVideoImport& pi) {
+    const auto& r = pi.importer->result();
+    auto* slot = m_project.getSlot(pi.track, pi.scene);
+    if (slot && slot->visualClip) {
+        slot->visualClip->videoPath       = r.videoPath;
+        slot->visualClip->thumbnailPath   = r.thumbnailPath;
+        slot->visualClip->videoSourcePath = pi.sourcePath;
+
+        // Auto-detect the clip's musical length from the source duration
+        // and turn on tempo sync, so the imported video follows the
+        // project tempo like audio/MIDI clips do. At the current BPM it
+        // plays ~native speed; changing the BPM rescales it. Rounded to a
+        // whole beat for a tidy "N bars" readout — the user can fine-tune
+        // via Clip Length, or disable sync to free-run at native rate.
+        if (r.durationSeconds > 0.0) {
+            const double bpm = std::max(1.0, m_engine.transport().bpm());
+            double beats = std::round(r.durationSeconds * bpm / 60.0);
+            slot->visualClip->lengthBeats = std::max(1.0, beats);
+            slot->visualClip->tempoSync   = true;
+        }
+        m_host.vccMarkDirty();
+    }
+
+    // If audio was extracted, append a new audio track named
+    // "<stem> audio" and load the WAV as an audio clip at the same scene
+    // so the user can scene-launch both together.
+    if (!r.audioPath.empty()) {
+        std::filesystem::path srcP(pi.sourcePath);
+        std::string newTrackName = srcP.stem().string() + " audio";
+        m_project.addTrack(newTrackName, Track::Type::Audio);
+        int newTrack = m_project.numTracks() - 1;
+        m_engine.sendCommand(audio::SetTrackTypeMsg{newTrack, 0});
+        if (m_host.vccLoadClipToSlot(r.audioPath, newTrack, pi.scene)) {
+            LOG_INFO("Video", "Audio track created for %s at scene %d",
+                      srcP.stem().string().c_str(), pi.scene);
+        }
+        m_host.vccSyncTracksToEngine();
+        m_host.vccMarkDirty();
+    }
+
+    m_host.vccSetSlotImporting(pi.track, pi.scene, false);
+    LOG_INFO("Video", "Import done: %s", pi.sourcePath.c_str());
+    m_host.vccToast("Video imported", 1.5f, 0 /*Severity::Info*/);
+}
+
+// ── Asset paths ───────────────────────────────────────────────────
+
+std::string VisualClipController::resolveShaderPath(const std::string& stored) const {
+    if (stored.empty()) return stored;
+    std::filesystem::path p(stored);
+    if (p.is_absolute()) return stored;
+    // Paths from bundled YAWN resources (e.g. "assets/shaders/...") live
+    // alongside the binary in the app's working directory, so pass them
+    // through untouched. Only genuinely project-relative entries (the
+    // ones we start writing as "shaders/<stem>.frag") get prefixed.
+    const auto& root = m_host.vccProjectPath();
+    if (!root.empty() && stored.compare(0, 8, "shaders/") == 0) {
+        return (root / stored).string();
+    }
+    return stored;
+}
+
+std::string VisualClipController::resolveModelPath(const std::string& stored) const {
+    if (stored.empty()) return stored;
+    std::filesystem::path p(stored);
+    if (p.is_absolute()) return stored;
+    const auto& root = m_host.vccProjectPath();
+    if (!root.empty() && stored.compare(0, 7, "models/") == 0) {
+        return (root / stored).string();
+    }
+    return stored;
+}
+
+std::string VisualClipController::resolveScenePath(const std::string& stored) const {
+    if (stored.empty()) return stored;
+    std::filesystem::path p(stored);
+    if (p.is_absolute()) return stored;
+    const auto& root = m_host.vccProjectPath();
+    if (!root.empty() && stored.compare(0, 8, "scripts/") == 0) {
+        return (root / stored).string();
+    }
+    return stored;
+}
+
+std::string VisualClipController::localizeShader(const std::string& sourcePath) {
+    if (sourcePath.empty()) return sourcePath;
+    const auto& root = m_host.vccProjectPath();
+    if (root.empty()) {
+        LOG_WARN("Shader",
+            "Project not saved — shader stays at %s. Save the project to "
+            "copy shaders into <project>/shaders/.", sourcePath.c_str());
+        return sourcePath;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path shadersDir = root / "shaders";
+    std::error_code ec;
+    fs::create_directories(shadersDir, ec);
+
+    fs::path src(sourcePath);
+    std::string stem = src.stem().string();
+    std::string ext  = src.extension().string();
+    if (ext.empty()) ext = ".frag";
+
+    fs::path target = shadersDir / (stem + ext);
+
+    // If a shader with the same stem already exists in the project:
+    //   - If `target` IS `src` (source IS project-local), nothing to do.
+    //   - Otherwise share it (user can Fork for a separate copy).
+    if (!fs::exists(target)) {
+        fs::copy_file(src, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_ERROR("Shader", "Failed to copy %s → %s: %s",
+                      src.string().c_str(), target.string().c_str(),
+                      ec.message().c_str());
+            return sourcePath;
+        }
+        LOG_INFO("Shader", "Localized %s → %s",
+                 src.string().c_str(), target.string().c_str());
+    }
+    return "shaders/" + stem + ext;
+}
+
+std::string VisualClipController::localizeModel(const std::string& sourcePath) {
+    if (sourcePath.empty()) return sourcePath;
+    const auto& root = m_host.vccProjectPath();
+    if (root.empty()) {
+        LOG_WARN("Model",
+            "Project not saved — model stays at %s. Save the project to "
+            "copy models into <project>/models/.", sourcePath.c_str());
+        return sourcePath;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path src(sourcePath);
+    std::string ext = src.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::tolower(c));
+
+    // .gltf references external .bin / texture files by relative path.
+    // Copying the .gltf without those files silently breaks the load,
+    // so for MVP we refuse to localize .gltf and just store the
+    // absolute path the user picked.
+    if (ext != ".glb") {
+        LOG_INFO("Model",
+            "Not localizing non-.glb model %s — use .glb for portable projects.",
+            sourcePath.c_str());
+        return sourcePath;
+    }
+
+    fs::path modelsDir = root / "models";
+    std::error_code ec;
+    fs::create_directories(modelsDir, ec);
+
+    std::string stem = src.stem().string();
+    fs::path target = modelsDir / (stem + ".glb");
+
+    if (!fs::exists(target)) {
+        fs::copy_file(src, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_ERROR("Model", "Failed to copy %s → %s: %s",
+                      src.string().c_str(), target.string().c_str(),
+                      ec.message().c_str());
+            return sourcePath;
+        }
+        LOG_INFO("Model", "Localized %s → %s",
+                 src.string().c_str(), target.string().c_str());
+    }
+    return "models/" + stem + ".glb";
+}
+
+std::string VisualClipController::localizeScene(const std::string& sourcePath) {
+    if (sourcePath.empty()) return sourcePath;
+    const auto& root = m_host.vccProjectPath();
+    if (root.empty()) {
+        LOG_WARN("Scene",
+            "Project not saved — scene script stays at %s. Save the "
+            "project to copy scripts into <project>/scripts/.",
+            sourcePath.c_str());
+        return sourcePath;
+    }
+    namespace fs = std::filesystem;
+    fs::path src(sourcePath);
+    std::string stem = src.stem().string();
+    std::string ext  = src.extension().string();
+    if (ext.empty()) ext = ".lua";
+
+    fs::path scriptsDir = root / "scripts";
+    std::error_code ec;
+    fs::create_directories(scriptsDir, ec);
+    fs::path target = scriptsDir / (stem + ext);
+
+    if (!fs::exists(target)) {
+        fs::copy_file(src, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            LOG_ERROR("Scene", "Failed to copy %s → %s: %s",
+                      src.string().c_str(), target.string().c_str(),
+                      ec.message().c_str());
+            return sourcePath;
+        }
+        LOG_INFO("Scene", "Localized %s → %s",
+                 src.string().c_str(), target.string().c_str());
+    }
+    return "scripts/" + stem + ext;
+}
+
+// ── Model clip ops / slot content ─────────────────────────────────
+
+void VisualClipController::reloadVisualClipModels(int track, int scene) {
+    auto* s = m_project.getSlot(track, scene);
+    if (!s || !s->visualClip) return;
+    if (m_project.track(track).defaultScene != scene) return;  // not the live clip
+    const auto& vc = *s->visualClip;
+    if (vc.modelPath.empty()) { m_visual.setLayerModel(track, ""); return; }
+    std::vector<std::string> extra;
+    for (const auto& p : vc.extraModelPaths)
+        if (!p.empty()) extra.push_back(resolveModelPath(p));
+    m_visual.setLayerModel(track, resolveModelPath(vc.modelPath), extra);
+}
+
+void VisualClipController::addModelToClip(int track, int scene,
+                                          const std::string& sourcePath) {
+    auto* s = m_project.getSlot(track, scene);
+    if (!s) return;
+    if (!s->visualClip)
+        s->visualClip = std::make_unique<visual::VisualClip>();
+    auto& vc = *s->visualClip;
+    std::string stored = localizeModel(sourcePath);
+    if (stored.empty()) return;
+    if (vc.modelPath.empty()) {
+        // First model becomes the primary (index 0). Take over iChannel2.
+        vc.modelPath       = stored;
+        vc.modelSourcePath = sourcePath;
+        vc.videoPath.clear();
+        vc.thumbnailPath.clear();
+        vc.liveInput = false;
+        vc.liveUrl.clear();
+        if (vc.name.empty())
+            vc.name = std::filesystem::path(sourcePath).stem().string();
+        if (vc.colorIndex == 0)
+            vc.colorIndex = m_project.track(track).colorIndex;
+    } else {
+        vc.extraModelPaths.push_back(stored);
+        vc.extraModelSourcePaths.push_back(sourcePath);
+    }
+    reloadVisualClipModels(track, scene);
+    m_host.vccMarkDirty();
+}
+
+void VisualClipController::removeModelFromClip(int track, int scene, int listIndex) {
+    auto* s = m_project.getSlot(track, scene);
+    if (!s || !s->visualClip) return;
+    auto& vc = *s->visualClip;
+
+    // Flatten to the same order the scene script indexes: primary first,
+    // then non-empty extras (with their parallel source paths).
+    std::vector<std::string> paths, srcs;
+    if (!vc.modelPath.empty()) {
+        paths.push_back(vc.modelPath);
+        srcs.push_back(vc.modelSourcePath);
+    }
+    for (size_t i = 0; i < vc.extraModelPaths.size(); ++i) {
+        if (vc.extraModelPaths[i].empty()) continue;
+        paths.push_back(vc.extraModelPaths[i]);
+        srcs.push_back(i < vc.extraModelSourcePaths.size()
+                       ? vc.extraModelSourcePaths[i] : std::string());
+    }
+    if (listIndex < 0 || listIndex >= static_cast<int>(paths.size())) return;
+    paths.erase(paths.begin() + listIndex);
+    srcs.erase(srcs.begin() + listIndex);
+
+    // Re-seat: list[0] is the new primary; the rest are extras.
+    vc.modelPath       = paths.empty() ? std::string() : paths[0];
+    vc.modelSourcePath = srcs.empty()  ? std::string() : srcs[0];
+    vc.extraModelPaths.assign(paths.begin() + (paths.empty() ? 0 : 1), paths.end());
+    vc.extraModelSourcePaths.assign(srcs.begin() + (srcs.empty() ? 0 : 1), srcs.end());
+
+    if (vc.modelPath.empty()) {
+        // No models left — a scene script has nothing to drive.
+        vc.scenePath.clear();
+        if (m_project.track(track).defaultScene == scene)
+            m_visual.setLayerSceneScript(track, "");
+    }
+    reloadVisualClipModels(track, scene);
+    m_host.vccMarkDirty();
+}
+
+void VisualClipController::assignModelFromLibrary(const std::string& sourcePath) {
+    const int t = m_host.vccSelectedTrack(), s = m_host.vccSelectedScene();
+    if (t < 0 || t >= m_project.numTracks() || s < 0) {
+        m_host.vccToast("Select a visual clip slot first", 2.5f, 0 /*Info*/);
+        return;
+    }
+    if (m_project.track(t).type != Track::Type::Visual) {
+        m_host.vccToast("Select a Visual track to assign a model", 2.5f, 0 /*Info*/);
+        return;
+    }
+    auto* slot = m_project.getSlot(t, s);
+    if (!slot) return;
+    if (!slot->visualClip)
+        slot->visualClip = std::make_unique<visual::VisualClip>();
+    auto& vc = *slot->visualClip;
+    std::string stored = localizeModel(sourcePath);
+    if (stored.empty()) return;
+    // Set as the primary model (replace), clearing the other iChannel2
+    // sources — mirrors Set Model….
+    vc.modelPath       = stored;
+    vc.modelSourcePath = sourcePath;
+    vc.videoPath.clear();
+    vc.thumbnailPath.clear();
+    vc.liveInput = false;
+    vc.liveUrl.clear();
+    if (vc.name.empty())
+        vc.name = std::filesystem::path(sourcePath).stem().string();
+    if (vc.colorIndex == 0)
+        vc.colorIndex = m_project.track(t).colorIndex;
+    reloadVisualClipModels(t, s);
+    m_host.vccToast("Assigned model: " + vc.name, 2.0f, 0 /*Info*/);
+    m_host.vccMarkDirty();
+}
+
+void VisualClipController::addImageToSlot(int track, int scene,
+                                          const std::string& sourcePath) {
+    auto* slot = m_project.getSlot(track, scene);
+    if (!slot) return;
+    if (!slot->visualClip) {
+        auto vc = std::make_unique<visual::VisualClip>();
+        std::filesystem::path p(sourcePath);
+        vc->name       = p.stem().string();
+        vc->colorIndex = m_project.track(track).colorIndex;
+        m_project.setVisualClip(track, scene, std::move(vc));
+        slot = m_project.getSlot(track, scene);
+        if (!slot || !slot->visualClip) return;
+    }
+    // The image is the sole iChannel2 source — clear the others. No transcode:
+    // we reference the file in place (absolute path).
+    slot->visualClip->imagePath       = sourcePath;
+    slot->visualClip->thumbnailPath   = sourcePath;   // the image is its own thumb
+    slot->visualClip->videoPath.clear();
+    slot->visualClip->videoSourcePath.clear();
+    slot->visualClip->liveInput = false;
+    slot->visualClip->liveUrl.clear();
+    slot->visualClip->modelPath.clear();
+    m_host.vccMarkDirty();
+    m_host.vccToast("Image loaded: " +
+        std::filesystem::path(sourcePath).filename().string(),
+        2.0f, 0 /*Info*/);
+}
+
+// ── State access for App reset paths ──────────────────────────────
+
+void VisualClipController::resetArrangementTracking(int track) {
+    if (track < 0 || track >= kMaxTracks) return;
+    m_activeArrVisualClip[track] = -1;
+}
+
+void VisualClipController::resetAllArrangementTracking() {
+    for (int i = 0; i < kMaxTracks; ++i) m_activeArrVisualClip[i] = -1;
+    m_activeArrInit = true;
+}
+
+void VisualClipController::resetLaunchState(int track) {
+    if (track < 0 || track >= kMaxTracks) return;
+    m_visualLaunchBeat[track]  = kNoVisualLaunch;
+    m_visualLaunchScene[track] = -1;
+}
+
+int VisualClipController::activeVisualScene(int track) const {
+    if (track < 0 || track >= kMaxTracks) return -1;
+    return m_visualLaunchScene[track];
+}
+
+} // namespace yawn
