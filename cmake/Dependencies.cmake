@@ -6,11 +6,15 @@ include(FetchContent)
 # Pinned to a specific commit (was: GIT_TAG main — every fresh clone
 # built a different SDL, and the Linux/Windows CI caches could embed
 # different SDL builds in the same release). Bump deliberately.
+# NOTE: hash-pinned deps must keep GIT_SHALLOW FALSE — a shallow clone
+# only holds the default-branch tip, so `git checkout <sha>` fails on
+# fresh clones ("fatal: unable to read tree"). Applies to all four
+# hash pins below (SDL3, stb, minimp3, eigen).
 FetchContent_Declare(
     SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG        8319d69f7286f40b3cacdb2c8216c8a6dd6a239c
-    GIT_SHALLOW    TRUE
+    GIT_SHALLOW    FALSE
 )
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
@@ -135,7 +139,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/nothings/stb.git
     # Pinned commit (was: master — floating). Bump deliberately.
     GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
-    GIT_SHALLOW    TRUE
+    GIT_SHALLOW    FALSE
 )
 FetchContent_MakeAvailable(stb)
 
@@ -175,7 +179,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/lieff/minimp3.git
     # Pinned commit (was: master — floating). Bump deliberately.
     GIT_TAG        7b590fdcfa5a79c033e76eacc05d0c3e4c79f536
-    GIT_SHALLOW    TRUE
+    GIT_SHALLOW    FALSE
 )
 FetchContent_MakeAvailable(minimp3)
 
@@ -267,7 +271,7 @@ if(YAWN_HAS_NAM OR YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
         # it — so we pin a specific master commit known to work
         # (was: master — floating; bump deliberately).
         GIT_TAG        e0f18b799e2cc7d416fdb0aec2075dceebbc8295
-        GIT_SHALLOW    TRUE
+        GIT_SHALLOW    FALSE
     )
     FetchContent_GetProperties(eigen)
     if(NOT eigen_POPULATED)
