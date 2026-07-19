@@ -233,7 +233,11 @@ jobs:
         run: cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
       - name: Build
-        run: cmake --build build-asan --parallel --target yawn_tests
+        # -j2, not --parallel: ASan+UBSan instrumented TUs peak at
+        # multiple GB each — 4-way parallel OOM'd the 16 GB runner
+        # (exit 143 after ~20 min). Slower but it finishes (and the
+        # ccache makes subsequent runs fast).
+        run: cmake --build build-asan --parallel 2 --target yawn_tests
 
       - name: Test
         working-directory: build-asan
