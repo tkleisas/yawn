@@ -17,6 +17,7 @@
 #include "ui/framework/v2/MultisamplerDisplayPanel.h"
 #include "ui/framework/v2/WavetableDisplayPanel.h"
 #include "ui/framework/v2/GranularDisplayPanel.h"
+#include "ui/panels/DetailDisplayRegistry.h"
 #include "ui/framework/v2/VocoderDisplayPanel.h"
 #include "ui/framework/v2/SplineEQDisplayPanel.h"
 #include "ui/framework/v2/ConvReverbDisplayPanel.h"
@@ -74,7 +75,15 @@ namespace yawn {
 namespace ui {
 namespace fw2 {
 
+namespace detail { struct DisplayRegistryAccess; }
+
 class DetailPanelWidget : public Widget {
+    // The display-registry builders legitimately reach a handful of
+    // private callback members (menu hooks, sidechain providers,
+    // cross-panel stashes) — they befriend this one accessor struct
+    // rather than the panel growing a dozen public getters.
+    friend struct detail::DisplayRegistryAccess;
+
 public:
     // Layout constants (preserved for external users)
     static constexpr float kDefaultPanelHeight = 220.0f;
@@ -1753,523 +1762,29 @@ private:
     }
 
     // ── Create instrument-specific grouped layout (returns true if handled) ──
+    // Per-device knowledge (display widget, section table, updater)
+    // lives in the display registry (DetailDisplayRegistry.cpp);
+    // this is just the lookup + the shared GroupedKnobBody tail.
+    // Test builds skip custom displays entirely (registry is exe-only;
+    // the panel headers' render() compiles empty there anyway).
+#ifdef YAWN_TEST_BUILD
+    bool setupInstrumentDisplay(DeviceWidget*, instruments::Instrument*,
+                                const DeviceRef&) { return false; }
+    bool setupAudioEffectDisplay(DeviceWidget*, effects::AudioEffect*,
+                                 const DeviceRef&) { return false; }
+    bool setupMidiEffectDisplay(DeviceWidget*, midi::MidiEffect*,
+                                const DeviceRef&) { return false; }
+#else
     bool setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst,
                                 const DeviceRef& ref) {
         if (!inst) return false;
-        std::string nm = inst->name();
+        auto* builder = findInstrumentDisplayBuilder(inst->name());
+        if (!builder) return false;
 
-        GroupedKnobBody::Config config;
-
-        if (nm == "FM Synth") {
-            auto* algoW = new FMAlgorithmWidget();
-            config.display = algoW;
-            config.displayWidth = 130;
-            config.sections = {
-                {"",     {0, 1, 18}},         // Algorithm, Feedback, Volume
-                {"Op 1", {2, 3, 4, 5}},       // Level, Ratio, Attack, Release
-                {"Op 2", {6, 7, 8, 9}},
-                {"Op 3", {10, 11, 12, 13}},
-                {"Op 4", {14, 15, 16, 17}},
-            };
-            m_displayUpdaters.push_back([algoW, inst]() {
-                algoW->setAlgorithm(static_cast<int>(inst->getParameter(0)));
-                algoW->setFeedback(inst->getParameter(1));
-                algoW->setOpLevels(inst->getParameter(2), inst->getParameter(6),
-                                   inst->getParameter(10), inst->getParameter(14));
-            });
-        } else if (nm == "Subtractive Synth") {
-            auto* panel = new SubSynthDisplayPanel();
-            config.display = panel;
-            config.displayWidth = 150;
-            config.sections = {
-                {"Osc",      {0, 1, 2, 3, 4, 5, 6, 7}},
-                {"Filter",   {8, 9, 10, 11}},
-                {"Amp",      {12, 13, 14, 15}},
-                {"Filt Env", {16, 17, 18, 19}},
-                {"LFO",      {20, 21, 22}},
-            };
-            m_displayUpdaters.push_back([panel, inst]() {
-                // Param 8 (Filter Cutoff) is 0..1 normalized → convert
-                // to Hz for the display's filter-curve widget.
-                const float cutoffHz =
-                    instruments::SubtractiveSynth::cutoffNormToHz(
-                        inst->getParameter(8));
-                panel->updateFromParams(
-                    inst->getParameter(0),  inst->getParameter(1),
-                    inst->getParameter(2),  inst->getParameter(3),
-                    cutoffHz,               inst->getParameter(9),
-                    inst->getParameter(10),
-                    inst->getParameter(12), inst->getParameter(13),
-                    inst->getParameter(14), inst->getParameter(15),
-                    inst->getParameter(16), inst->getParameter(17),
-                    inst->getParameter(18), inst->getParameter(19));
-            });
-        } else if (nm == "Sampler") {
-            auto* samplerPanel = new SamplerDisplayPanel();
-            config.display = samplerPanel;
-            config.displayWidth = 130;
-            config.sections = {
-                {"Sample", {0, 10, 11}},
-                {"Loop",   {8, 9}},
-                {"Amp",    {1, 2, 3, 4}},
-                {"Filter", {5, 6}},
-                {"",       {7}},
-            };
-            m_displayUpdaters.push_back([samplerPanel, inst]() {
-                samplerPanel->setADSR(inst->getParameter(1), inst->getParameter(2),
-                                      inst->getParameter(3), inst->getParameter(4));
-                samplerPanel->setLoopPoints(inst->getParameter(8), inst->getParameter(9));
-                samplerPanel->setReverse(inst->getParameter(10) > 0.5f);
-                auto* sampler = dynamic_cast<instruments::Sampler*>(inst);
-                if (sampler) {
-                    if (sampler->hasSample())
-                        samplerPanel->setSampleData(sampler->sampleData(),
-                                                    sampler->sampleFrames(),
-                                                    sampler->sampleChannels());
-                    samplerPanel->setPlayhead(sampler->playheadPosition(),
-                                              sampler->isPlaying());
-                }
-            });
-        } else if (nm == "DrumSlop") {
-            auto* dsPanel = new DrumSlopDisplayPanel();
-            config.display = dsPanel;
-            config.displayWidth = 160;
-            config.sections = {
-                {"Global", {0, 1, 2, 3, 4, 5}},
-                {"Pad", {6, 7, 8, 9, 10, 11}},
-                {"Pad Env", {12, 13, 14, 15}},
-            };
-
-            // Pad click callback to select pad
-            dsPanel->setOnPadClick([inst](int padIdx) {
-                auto* ds = dynamic_cast<instruments::DrumSlop*>(inst);
-                if (ds) ds->setSelectedPad(padIdx);
-            });
-
-            m_displayUpdaters.push_back([dsPanel, inst]() {
-                auto* ds = dynamic_cast<instruments::DrumSlop*>(inst);
-                if (!ds) return;
-
-                dsPanel->setSliceCount(ds->sliceCount());
-                dsPanel->setBaseNote(static_cast<int>(ds->getParameter(
-                    instruments::DrumSlop::kBaseNote)));
-                dsPanel->setSelectedPad(ds->selectedPad());
-
-                if (ds->hasLoop()) {
-                    dsPanel->setLoopData(ds->loopData(), ds->loopFrames(),
-                                         ds->loopChannels());
-                    // Build slice boundaries for display
-                    std::vector<int64_t> bounds;
-                    int sc = ds->sliceCount();
-                    for (int i = 0; i <= sc; ++i)
-                        bounds.push_back(ds->sliceBoundary(i));
-                    dsPanel->setSliceBoundaries(bounds);
-                }
-
-                for (int i = 0; i < instruments::DrumSlop::kNumPads; ++i)
-                    dsPanel->setPadPlaying(i, ds->isPadPlaying(i));
-            });
-        } else if (nm == "Wavetable Synth") {
-            auto* wtPanel = new WavetableDisplayPanel();
-            config.display = wtPanel;
-            config.displayWidth = 130;
-            config.sections = {
-                {"Osc",      {0, 1, 14, 15, 16}},
-                {"Amp",      {5, 6, 7, 8}},
-                {"Filter",   {2, 3, 4}},
-                {"Filt Env", {9, 10, 11, 12}},
-                {"",         {13, 17}},
-            };
-            static const char* tableNames[] = {
-                "Basic", "PWM", "Formant", "Harmonic", "Digital"
-            };
-            m_displayUpdaters.push_back([wtPanel, inst]() {
-                auto* wt = dynamic_cast<instruments::WavetableSynth*>(inst);
-                if (!wt) return;
-                int table = wt->currentTable();
-                float pos = wt->getParameter(instruments::WavetableSynth::kPosition);
-                int numFrames = wt->frameCount(table);
-                if (numFrames > 0) {
-                    // Compute morphed waveform at current position
-                    static float morphBuf[instruments::WavetableSynth::kFrameSize];
-                    float framePos = pos * (numFrames - 1);
-                    int f0 = static_cast<int>(framePos);
-                    int f1 = std::min(f0 + 1, numFrames - 1);
-                    float frac = framePos - f0;
-                    const float* d0 = wt->frameData(table, f0);
-                    const float* d1 = wt->frameData(table, f1);
-                    if (d0 && d1) {
-                        for (int s = 0; s < instruments::WavetableSynth::kFrameSize; ++s)
-                            morphBuf[s] = d0[s] * (1.0f - frac) + d1[s] * frac;
-                        wtPanel->setWaveformData(morphBuf,
-                                                 instruments::WavetableSynth::kFrameSize);
-                    }
-                }
-                wtPanel->setPosition(pos);
-                if (table >= 0 && table < 5)
-                    wtPanel->setTableName(tableNames[table]);
-            });
-        } else if (nm == "Granular Synth") {
-            auto* grPanel = new GranularDisplayPanel();
-            config.display = grPanel;
-            config.displayWidth = 130;
-            config.sections = {
-                {"Grain",    {0, 1, 2, 3}},
-                {"Pitch",    {4, 5, 14}},
-                {"Shape",    {6, 7, 12, 13}},
-                {"Filter",   {8, 9}},
-                {"Env",      {10, 11}},
-                {"",         {15, 16}},
-            };
-            m_displayUpdaters.push_back([grPanel, inst]() {
-                auto* gr = dynamic_cast<instruments::GranularSynth*>(inst);
-                if (!gr) return;
-                if (gr->hasSample())
-                    grPanel->setSampleData(gr->sampleData(), gr->sampleFrames(),
-                                           gr->sampleChannels());
-                grPanel->setPosition(gr->currentPosition());
-                grPanel->setScanPosition(gr->scanPosition());
-                grPanel->setPlaying(gr->isPlaying());
-                // Normalize grain size for display (100ms / total length)
-                float grainMs = gr->getParameter(instruments::GranularSynth::kGrainSize);
-                float totalMs = gr->sampleFrames() > 0
-                    ? 1000.0f * gr->sampleFrames() / 44100.0f : 1.0f;
-                grPanel->setGrainSize(grainMs / totalMs);
-            });
-        } else if (nm == "Vocoder") {
-            auto* vocPanel = new VocoderDisplayPanel();
-            config.display = vocPanel;
-            // Slightly wider than the original 130 px so the sidechain
-            // source dropdown has room when it appears, but not so wide
-            // that the section knobs to the right get squeezed and
-            // start their labels overlapping. 180 px fits "(none)" /
-            // "Track 1" / "Audio 1" comfortably — long names get
-            // ellipsised by the dropdown painter.
-            config.displayWidth = 180;
-            config.sections = {
-                {"Source",   {1, 15, 2, 16}},   // Carrier Type, Detune, Mod Source, Carrier=SC
-                {"Bands",    {0, 3, 6}},
-                {"Envelope", {4, 5}},
-                {"Mix",      {7, 8, 9}},
-                {"Amp",      {10, 11}},
-                {"Output",   {12, 13, 14}},
-            };
-
-            // Wire the device-side sidechain picker → App callback.
-            // App-side handler updates project.track[t].sidechainSource
-            // and sends SetSidechainSourceMsg to the audio engine.
-            vocPanel->setOnSidechainSourceChanged(
-                [this](int sourceIdx) {
-                    if (m_autoTrackIndex < 0) return;
-                    if (m_setSidechainSource)
-                        m_setSidechainSource(m_autoTrackIndex, sourceIdx);
-                });
-
-            m_displayUpdaters.push_back([this, vocPanel, inst]() {
-                auto* voc = dynamic_cast<instruments::Vocoder*>(inst);
-                if (!voc) return;
-                if (voc->hasModulatorSample())
-                    vocPanel->setModulatorData(voc->modulatorData(),
-                                               voc->modulatorFrames());
-                vocPanel->setPlayhead(voc->modulatorPlayhead());
-                vocPanel->setPlaying(voc->isPlaying());
-                vocPanel->setBandCount(
-                    static_cast<int>(voc->getParameter(instruments::Vocoder::kBands)));
-                vocPanel->setModSource(
-                    static_cast<int>(voc->getParameter(instruments::Vocoder::kModSource)));
-                vocPanel->setModLevel(voc->consumeModulatorLevel());
-                // Drain the per-band envelope peaks into the display
-                // panel so the spectrum strip animates with the
-                // modulator's spectral content. Sized to kMaxBands
-                // (32); trailing entries are simply ignored at the
-                // current band count.
-                float bandLevels[instruments::Vocoder::kMaxBands] = {};
-                voc->consumeBandLevels(bandLevels,
-                                       instruments::Vocoder::kMaxBands);
-                vocPanel->setBandLevels(bandLevels,
-                                        instruments::Vocoder::kMaxBands);
-
-                // Pull the latest project track list + current sidechain
-                // source so the dropdown stays in sync with whatever
-                // the Mixer I/O strip might have changed.
-                if (m_trackNamesProvider) {
-                    vocPanel->setAvailableSources(
-                        m_trackNamesProvider(), m_autoTrackIndex);
-                }
-                if (m_sidechainSourceProvider && m_autoTrackIndex >= 0) {
-                    vocPanel->setSidechainSource(
-                        m_sidechainSourceProvider(m_autoTrackIndex));
-                }
-            });
-        } else if (nm == "Drum Synth") {
-            // 8 sections, one per drum, in MIDI-ascending order (matches
-            // the DrumRoll's row order — bottom = Kick (note 36), top
-            // = Tambourine (note 54)). Kick has 7 params (the only drum
-            // with sine/white/pink mix knobs); the others have the
-            // standard 4 (tune, attack, decay, drive).
-            //
-            // GroupedKnobBody packs 7 knobs into a 4×2 grid (cols=
-            // ceil(7/2)=4) and 4 knobs into a 2×2 grid (cols=ceil(4/2)
-            // =2), so the kick strip is roughly twice as wide as each
-            // other-drum strip. Total body width ≈ 1230 px which fits
-            // comfortably on a 1280-px screen with horizontal scroll
-            // for narrower displays.
-            config.sections = {
-                {"Kick",  { 0,  1,  2,  3,  4,  5,  6}},
-                {"Snare", { 7,  8,  9, 10}},
-                {"Clap",  {11, 12, 13, 14}},
-                {"Tom1",  {15, 16, 17, 18}},
-                {"CHH",   {19, 20, 21, 22}},
-                {"OHH",   {23, 24, 25, 26}},
-                {"Tom2",  {27, 28, 29, 30}},
-                {"Tamb",  {31, 32, 33, 34}},
-                {"Global",{35}},   // OS 2x oversampling toggle
-            };
-        } else if (nm == "Drum Rack") {
-            auto* drPanel = new DrumRackDisplayPanel();
-            config.display = drPanel;
-            config.displayWidth = 160;
-            // 0 = Volume (Global). 1..8 = per-selected-pad:
-            // Pad Volume / Pan / Pitch / Choke / Attack / Decay
-            // / Start / End. Grouped into Pad / AR Env / Region
-            // so each row has breathing space.
-            config.sections = {
-                {"Global", {0}},
-                {"Pad",    {1, 2, 3, 4}},
-                {"AR Env", {5, 6}},
-                {"Region", {7, 8}},
-            };
-
-            // Stash for the cross-panel drag-drop hook so audio
-            // clips dropped on a pad can be routed there.
-            m_drumRackDisplay = drPanel;
-            m_drumRackInst    = dynamic_cast<instruments::DrumRack*>(inst);
-
-            drPanel->setOnPadClick([inst](int note) {
-                auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
-                if (dr) dr->setSelectedPad(note);
-            });
-
-            // Right-click on a pad → forward up to App so it can
-            // open the per-pad fx context menu (Add / Remove
-            // effects). DetailPanel doesn't know about the audio-
-            // effect factory; App owns that knowledge.
-            drPanel->setOnPadRightClick([this, inst](int note,
-                                                       float sx, float sy) {
-                auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
-                if (dr && m_onDrumPadFxMenu)
-                    m_onDrumPadFxMenu(dr, note, sx, sy);
-            });
-
-            m_displayUpdaters.push_back([drPanel, inst, lastSel = -1]() mutable {
-                auto* dr = dynamic_cast<instruments::DrumRack*>(inst);
-                if (!dr) return;
-
-                int sel = dr->selectedPad();
-                drPanel->setSelectedPad(sel);
-
-                // Only auto-jump the page when the selection ACTUALLY
-                // changed (e.g. external setSelectedPad from drop or
-                // MIDI click). Without this guard, the updater fired
-                // every frame would force the page to track sel/16
-                // and any user-driven page navigation (arrow buttons
-                // / page labels / scroll wheel) would be reverted on
-                // the next render tick.
-                if (sel != lastSel) {
-                    drPanel->setPage(sel / 16);
-                    lastSel = sel;
-                }
-
-                // Update sample/playing state for all 128 pads
-                for (int n = 0; n < instruments::DrumRack::kNumPads; ++n) {
-                    drPanel->setPadHasSample(n, dr->hasSample(n));
-                    drPanel->setPadPlaying(n, dr->isPadPlaying(n));
-                }
-
-                // Selected pad waveform
-                const float* data = dr->padSampleData(sel);
-                if (data)
-                    drPanel->setSelectedPadWaveform(data, dr->padSampleFrames(sel),
-                                                    dr->padSampleChannels(sel));
-                else
-                    drPanel->setSelectedPadWaveform(nullptr, 0, 1);
-
-                // Region trim markers — pushed every frame so the
-                // markers track the Region knobs live as the user
-                // drags them, and so a kit-preset load also updates
-                // the display without an extra rebuild.
-                drPanel->setSelectedPadRegion(dr->padStart(sel),
-                                              dr->padEnd(sel));
-            });
-        } else if (nm == "Instrument Rack") {
-            auto* irPanel = new InstrumentRackDisplayPanel();
-            config.display = irPanel;
-            // Bumped 160 → 240 so the chain rows fit "1: Subtractive
-            // Synth" without truncation at the user's theme font
-            // scale, and so the key/vel range bars have enough width
-            // to read at a glance.
-            config.displayWidth = 240;
-            config.sections = {
-                {"Rack",  {0}},
-                {"Chain", {1, 2, 3, 4, 5, 6}},
-            };
-
-            // Stash the rack pointer so tick() can detect a chain
-            // selection or per-chain fx count change and trigger a
-            // rebuild — same pattern as m_drumRackInst.
-            m_instrackInst = dynamic_cast<instruments::InstrumentRack*>(inst);
-
-            irPanel->setOnChainClick([inst](int idx) {
-                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
-                if (ir) ir->setSelectedChain(idx);
-            });
-
-            // Right-click on a chain row → forward up to App so it
-            // can open the per-chain fx context menu (Add / Remove
-            // effects). DetailPanel doesn't know about the audio-
-            // effect factory; App owns that knowledge.
-            irPanel->setOnChainRightClick([this, inst](int chainIdx,
-                                                          float sx, float sy) {
-                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
-                if (ir && m_onInstrackChainFxMenu)
-                    m_onInstrackChainFxMenu(ir, chainIdx, sx, sy);
-            });
-
-            irPanel->setOnAddChain([inst]() {
-                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
-                if (ir && ir->chainCount() < instruments::InstrumentRack::kMaxChains)
-                    ir->addChain(std::make_unique<instruments::SubtractiveSynth>());
-            });
-
-            irPanel->setOnRemoveChain([inst](int idx) {
-                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
-                if (ir && idx < ir->chainCount())
-                    ir->removeChain(idx);
-            });
-
-            irPanel->setOnToggleChain([inst](int idx) {
-                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
-                if (ir && idx < ir->chainCount())
-                    ir->chain(idx).enabled = !ir->chain(idx).enabled;
-            });
-
-            m_displayUpdaters.push_back([irPanel, inst]() {
-                auto* ir = dynamic_cast<instruments::InstrumentRack*>(inst);
-                if (!ir) return;
-
-                irPanel->setChainCount(ir->chainCount());
-                irPanel->setSelectedChain(ir->selectedChain());
-
-                for (int i = 0; i < ir->chainCount(); ++i) {
-                    const auto& ch = ir->chain(i);
-                    InstrumentRackDisplayPanel::ChainInfo ci;
-                    ci.name    = ch.instrument ? ch.instrument->name() : "Empty";
-                    ci.keyLow  = ch.keyLow;
-                    ci.keyHigh = ch.keyHigh;
-                    ci.velLow  = ch.velLow;
-                    ci.velHigh = ch.velHigh;
-                    ci.volume  = ch.volume;
-                    ci.enabled = ch.enabled;
-                    irPanel->setChain(i, ci);
-                }
-            });
-        } else if (nm == "Multisampler") {
-            auto* msPanel = new MultisamplerDisplayPanel();
-            config.display = msPanel;
-            // Stash for the cross-panel drag-drop hook so audio
-            // clips dropped on the panel can be added as zones.
-            m_msDisplay = msPanel;
-            m_msInst    = dynamic_cast<instruments::Multisampler*>(inst);
-            // Wider than other display panels because it hosts both
-            // a zone list and a per-zone editor side-by-side.
-            config.displayWidth = 360.0f;
-            // Multisampler param indices (Multisampler::Param):
-            //   0..3  Amp ADSR
-            //   4..6  Filter (Cutoff, Reso, Env amount)
-            //   7..10 Filter ADSR
-            //   11    Glide
-            //   12    VelXfade
-            //   13    Volume
-            config.sections = {
-                {"Amp",      {0, 1, 2, 3}},
-                {"Filter",   {4, 5, 6}},
-                {"Filt Env", {7, 8, 9, 10}},
-                {"Misc",     {11, 12, 13}},
-            };
-
-            // Edit a single zone's metadata in place. The audio thread
-            // reads zone fields without a lock, same caveat as
-            // addZone / clearZones — UI-thread mutation is racy in
-            // theory but harmless in practice for one-int writes.
-            msPanel->setOnZoneFieldChange([inst](int zoneIdx,
-                    const MultisamplerDisplayPanel::ZoneRow& src) {
-                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
-                if (!ms) return;
-                auto* z = ms->zone(zoneIdx);
-                if (!z) return;
-                z->rootNote = src.rootNote;
-                z->lowKey   = src.lowKey;
-                z->highKey  = src.highKey;
-                z->lowVel   = src.lowVel;
-                z->highVel  = src.highVel;
-                z->tune     = src.tune;
-                z->volume   = src.volume;
-                z->pan      = src.pan;
-                z->loop     = src.loop;
-            });
-
-            msPanel->setOnRemoveZone([inst](int zoneIdx) {
-                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
-                if (!ms) return;
-                ms->removeZone(zoneIdx);
-            });
-
-            msPanel->setOnAutoSampleClicked([this, inst]() {
-                // Forward the click up to App, which owns the
-                // FwAutoSampleDialog and the engine/midi context the
-                // dialog needs to open with.
-                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
-                if (ms && m_onAutoSampleRequested) {
-                    m_onAutoSampleRequested(ms);
-                }
-            });
-
-            // Push fresh zone rows from the instrument each frame.
-            // setZones short-circuits when nothing changed, so the
-            // user's mid-edit knob values aren't stomped.
-            m_displayUpdaters.push_back([msPanel, inst]() {
-                auto* ms = dynamic_cast<instruments::Multisampler*>(inst);
-                if (!ms) return;
-                std::vector<MultisamplerDisplayPanel::ZoneRow> rows;
-                rows.reserve(ms->zoneCount());
-                for (int i = 0; i < ms->zoneCount(); ++i) {
-                    const auto* z = ms->zone(i);
-                    if (!z) continue;
-                    MultisamplerDisplayPanel::ZoneRow r;
-                    r.rootNote     = z->rootNote;
-                    r.lowKey       = z->lowKey;
-                    r.highKey      = z->highKey;
-                    r.lowVel       = z->lowVel;
-                    r.highVel      = z->highVel;
-                    r.tune         = z->tune;
-                    r.volume       = z->volume;
-                    r.pan          = z->pan;
-                    r.loop         = z->loop;
-                    r.sampleFrames = z->sampleFrames;
-                    // filename: derived in the auto-sampler / drop
-                    // path (commit 3) — empty for now.
-                    rows.push_back(r);
-                }
-                msPanel->setZones(std::move(rows));
-            });
-            // Width-change wiring (deferred to AFTER the GroupedKnobBody
-            // is constructed below; we have to capture the body* once it
-            // exists, so the actual setOnPreferredWidthChanged() call
-            // lives just past the body/setCustomBody sequence).
-            m_pendingMsPanelWidthHook = msPanel;
-        } else {
-            return false;
-        }
+        DisplayBuildArgs args{*this,
+            [ref](int idx, float v) { DeviceRef r = ref; r.setParam(idx, v); },
+            ref.chainIndex};
+        auto setup = builder(args, inst);
 
         // Build param descriptors
         int count = inst->parameterCount();
@@ -2282,20 +1797,20 @@ private:
         }
 
         auto* body = new GroupedKnobBody();
-        body->configure(config, params);
+        body->configure(setup.config, params);
         body->setOnParamChange([ref](int idx, float v) {
             DeviceRef r = ref; r.setParam(idx, v);
         });
         dw->setCustomBody(body);
+        if (setup.updater) m_displayUpdaters.push_back(std::move(setup.updater));
 
         // Set initial values
         for (int p = 0; p < count; ++p)
             body->updateParamValue(p, ref.getParam(p));
 
         // Multisampler panel toggles its 2D map → reports a new
-        // preferred display width → body re-flows. Wired here, after
-        // the body exists. Captures `body` only — the panel pointer
-        // was stashed in m_pendingMsPanelWidthHook a few lines up.
+        // preferred display width → body re-flows. The builder stashes
+        // the panel pointer; the body* only exists here.
         if (m_pendingMsPanelWidthHook) {
             m_pendingMsPanelWidthHook->setOnPreferredWidthChanged(
                 [body](float newWidth) { body->setDisplayWidth(newWidth); });
@@ -2310,191 +1825,78 @@ private:
         return true;
     }
 
-    // ── Build custom display for audio effects (currently Filter) ──
+    // ── Build custom display for audio effects (registry-driven) ──
+    // ── Build custom display for audio effects (registry-driven) ──
     bool setupAudioEffectDisplay(DeviceWidget* dw, effects::AudioEffect* fx,
                                  const DeviceRef& ref) {
         if (!fx) return false;
-        std::string id = fx->id();
+        auto* builder = findAudioFxDisplayBuilder(fx->id());
+        if (!builder) return false;
 
-        if (id == "splineeq") {
-            // Use setCustomBody (not setCustomPanel) so the panel
-            // REPLACES the per-param knob layout as the device's
-            // body. setCustomPanel inherited the device width from
-            // the knob count — with 40 EQ params that ballooned the
-            // strip past 1200 px regardless of any minW we passed.
-            // As a CustomDeviceBody the panel controls its own
-            // preferredBodyWidth() (270 px), so the strip sizes
-            // sanely. The 40 params remain settable via automation
-            // / preset / MIDI Learn — just not shown in the strip,
-            // because the panel IS the editor.
-            auto* disp = new SplineEQDisplayPanel();
-            disp->setEQ(static_cast<effects::SplineEQ*>(fx));
-            disp->setSampleRate(static_cast<double>(m_clipSampleRate));
-            disp->setOnParamChange([ref](int idx, float v) {
-                DeviceRef r = ref; r.setParam(idx, v);
-            });
-            dw->setCustomBody(disp);
+        DisplayBuildArgs args{*this,
+            [ref](int idx, float v) { DeviceRef r = ref; r.setParam(idx, v); },
+            ref.chainIndex};
+        auto setup = builder(args, fx);
+
+        if (setup.customBody) {
+            // Full-body replacement (Spline EQ, Conv Reverb) — the
+            // panel IS the editor; params stay settable via
+            // automation / preset / MIDI Learn.
+            dw->setCustomBody(setup.customBody);
             configureDeviceWidget(dw, ref);
+            if (setup.updater) m_displayUpdaters.push_back(std::move(setup.updater));
+            return true;
+        }
+        if (setup.customPanel) {
+            dw->setCustomPanel(setup.customPanel,
+                               setup.customPanelHeight, setup.customPanelMinW);
+            configureDeviceWidget(dw, ref);
+            if (setup.updater) m_displayUpdaters.push_back(std::move(setup.updater));
             return true;
         }
 
-        if (id == "convreverb") {
-            // Same CustomDeviceBody pattern as the Spline EQ — the
-            // panel replaces the per-param knob list. Buttons drive
-            // an App-side IR loader (file dialog + libsndfile decode
-            // + push to effect via loadIRMono). Per-frame updater
-            // keeps the panel's filename / waveform thumbnail in
-            // sync with the underlying effect.
-            auto* disp = new ConvReverbDisplayPanel();
-            auto* cr   = static_cast<effects::ConvolutionReverb*>(fx);
-            disp->setOnParamChange([ref](int idx, float v) {
-                DeviceRef r = ref; r.setParam(idx, v);
-            });
-            disp->setOnLoadRequest([this, cr]() {
-                if (m_onLoadConvIR) m_onLoadConvIR(cr);
-            });
-            disp->setOnClearRequest([cr]() { cr->clearIR(); });
-            dw->setCustomBody(disp);
-            configureDeviceWidget(dw, ref);
-            m_displayUpdaters.push_back([disp, cr]() {
-                // Pull filename from the effect's stored path
-                // (just the basename, not the full path — fits the
-                // panel better).
-                std::string p = cr->irPath();
-                std::string base = p;
-                const auto slash = p.find_last_of("/\\");
-                if (slash != std::string::npos) base = p.substr(slash + 1);
-                disp->setIRName(base);
-                disp->setIRWaveform(cr->irData(), cr->irDataLength());
-            });
-            return true;
+        // Grouped-knob-body path (Neural Amp).
+        int count = fx->parameterCount();
+        std::vector<GroupedKnobBody::ParamDesc> params(count);
+        for (int p = 0; p < count; ++p) {
+            const auto& info = fx->parameterInfo(p);
+            params[p] = {p, info.name, info.unit ? info.unit : "",
+                         info.minValue, info.maxValue, info.defaultValue,
+                         info.isBoolean, info.formatFn};
         }
-
-        if (id == "neuralamp") {
-            // The model panel (filename / Load / Clear / Lite) lives on
-            // the left as a GroupedKnobBody display widget; the built-in
-            // amp-strip knobs (gate / drive / tone / output) group to its
-            // right. This reuses the same GroupedKnobBody machinery the
-            // instruments use rather than the bare setCustomBody path, so
-            // the device renders a full amp channel. The Load button
-            // drives an App-side handler that opens an SDL .nam dialog and
-            // calls effect->setModelPath (NAM load + Reset + prewarm).
-            auto* disp = new NeuralAmpDisplayPanel();
-            auto* na   = static_cast<effects::NeuralAmp*>(fx);
-            disp->setOnLoadRequest([this, na]() {
-                if (m_onLoadNamModel) m_onLoadNamModel(na);
-            });
-            disp->setOnClearRequest([na]() { na->setModelPath(""); });
-            disp->setOnToggleLite([na]() { na->setLite(!na->lite()); });
-
-            GroupedKnobBody::Config config;
-            config.display = disp;
-            config.displayWidth = 190.0f;
-            config.sections = {
-                {"Gate",   {effects::NeuralAmp::kGate}},
-                {"Drive",  {effects::NeuralAmp::kInputGain}},
-                {"Tone",   {effects::NeuralAmp::kBass,
-                            effects::NeuralAmp::kMid,
-                            effects::NeuralAmp::kTreble}},
-                {"Output", {effects::NeuralAmp::kOutputGain,
-                            effects::NeuralAmp::kMix,
-                            effects::NeuralAmp::kNormalize}},
-            };
-
-            int count = na->parameterCount();
-            std::vector<GroupedKnobBody::ParamDesc> params(count);
-            for (int p = 0; p < count; ++p) {
-                const auto& info = na->parameterInfo(p);
-                params[p] = {p, info.name, info.unit ? info.unit : "",
-                             info.minValue, info.maxValue, info.defaultValue,
-                             info.isBoolean, info.formatFn};
-            }
-
-            auto* body = new GroupedKnobBody();
-            body->configure(config, params);
-            body->setOnParamChange([ref](int idx, float v) {
-                DeviceRef r = ref; r.setParam(idx, v);
-            });
-            dw->setCustomBody(body);
-            configureDeviceWidget(dw, ref);
-            m_displayUpdaters.push_back([disp, na]() {
-                std::string p = na->modelPath();
-                std::string base = p;
-                const auto slash = p.find_last_of("/\\");
-                if (slash != std::string::npos) base = p.substr(slash + 1);
-                disp->setModelName(base);
-                disp->setLoadedFlag(na->hasModel());
-                disp->setErrorText(na->lastLoadError());
-                disp->setLiteState(na->lite(), na->isSlimmable());
-                disp->setWarningText(
-                    na->sampleRateMismatch()
-                        ? ("trained @ " +
-                           std::to_string(static_cast<int>(
-                               na->expectedSampleRate())) + " Hz")
-                        : std::string());
-            });
-            return true;
-        }
-
-        if (id == "filter") {
-            auto* disp = new FilterDisplayWidget();
-            dw->setCustomPanel(disp, 52.0f, 200.0f);
-            configureDeviceWidget(dw, ref);
-
-            m_displayUpdaters.push_back([disp, fx]() {
-                auto* flt = static_cast<effects::Filter*>(fx);
-                // Cutoff is stored 0..1 → convert to Hz for the display.
-                disp->setCutoff(effects::Filter::cutoffNormToHz(
-                    flt->getParameter(effects::Filter::kCutoff)));
-                // Resonance stored 0.1..20 biquad Q → rough 0..1 normalize
-                // so the curve bump scales sensibly.
-                const float q = flt->getParameter(effects::Filter::kResonance);
-                disp->setResonance(std::clamp((q - 0.1f) / 5.0f, 0.0f, 1.0f));
-                disp->setFilterType(
-                    static_cast<int>(flt->getParameter(effects::Filter::kType)));
-            });
-            return true;
-        }
-
-        return false;
+        auto* body = new GroupedKnobBody();
+        body->configure(setup.config, params);
+        body->setOnParamChange([ref](int idx, float v) {
+            DeviceRef r = ref; r.setParam(idx, v);
+        });
+        dw->setCustomBody(body);
+        configureDeviceWidget(dw, ref);
+        if (setup.updater) m_displayUpdaters.push_back(std::move(setup.updater));
+        return true;
     }
 
-    // ── Build custom display for MIDI effects (currently LFO) ──
+    // ── Build custom display for MIDI effects (registry-driven) ──
     bool setupMidiEffectDisplay(DeviceWidget* dw, midi::MidiEffect* fx,
                                 const DeviceRef& ref) {
         if (!fx) return false;
-        std::string nm = fx->id();
+        auto* builder = findMidiFxDisplayBuilder(fx->id());
+        if (!builder) return false;
 
-        if (nm == "lfo") {
-            auto* lfoDisp = new LFODisplayWidget();
-            dw->setCustomPanel(lfoDisp, 52.0f, 200.0f);
+        DisplayBuildArgs args{*this,
+            [ref](int idx, float v) { DeviceRef r = ref; r.setParam(idx, v); },
+            ref.chainIndex};
+        auto setup = builder(args, fx);
+
+        if (setup.customPanel) {
+            dw->setCustomPanel(setup.customPanel,
+                               setup.customPanelHeight, setup.customPanelMinW);
             configureDeviceWidget(dw, ref);
-
-            // Clicking the display opens the named target picker (App
-            // builds + shows it — it owns the engine/visual enumeration).
-            const int track = m_autoTrackIndex;
-            const int chain = ref.chainIndex;
-            lfoDisp->setOnClick([this, track, chain](float sx, float sy) {
-                if (m_onLfoTargetMenu) m_onLfoTargetMenu(track, chain, sx, sy);
-            });
-
-            m_displayUpdaters.push_back([this, lfoDisp, fx, track, chain]() {
-                auto* lfo = static_cast<midi::LFO*>(fx);
-                lfoDisp->setShape(static_cast<int>(lfo->getParameter(midi::LFO::kShape)));
-                lfoDisp->setDepth(lfo->getParameter(midi::LFO::kDepth));
-                lfoDisp->setBias(lfo->getParameter(midi::LFO::kBias));
-                lfoDisp->setPhaseOffset(lfo->getParameter(midi::LFO::kPhase));
-                lfoDisp->setCurrentValue(lfo->currentValue());
-                lfoDisp->setCurrentPhase(lfo->currentPhase());
-                lfoDisp->setLinked(lfo->linkTargetId() != 0);
-                if (m_lfoTargetNameResolver)
-                    lfoDisp->setTargetLabel(m_lfoTargetNameResolver(track, chain));
-            });
+            if (setup.updater) m_displayUpdaters.push_back(std::move(setup.updater));
             return true;
         }
-
-        return false;
+        return false;   // no grouped-knob path for MIDI effects today
     }
+#endif // YAWN_TEST_BUILD
 
     // ── Right-click knob reset (matches old geometry-based hit-test) ──
 #ifdef YAWN_TEST_BUILD
