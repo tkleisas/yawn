@@ -74,6 +74,13 @@ private:
     std::vector<Steinberg::Vst::AudioBusBuffers> m_outputBuses;
     std::vector<Steinberg::Vst::AudioBusBuffers> m_inputBuses;
 
+    // Persistent parameter-change queues handed to the plugin each
+    // block. Rebuilt in place (clearQueue keeps the allocations), so
+    // the per-block drain neither constructs nor allocates on the
+    // audio thread after warmup.
+    Steinberg::Vst::ParameterChanges m_inParamChanges{64};
+    Steinberg::Vst::ParameterChanges m_outParamChanges{16};
+
     static const instruments::InstrumentParameterInfo s_emptyParam;
 };
 

@@ -12,6 +12,7 @@
 #include "util/MessageQueue.h"
 #include "visual/VisualKnobBus.h"
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -61,7 +62,9 @@ public:
     bool openInputPort(int portIndex);
     bool openOutputPort(int portIndex);
 
-    int openInputPortCount() const { return static_cast<int>(m_inputPorts.size()); }
+    int openInputPortCount() const {
+        return m_inputPortCount.load(std::memory_order_acquire);
+    }
     int openOutputPortCount() const { return static_cast<int>(m_outputPorts.size()); }
     // Name of an OPEN output port (the one that sendToOutput(idx)
     // dispatches to). Empty string if idx is out of range or the
@@ -137,8 +140,15 @@ private:
     std::vector<std::string> m_availableInputs;
     std::vector<std::string> m_availableOutputs;
 
-    // Open ports
-    std::vector<std::unique_ptr<MidiPort>> m_inputPorts;
+    // Open ports. Input ports live in fixed slots (never reallocated)
+    // with the count published atomically: the UI appends a fully-
+    // constructed port then bumps the count (release); the audio
+    // thread snapshots the count once per process() (acquire) and
+    // reads only published slots — no reallocation race, no
+    // allocation on the RT path. Output ports are UI-thread-only
+    // (sendToOutput/AutoSampler), so they keep the plain vector.
+    std::unique_ptr<MidiPort> m_inputPorts[kMaxMidiPorts];
+    std::atomic<int>        m_inputPortCount{0};
     std::vector<std::unique_ptr<MidiPort>> m_outputPorts;
 
     // Per-track input routing

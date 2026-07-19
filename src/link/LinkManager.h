@@ -45,8 +45,11 @@ public:
     //
     // When `localTempoChanged` is false and peers > 0, ioBpm is
     // overwritten with the session tempo so we follow the network.
-    // The committed app session state always carries the resolved
+    // The committed audio session state always carries the resolved
     // ioBpm so other peers see the latest authoritative value.
+    // Everything here uses Link's realtime-safe audio-thread API
+    // (capture/commitAudioSessionState, numPeers, clock) — the
+    // app-session-state variants take locks and stay off this thread.
     void onAudioCallback(double& ioBpm, double& ioBeatPosition,
                           bool isPlaying, bool localTempoChanged);
 

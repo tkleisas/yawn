@@ -116,6 +116,24 @@ public:
         return result;
     }
 
+    // RT-safe lookups: invoke `fn(const MidiMapping&)` for each match
+    // without allocating (findByCC/findByNote return a vector by
+    // value — one heap allocation per matched message, so they must
+    // stay off the audio thread; MidiEngine::process uses these).
+    template <typename Fn>
+    void forEachByCC(int channel, int cc, Fn&& fn) const {
+        for (auto& m : m_mappings) {
+            if (m.matchesCC(channel, cc)) fn(m);
+        }
+    }
+
+    template <typename Fn>
+    void forEachByNote(int channel, int noteNum, Fn&& fn) const {
+        for (auto& m : m_mappings) {
+            if (m.matchesNote(channel, noteNum)) fn(m);
+        }
+    }
+
     void removeByTarget(const automation::AutomationTarget& t) {
         m_mappings.erase(
             std::remove_if(m_mappings.begin(), m_mappings.end(),

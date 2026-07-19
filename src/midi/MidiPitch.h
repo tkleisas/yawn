@@ -3,7 +3,6 @@
 #include "midi/MidiEffect.h"
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace yawn {
 namespace midi {
@@ -69,10 +68,18 @@ private:
         uint8_t outputNote;
     };
 
+    // Fixed-capacity held-note stack — process() runs on the audio
+    // thread, so no std::vector (heap) here. 256 slots cover any real
+    // performance; past that a note is still transposed but its
+    // (input→output) tracking is dropped, so its note-off falls back
+    // to the best-effort transpose path in process().
+    static constexpr int kMaxActiveNotes = 256;
+
     int m_semitones = 0;
     int m_octave    = 0;
     bool m_pitchChanged = false;
-    std::vector<ActiveNote> m_active;
+    ActiveNote m_active[kMaxActiveNotes] = {};
+    int m_activeCount = 0;
 };
 
 } // namespace midi

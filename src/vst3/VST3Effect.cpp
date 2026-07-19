@@ -101,10 +101,9 @@ void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
     m_instance->buildInputBuses(m_inputBuses.data(), mainIn, 2, numFrames);
     m_instance->buildOutputBuses(m_outputBuses.data(), mainOut, 2, numFrames);
 
-    // Drain queued parameter changes for the processor
-    Steinberg::Vst::ParameterChanges paramChanges;
-    Steinberg::Vst::ParameterChanges outParamChanges;
-    m_instance->drainParameterChanges(paramChanges);
+    // Drain queued parameter changes for the processor into the
+    // persistent queues (no allocation after warmup — see header).
+    m_instance->drainParameterChanges(m_inParamChanges);
 
     // Minimal process context — JUCE plugins dereference processContext
     // without checking null. Provide a stable default.
@@ -128,8 +127,8 @@ void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
     processData.outputs = numOutputBuses > 0 ? m_outputBuses.data() : nullptr;
     processData.inputEvents = nullptr;
     processData.outputEvents = nullptr;
-    processData.inputParameterChanges = paramChanges.getParameterCount() > 0 ? &paramChanges : nullptr;
-    processData.outputParameterChanges = &outParamChanges;
+    processData.inputParameterChanges = m_inParamChanges.getParameterCount() > 0 ? &m_inParamChanges : nullptr;
+    processData.outputParameterChanges = &m_outParamChanges;
     processData.processContext = &processContext;
 
     // Process. A plugin that starts reporting failure gets hard-

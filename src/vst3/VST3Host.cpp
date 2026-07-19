@@ -7,6 +7,7 @@
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/processdata.h"
 #include "public.sdk/source/vst/utility/uid.h"
+#include "util/AudioThread.h"
 #include "util/Logger.h"
 
 #if defined(__linux__)
@@ -408,6 +409,11 @@ bool VST3PluginInstance::connectComponents() {
 bool VST3PluginInstance::setupProcessing(double sampleRate, int maxBlockSize) {
     if (!m_processor) return false;
 
+    // Off the audio thread here (init / device reset): pre-reserve
+    // the audio-thread-local param list so recording/automation
+    // bursts don't grow it mid-block.
+    m_rtPendingParams.reserve(128);
+
     try {
 
     Steinberg::Vst::ProcessSetup setup;
@@ -566,26 +572,36 @@ double VST3PluginInstance::getParameterNormalized(Steinberg::Vst::ParamID id) co
 void VST3PluginInstance::setParameterNormalized(Steinberg::Vst::ParamID id, double value) {
     if (m_controller)
         m_controller->setParamNormalized(id, value);
-    // Queue for audio processor
-    std::lock_guard<std::mutex> lock(m_paramMutex);
-    m_pendingParams.push_back({id, value});
+    // Queue for the audio processor — lock-free on both paths (see
+    // the member comment in VST3Host.h). Callers already on the
+    // audio thread share the drain's thread, so a plain list
+    // suffices; everyone else pushes into the SPSC ring.
+    if (rt::onAudioThread) {
+        m_rtPendingParams.push_back({id, value});
+    } else if (!m_paramRing.push({id, value})) {
+        LOG_WARN("VST3", "Param queue full for '%s' — dropping change",
+                 m_name.c_str());
+    }
 }
 
 void VST3PluginInstance::drainParameterChanges(Steinberg::Vst::ParameterChanges& target) {
-    std::vector<PendingParam> changes;
-    {
-        std::lock_guard<std::mutex> lock(m_paramMutex);
-        changes.swap(m_pendingParams);
-    }
+    // Audio thread. `target` is a persistent per-device object whose
+    // queues are reused block-to-block (clearQueue keeps the
+    // allocation), so nothing here allocates after warmup.
     target.clearQueue();
-    for (auto& c : changes) {
+    auto append = [&target](Steinberg::Vst::ParamID id, double value) {
         Steinberg::int32 index;
-        auto* queue = target.addParameterData(c.id, index);
-        if (queue) {
+        if (auto* queue = target.addParameterData(id, index)) {
             Steinberg::int32 pointIndex;
-            queue->addPoint(0, c.value, pointIndex);
+            queue->addPoint(0, value, pointIndex);
         }
-    }
+    };
+    PendingParam p;
+    while (m_paramRing.pop(p))
+        append(p.id, p.value);
+    for (const auto& c : m_rtPendingParams)
+        append(c.id, c.value);
+    m_rtPendingParams.clear();
 }
 
 // ── State persistence ──

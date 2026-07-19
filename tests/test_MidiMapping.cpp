@@ -160,6 +160,52 @@ TEST(MidiLearnManager, FindByCC) {
     EXPECT_EQ(results3.size(), 0u);
 }
 
+// The RT-path lookup (MidiEngine::process) must produce the same hit
+// set as findByCC/findByNote without allocating.
+TEST(MidiLearnManager, ForEachLookupMatchesFindBy) {
+    MidiLearnManager mgr;
+
+    MidiMapping m1;
+    m1.midiChannel = -1;
+    m1.ccNumber = 7;
+    m1.target = AutomationTarget::mixer(0, MixerParam::Volume);
+    mgr.addMapping(m1);
+
+    MidiMapping m2;
+    m2.midiChannel = -1;
+    m2.ccNumber = 7;
+    m2.target = AutomationTarget::mixer(1, MixerParam::Volume);
+    mgr.addMapping(m2);
+
+    MidiMapping m3;
+    m3.midiChannel = 2;
+    m3.noteNumber = 60;
+    m3.source = MappingSource::Note;
+    m3.target = AutomationTarget::mixer(3, MixerParam::Mute);
+    mgr.addMapping(m3);
+
+    int ccHits = 0;
+    mgr.forEachByCC(0, 7, [&](const MidiMapping& m) {
+        EXPECT_EQ(m.ccNumber, 7);
+        ++ccHits;
+    });
+    EXPECT_EQ(ccHits, 2);
+
+    mgr.forEachByCC(0, 99, [&](const MidiMapping&) { ++ccHits; });
+    EXPECT_EQ(ccHits, 2);
+
+    int noteHits = 0;
+    mgr.forEachByNote(2, 60, [&](const MidiMapping& m) {
+        EXPECT_EQ(m.noteNumber, 60);
+        ++noteHits;
+    });
+    EXPECT_EQ(noteHits, 1);
+
+    // Channel filter: same note on a different channel must not match.
+    mgr.forEachByNote(1, 60, [&](const MidiMapping&) { ++noteHits; });
+    EXPECT_EQ(noteHits, 1);
+}
+
 TEST(MidiLearnManager, RemoveByTarget) {
     MidiLearnManager mgr;
 

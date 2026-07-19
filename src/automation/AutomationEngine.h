@@ -18,6 +18,13 @@ namespace automation {
 // Called once per buffer, before the mixer processes.
 class AutomationEngine {
 public:
+    // Breakpoints reserved per lane when recording storage is
+    // preallocated (at arm time for existing lanes, at creation for
+    // new ones). 4096 points ≈ 43 s of continuous movement at
+    // ~94 buffers/s; beyond that the envelope's geometric growth
+    // takes over (a rare amortized allocation, not one per point).
+    static constexpr size_t kRecordPointReserve = 4096;
+
     // Per-track automation mode (set from UI via command queue)
     AutoMode trackAutoMode(int track) const {
         if (track < 0 || track >= kMaxTracks) return AutoMode::Off;

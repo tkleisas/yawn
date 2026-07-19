@@ -26,7 +26,7 @@ void LinkManager::onAudioCallback(double& ioBpm, double& ioBeatPosition,
                                     bool isPlaying, bool localTempoChanged) {
     if (!m_enabled.load(std::memory_order_acquire)) return;
 
-    const auto sessionState = m_link.captureAudioSessionState();
+    auto sessionState = m_link.captureAudioSessionState();
 
     // Local-edit wins for this buffer — see header comment. Without
     // the !localTempoChanged guard, the user can never change tempo
@@ -41,11 +41,13 @@ void LinkManager::onAudioCallback(double& ioBpm, double& ioBeatPosition,
     }
 
     // Always commit the resolved tempo (whether it came from the
-    // network or from a local edit) so peers stay in sync.
-    auto state = m_link.captureAppSessionState();
-    state.setTempo(ioBpm, state.timeAtBeat(ioBeatPosition, 4.0));
-    state.setIsPlaying(isPlaying, state.timeAtBeat(ioBeatPosition, 4.0));
-    m_link.commitAppSessionState(state);
+    // network or from a local edit) so peers stay in sync. Reuse the
+    // audio session state captured above and commit through the
+    // realtime-safe audio-thread API — capture/commitAppSessionState
+    // take internal locks and must never run on this thread.
+    sessionState.setTempo(ioBpm, sessionState.timeAtBeat(ioBeatPosition, 4.0));
+    sessionState.setIsPlaying(isPlaying, sessionState.timeAtBeat(ioBeatPosition, 4.0));
+    m_link.commitAudioSessionState(sessionState);
 }
 
 #else

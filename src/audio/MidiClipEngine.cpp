@@ -9,6 +9,15 @@
 namespace yawn {
 namespace audio {
 
+namespace {
+// Bit index into MidiClipPlayState::heldNotes — the (channel, pitch)
+// set of currently-sounding notes, so a clip hot-swap can release
+// exactly the ones the replacement won't keep.
+constexpr size_t heldBit(uint8_t ch, uint8_t pitch) {
+    return static_cast<size_t>(ch) * 128 + pitch;
+}
+} // namespace
+
 void MidiClipEngine::scheduleClip(int trackIndex, int sceneIndex,
                                   const midi::MidiClip* clip,
                                   QuantizeMode quantize,
@@ -67,12 +76,18 @@ void MidiClipEngine::swapClip(int trackIndex, const midi::MidiClip* oldClip,
             }
             return false;
         };
-        for (auto it = state.heldNotes.begin(); it != state.heldNotes.end(); ) {
-            if (!soundsInNew(it->channel, it->pitch)) {
-                buffer.addMessage(midi::MidiMessage::noteOff(it->channel, it->pitch, 0, 0));
-                it = state.heldNotes.erase(it);
-            } else {
-                ++it;
+        for (int ch = 0; ch < 16; ++ch) {
+            for (int pitch = 0; pitch < 128; ++pitch) {
+                const size_t bit = heldBit(static_cast<uint8_t>(ch),
+                                           static_cast<uint8_t>(pitch));
+                if (!state.heldNotes.test(bit)) continue;
+                if (!soundsInNew(static_cast<uint8_t>(ch),
+                                 static_cast<uint8_t>(pitch))) {
+                    buffer.addMessage(midi::MidiMessage::noteOff(
+                        static_cast<uint8_t>(ch),
+                        static_cast<uint8_t>(pitch), 0, 0));
+                    state.heldNotes.reset(bit);
+                }
             }
         }
     }
@@ -230,7 +245,7 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
     state.playPositionBeats = 0.0;
     state.active = true;
     state.stopping = false;
-    state.heldNotes.clear();
+    state.heldNotes.reset();
     state.sceneIndex = sceneIndex;
     state.clipAutomation = clipAutomation;
     state.followAction = followAction;
@@ -251,24 +266,8 @@ void MidiClipEngine::stopNow(int trackIndex) {
     // Keep state.clip so emitClipStates() continues reporting playing=false
     // to the UI (prevents stale "playing" state blocking relaunch).
     state.playPositionBeats = 0.0;
-    state.heldNotes.clear();
+    state.heldNotes.reset();
 }
-
-namespace {
-// Track which (channel, pitch) notes are currently sounding so a clip
-// hot-swap can release exactly the ones the replacement won't keep.
-void addHeld(std::vector<MidiClipPlayState::HeldNote>& held,
-             uint8_t ch, uint8_t pitch) {
-    for (auto& h : held)
-        if (h.channel == ch && h.pitch == pitch) return;  // already on
-    held.push_back({ch, pitch});
-}
-void removeHeld(std::vector<MidiClipPlayState::HeldNote>& held,
-                uint8_t ch, uint8_t pitch) {
-    for (auto it = held.begin(); it != held.end(); ++it)
-        if (it->channel == ch && it->pitch == pitch) { held.erase(it); return; }
-}
-} // namespace
 
 void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
                                  midi::MidiBuffer& buffer,
@@ -310,7 +309,7 @@ void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
 
             buffer.addMessage(
                 midi::MidiMessage::noteOff(n.channel, n.pitch, relVel7, frame));
-            removeHeld(state.heldNotes, n.channel, n.pitch);
+            state.heldNotes.reset(heldBit(n.channel, n.pitch));
         }
         // Early exit: if note starts after scanEnd, no more note-offs possible
         if (n.startBeat >= scanEnd) break;
@@ -332,7 +331,7 @@ void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
 
         buffer.addMessage(
             midi::MidiMessage::noteOn(n.channel, n.pitch, vel7, frame));
-        addHeld(state.heldNotes, n.channel, n.pitch);
+        state.heldNotes.set(heldBit(n.channel, n.pitch));
     }
 
     // --- CC Events ---

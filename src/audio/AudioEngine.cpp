@@ -1,4 +1,5 @@
 #include "audio/AudioEngine.h"
+#include "util/AudioThread.h"
 #include "util/Logger.h"
 #include "midi/LFO.h"
 #include "visual/VisualModBus.h"
@@ -721,6 +722,10 @@ void AudioEngine::pollLatencyLog() {
 }
 
 void AudioEngine::processAudio(const float* input, float* output, unsigned long numFrames) {
+    // Mark this thread as the realtime thread for the whole block so
+    // deep code (VST3 param handoff, …) can pick lock-free paths.
+    rt::AudioThreadScope rtScope;
+
     // Retirement heartbeat — exactly one tick per processAudio call
     // (suspended callbacks tick separately in paCallback). The UI-side
     // retire list frees swapped-out objects once this advances past
@@ -1968,8 +1973,26 @@ void AudioEngine::processCommands() {
                 }
             }
             else if constexpr (std::is_same_v<T, SetAutoModeMsg>) {
-                m_automationEngine.setTrackAutoMode(msg.trackIndex,
-                    static_cast<automation::AutoMode>(msg.mode));
+                const auto newMode = static_cast<automation::AutoMode>(msg.mode);
+                m_automationEngine.setTrackAutoMode(msg.trackIndex, newMode);
+                // Arming Touch/Latch: preallocate this track's
+                // recording storage so the take itself doesn't
+                // allocate per breakpoint on the audio thread. Runs
+                // once per arm gesture (button click), never
+                // per-buffer.
+                if ((newMode == automation::AutoMode::Touch ||
+                     newMode == automation::AutoMode::Latch) &&
+                    msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
+                    auto& lanes = m_trackAutoLanes[msg.trackIndex];
+                    lanes.reserve(lanes.size() + 16);
+                    for (auto& lane : lanes) {
+                        const size_t want =
+                            static_cast<size_t>(lane.envelope.pointCount()) +
+                            automation::AutomationEngine::kRecordPointReserve;
+                        if (lane.envelope.pointCapacity() < want)
+                            lane.envelope.reservePoints(want);
+                    }
+                }
             }
             else if constexpr (std::is_same_v<T, SetGlobalAutoRecordMsg>) {
                 m_automationEngine.setGlobalAutoRecord(msg.armed);

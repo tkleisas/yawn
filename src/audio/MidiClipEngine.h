@@ -36,13 +36,13 @@ struct MidiClipPlayState {
     FollowAction followAction;
 
     // Notes currently sounding on this track (note-on emitted, matching
-    // note-off not yet emitted). Maintained by scanAndEmit. Lets a
-    // mid-playback clip swap release exactly the notes the replacement
-    // clip won't keep sounding — so dropping a new clip doesn't leave
-    // the old clip's long notes hanging, while an in-place edit that
-    // keeps a note doesn't cut it. See MidiClipEngine::swapClip.
-    struct HeldNote { uint8_t channel; uint8_t pitch; };
-    std::vector<HeldNote> heldNotes;
+    // note-off not yet emitted) as a 16-channel × 128-pitch bit set —
+    // fixed size, no heap, so scanAndEmit never allocates on the audio
+    // thread. Maintained by scanAndEmit. Lets a mid-playback clip swap
+    // release exactly the notes the replacement clip won't keep
+    // sounding — see MidiClipEngine::swapClip. Bit index:
+    // channel * 128 + pitch.
+    std::bitset<16 * 128> heldNotes;
 };
 
 // Pending MIDI clip launch (for quantized launching)

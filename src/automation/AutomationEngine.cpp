@@ -8,8 +8,11 @@ AutomationLane* AutomationEngine::findOrCreateLane(std::vector<AutomationLane>& 
     for (auto& lane : lanes) {
         if (lane.target == target) return &lane;
     }
-    // Create a new lane for this target
+    // Create a new lane for this target, reserving breakpoint storage
+    // up front so the per-buffer addPoint() calls that follow don't
+    // allocate on the audio thread.
     lanes.push_back({target, {}, true});
+    lanes.back().envelope.reservePoints(AutomationEngine::kRecordPointReserve);
     return &lanes.back();
 }
 

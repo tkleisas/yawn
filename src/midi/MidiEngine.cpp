@@ -14,13 +14,15 @@ MidiEngine::~MidiEngine() {
 }
 
 void MidiEngine::shutdown() {
-    for (auto& p : m_inputPorts) {
-        if (p) p->close();
+    const int n = m_inputPortCount.load(std::memory_order_acquire);
+    for (int i = 0; i < n; ++i) {
+        if (m_inputPorts[i]) m_inputPorts[i]->close();
+        m_inputPorts[i].reset();
     }
+    m_inputPortCount.store(0, std::memory_order_release);
     for (auto& p : m_outputPorts) {
         if (p) p->close();
     }
-    m_inputPorts.clear();
     m_outputPorts.clear();
 }
 
@@ -31,9 +33,14 @@ void MidiEngine::refreshPorts() {
 
 bool MidiEngine::openInputPort(int portIndex) {
     if (portIndex < 0 || portIndex >= availableInputCount()) return false;
+    // UI thread only. Append into a fixed slot, then publish — the
+    // audio thread reads only slots below the acquire-loaded count.
+    const int n = m_inputPortCount.load(std::memory_order_relaxed);
+    if (n >= kMaxMidiPorts) return false;
     auto port = std::make_unique<MidiPort>(MidiPort::Direction::Input);
     if (!port->open(portIndex)) return false;
-    m_inputPorts.push_back(std::move(port));
+    m_inputPorts[n] = std::move(port);
+    m_inputPortCount.store(n + 1, std::memory_order_release);
     return true;
 }
 
@@ -49,9 +56,12 @@ void MidiEngine::process(int /*numFrames*/) {
     // Clear all track buffers
     for (auto& buf : m_trackBuffers) buf.clear();
 
-    // Collect input from all open ports into the merge buffer
+    // Collect input from all open ports into the merge buffer.
+    // Snapshot the published port count once — the UI may be
+    // appending a new port concurrently (see MidiEngine.h).
     m_mergeBuffer.clear();
-    for (int p = 0; p < static_cast<int>(m_inputPorts.size()); ++p) {
+    const int nPorts = m_inputPortCount.load(std::memory_order_acquire);
+    for (int p = 0; p < nPorts; ++p) {
         auto& port = m_inputPorts[p];
         if (!port || !port->isOpen()) continue;
 
@@ -86,11 +96,11 @@ void MidiEngine::process(int /*numFrames*/) {
                     continue;
                 }
 
-                auto hits = m_learnManager->findByCC(ch, cc);
-                for (auto* mapping : hits) {
-                    float paramVal = mapping->ccToParam(val);
-                    resolveAndSend(mapping->target, paramVal);
-                }
+                m_learnManager->forEachByCC(ch, cc,
+                    [&](const MidiMapping& mapping) {
+                        resolveAndSend(mapping.target,
+                                       mapping.ccToParam(val));
+                    });
             }
             else if (msg.isNoteOn() || msg.isNoteOff()) {
                 int ch = msg.channel;
@@ -101,11 +111,11 @@ void MidiEngine::process(int /*numFrames*/) {
                     continue;
                 }
 
-                auto hits = m_learnManager->findByNote(ch, noteNum);
-                for (auto* mapping : hits) {
-                    float paramVal = mapping->noteToParam(msg.isNoteOn());
-                    resolveAndSend(mapping->target, paramVal);
-                }
+                m_learnManager->forEachByNote(ch, noteNum,
+                    [&](const MidiMapping& mapping) {
+                        resolveAndSend(mapping.target,
+                                       mapping.noteToParam(msg.isNoteOn()));
+                    });
             }
         }
     }

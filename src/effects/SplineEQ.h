@@ -78,6 +78,12 @@ public:
         m_window.assign(kFftSize, 0.0f);
         m_inMags.assign(kSpectrumBins, 0.0f);
         m_outMags.assign(kSpectrumBins, 0.0f);
+        // FFT scratch — sized once here so updateSpectrum() doesn't
+        // allocate on the audio thread every kFftSize samples.
+        m_fftReIn.assign(kFftSize, 0.0f);
+        m_fftImIn.assign(kFftSize, 0.0f);
+        m_fftReOut.assign(kFftSize, 0.0f);
+        m_fftImOut.assign(kFftSize, 0.0f);
 
         // Initialise per-node defaults. ParameterInfo only carries
         // ONE default-per-field (the same Type/Freq/Gain/Q template
@@ -392,9 +398,15 @@ private:
     void updateSpectrum() {
         // Window + FFT both pre and post buffers, log-bin the
         // magnitudes into m_inMags / m_outMags, peak-and-decay
-        // smoothing to make the display readable.
-        std::vector<float> reIn(kFftSize), imIn(kFftSize, 0.0f);
-        std::vector<float> reOut(kFftSize), imOut(kFftSize, 0.0f);
+        // smoothing to make the display readable. Uses the scratch
+        // arrays allocated in init() — no allocation here, this runs
+        // on the audio thread.
+        auto& reIn  = m_fftReIn;
+        auto& imIn  = m_fftImIn;
+        auto& reOut = m_fftReOut;
+        auto& imOut = m_fftImOut;
+        std::fill(imIn.begin(), imIn.end(), 0.0f);
+        std::fill(imOut.begin(), imOut.end(), 0.0f);
         // The ring buffer's "newest" sample is at m_fftWritePos-1 and
         // wraps back. Re-order into a contiguous time-ordered array
         // before windowing.
@@ -439,6 +451,7 @@ private:
     std::vector<float> m_inFftBuf, m_outFftBuf;
     std::vector<float> m_window;
     std::vector<float> m_inMags, m_outMags;
+    std::vector<float> m_fftReIn, m_fftImIn, m_fftReOut, m_fftImOut;
     int                m_fftWritePos = 0;
     bool               m_fftReady = false;
 };

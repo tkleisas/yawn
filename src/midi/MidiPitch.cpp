@@ -9,7 +9,7 @@ void MidiPitch::init(double sampleRate) {
 }
 
 void MidiPitch::reset() {
-    m_active.clear();
+    m_activeCount = 0;
     m_pitchChanged = false;
 }
 
@@ -29,20 +29,25 @@ void MidiPitch::process(MidiBuffer& buffer, int /*numFrames*/,
                 msg.velocity = 0;  // silence out-of-range
                 continue;
             }
-            m_active.push_back({msg.channel, msg.note,
-                                 static_cast<uint8_t>(np)});
+            if (m_activeCount < kMaxActiveNotes) {
+                m_active[m_activeCount++] = {msg.channel, msg.note,
+                                             static_cast<uint8_t>(np)};
+            }
             msg.note = static_cast<uint8_t>(np);
         } else if (msg.isNoteOff()) {
             // Prefer the stored output note so releases always match
             // the note-on they came from.
-            auto it = std::find_if(m_active.begin(), m_active.end(),
-                [&](const ActiveNote& an) {
-                    return an.channel == msg.channel &&
-                           an.inputNote == msg.note;
-                });
-            if (it != m_active.end()) {
-                msg.note = it->outputNote;
-                m_active.erase(it);
+            int found = -1;
+            for (int i = 0; i < m_activeCount; ++i) {
+                if (m_active[i].channel == msg.channel &&
+                    m_active[i].inputNote == msg.note) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                msg.note = m_active[found].outputNote;
+                m_active[found] = m_active[--m_activeCount];
             } else {
                 // Untracked: best-effort transpose with current
                 // offset. Skip out-of-range.
@@ -59,11 +64,12 @@ void MidiPitch::process(MidiBuffer& buffer, int /*numFrames*/,
     // buffer was already handled by phase 1's m_active lookup.
     if (m_pitchChanged) {
         m_pitchChanged = false;
-        for (auto& an : m_active) {
+        for (int i = 0; i < m_activeCount; ++i) {
             buffer.addMessage(
-                MidiMessage::noteOff(an.channel, an.outputNote, 0, 0));
+                MidiMessage::noteOff(m_active[i].channel,
+                                     m_active[i].outputNote, 0, 0));
         }
-        m_active.clear();
+        m_activeCount = 0;
     }
 }
 

@@ -19,10 +19,11 @@
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 
+#include "util/RingBuffer.h"
+
 #include <memory>
 #include <string>
 #include <vector>
-#include <mutex>
 
 namespace yawn {
 namespace vst3 {
@@ -176,13 +177,26 @@ private:
     std::vector<std::vector<float*>> m_inputBusPtrs;
     int m_maxBlockSize = 0;
 
-    // Thread-safe parameter change queue (UI thread → audio thread)
+    // Parameter change handoff → the audio processor.
+    //
+    // setParameterNormalized() is called from the UI thread (knob
+    // drags, in-process editor) AND from the audio thread itself
+    // (automation playback, MIDI-learn commands). Non-audio callers
+    // push into a lock-free SPSC ring; audio-thread callers append to
+    // a plain list — the drain runs on that same thread, so no
+    // synchronization is needed there. Neither path locks or
+    // allocates on the audio thread.
     struct PendingParam {
         Steinberg::Vst::ParamID id;
         double value;
     };
-    std::mutex m_paramMutex;
-    std::vector<PendingParam> m_pendingParams;
+    // 4096 absorbs any realistic UI burst (preset-apply loops,
+    // sweeps); on overflow the change is dropped — the controller was
+    // already updated synchronously, so the UI still reads back the
+    // correct value, and the next change re-queues.
+    static constexpr size_t kParamRingCapacity = 4096;
+    util::RingBuffer<PendingParam, kParamRingCapacity> m_paramRing;
+    std::vector<PendingParam> m_rtPendingParams;
 };
 
 // Singleton host context — provides IHostApplication to plugins

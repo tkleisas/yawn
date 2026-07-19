@@ -73,6 +73,12 @@ public:
 
     int pointCount() const { return static_cast<int>(m_points.size()); }
 
+    // Reserve breakpoint storage. The recording path calls this at
+    // arm time / lane creation so addPoint() doesn't allocate on the
+    // audio thread mid-take.
+    void reservePoints(size_t n) { m_points.reserve(n); }
+    size_t pointCapacity() const { return m_points.capacity(); }
+
     const BreakPoint& point(int index) const { return m_points[index]; }
     BreakPoint& point(int index) { return m_points[index]; }
 
