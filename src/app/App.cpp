@@ -188,45 +188,18 @@ void App::setupDefaultTracks() {
 
 void App::newProject() {
     LOG_INFO("User", "newProject");
-    auto doNew = [this]() {
-        m_audioEngine.sendCommand(audio::TransportStopMsg{});
-
-        // Reset project to defaults
-        m_project = Project();
-        m_project.init();
-
-        resetEngineState();
-
-        setupDefaultTracks();
-        syncTracksToEngine();
-
-        m_projectPath.clear();
-        m_projectDirty = false;
-        // No project open → preset saves go to the global library only.
-        PresetManager::setProjectRoot({});
-        m_undoManager.clear();
-        m_midiLearnManager.clearAll();
-        m_selectedTrack = 0;
-        m_detailTarget = DetailTarget::Track;
-        m_detailReturnBus = -1;
-        m_showDetailPanel = false;
-        m_pianoRoll->close();
-        updateWindowTitle();
-        LOG_INFO("Project", "New project created");
-    };
-
     if (m_projectDirty) {
         ui::fw2::ConfirmDialog::prompt("Save changes before creating a new project?",
-            [this, doNew]() {
+            [this]() {
                 if (!m_projectPath.empty()) {
                     doSaveProject(m_projectPath);
                 } else {
                     saveProjectAs();
                 }
-                doNew();
+                doNewProject();
             });
     } else {
-        doNew();
+        doNewProject();
     }
 }
 
@@ -257,6 +230,36 @@ void App::saveProject() {
         return;
     }
     doSaveProject(m_projectPath);
+}
+
+// The actual project reset, factored out of newProject() so the UI
+// command channel's `new` verb can reset state without tripping the
+// dirty-check confirmation dialog (headless scripts can't answer it).
+void App::doNewProject() {
+    m_audioEngine.sendCommand(audio::TransportStopMsg{});
+
+    // Reset project to defaults
+    m_project = Project();
+    m_project.init();
+
+    resetEngineState();
+
+    setupDefaultTracks();
+    syncTracksToEngine();
+
+    m_projectPath.clear();
+    m_projectDirty = false;
+    // No project open → preset saves go to the global library only.
+    PresetManager::setProjectRoot({});
+    m_undoManager.clear();
+    m_midiLearnManager.clearAll();
+    m_selectedTrack = 0;
+    m_detailTarget = DetailTarget::Track;
+    m_detailReturnBus = -1;
+    m_showDetailPanel = false;
+    m_pianoRoll->close();
+    updateWindowTitle();
+    LOG_INFO("Project", "New project created");
 }
 
 void App::saveProjectAs() {

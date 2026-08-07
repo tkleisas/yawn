@@ -622,8 +622,22 @@ Verbs: `ping`, `shot <path.png>` (GL back-buffer capture — works under Wayland
 `menu <title>`, `menuitem <label>`, `addtrack audio|midi|visual`,
 `addinstrument <track> <name>`, `addeffect <track> <name>`,
 `setparam <track> <paramIndex> <value>`, `dialog preferences|about|shortcuts|export`,
-`dbg` (input-dispatch diagnostics), `quit`. `scripts/ui_probe.py` is the reference
-client (plain sockets — any language works).
+`dbg` (input-dispatch diagnostics), `quit [code]`.
+
+**State queries** (every reply is `OK <value>`): `get tracks`, `get scenes`,
+`get tracktype <i>`, `get instrument <i>`, `get param <track> <index>`,
+`get playing`, `get bpm`, `get view`, `get modal`, `get undo` / `get redo`
+(stack state + description). **Actions**: `undo`, `redo` (the real app path),
+`new` (fresh project, no dirty-check dialog), `wait <frames>` (deferred ack —
+deterministic frame sync, no blind sleeps). `quit <code>` sets the process exit
+code, so a harness can fail CI through the app itself. `scripts/ui_probe.py`
+is the reference client (plain sockets — any language works).
+
+**Smoke harness**: `scripts/ui_smoke.py [binary]` launches the app, runs ~30
+assertions through the channel (queries, undo/redo roundtrip, screenshot PNG
+validation, modal open/close, clean exit) and exits non-zero on any failure.
+Runs headless under Xvfb (`xvfb-run -a python3 scripts/ui_smoke.py build/bin/YAWN`)
+and is wired into CI as the "UI smoke (Xvfb)" step of the Linux build job.
 
 ---
 

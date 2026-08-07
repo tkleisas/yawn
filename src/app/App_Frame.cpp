@@ -833,6 +833,13 @@ void App::render() {
         m_pendingShotClient = -1;
     }
 
+    // Deferred `wait` ack: count rendered frames down, then reply.
+    if (m_pendingWaitClient >= 0 && --m_pendingWaitFrames <= 0) {
+        if (m_uiCmdServer)
+            m_uiCmdServer->queueResponse(m_pendingWaitClient, "OK wait");
+        m_pendingWaitClient = -1;
+    }
+
     m_mainWindow.swap();
 
     // Visual output: render after the main UI has swapped. tick() saves and

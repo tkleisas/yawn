@@ -77,7 +77,18 @@ void App::initUiCommandServer() {
     const std::string v = env;
     if (!v.empty() && v != "1") port = std::atoi(v.c_str());
 
-    auto server = std::make_unique<util::TcpLineServer>(port);
+    // A previous instance may still be shutting down with the port
+    // held (rapid restart loops in test harnesses). Retry briefly
+    // instead of giving up on the first EADDRINUSE.
+    std::unique_ptr<util::TcpLineServer> server;
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        server = std::make_unique<util::TcpLineServer>(port);
+        if (server->ok()) break;
+        if (attempt == 0)
+            LOG_INFO("UiCmd", "bind on 127.0.0.1:%d failed — retrying for a "
+                              "few seconds (previous instance exiting?)", port);
+        SDL_Delay(100);
+    }
     if (!server->ok()) {
         LOG_ERROR("UiCmd", "YAWN_CMD set but bind on 127.0.0.1:%d failed — "
                            "UI command channel disabled", port);
@@ -105,6 +116,9 @@ std::string App::executeUiCommand(const std::string& line) {
 
     if (verb == "shot") {
         if (args.size() < 2) return "ERR usage: shot <path.png>";
+        // One deferred capture at a time — a second `shot` would
+        // otherwise silently steal the pending ack.
+        if (!m_pendingShotPath.empty()) return "ERR busy (shot pending)";
         // Deferred ack: the capture happens at the end of this frame's
         // render() (back buffer complete, pre-swap), which then queues
         // "OK shot" back to this client.
@@ -250,6 +264,112 @@ std::string App::executeUiCommand(const std::string& line) {
         return "ERR usage: dialog preferences|about|shortcuts|export";
     }
 
+    if (verb == "get") {
+        // Read-only state queries for assertions in test scripts.
+        // Every reply is "OK <value>".
+        if (args.size() < 2)
+            return "ERR usage: get tracks|tracktype|instrument|param|playing|bpm|view|scenes|modal|undo|redo";
+        const std::string& what = args[1];
+
+        if (what == "tracks")
+            return "OK " + std::to_string(m_project.numTracks());
+        if (what == "scenes")
+            return "OK " + std::to_string(m_project.numScenes());
+        if (what == "playing")
+            return std::string("OK ") +
+                   (m_audioEngine.transport().isPlaying() ? "1" : "0");
+        if (what == "bpm")
+            return "OK " + std::to_string(m_audioEngine.transport().bpm());
+        if (what == "view")
+            return std::string("OK ") +
+                   (m_project.viewMode() == ViewMode::Arrangement
+                    ? "arrangement" : "session");
+        if (what == "modal")
+            return std::string("OK ") +
+                   (m_fw2LayerStack.hasModalActive() ? "1" : "0");
+        if (what == "undo") {
+            // canUndo flag + description of the top entry, so a script
+            // can assert the right action is on the stack.
+            return std::string("OK ") +
+                   (m_undoManager.canUndo() ? "1 " : "0") +
+                   m_undoManager.undoDescription();
+        }
+        if (what == "redo") {
+            return std::string("OK ") +
+                   (m_undoManager.canRedo() ? "1 " : "0") +
+                   m_undoManager.redoDescription();
+        }
+        if (what == "tracktype") {
+            if (args.size() < 3) return "ERR usage: get tracktype <trackIndex>";
+            int track = -1;
+            try { track = std::stoi(args[2]); } catch (...) {}
+            if (track < 0 || track >= m_project.numTracks()) return "ERR bad track";
+            switch (m_project.track(track).type) {
+                case Track::Type::Audio:  return "OK audio";
+                case Track::Type::Midi:   return "OK midi";
+                case Track::Type::Visual: return "OK visual";
+            }
+            return "ERR unknown track type";
+        }
+        if (what == "instrument") {
+            if (args.size() < 3) return "ERR usage: get instrument <trackIndex>";
+            int track = -1;
+            try { track = std::stoi(args[2]); } catch (...) {}
+            if (track < 0 || track >= m_project.numTracks()) return "ERR bad track";
+            auto* inst = m_audioEngine.instrument(track);
+            return std::string("OK ") + (inst ? inst->name() : "none");
+        }
+        if (what == "param") {
+            if (args.size() < 4)
+                return "ERR usage: get param <trackIndex> <paramIndex>";
+            int track = -1, param = -1;
+            try { track = std::stoi(args[2]); } catch (...) {}
+            try { param = std::stoi(args[3]); } catch (...) {}
+            if (track < 0 || track >= m_project.numTracks()) return "ERR bad track";
+            auto* inst = m_audioEngine.instrument(track);
+            if (!inst) return "ERR no instrument on track";
+            if (param < 0 || param >= inst->parameterCount()) return "ERR bad param";
+            return "OK " + std::to_string(inst->getParameter(param));
+        }
+        return "ERR unknown query: " + what;
+    }
+
+    if (verb == "undo" || verb == "redo") {
+        // Same path as Ctrl+Z / Ctrl+Y.
+        if (verb == "undo") {
+            if (!m_undoManager.canUndo()) return "ERR nothing to undo";
+            const std::string d = m_undoManager.undoDescription();
+            m_undoManager.undo();
+            markDirty();
+            return "OK undo " + d;
+        }
+        if (!m_undoManager.canRedo()) return "ERR nothing to redo";
+        const std::string d = m_undoManager.redoDescription();
+        m_undoManager.redo();
+        markDirty();
+        return "OK redo " + d;
+    }
+
+    if (verb == "wait") {
+        // Deferred ack: reply "OK wait" after N rendered frames — the
+        // deterministic sync point for scripts (no blind sleeps).
+        if (args.size() < 2) return "ERR usage: wait <frames>";
+        if (m_pendingWaitClient >= 0) return "ERR busy (wait pending)";
+        int frames = 0;
+        try { frames = std::stoi(args[1]); } catch (...) {}
+        if (frames < 1) return "ERR bad frame count";
+        m_pendingWaitFrames = frames;
+        m_pendingWaitClient = m_uiCmdClientId;
+        return std::string();
+    }
+
+    if (verb == "new") {
+        // Force a fresh default project WITHOUT the dirty-check dialog —
+        // headless scripts can't answer a modal.
+        doNewProject();
+        return "OK new";
+    }
+
     if (verb == "dbg") {
         // Diagnostic dump for input-dispatch bugs: what's floating on
         // the LayerStack, and who holds fw2 mouse capture.
@@ -267,7 +387,12 @@ std::string App::executeUiCommand(const std::string& line) {
 
     if (verb == "quit") {
         // Same path as File → Quit: the run loop exits at the end of
-        // this frame (after the ack below is flushed).
+        // this frame (after the ack below is flushed). Optional exit
+        // code lets test harnesses report pass/fail through the app's
+        // own exit status (`quit 1` → process exits 1).
+        if (args.size() >= 2) {
+            try { m_exitCode = std::stoi(args[1]); } catch (...) {}
+        }
         m_running = false;
         return "OK quit";
     }

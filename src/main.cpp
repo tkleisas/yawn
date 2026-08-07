@@ -266,10 +266,11 @@ static int runApp() {
     }
 
     app->run();
+    const int code = app->exitCode();
     app->shutdown();
 
     LOG_INFO("App", "Y.A.W.N shutdown complete");
-    return 0;
+    return code;
 }
 
 #ifdef _WIN32

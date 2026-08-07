@@ -84,6 +84,10 @@ public:
 
     bool isRunning() const { return m_running; }
 
+    // Exit code returned from main() — set by the `quit <code>` verb
+    // (test harnesses report failure this way); 0 in normal use.
+    int  exitCode() const { return m_exitCode; }
+
 private:
     void processEvents();
     void handleKeyEvent(const SDL_Event& event);
@@ -292,11 +296,16 @@ private:
 
     // TCP UI command channel (App_UiCommands.cpp). Off unless the
     // YAWN_CMD env var names a port; scripts send line-based verbs
-    // (ping / shot / key / click / menu / addtrack / …) instead of
-    // synthesizing X11 input.
+    // (ping / shot / key / click / menu / addtrack / get / undo / …)
+    // instead of synthesizing X11 input.
     void initUiCommandServer();
     void pumpUiCommands();
     std::string executeUiCommand(const std::string& line);
+
+    // The unconditional half of newProject() (no dirty-check prompt) —
+    // used by the `new` verb so scripts can reset state without a
+    // modal appearing.
+    void doNewProject();
 
     // Procedural preset generation (Tools menu). Runs the generator on
     // a detached worker thread (full catalog ≈ 6 s) and posts a
@@ -721,6 +730,10 @@ private:
     int         m_uiCmdClientId = -1;
     std::string m_pendingShotPath;
     int         m_pendingShotClient = -1;
+    // `wait <frames>` deferred ack — counted down at end of render.
+    int         m_pendingWaitFrames = 0;
+    int         m_pendingWaitClient = -1;
+    int         m_exitCode = 0;
 
 #ifdef YAWN_HAS_VST3
     std::unique_ptr<vst3::VST3Scanner> m_vst3Scanner;

@@ -63,7 +63,8 @@ jobs:
             libavutil-dev \
             libswscale-dev \
             libavdevice-dev \
-            ccache
+            ccache \
+            xvfb
 
       # Prebuilt FFmpeg (shared, includes headers + import libs + DLLs +
       # ffmpeg.exe/ffprobe.exe). BtbN publishes these under their
@@ -129,6 +130,13 @@ jobs:
       - name: Test
         working-directory: build
         run: ctest --build-config ${{ matrix.build-type }} --output-on-failure --parallel
+
+      # End-to-end UI smoke: drive the real app over the YAWN_CMD TCP
+      # command channel under a virtual X server (llvmpipe GL). Covers
+      # the get/undo/redo/wait/shot verbs against a live process.
+      - name: UI smoke (Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python3 scripts/ui_smoke.py build/bin/YAWN
 
       - name: Package (Windows)
         if: runner.os == 'Windows'

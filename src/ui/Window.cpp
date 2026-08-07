@@ -4,6 +4,7 @@
 #include "stb_image_write.h"
 #include <glad/gl.h>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -193,12 +194,19 @@ void Window::swap() {
 // Screenshot path for the UI command channel (App_UiCommands.cpp,
 // YAWN_CMD env var). Reads the finished frame straight out of the
 // back buffer — works on any windowing system (xwd/x11grab see
-// nothing under Wayland).
+// nothing under Wayland). Parent directories are created as needed —
+// test scripts point at fresh temp paths all the time.
 bool Window::captureToPng(const std::string& path) {
     if (!m_window) return false;
     int w = 0, h = 0;
     SDL_GetWindowSizeInPixels(m_window, &w, &h);
     if (w <= 0 || h <= 0) return false;
+    const std::filesystem::path parent =
+        std::filesystem::path(path).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+    }
     std::vector<unsigned char> px(static_cast<size_t>(w) * h * 4);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
     stbi_flip_vertically_on_write(1);
