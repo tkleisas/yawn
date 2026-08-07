@@ -77,10 +77,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-18-13-13/ffmpeg-N-125658-g0869e710e6-win64-gpl-shared.zip'
+          # Mirrored in this repo's `deps` release — BtbN prunes dated
+          # autobuilds within weeks (the 2026-07-18 pin 404'd), and the
+          # rolling `latest` alias floats. Hash-checked so the toolchain
+          # is exactly what we mirrored.
+          $url = 'https://github.com/tkleisas/yawn/releases/download/deps/ffmpeg-win64.zip'
+          $sha256 = '952b5fb1d32636d70ced1f8df65a51def4c576e1f8a834ee9d578ae0adc8d64c'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           $dest = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
           Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $sha256) {
+            throw "FFmpeg zip sha256 mismatch — mirror tampered or URL wrong"
+          }
           Expand-Archive -Path $zip -DestinationPath $dest -Force
           $root = (Get-ChildItem -Path $dest -Directory | Select-Object -First 1).FullName
           echo "FFMPEG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
