@@ -389,9 +389,11 @@ public:
         const uint64_t now = nowMs();
         // 5 seconds — generous enough to outlast a quantized stop
         // even at slow tempos (60 BPM = 4 sec/bar). Callers that
-        // need a hard guarantee should send an unquantized
-        // StopClipMsg (QuantizeMode::None) which clears state.clip
-        // on the audio thread synchronously.
+        // need a hard guarantee pair the unquantized StopClipMsg
+        // with AudioEngine::quiesceCommands() — see
+        // App::stopAllClipsForSceneEdit — which blocks until the
+        // audio thread has consumed the stop before any freed
+        // pointer's owner is touched.
         const uint64_t keepMs = 5000;
         m_clipGraveyard.erase(
             std::remove_if(m_clipGraveyard.begin(), m_clipGraveyard.end(),

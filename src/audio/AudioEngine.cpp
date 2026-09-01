@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <thread>
 
 // ── Denormal flushing on the audio thread ──────────────────────────
 // Recursive DSP (NAM/WaveNet, filters, reverbs) produces denormal
@@ -537,7 +538,57 @@ void AudioEngine::handleDeviceLost() {
 }
 
 void AudioEngine::sendCommand(const AudioCommand& cmd) {
-    m_commandQueue.push(cmd);
+    if (m_commandQueue.push(cmd))
+        m_cmdsProduced.fetch_add(1, std::memory_order_release);
+}
+
+void AudioEngine::quiesceCommands(std::chrono::milliseconds timeout) {
+    using namespace std::chrono;
+
+    // No live stream → no audio thread exists to race with.
+    if (!m_stream || Pa_IsStreamActive(m_stream) == 0) return;
+
+    const auto deadline = steady_clock::now() + timeout;
+
+    if (!m_running.load(std::memory_order_acquire)) {
+        // Suspended: the callback ticks the heartbeat but returns
+        // silence without processCommands(), so the queue can't drain
+        // and m_cmdsConsumed will never reach the target. The pending
+        // commands are consumed by the first callback after resume,
+        // BEFORE any rendering resumes, so it suffices to wait out any
+        // callback that was already in flight when suspend() landed.
+        const uint64_t s0 = m_rtSeq.load(std::memory_order_acquire);
+        while (m_rtSeq.load(std::memory_order_acquire) == s0) {
+            if (steady_clock::now() >= deadline) {
+                LOG_WARN("Audio", "quiesceCommands: timed out (%lld ms) waiting "
+                                  "for the suspended callback heartbeat",
+                         static_cast<long long>(timeout.count()));
+                break;
+            }
+            std::this_thread::yield();
+        }
+        return;
+    }
+
+    // Wait for a drain that started after our last send to finish.
+    // processCommands() stores the produced-count it observed at the
+    // START of the drain; consumed >= target therefore proves every
+    // command enqueued before the target read was popped by that drain
+    // (the produced RMWs form a release sequence, so observing their
+    // count means the corresponding ring pushes happened-before the
+    // drain's pops). No more sends can interleave: quiesceCommands runs
+    // on the UI thread, the queue's only producer.
+    const uint64_t target = m_cmdsProduced.load(std::memory_order_acquire);
+    while (m_cmdsConsumed.load(std::memory_order_acquire) < target) {
+        if (steady_clock::now() >= deadline) {
+            LOG_WARN("Audio", "quiesceCommands: timed out (%lld ms) waiting for "
+                              "the audio thread to consume %llu command(s)",
+                     static_cast<long long>(timeout.count()),
+                     static_cast<unsigned long long>(target));
+            break;
+        }
+        std::this_thread::yield();
+    }
 }
 
 bool AudioEngine::pollEvent(AudioEvent& event) {
@@ -1476,6 +1527,16 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
 }
 
 void AudioEngine::processCommands() {
+    // Snapshot the produced counter BEFORE draining: quiesceCommands()
+    // on the UI thread treats consumed >= target as proof that every
+    // command produced up to `target` was popped. Storing the
+    // start-of-drain observation (rather than an end-of-drain one)
+    // keeps that implication exact — a command produced after the
+    // snapshot was either popped by this drain (it was already in the
+    // ring) or isn't covered by this drain's consumed marker.
+    const uint64_t producedAtStart =
+        m_cmdsProduced.load(std::memory_order_acquire);
+
     AudioCommand cmd;
     while (m_commandQueue.pop(cmd)) {
         std::visit([this](auto&& msg) {
@@ -2027,6 +2088,12 @@ void AudioEngine::processCommands() {
             }
         }, cmd);
     }
+
+    // Publish what this drain covered (see the producedAtStart snapshot
+    // above). Release so a UI-thread acquire of m_cmdsConsumed that
+    // observes >= its target also sees every side effect of the popped
+    // commands.
+    m_cmdsConsumed.store(producedAtStart, std::memory_order_release);
 }
 
 void AudioEngine::checkPendingRecordStops(int bufferSize) {

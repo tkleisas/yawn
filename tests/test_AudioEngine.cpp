@@ -439,3 +439,49 @@ TEST(AudioEngine, PrivateCaptureStereoChannelInterleaved) {
         EXPECT_NEAR(req.buffer[f * 2 + 1], -1.0f, 1e-3f);
     }
 }
+
+// ==================== quiesceCommands handshake ====================
+//
+// Structural scene edits (scene insert/delete/duplicate) send
+// unquantized stops and then quiesce: block until the audio thread has
+// CONSUMED those stops before the clip-slot vectors move. These tests
+// verify the command-counter plumbing headlessly (no PortAudio stream):
+// pumpInputForTest drives processAudio → processCommands, which is what
+// advances the consumed counter.
+
+TEST(AudioEngineQuiesce, NoStreamReturnsImmediately) {
+    AudioEngine engine;
+    engine.sendCommand(TransportSetBPMMsg{100.0});
+    // No stream → no audio thread → quiesce must not wait even though
+    // the command is still sitting in the queue.
+    engine.quiesceCommands(std::chrono::milliseconds(50));
+    EXPECT_EQ(engine.cmdsProducedForTest(), 1u);
+    EXPECT_EQ(engine.cmdsConsumedForTest(), 0u);
+}
+
+TEST(AudioEngineQuiesce, CommandsConsumedAfterPump) {
+    AudioEngine engine;
+    engine.sendCommand(TransportSetBPMMsg{100.0});
+    engine.sendCommand(TransportSetBPMMsg{140.0});
+    ASSERT_EQ(engine.cmdsProducedForTest(), 2u);
+    ASSERT_EQ(engine.cmdsConsumedForTest(), 0u);
+
+    // One processAudio pass drains the whole queue.
+    engine.pumpInputForTest(nullptr, 256);
+    EXPECT_EQ(engine.cmdsConsumedForTest(), 2u);
+    EXPECT_DOUBLE_EQ(engine.transport().bpm(), 140.0);
+
+    // A quiesce after the drain observes consumed >= produced and
+    // returns without touching the queue again.
+    engine.quiesceCommands(std::chrono::milliseconds(50));
+    EXPECT_EQ(engine.cmdsConsumedForTest(), 2u);
+}
+
+TEST(AudioEngineQuiesce, ConsumedCounterIsMonotonicAcrossPumps) {
+    AudioEngine engine;
+    for (int i = 0; i < 3; ++i) {
+        engine.sendCommand(TransportSetBPMMsg{120.0 + i});
+        engine.pumpInputForTest(nullptr, 64);
+        EXPECT_EQ(engine.cmdsConsumedForTest(), engine.cmdsProducedForTest());
+    }
+}

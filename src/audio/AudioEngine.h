@@ -134,6 +134,27 @@ public:
     void sendCommand(const AudioCommand& cmd);
     bool pollEvent(AudioEvent& event);
 
+    // Structural-edit handshake (UI thread only). Blocks until every
+    // command enqueued so far has been CONSUMED by the audio thread's
+    // processCommands() — i.e. the engine has applied them and dropped
+    // any cached pointers the commands clear — or until `timeout`
+    // elapses. Used before structural scene edits that reallocate the
+    // clip-slot vectors, so the engine can no longer dereference the
+    // old slots' clip/automation pointers when they move.
+    //
+    // Guarantees, by case:
+    //  - Stream stopped: no audio thread exists → returns immediately.
+    //  - Suspended: callbacks skip processCommands, so the queue can't
+    //    drain; the pending commands are consumed by the first callback
+    //    after resume BEFORE any rendering. Waits out any in-flight
+    //    pre-suspend callback, then returns.
+    //  - Running: spins until the queue drain that consumed the last
+    //    enqueued command completes (typically one callback period,
+    //    ~10 ms).
+    // On timeout it logs a warning and returns anyway — the project
+    // clip graveyard's TTL remains as the memory-safety backstop.
+    void quiesceCommands(std::chrono::milliseconds timeout);
+
     // CPU load as reported by PortAudio (0.0 – 1.0)
     double cpuLoad() const { return m_stream ? Pa_GetStreamCpuLoad(m_stream) : 0.0; }
 
@@ -417,6 +438,16 @@ public:
     // record/finalize path without PortAudio.
     void setHasInputDeviceForTest(bool v) { m_hasInputDevice = v; }
 
+    // Test helpers: command-counter snapshots, for verifying the
+    // quiesceCommands() handshake without a live stream (pump
+    // processAudio via pumpInputForTest, then assert the counters).
+    uint64_t cmdsProducedForTest() const {
+        return m_cmdsProduced.load(std::memory_order_acquire);
+    }
+    uint64_t cmdsConsumedForTest() const {
+        return m_cmdsConsumed.load(std::memory_order_acquire);
+    }
+
     // ─── Private audio capture (auto-sampler, sample tools) ──────────
     //
     // A side channel for capturing input frames into a caller-owned
@@ -660,6 +691,19 @@ private:
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;
+
+    // Command-consumption bookkeeping for quiesceCommands(). Produced:
+    // incremented (release) by sendCommand() after a successful push.
+    // Consumed: stored (release) at the end of each processCommands()
+    // drain with the produced-count observed at the START of that
+    // drain. A consumed value >= a produced value observed after a
+    // batch of sends therefore proves that batch was popped by that
+    // drain (the produced RMWs form a release sequence; see
+    // quiesceCommands). Relaxed atomics elsewhere — only the relative
+    // counts matter here, data visibility rides on the queue's own
+    // release/acquire pairing.
+    std::atomic<uint64_t> m_cmdsProduced{0};
+    std::atomic<uint64_t> m_cmdsConsumed{0};
 
     PaStream* m_stream = nullptr;
     std::atomic<bool> m_running{false};

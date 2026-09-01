@@ -90,14 +90,19 @@ void App::insertSceneAtSelection() {
 
 // Stop every launched clip immediately so the audio engine drops the
 // per-slot pointers (ClipPlayState::clip / clipAutomation) it caches from
-// LaunchClipMsg/LaunchMidiClipMsg. Runs before structural scene edits:
-// Project::insertScene/deleteScene/duplicateScene reallocate the
-// per-track clip-slot vectors. The automation lanes are boxed
+// LaunchClipMsg/LaunchMidiClipMsg, then QUIESCE: block until the audio
+// thread has actually consumed those stops, so the structural edit that
+// follows (Project::insertScene/deleteScene/duplicateScene reallocating
+// the per-track clip-slot vectors) can never be observed by a callback
+// still holding the old slots' pointers. Runs before structural scene
+// edits.
+//
+// QuantizeMode::None makes the stop take effect on the engine's next
+// command drain; quiesceCommands() then waits out that drain (typically
+// one callback period). The automation lanes are boxed
 // (ClipSlot::clipAutomation) and deleted slots' clips/boxes are
-// graveyard-retired, so the pointers can't dangle anymore — the stop
-// is kept so the graveyard stays small and quantized stops don't
-// linger past the edit. QuantizeMode::None makes the stop take effect
-// on the engine's next callback rather than the next bar.
+// graveyard-retired, so on a quiesce timeout the pointers still can't
+// dangle — the graveyard TTL is a backstop, not the mechanism.
 void App::stopAllClipsForSceneEdit() {
     for (int t = 0; t < m_project.numTracks(); ++t) {
         m_audioEngine.sendCommand(
@@ -105,6 +110,7 @@ void App::stopAllClipsForSceneEdit() {
         m_audioEngine.sendCommand(
             audio::StopMidiClipMsg{t, audio::QuantizeMode::None});
     }
+    m_audioEngine.quiesceCommands(std::chrono::milliseconds(250));
 }
 
 void App::sceneInsert(int index) {

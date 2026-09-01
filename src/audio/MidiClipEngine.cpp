@@ -36,6 +36,12 @@ void MidiClipEngine::scheduleStop(int trackIndex, QuantizeMode quantize) {
     if (trackIndex < 0 || trackIndex >= kMaxTracks) return;
     if (quantize == QuantizeMode::None) {
         stopNow(trackIndex);
+        // Also drop any pending launch — mirrors ClipEngine::scheduleStop.
+        // Without this, a quantized launch queued before the stop fires
+        // at the next boundary and re-points the track at a clip the UI
+        // may already have graveyarded (structural scene edits rely on
+        // this to keep deleted scenes' clips from relaunching).
+        m_pending[trackIndex] = {};
     } else {
         m_pending[trackIndex] = {trackIndex, -1, nullptr, quantize, true};
     }
@@ -267,6 +273,13 @@ void MidiClipEngine::stopNow(int trackIndex) {
     // to the UI (prevents stale "playing" state blocking relaunch).
     state.playPositionBeats = 0.0;
     state.heldNotes.reset();
+    // Drop the cached automation-lane pointer (ClipEngine::scheduleStop
+    // does the same). The automation context gates on `active`, so a
+    // stale pointer is never dereferenced — but keeping it would let a
+    // since-freed box's address linger in engine state, which is
+    // precisely the dangling-pointer class the scene-edit quiesce
+    // handshake exists to rule out.
+    state.clipAutomation = nullptr;
 }
 
 void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,

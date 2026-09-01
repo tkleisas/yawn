@@ -444,3 +444,48 @@ TEST_F(MidiClipEngineTest, SwapKeepsNotesNewClipStillSustains) {
     }
     EXPECT_FALSE(off60) << "note 60 still sustained by new clip; must not be cut";
 }
+// Regression (scene-edit race): a clip queued with NextBar quantize must
+// NOT fire after an immediate (QuantizeMode::None) stop. Structural scene
+// edits (insert/delete/duplicate) stop every track unquantized before
+// reallocating the clip-slot vectors; a surviving pending launch would
+// fire at the next bar boundary and re-point the track at a clip the UI
+// has since graveyarded. Mirrors ClipEngine::scheduleStop, which already
+// dropped its pending slot; MidiClipEngine now does the same.
+TEST_F(MidiClipEngineTest, ImmediateStopDropsQueuedPendingLaunch) {
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    clip.addNote({0.0, 1.0, 60, 0, 16000, 0, 0, 0, 0});
+
+    m_transport.play();
+    m_transport.setPositionInSamples(0);
+
+    // Queue a NextBar launch, then immediately stop the track
+    // unquantized — the scene-edit sequence.
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::NextBar);
+    m_engine.scheduleStop(0, QuantizeMode::None);
+
+    // Even after crossing into the next bar, the queued clip must not
+    // fire — the pending slot was dropped by the immediate stop.
+    m_transport.setPositionInSamples(static_cast<int64_t>(44100.0 * 4 * 60.0 / 120.0));
+    m_engine.resetQuantizeCheck();
+    m_engine.checkAndFirePending();
+    EXPECT_FALSE(m_engine.isTrackPlaying(0));
+}
+
+// Immediate stop must also drop the cached automation-lane pointer, so a
+// since-retired box's address doesn't linger in engine state after a
+// structural scene edit (ClipEngine::scheduleStop(None) does the same).
+TEST_F(MidiClipEngineTest, ImmediateStopClearsCachedAutomationPointer) {
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    std::vector<automation::AutomationLane> lanes;
+
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None, &lanes);
+    m_engine.checkAndFirePending();
+    ASSERT_TRUE(m_engine.isTrackPlaying(0));
+    ASSERT_EQ(m_engine.trackState(0).clipAutomation, &lanes);
+
+    m_engine.scheduleStop(0, QuantizeMode::None);
+    EXPECT_EQ(m_engine.trackState(0).clipAutomation, nullptr);
+    EXPECT_FALSE(m_engine.isTrackPlaying(0));
+}
