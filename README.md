@@ -133,6 +133,7 @@ self-contained releases are built, and the stem-separation model) are in
 | [docs/visual.md](docs/visual.md) | Shader authoring, uniforms, video / live / 3D / Lua / automation |
 | [docs/controller-scripting.md](docs/controller-scripting.md) | Lua API + every controller's button/CC map |
 | [docs/ableton-move.md](docs/ableton-move.md) | Ableton Move button map, encoders, LED palette |
+| [docs/ai-sound-design.md](docs/ai-sound-design.md) | AI/ML integration possibilities — CLAP tagging, sound matching, text→patch — ranked by reachability, with prototype plan |
 | [docs/ui-v2-architecture.md](docs/ui-v2-architecture.md) | fw2 UI framework internals ([events](docs/ui-v2-events.md), [layout](docs/ui-v2-measure-layout.md), [layer stack](docs/ui-v2-layer-stack.md), [theme](docs/ui-v2-theme.md)) |
 | [docs/widgets/](docs/widgets/README.md) | Per-widget reference |
 | [NOTICES.md](NOTICES.md) | Third-party content licenses + attribution |
