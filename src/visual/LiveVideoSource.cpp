@@ -1,19 +1,10 @@
 #include "visual/LiveVideoSource.h"
+#include "visual/FfmpegShim.h"
 #include "util/Logger.h"
 
 #include <cstring>
 
 #if defined(YAWN_HAS_VIDEO) && YAWN_HAS_VIDEO
-
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/imgutils.h>
-#include <libswscale/swscale.h>
-#if defined(YAWN_HAS_AVDEVICE) && YAWN_HAS_AVDEVICE
-#include <libavdevice/avdevice.h>
-#endif
-}
 
 namespace yawn {
 namespace visual {
@@ -74,25 +65,36 @@ enum class AttemptOutcome {
 void LiveVideoSource::threadMain(std::string url) {
     LiveUrlParts parts = parseLiveUrl(url);
 
+    // Runtime gate: on POSIX the libav* set is dlopen()'d on demand.
+    if (!ff::probe()) {
+        std::lock_guard<std::mutex> lk(m_metaMutex);
+        m_error = "FFmpeg runtime libraries not found (" +
+                  ff::loadError() + ")";
+        m_state.store(State::Failed);
+        LOG_ERROR("LiveVideo", "%s", m_error.c_str());
+        return;
+    }
+
     const AVInputFormat* inputFmt = nullptr;
     if (!parts.inputFormat.empty()) {
-#if defined(YAWN_HAS_AVDEVICE) && YAWN_HAS_AVDEVICE
-        inputFmt = av_find_input_format(parts.inputFormat.c_str());
-        if (!inputFmt) {
+        // Device URLs (v4l2/dshow/…) need libavdevice present — checked
+        // at runtime now, since on POSIX the lib is dlopen()'d.
+        if (!ff::hasAvdevice()) {
             std::lock_guard<std::mutex> lk(m_metaMutex);
-            m_error = "input format '" + parts.inputFormat +
-                       "' not available (rebuild with libavdevice?)";
+            m_error = "device URL needs libavdevice (not available on this system)";
             m_state.store(State::Failed);
             LOG_ERROR("LiveVideo", "%s", m_error.c_str());
             return;
         }
-#else
-        std::lock_guard<std::mutex> lk(m_metaMutex);
-        m_error = "device URL needs libavdevice (not compiled in)";
-        m_state.store(State::Failed);
-        LOG_ERROR("LiveVideo", "%s", m_error.c_str());
-        return;
-#endif
+        inputFmt = ff::av_find_input_format(parts.inputFormat.c_str());
+        if (!inputFmt) {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
+            m_error = "input format '" + parts.inputFormat +
+                       "' not available (is libavdevice installed?)";
+            m_state.store(State::Failed);
+            LOG_ERROR("LiveVideo", "%s", m_error.c_str());
+            return;
+        }
     }
 
     auto setError = [this](std::string msg) {
@@ -119,21 +121,21 @@ void LiveVideoSource::threadMain(std::string url) {
         // For network streams we want to fail fast rather than block
         // for minutes, and RTSP over TCP is the sane default.
         AVDictionary* opts = nullptr;
-        av_dict_set(&opts, "stimeout",       "5000000", 0); // 5s (µs)
-        av_dict_set(&opts, "rw_timeout",     "5000000", 0);
-        av_dict_set(&opts, "rtsp_transport", "tcp",     0);
+        ff::av_dict_set(&opts, "stimeout",       "5000000", 0); // 5s (µs)
+        ff::av_dict_set(&opts, "rw_timeout",     "5000000", 0);
+        ff::av_dict_set(&opts, "rtsp_transport", "tcp",     0);
 
-        if (avformat_open_input(&fmt, parts.filename.c_str(),
+        if (ff::avformat_open_input(&fmt, parts.filename.c_str(),
                                   inputFmt, &opts) != 0) {
-            av_dict_free(&opts);
+            ff::av_dict_free(&opts);
             setError("avformat_open_input failed for " + parts.filename);
             LOG_ERROR("LiveVideo", "open failed: %s", parts.filename.c_str());
             return AttemptOutcome::OpenFailed;
         }
-        av_dict_free(&opts);
+        ff::av_dict_free(&opts);
 
-        if (avformat_find_stream_info(fmt, nullptr) < 0) {
-            avformat_close_input(&fmt);
+        if (ff::avformat_find_stream_info(fmt, nullptr) < 0) {
+            ff::avformat_close_input(&fmt);
             setError("find_stream_info failed for " + parts.filename);
             return AttemptOutcome::OpenFailed;
         }
@@ -146,32 +148,34 @@ void LiveVideoSource::threadMain(std::string url) {
             }
         }
         if (streamIdx < 0) {
-            avformat_close_input(&fmt);
+            ff::avformat_close_input(&fmt);
             setError("no video stream in " + parts.filename);
             return AttemptOutcome::OpenFailed;
         }
 
         AVStream* st = fmt->streams[streamIdx];
-        const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-        AVCodecContext* cctx = codec ? avcodec_alloc_context3(codec) : nullptr;
+        const AVCodec* codec = ff::avcodec_find_decoder(st->codecpar->codec_id);
+        AVCodecContext* cctx = codec ? ff::avcodec_alloc_context3(codec) : nullptr;
         if (!cctx ||
-            avcodec_parameters_to_context(cctx, st->codecpar) < 0 ||
-            avcodec_open2(cctx, codec, nullptr) < 0) {
-            if (cctx) avcodec_free_context(&cctx);
-            avformat_close_input(&fmt);
+            ff::avcodec_parameters_to_context(cctx, st->codecpar) < 0 ||
+            ff::avcodec_open2(cctx, codec, nullptr) < 0) {
+            if (cctx) ff::avcodec_free_context(&cctx);
+            ff::avformat_close_input(&fmt);
             setError("codec open failed");
             return AttemptOutcome::OpenFailed;
         }
 
         // Scaler is lazy — we wait for the first decoded frame before
         // building it, since live sources don't always report a valid
-        // pix_fmt on codecpar.
+        // pix_fmt on codecpar. (Also layout-stable: AVFrame's geometry
+        // fields are safe across the FFmpeg 6/7 ABI boundary — unlike
+        // AVCodecContext::pix_fmt, which moved. See FfmpegShim.cpp.)
         SwsContext* sws = nullptr;
         int swsSrcW = 0, swsSrcH = 0;
         int swsSrcFmt = AV_PIX_FMT_NONE;
 
-        AVFrame*  frame  = av_frame_alloc();
-        AVPacket* packet = av_packet_alloc();
+        AVFrame*  frame  = ff::av_frame_alloc();
+        AVPacket* packet = ff::av_packet_alloc();
         std::vector<uint8_t> rgba(size_t(kWidth) * kHeight * 4, 0);
 
         m_state.store(State::Connected);
@@ -181,7 +185,7 @@ void LiveVideoSource::threadMain(std::string url) {
         AttemptOutcome outcome = AttemptOutcome::StreamDropped;
 
         while (!m_stopFlag.load()) {
-            int readRc = av_read_frame(fmt, packet);
+            int readRc = ff::av_read_frame(fmt, packet);
             if (readRc < 0) {
                 if (readRc == AVERROR(EAGAIN)) continue;
                 LOG_WARN("LiveVideo", "av_read_frame ended (rc=%d)", readRc);
@@ -189,15 +193,15 @@ void LiveVideoSource::threadMain(std::string url) {
                 break;
             }
             if (packet->stream_index != streamIdx) {
-                av_packet_unref(packet);
+                ff::av_packet_unref(packet);
                 continue;
             }
-            int send = avcodec_send_packet(cctx, packet);
-            av_packet_unref(packet);
+            int send = ff::avcodec_send_packet(cctx, packet);
+            ff::av_packet_unref(packet);
             if (send < 0) continue;
 
             while (!m_stopFlag.load()) {
-                int recv = avcodec_receive_frame(cctx, frame);
+                int recv = ff::avcodec_receive_frame(cctx, frame);
                 if (recv == AVERROR(EAGAIN) || recv == AVERROR_EOF) break;
                 if (recv < 0) break;
 
@@ -206,11 +210,11 @@ void LiveVideoSource::threadMain(std::string url) {
                 if (!sws || frame->width != swsSrcW ||
                     frame->height != swsSrcH ||
                     frame->format != swsSrcFmt) {
-                    if (sws) { sws_freeContext(sws); sws = nullptr; }
+                    if (sws) { ff::sws_freeContext(sws); sws = nullptr; }
                     swsSrcW   = frame->width;
                     swsSrcH   = frame->height;
                     swsSrcFmt = frame->format;
-                    sws = sws_getContext(
+                    sws = ff::sws_getContext(
                         swsSrcW, swsSrcH, static_cast<AVPixelFormat>(swsSrcFmt),
                         kWidth, kHeight, AV_PIX_FMT_RGBA,
                         SWS_BILINEAR, nullptr, nullptr, nullptr);
@@ -224,7 +228,7 @@ void LiveVideoSource::threadMain(std::string url) {
 
                 uint8_t* dstSlice[1]  = { rgba.data() };
                 int      dstStride[1] = { kWidth * 4 };
-                sws_scale(sws, frame->data, frame->linesize,
+                ff::sws_scale(sws, frame->data, frame->linesize,
                           0, swsSrcH, dstSlice, dstStride);
 
                 {
@@ -237,11 +241,11 @@ void LiveVideoSource::threadMain(std::string url) {
 
         if (m_stopFlag.load()) outcome = AttemptOutcome::Stopped;
 
-        if (sws)    sws_freeContext(sws);
-        if (frame)  av_frame_free(&frame);
-        if (packet) av_packet_free(&packet);
-        if (cctx)   avcodec_free_context(&cctx);
-        avformat_close_input(&fmt);
+        if (sws)    ff::sws_freeContext(sws);
+        if (frame)  ff::av_frame_free(&frame);
+        if (packet) ff::av_packet_free(&packet);
+        if (cctx)   ff::avcodec_free_context(&cctx);
+        ff::avformat_close_input(&fmt);
         return outcome;
     };
 

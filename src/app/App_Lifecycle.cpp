@@ -3,6 +3,7 @@
 #include "app/App.h"
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
+#include "visual/FfmpegShim.h"
 #include "visual/VisualModBus.h"
 #include "transcribe/AudioToMidi.h"
 #include "ui/framework/v2/Fw2Painters.h"
@@ -1605,6 +1606,31 @@ bool App::init() {
     m_toastManager.show("Video support disabled — set FFMPEG_ROOT and rebuild "
                         "to enable video files / webcams",
                         8.0f, ui::ToastManager::Severity::Warn);
+#elif !defined(_WIN32)
+    // POSIX: video is compiled in, but the libav* set is dlopen()'d at
+    // runtime by FfmpegShim — the host may still lack a compatible
+    // FFmpeg (wrong soname major, or none installed). Probe now so the
+    // gap is surfaced once, loudly, instead of as silent menu failures.
+    if (!visual::ff::probe()) {
+        LOG_INFO("App", "[!] Video support UNAVAILABLE at runtime: %s",
+                 visual::ff::loadError().c_str());
+        LOG_INFO("App", "    Visual tracks can run shaders only; video files");
+        LOG_INFO("App", "    and live capture (webcams) won't work.");
+        LOG_INFO("App", "    Fix: install FFmpeg 6 or 7 (e.g. 'sudo apt install");
+        LOG_INFO("App", "    ffmpeg'), or use the AppImage which bundles them.");
+        m_toastManager.show("Video support unavailable — no compatible FFmpeg "
+                            "(6/7) found on this system",
+                            8.0f, ui::ToastManager::Severity::Warn);
+    } else if (!visual::ff::hasAvdevice()) {
+        LOG_INFO("App", "[!] Live capture UNAVAILABLE — libavdevice not found "
+                 "on this system at runtime.");
+        LOG_INFO("App", "    Video files work, but webcams / device URLs won't.");
+        LOG_INFO("App", "    Fix: 'sudo apt install libavdevice61' (FFmpeg 7) or");
+        LOG_INFO("App", "    'libavdevice60' (FFmpeg 6).");
+        m_toastManager.show("Live capture unavailable — libavdevice missing on "
+                            "this system",
+                            6.0f, ui::ToastManager::Severity::Warn);
+    }
 #elif !defined(YAWN_HAS_AVDEVICE)
     LOG_INFO("App", "[!] Live capture DISABLED — libavdevice not linked.");
     LOG_INFO("App", "    Video files work, but webcams / dshow streams won't.");

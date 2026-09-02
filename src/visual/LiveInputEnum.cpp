@@ -89,8 +89,9 @@ std::vector<LiveInputDevice> enumerateLiveInputDevices() {
 // our standard dshow:// scheme so LiveVideoSource::start() routes
 // through the existing libav path with no special-casing.
 std::vector<LiveInputDevice> enumerateLiveInputDevices() {
-    // Self-register libavdevice — the static init in VideoDecoder.cpp
-    // may not fire if the linker drops that TU under /OPT:REF. Idempotent.
+    // Self-register libavdevice — a no-op on FFmpeg ≥ 5.1 (demuxers
+    // self-register) but harmless; kept for older linked builds.
+    // Idempotent.
     static std::once_flag s_initOnce;
     std::call_once(s_initOnce, []{ avdevice_register_all(); });
 

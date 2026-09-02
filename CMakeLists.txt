@@ -117,22 +117,20 @@ if(MSVC)
 endif()
 
 # ── FFmpeg (video playback) ──────────────────────────────────────────────
-# Optional dep. Two detection paths:
 #
-#   1. pkg-config — the normal route on Linux/macOS and inside envs that
-#      ship .pc files (e.g. vcpkg, MSYS2). Produces PkgConfig::FFMPEG
-#      imported targets with all flags pre-wired.
-#
-#   2. Manual find — fallback for Windows where pkg-config typically
-#      isn't present. Consumes an FFMPEG_ROOT hint (either -D or env)
-#      pointing at a prebuilt FFmpeg tree shaped like:
-#          <root>/include/libavcodec/avcodec.h
-#          <root>/lib/avcodec.lib     (or libavcodec.a on unix)
-#          <root>/bin/avcodec-*.dll   (shared builds on Windows)
-#      This matches the BtbN prebuilt layout used in CI.
+# Two detection routes:
+#   1) pkg-config — typical on Linux. Produces PkgConfig::FFMPEG
+#      (libavcodec/avformat/avutil/swscale). On POSIX the libraries are
+#      NOT linked: src/visual/FfmpegShim.cpp dlopen()s them at runtime by
+#      soname family, so the binary starts on hosts with a different (or
+#      no) FFmpeg. pkg-config supplies headers only in that case.
+#   2) Manual detection fallback — picks up prebuilt FFmpeg via FFMPEG_ROOT.
+#      Linked at build time (Windows; DLLs are bundled in the release).
 #
 # YAWN_HAS_VIDEO / YAWN_HAS_AVDEVICE gate the video code paths so builds
-# without ffmpeg still work (menu items hidden).
+# without ffmpeg headers still work; on POSIX the same features degrade at
+# RUNTIME (toast + graceful failure) when the libraries aren't loadable.
+# The manual fallback (2) matches the BtbN prebuilt layout used in CI.
 set(YAWN_HAS_VIDEO 0)
 set(YAWN_HAS_AVDEVICE 0)
 set(YAWN_FFMPEG_TARGET "")
@@ -677,11 +675,26 @@ if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
 endif()
 
 if(YAWN_HAS_VIDEO)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_TARGET})
+    if(WIN32)
+        # Linked at build time; the DLLs are bundled in the release.
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_TARGET})
+    else()
+        # POSIX: runtime dlopen via src/visual/FfmpegShim.cpp — headers
+        # only, no DT_NEEDED, so the binary starts on any host regardless
+        # of which FFmpeg soname major (or none) is installed.
+        target_include_directories(${PROJECT_NAME} PRIVATE
+            ${FFMPEG_INCLUDE_DIRS} ${FFMPEG_INCLUDE_DIR})
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
+    endif()
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_VIDEO=1)
 endif()
 if(YAWN_HAS_AVDEVICE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_AVDEVICE_TARGET})
+    if(WIN32)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${YAWN_FFMPEG_AVDEVICE_TARGET})
+    else()
+        target_include_directories(${PROJECT_NAME} PRIVATE
+            ${FFMPEG_AVDEVICE_INCLUDE_DIRS})
+    endif()
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAWN_HAS_AVDEVICE=1)
 endif()
 

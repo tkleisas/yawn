@@ -17,7 +17,10 @@
 // thread, each consumer should have its own VideoDecoder.
 //
 // If YAWN_HAS_VIDEO is 0 this class compiles to no-ops so the rest of
-// the code can reference it without #ifdefs everywhere.
+// the code can reference it without #ifdefs everywhere. When compiled
+// in, the libav* calls still go through FfmpegShim (runtime dlopen on
+// POSIX), so open() can fail at runtime if no compatible FFmpeg is
+// installed on the host — check the log for the reason.
 
 #include <string>
 #include <vector>
@@ -57,21 +60,27 @@ public:
     bool decodeFrame(int frameIndex, uint8_t* outRGBA);
 
 private:
+    // Build/rebuild the sws scaler from a decoded frame's geometry.
+    // Returns false if the context couldn't be created.
+    bool ensureScaler(const AVFrame* f);
+
     // libav state — all opaque to callers, forward-declared above.
     AVFormatContext* m_fmt     = nullptr;
     AVCodecContext*  m_codec   = nullptr;
     AVFrame*         m_frame   = nullptr;
-    AVFrame*         m_rgba    = nullptr;
     AVPacket*        m_packet  = nullptr;
     SwsContext*      m_sws     = nullptr;
 
     int    m_streamIndex = -1;
     int    m_frameCount  = 0;
-    // Native source dimensions the sws scaler was built for. Most assets
-    // are transcoded to kWidth×kHeight, but we must scale from the codec's
-    // actual size — otherwise sws reads out of bounds on any other size.
+    // Native source dimensions + pixel format the sws scaler was built
+    // for, captured from the first decoded frame (layout-stable AVFrame
+    // fields — see ensureScaler). Most assets are transcoded to
+    // kWidth×kHeight, but we must scale from the frame's actual size —
+    // otherwise sws reads out of bounds on any other size.
     int    m_srcWidth    = 0;
     int    m_srcHeight   = 0;
+    int    m_srcFmt      = -1;   // AVPixelFormat (-1 = AV_PIX_FMT_NONE)
     double m_fps         = 30.0;
     int    m_lastDecodedFrame = -2;
     bool   m_opened      = false;
