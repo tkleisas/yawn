@@ -276,13 +276,13 @@ jobs:
           # Heredoc content must sit at the YAML block's base indent —
           # the literal-block dedent then puts it at column 0 for bash.
           cat > "$appdir/AppRun" <<'APPRUN'
-#!/bin/bash
-HERE="$(dirname "$(readlink -f "$0")")"
-export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export PATH="$HERE/usr/bin:$PATH"
-cd "$HERE/usr/bin"   # assets/, models/ resolve relative to CWD
-exec ./YAWN "$@"
-APPRUN
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export PATH="$HERE/usr/bin:$PATH"
+          cd "$HERE/usr/bin"   # assets/, models/ resolve relative to CWD
+          exec ./YAWN "$@"
+          APPRUN
           chmod +x "$appdir/AppRun"
 
           # appimagetool upstream only publishes a floating "continuous"
