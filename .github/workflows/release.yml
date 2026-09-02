@@ -21,7 +21,10 @@ jobs:
             platform: windows
             build-type: Release
             archive-ext: zip
-          - os: ubuntu-latest
+          # Pinned (not ubuntu-latest): the Linux FFmpeg sonames the shim
+          # probes (libavcodec.so.60 family) and the AppImage's glibc floor
+          # (2.39) both come from this runner — don't let it float.
+          - os: ubuntu-24.04
             platform: linux
             build-type: Release
             archive-ext: tar.gz
@@ -197,11 +200,118 @@ jobs:
           fi
           tar czf "YAWN-${version}-linux.tar.gz" "$dir"
 
-      - name: Upload artifact
+      - name: Package AppImage (Linux)
+        if: runner.os == 'Linux'
+        # Non-fatal: the tarball carries the dlopen fix and must publish
+        # even if the (new, evolving) AppImage assembly flakes.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          appdir="YAWN.AppDir"
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/lib"
+
+          # App + payload. assets/ and models/ are resolved relative to
+          # the process CWD, so AppRun cd's into usr/bin before exec.
+          cp build/bin/YAWN "$appdir/usr/bin/"
+          if [ -f build/bin/yawn_vst3_host ]; then
+            cp build/bin/yawn_vst3_host "$appdir/usr/bin/"
+          fi
+          if [ -d build/bin/assets ]; then cp -r build/bin/assets "$appdir/usr/bin/"; fi
+          if [ -d build/bin/scripts ]; then cp -r build/bin/scripts "$appdir/usr/bin/"; fi
+
+          # ONNX Runtime (rpath $ORIGIN covers usr/bin, but LD_LIBRARY_PATH
+          # in AppRun also covers usr/lib — put it with the other libs).
+          find build/_deps -path '*onnxruntime*/lib/libonnxruntime.so*' -print0 \
+            | xargs -0 cp -P -t "$appdir/usr/lib/"
+
+          # Demucs model (size-verified, same as the tarball).
+          mkdir -p "$appdir/usr/bin/models"
+          curl -L -f -sS -o "$appdir/usr/bin/models/htdemucs_4s.onnx" \
+            "https://github.com/tkleisas/yawn/releases/download/models-v1/htdemucs_4s.onnx"
+          sz=$(stat -c%s "$appdir/usr/bin/models/htdemucs_4s.onnx")
+          if [ "$sz" != "170681491" ]; then
+            echo "Model size mismatch: $sz (expected 170681491)"; exit 1
+          fi
+
+          # ── FFmpeg runtime closure ─────────────────────────────────
+          # The app dlopen()s libav* at runtime (FfmpegShim), so the
+          # whole point of the AppImage is bundling them: walk the ldd
+          # closure of the five libav libs and copy everything EXCEPT
+          # core runtime / graphics drivers / audio servers — those must
+          # come from the host (glibc versioning, GPU driver match, JACK
+          # connectivity).
+          bundle_lib() {
+            local f="$1" base dst
+            base="$(basename "$f")"
+            case "$base" in
+              libc.so.*|libstdc++.so.*|libm.so.*|libgcc_s.so.*|libpthread.so.*|\
+              libdl.so.*|librt.so.*|ld-linux*.so.*|linux-vdso*|\
+              libGL*.so.*|libEGL*.so.*|libGLX*.so.*|libGLdispatch*.so.*|\
+              libasound.so.*|libjack.so.*|libpipewire*.so.*|libpulse*.so.*|\
+              libX11.so.*|libxcb*.so.*|libwayland*.so.*|libdbus-1.so.*)
+                return ;;
+            esac
+            dst="$appdir/usr/lib/$base"
+            [ -f "$dst" ] && return 0
+            cp -L "$f" "$dst"
+            ldd "$dst" 2>/dev/null | awk '/=> \// {print $3} /^\// {print $1}' \
+              | while read -r dep; do [ -n "$dep" ] && bundle_lib "$dep"; done
+          }
+          for soname in libavcodec.so.60 libavformat.so.60 libavutil.so.58 \
+                        libswscale.so.7 libavdevice.so.60; do
+            bundle_lib "/usr/lib/x86_64-linux-gnu/$soname"
+          done
+
+          # ── AppImage skeleton ──────────────────────────────────────
+          cp packaging/linux/com.yawn.daw.desktop "$appdir/com.yawn.daw.desktop"
+          cp assets/icon.png "$appdir/com.yawn.daw.png"
+          mkdir -p "$appdir/usr/share/applications" \
+                   "$appdir/usr/share/icons/hicolor/512x512/apps"
+          cp packaging/linux/com.yawn.daw.desktop \
+             "$appdir/usr/share/applications/com.yawn.daw.desktop"
+          cp assets/icon.png \
+             "$appdir/usr/share/icons/hicolor/512x512/apps/com.yawn.daw.png"
+
+          # Heredoc content must sit at the YAML block's base indent —
+          # the literal-block dedent then puts it at column 0 for bash.
+          cat > "$appdir/AppRun" <<'APPRUN'
+#!/bin/bash
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="$HERE/usr/bin:$PATH"
+cd "$HERE/usr/bin"   # assets/, models/ resolve relative to CWD
+exec ./YAWN "$@"
+APPRUN
+          chmod +x "$appdir/AppRun"
+
+          # appimagetool upstream only publishes a floating "continuous"
+          # build — no per-version tags, so no meaningful hash pinning
+          # (mirroring into our deps release like FFmpeg's is the
+          # follow-up if this ever flakes). APPIMAGE_EXTRACT_AND_RUN
+          # covers runners without /dev/fuse.
+          curl -L -f -sS -o /tmp/appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x /tmp/appimagetool
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 /tmp/appimagetool \
+            "$appdir" "YAWN-${version}-linux-x86_64.AppImage"
+          ls -la "YAWN-${version}-linux-x86_64.AppImage"
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: YAWN-${{ matrix.platform }}
           path: YAWN-*-${{ matrix.platform }}.${{ matrix.archive-ext }}
+
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: YAWN-${{ matrix.platform }}
+          path: |
+            YAWN-*-linux.tar.gz
+            YAWN-*-linux-x86_64.AppImage
 
   release:
     needs: build
@@ -221,6 +331,7 @@ jobs:
           files: |
             YAWN-windows/*.zip
             YAWN-linux/*.tar.gz
+            YAWN-linux/*.AppImage
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

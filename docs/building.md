@@ -6,12 +6,24 @@
 
 ## Just want to run it?
 
-Grab a [release](https://github.com/tkleisas/yawn/releases) — the Windows
-`.zip` and Linux `.tar.gz` are **self-contained**: the binary, the ONNX
-Runtime, the Demucs stem-separation model, and all bundled assets are in
-the archive. Unpack and run; no first-launch download, no extra installs
-(other than `ffmpeg` on `PATH` if you want video import). Everything below
-is for building from source.
+Grab a [release](https://github.com/tkleisas/yawn/releases). Windows `.zip` and
+Linux builds are **self-contained**: the binary, the ONNX Runtime, the Demucs
+stem-separation model, and all bundled assets are in the archive. Unpack and
+run; no first-launch download.
+
+**Linux has two artifacts** (see [Linux deployment options](#linux-deployment-options)
+for the full comparison):
+
+- **`YAWN-*-linux.tar.gz`** — plain tarball. Video decode/live capture load
+  the host's FFmpeg 6 or 7 at runtime via `dlopen` (no hard library
+  dependency — the app starts fine without FFmpeg, video features just
+  report unavailable). Video *import* additionally needs the `ffmpeg`
+  binary on `PATH`.
+- **`YAWN-*-linux-x86_64.AppImage`** — single file, bundles the FFmpeg
+  libraries, so video works even with no FFmpeg installed. Needs FUSE
+  (`libfuse2`) and a glibc ≥ 2.39 distro.
+
+Everything below is for building from source.
 
 ## Prerequisites
 
@@ -51,8 +63,25 @@ sudo apt install \
 ```
 
 The `ffmpeg` binary is used at runtime for the transcode step; `libav*`
-headers and libraries are linked for real-time video decoding. Without
-them, the build still succeeds but the video menu items are hidden.
+headers are used to compile the real-time video decoder. On **POSIX the
+libraries are not linked** — `src/visual/FfmpegShim.cpp` `dlopen()`s them
+at runtime by FFmpeg release family (7.x first, then 6.x), so the binary
+starts on any distro regardless of which FFmpeg soname major (if any) is
+installed. Video features degrade gracefully (startup toast + clear error
+messages) when no compatible runtime is found. On **Windows** the bundled
+FFmpeg DLLs are linked at build time as before.
+
+> **ABI note (do not skip when touching video code):** the shim only
+> probes FFmpeg 6 and 7, and only because the exact struct fields the
+> code touches were verified layout-compatible across those two majors
+> (n6.1.2 vs n7.1.1 headers, field by field). The three forbidden reads
+> — `AVFormatContext::duration`, `AVCodecContext::pix_fmt`,
+> `AVCodecContext::time_base` — are avoided by design: duration comes
+> from `AVStream::duration` and scaler geometry from decoded `AVFrame`
+> fields. FFmpeg 5 is excluded (AVStream layout changed in 6.0); FFmpeg 8
+> is not probed (AVStream `side_data` removal shifts offsets). Before
+> adding a new FFmpeg major to the family table in `FfmpegShim.cpp`,
+> re-run that field-layout check.
 
 For **live video input** (optional — gated by `YAWN_HAS_AVDEVICE`,
 adds webcam / `v4l2://` / `avfoundation://` / `dshow://` device URLs
@@ -146,12 +175,43 @@ truncated or wrong-size file is rejected.
 Basic Pitch's model is much smaller (226 KB) and is **embedded** in the
 binary as a byte array, so it never needs a download or a bundled file.
 
+## Linux deployment options
+
+The release workflow publishes two Linux artifacts. Both are built on
+`ubuntu-24.04` (pinned — the FFmpeg 6 sonames and the glibc 2.39 floor
+come from that runner) and contain the same app, assets, ONNX Runtime,
+and Demucs model.
+
+| | tarball (`.tar.gz`) | AppImage |
+|---|---|---|
+| Runs on | any distro with glibc ≥ 2.39 | any distro with glibc ≥ 2.39 + FUSE (`libfuse2`) |
+| Video decode / live capture | host FFmpeg 6 **or** 7 (runtime `dlopen`; absent → feature off, app still runs) | bundled FFmpeg 6 — always on |
+| Video **import** (transcode) | needs host `ffmpeg` binary | needs host `ffmpeg` binary (bundling the CLI is a possible follow-up) |
+| Footprint | smaller (~220 MB) | larger (+~50 MB of libav* closure) |
+| Integrates with host audio | yes | yes — ALSA/JACK/PipeWire/Pulse libs are deliberately *not* bundled |
+
+How the AppImage is assembled (all in `.github/workflows/release.yml`,
+"Package AppImage (Linux)" step): the AppDir gets the binary + assets +
+model under `usr/bin` (AppRun `cd`s there because assets resolve relative
+to CWD), `libonnxruntime` and the five libav* libraries plus their `ldd`
+closure under `usr/lib` (with a denylist for core runtime / GL drivers /
+audio-server libs, which must be the host's), the existing
+`packaging/linux/com.yawn.daw.desktop` + icon, and a small `AppRun` that
+sets `LD_LIBRARY_PATH`/`PATH`. `appimagetool` (upstream "continuous"
+build — there are no versioned tags to hash-pin) squashes it.
+
+Known limits: FUSE is required to *run* an AppImage (`--appimage-extract`
+works without it); glibc 2.39 means Ubuntu 22.04 / Debian 12 and older
+can't run either artifact from the official pipeline — build from source
+there instead.
+
 ## How releases are built
 
 Releases are cut by pushing a `v*` tag; GitHub Actions
 (`.github/workflows/release.yml`) builds the Release config on Windows +
 Linux with the ONNX features on, runs the test suite, and packages each
-platform into a self-contained archive:
+platform into a self-contained archive (Linux additionally produces an
+AppImage — see above):
 
 - The binary (`YAWN` / `YAWN.exe`) + bundled `assets/` and `scripts/`
 - The ONNX Runtime shared lib beside the binary (Linux relies on `$ORIGIN`

@@ -104,7 +104,7 @@ All dependencies are fetched automatically via CMake FetchContent — no manual 
 
 ## Quick Start
 
-**Just want to run it?** Grab a [release](https://github.com/tkleisas/yawn/releases) — the Windows `.zip` / Linux `.tar.gz` are self-contained (binary + ONNX Runtime + Demucs model + assets). Unpack and run.
+**Just want to run it?** Grab a [release](https://github.com/tkleisas/yawn/releases) — the Windows `.zip` / Linux `.tar.gz` are self-contained (binary + ONNX Runtime + Demucs model + assets). On Linux there's also an **AppImage** that bundles FFmpeg (the tarball uses your distro's FFmpeg 6/7 for video, and runs fine without it). Unpack and run.
 
 **Building from source:**
 
