@@ -24,6 +24,7 @@
 
 #include "effects/AudioEffect.h"
 #include "effects/Reverb.h"
+#include "effects/PlateReverb.h"
 #include "effects/Delay.h"
 #include "effects/EQ.h"
 #include "effects/Compressor.h"
@@ -104,6 +105,8 @@ audioEffectDescriptors() {
     static const std::vector<DeviceDescriptor<effects::AudioEffect>> table = {
         {"Reverb",            "reverb",       "Reverb",              nullptr,
             [] { return std::make_unique<effects::Reverb>(); }},
+        {"Plate Reverb",      "plate",        "Plate Reverb",        nullptr,
+            [] { return std::make_unique<effects::PlateReverb>(); }},
         {"Delay",             "delay",        "Delay",               nullptr,
             [] { return std::make_unique<effects::Delay>(); }},
         {"EQ",                "eq",           "EQ",                  nullptr,

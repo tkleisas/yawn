@@ -422,6 +422,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/NeuralAmp.cpp
     # Audio effects (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Reverb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/PlateReverb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Delay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/EQ.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/effects/Compressor.cpp

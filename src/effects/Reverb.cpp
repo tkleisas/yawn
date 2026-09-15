@@ -48,6 +48,32 @@ void Reverb::process(float* buffer, int numFrames, int numChannels) {
     int pdSamples = static_cast<int>(m_params[kPreDelay] * 0.001f * m_sampleRate);
     if (pdSamples >= m_preDelayLen) pdSamples = m_preDelayLen - 1;
 
+    // ── Silence gate ────────────────────────────────────────────────
+    // The tank costs ~26 divides' worth of index math + 60-70 flops
+    // per sample even when completely silent. Track input silence
+    // (longer than the pre-delay, so pending pre-delayed content is
+    // never dropped) plus one comb's filterStore as the tail-energy
+    // proxy; when both are below -100 dBFS, pass the (in-place) input
+    // through unprocessed — that IS dry-only — and skip the tank.
+    float inPeak = 0.0f;
+    for (int i = 0; i < numFrames; ++i) {
+        const float a = std::fabs(buffer[i * numChannels]);
+        const float b = numChannels > 1
+            ? std::fabs(buffer[i * numChannels + 1]) : a;
+        inPeak = std::max(inPeak, std::max(a, b));
+    }
+    if (inPeak >= 1e-5f) m_silentFrames = 0;
+    else                 m_silentFrames += numFrames;
+    const bool tankSilent = std::fabs(m_combL[0].m_filterStore) < 1e-5f;
+    if (m_silentFrames > pdSamples && tankSilent) {
+        if (!m_gated) {
+            m_gated = true;
+            reset(); // no stale tails when the next sound wakes us
+        }
+        return;
+    }
+    m_gated = false;
+
     for (int i = 0; i < numFrames; ++i) {
         float inL = buffer[i * numChannels];
         float inR = (numChannels > 1) ? buffer[i * numChannels + 1] : inL;
@@ -56,9 +82,10 @@ void Reverb::process(float* buffer, int numFrames, int numChannels) {
         // Pre-delay
         int wrIdx = m_preDelayPos;
         m_preDelayBuf[wrIdx] = input;
-        int rdIdx = (wrIdx - pdSamples + m_preDelayLen) % m_preDelayLen;
+        int rdIdx = wrIdx - pdSamples; // was: (…+ len) % len
+        if (rdIdx < 0) rdIdx += m_preDelayLen;
         float delayed = m_preDelayBuf[rdIdx];
-        m_preDelayPos = (wrIdx + 1) % m_preDelayLen;
+        if (++m_preDelayPos >= m_preDelayLen) m_preDelayPos = 0;
 
         // Parallel comb filters
         float outL = 0.0f, outR = 0.0f;

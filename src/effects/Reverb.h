@@ -71,9 +71,15 @@ private:
         float process(float input, float feedback, float damp1, float damp2) {
             if (m_size == 0) return 0.0f;
             float out = m_buffer[m_pos];
+            // NOTE: measured on Cortex-A53 (reverb A/B bench): the
+            // classic 1e-20 DC-bias denormal guard costs ~10% on the
+            // busy path and buys nothing — A53 subnormal assists are
+            // mild, and the audio thread sets FPCR FZ+DN anyway (see
+            // AudioEngine.cpp). The silence gate in process() is what
+            // actually removes the idle cost.
             m_filterStore = out * damp2 + m_filterStore * damp1;
             m_buffer[m_pos] = input + m_filterStore * feedback;
-            m_pos = (m_pos + 1) % m_size;
+            if (++m_pos >= m_size) m_pos = 0; // was: (m_pos+1) % m_size
             return out;
         }
         std::vector<float> m_buffer;
@@ -97,7 +103,7 @@ private:
             float buf = m_buffer[m_pos];
             float out = buf - input;
             m_buffer[m_pos] = input + buf * 0.5f;
-            m_pos = (m_pos + 1) % m_size;
+            if (++m_pos >= m_size) m_pos = 0; // was: (m_pos+1) % m_size
             return out;
         }
         std::vector<float> m_buffer;
@@ -112,6 +118,12 @@ private:
     float m_params[kParamCount] = {0.7f, 0.5f, 0.3f, 10.0f, 1.0f};
     float m_roomSize = 0.7f, m_damp1 = 0.5f, m_damp2 = 0.5f;
     float m_wet = 0.3f, m_width = 1.0f;
+
+    // Silence gate state (see process()). Counts consecutive frames
+    // with input below -100 dBFS so the gate respects the pre-delay:
+    // content sitting in the pre-delay line is still "incoming audio".
+    int  m_silentFrames = 0;
+    bool m_gated = false;
 };
 
 } // namespace effects

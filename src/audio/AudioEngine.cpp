@@ -18,7 +18,8 @@
 // overruns its deadline — heard as growing live-monitoring latency
 // (the audio server enlarges its buffer to cope). MXCSR is per-thread,
 // so this is set on the PortAudio callback thread (see paCallback).
-// x86 (SSE2+) only; other arches no-op for now.
+// x86 (SSE2+) flushes via MXCSR, AArch64 via FPCR (FZ+DN); other
+// arches no-op for now.
 #if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64) \
     || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
   #include <xmmintrin.h>  // _MM_SET_FLUSH_ZERO_MODE (SSE)
@@ -26,6 +27,20 @@
   #define YAWN_AUDIO_FLUSH_DENORMALS() do {               \
       _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);         \
       _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON); \
+  } while (0)
+#elif defined(__aarch64__)
+  #include <cstdint> // uint64_t
+  // ARM64 equivalent: FPCR.FZ (bit 24) flushes denormal RESULTS to
+  // zero, FPCR.DN (bit 25) treats denormal INPUTS as zero. Same
+  // per-thread semantics as MXCSR — set on the PA callback thread.
+  // Measured on Cortex-A53 (Pi Zero 2W): subnormal assists are mild
+  // here, so this is cheap insurance rather than a big win — it keeps
+  // decaying DSP tails (reverb, filters) off the slow path for free.
+  #define YAWN_AUDIO_FLUSH_DENORMALS() do {                  \
+      uint64_t fpcr_;                                        \
+      __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr_));        \
+      fpcr_ |= (1ull << 24) | (1ull << 25);                  \
+      __asm__ volatile("msr fpcr, %0" :: "r"(fpcr_));        \
   } while (0)
 #else
   #define YAWN_AUDIO_FLUSH_DENORMALS() ((void)0)

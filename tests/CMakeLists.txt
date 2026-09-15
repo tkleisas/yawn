@@ -5,13 +5,16 @@ file(GLOB TEST_SOURCES CONFIGURE_DEPENDS *.cpp)
 add_executable(yawn_tests ${TEST_SOURCES})
 
 yawn_set_warnings(yawn_tests)
-target_precompile_headers(yawn_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch/yawn_test_pch.h)
+# CMAKE_CURRENT_SOURCE_DIR/.. (the yawn root), NOT CMAKE_SOURCE_DIR —
+# the latter breaks when yawn is embedded via add_subdirectory (e.g. the
+# groovebox emulator super-build): it points at the PARENT's source dir.
+target_precompile_headers(yawn_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/pch/yawn_test_pch.h)
 
 # NOT SYSTEM: marking our own headers as system headers suppresses
 # warnings from them in the test TUs — the tests are exactly where we
 # want those warnings to fire.
 target_include_directories(yawn_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
 target_compile_definitions(yawn_tests PRIVATE YAWN_TEST_BUILD)
