@@ -65,6 +65,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y \
+            git \
             libgl1-mesa-dev \
             libgles2-mesa-dev \
             libegl1-mesa-dev \
@@ -282,6 +283,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y \
+            git \
             libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
@@ -370,6 +372,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y \
+            git \
             libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
