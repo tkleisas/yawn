@@ -15,11 +15,17 @@ jobs:
           - os: windows-latest
             platform: windows
             build-type: Release
-          - os: ubuntu-latest
+          # Same container as release.yml's Linux leg (see the comments
+          # there): builds against jammy's glibc 2.35 so CI and the
+          # release artifacts match, and the ubuntu-22.04 VM-image
+          # deprecation doesn't touch us.
+          - os: ubuntu-24.04
             platform: linux
             build-type: Release
+            container-image: ubuntu:22.04
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container-image || '' }}
     name: Build (${{ matrix.platform }})
 
     steps:
@@ -30,11 +36,31 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Container-only CMake upgrade — see release.yml for the long
+      # version. jammy ships 3.22; the project needs 3.24+.
+      - name: Install CMake ≥ 3.24 (Linux container)
+        if: runner.os == 'Linux'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates gnupg wget pkg-config
+          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
+          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
+            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
+            echo "Kitware GPG fingerprint mismatch"; exit 1; }
+          echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
+            > /etc/apt/sources.list.d/kitware.list
+          apt-get update
+          apt-get install -y cmake
+
+      # sudo doesn't exist in the bare ubuntu:22.04 container image.
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
             libgl1-mesa-dev \
             libgles2-mesa-dev \
             libegl1-mesa-dev \
@@ -58,13 +84,23 @@ jobs:
             libdbus-1-dev \
             libibus-1.0-dev \
             libudev-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libswscale-dev \
-            libavdevice-dev \
             ccache \
             xvfb
+
+      # Same mirror as release.yml — CI and releases must compile against
+      # the same FFmpeg headers (apt's 4.4 in jammy is outside the shim's
+      # verified-family contract). Headers only on Linux; no link.
+      - name: Install FFmpeg (Linux, from deps mirror)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
+          sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
+          curl -L -f -sS -o /tmp/libff.tar.xz "$url"
+          echo "$sha256  /tmp/libff.tar.xz" | sha256sum -c - >/dev/null || {
+            echo "FFmpeg tarball sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
+          mkdir -p /opt/ffmpeg
+          tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
 
       # Prebuilt FFmpeg (shared, includes headers + import libs + DLLs +
       # ffmpeg.exe/ffprobe.exe). BtbN publishes these under their
@@ -130,7 +166,11 @@ jobs:
           restore-keys: linux-ccache-
 
       - name: Configure
+        # Linux: pkg-config route (headers only, no libav DT_NEEDED —
+        # same rationale as release.yml).
         run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_BASIC_PITCH=ON -DYAWN_HAS_STEM_SEPARATION=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
+        env:
+          PKG_CONFIG_PATH: ${{ runner.os == 'Linux' && '/opt/ffmpeg/lib/pkgconfig' || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
@@ -145,6 +185,8 @@ jobs:
       - name: UI smoke (Xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run -a python3 scripts/ui_smoke.py build/bin/YAWN
+        env:
+          LD_LIBRARY_PATH: /opt/ffmpeg/lib   # DLL-less pack: dlopen probing
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -203,6 +245,7 @@ jobs:
   # sanitizers, so no special flag wrangling is needed.
   sanitizers:
     runs-on: ubuntu-latest
+    container: ubuntu:22.04
     name: Sanitizers (ASan+UBSan, Linux)
 
     steps:
@@ -213,19 +256,44 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install CMake ≥ 3.24 (Linux container)
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates gnupg wget pkg-config
+          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
+          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
+            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
+            echo "Kitware GPG fingerprint mismatch"; exit 1; }
+          echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
+            > /etc/apt/sources.list.d/kitware.list
+          apt-get update
+          apt-get install -y cmake
+
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
             libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
-            libibus-1.0-dev libudev-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libavdevice-dev ccache
+            libibus-1.0-dev libudev-dev ccache
+
+      - name: Install FFmpeg (from deps mirror)
+        run: |
+          set -euo pipefail
+          url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
+          sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
+          curl -L -f -sS -o /tmp/libff.tar.xz "$url"
+          echo "$sha256  /tmp/libff.tar.xz" | sha256sum -c - >/dev/null || {
+            echo "FFmpeg tarball sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
+          mkdir -p /opt/ffmpeg
+          tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
 
       - name: Install Python dependencies
         run: pip install jinja2
@@ -247,6 +315,8 @@ jobs:
 
       - name: Configure
         run: cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+        env:
+          PKG_CONFIG_PATH: /opt/ffmpeg/lib/pkgconfig
 
       - name: Build
         # -j2, not --parallel: ASan+UBSan instrumented TUs peak at
@@ -264,6 +334,7 @@ jobs:
   # only job where they actually fire.
   debug:
     runs-on: ubuntu-latest
+    container: ubuntu:22.04
     name: Debug (asserts enabled, Linux)
 
     steps:
@@ -274,19 +345,44 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install CMake ≥ 3.24 (Linux container)
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates gnupg wget pkg-config
+          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
+          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
+            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
+            echo "Kitware GPG fingerprint mismatch"; exit 1; }
+          echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
+            > /etc/apt/sources.list.d/kitware.list
+          apt-get update
+          apt-get install -y cmake
+
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
             libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
-            libibus-1.0-dev libudev-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libavdevice-dev ccache
+            libibus-1.0-dev libudev-dev ccache
+
+      - name: Install FFmpeg (from deps mirror)
+        run: |
+          set -euo pipefail
+          url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
+          sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
+          curl -L -f -sS -o /tmp/libff.tar.xz "$url"
+          echo "$sha256  /tmp/libff.tar.xz" | sha256sum -c - >/dev/null || {
+            echo "FFmpeg tarball sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
+          mkdir -p /opt/ffmpeg
+          tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
 
       - name: Install Python dependencies
         run: pip install jinja2
@@ -306,6 +402,8 @@ jobs:
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        env:
+          PKG_CONFIG_PATH: /opt/ffmpeg/lib/pkgconfig
 
       # -j2, not --parallel: Debug-info TUs (ONNX/Eigen C++20 + SDL)
       # peak at multiple GB each — 4-way parallel OOM'd the 16 GB

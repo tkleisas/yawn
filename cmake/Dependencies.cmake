@@ -55,6 +55,13 @@ FetchContent_Declare(
 )
 set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+# Static: PortAudio is FetchContent-built, so a shared build emits a
+# libportaudio.so.2 DT_NEEDED that no packaging step knows to bundle —
+# the v0.87.5 AppImage failed to launch on the appimage.github.io test
+# rig for exactly that ("error while loading shared libraries:
+# libportaudio.so.2"). Static keeps YAWN self-contained. Flip OFF only
+# if a PortAudio debug session needs the shared lib.
+set(PA_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 if(WIN32)
     # Steinberg ASIO host support — the path to low (~5-10 ms round
     # trip) latency on Windows audio interfaces (WASAPI shared mode
@@ -68,7 +75,8 @@ if(WIN32)
 endif()
 FetchContent_MakeAvailable(portaudio)
 
-# PortAudio target name varies; create an alias
+# PortAudio target name varies; create an alias. With the static build
+# above, portaudio_static exists on every platform.
 if(TARGET portaudio_static)
     add_library(PortAudio ALIAS portaudio_static)
 elseif(TARGET portaudio)

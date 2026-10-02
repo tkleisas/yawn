@@ -19,9 +19,9 @@ for the full comparison):
   dependency — the app starts fine without FFmpeg, video features just
   report unavailable). Video *import* additionally needs the `ffmpeg`
   binary on `PATH`.
-- **`YAWN-*-linux-x86_64.AppImage`** — single file, bundles the FFmpeg
+- **`YAWN-*-x86_64.AppImage`** — single file, bundles the FFmpeg
   libraries, so video works even with no FFmpeg installed. Needs FUSE
-  (`libfuse2`) and a glibc ≥ 2.39 distro.
+  (`libfuse2`) and a glibc ≥ 2.35 distro.
 
 Everything below is for building from source.
 
@@ -43,7 +43,9 @@ amalgamations.
 
 ### Linux system dev packages
 
-SDL3, the VST3 editor host (X11 embedding), and the audio backends need:
+SDL3, the VST3 editor host (X11 embedding), and the audio backends need
+(the same set, plus CMake/pkg-config first, when building inside the CI
+`ubuntu:22.04` container — see `.github/workflows/release.yml`):
 
 ```bash
 sudo apt install \
@@ -177,31 +179,33 @@ binary as a byte array, so it never needs a download or a bundled file.
 
 ## Linux deployment options
 
-The release workflow publishes two Linux artifacts. Both are built on
-`ubuntu-24.04` (pinned — the FFmpeg 6 sonames and the glibc 2.39 floor
-come from that runner) and contain the same app, assets, ONNX Runtime,
-and Demucs model.
+The release workflow publishes two Linux artifacts. Both are built inside
+an `ubuntu:22.04` container (pinned — jammy's glibc 2.35 is the binary's
+portability floor, and the FFmpeg headers come from the mirrored BtbN
+n6.1.3 shared build, not from apt) and contain the same app, assets, ONNX
+Runtime, and Demucs model.
 
 | | tarball (`.tar.gz`) | AppImage |
 |---|---|---|
-| Runs on | any distro with glibc ≥ 2.39 | any distro with glibc ≥ 2.39 + FUSE (`libfuse2`) |
+| Runs on | any distro with glibc ≥ 2.35 | any distro with glibc ≥ 2.35 + FUSE (`libfuse2`) |
 | Video decode / live capture | host FFmpeg 6 **or** 7 (runtime `dlopen`; absent → feature off, app still runs) | bundled FFmpeg 6 — always on |
-| Video **import** (transcode) | needs host `ffmpeg` binary | needs host `ffmpeg` binary (bundling the CLI is a possible follow-up) |
+| Video **import** (transcode) | needs host `ffmpeg` binary | bundled `ffmpeg`/`ffprobe` — always on |
 | Footprint | smaller (~220 MB) | larger (+~50 MB of libav* closure) |
 | Integrates with host audio | yes | yes — ALSA/JACK/PipeWire/Pulse libs are deliberately *not* bundled |
 
 How the AppImage is assembled (all in `.github/workflows/release.yml`,
 "Package AppImage (Linux)" step): the AppDir gets the binary + assets +
 model under `usr/bin` (AppRun `cd`s there because assets resolve relative
-to CWD), `libonnxruntime` and the five libav* libraries plus their `ldd`
-closure under `usr/lib` (with a denylist for core runtime / GL drivers /
-audio-server libs, which must be the host's), the existing
+to CWD), `libonnxruntime`, the seven libav* libraries from the mirror
+tarball plus their `ldd` closure, and bundled `ffmpeg`/`ffprobe` under
+`usr/lib` (with a denylist for core runtime / GL drivers / audio-server
+libs, which must be the host's), the existing
 `packaging/linux/com.yawn.daw.desktop` + icon, and a small `AppRun` that
 sets `LD_LIBRARY_PATH`/`PATH`. `appimagetool` (upstream "continuous"
 build — there are no versioned tags to hash-pin) squashes it.
 
 Known limits: FUSE is required to *run* an AppImage (`--appimage-extract`
-works without it); glibc 2.39 means Ubuntu 22.04 / Debian 12 and older
+works without it); glibc 2.35 means Ubuntu 20.04 / Debian 11 and older
 can't run either artifact from the official pipeline — build from source
 there instead.
 
