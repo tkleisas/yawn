@@ -89,6 +89,8 @@ jobs:
             libibus-1.0-dev \
             libudev-dev \
             python3-pip \
+            gcc-12 \
+            g++-12 \
             ccache \
             xvfb
 
@@ -173,7 +175,7 @@ jobs:
       - name: Configure
         # Linux: pkg-config route (headers only, no libav DT_NEEDED —
         # same rationale as release.yml).
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_BASIC_PITCH=ON -DYAWN_HAS_STEM_SEPARATION=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_BASIC_PITCH=ON -DYAWN_HAS_STEM_SEPARATION=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
         env:
           PKG_CONFIG_PATH: ${{ runner.os == 'Linux' && '/opt/ffmpeg/lib/pkgconfig' || '' }}
 
@@ -286,7 +288,7 @@ jobs:
             libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
-            libibus-1.0-dev libudev-dev ccache python3-pip
+            libibus-1.0-dev libudev-dev ccache python3-pip gcc-12 g++-12
 
       - name: Install FFmpeg (from deps mirror)
         run: |
@@ -318,7 +320,7 @@ jobs:
             linux-ccache-
 
       - name: Configure
-        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
         env:
           PKG_CONFIG_PATH: /opt/ffmpeg/lib/pkgconfig
 
@@ -374,7 +376,7 @@ jobs:
             libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
-            libibus-1.0-dev libudev-dev ccache python3-pip
+            libibus-1.0-dev libudev-dev ccache python3-pip gcc-12 g++-12
 
       - name: Install FFmpeg (from deps mirror)
         run: |
@@ -404,7 +406,7 @@ jobs:
           restore-keys: linux-ccache-
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         env:
           PKG_CONFIG_PATH: /opt/ffmpeg/lib/pkgconfig
 

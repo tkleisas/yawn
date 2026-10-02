@@ -47,6 +47,15 @@ jobs:
         with:
           fetch-depth: 0  # full history for version tag
 
+      # Windows only — see the Linux comment below: setup-python's
+      # toolcache CPython needs GLIBC_2.38 and shadows the container's
+      # own python3.
+      - name: Set up Python (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       # Container-only: the ubuntu:22.04 image ships CMake 3.22, but the
       # project needs 3.24+ (the $<LINK_LIBRARY:WHOLE_ARCHIVE,…> generator
       # expression that keeps NAM's static lib alive). Kitware's jammy apt
@@ -108,7 +117,9 @@ jobs:
             git \
             curl \
             xz-utils \
-            ccache
+            ccache \
+            gcc-12 \
+            g++-12
 
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
@@ -200,7 +211,7 @@ jobs:
         # FFMPEG_ROOT on Linux would hit the manual route and hard-link
         # DT_NEEDED entries back into the binary. BtbN ships .pc files,
         # so PKG_CONFIG_PATH steers route 1 at the mirror checkout.
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) }}
         env:
           PKG_CONFIG_PATH: ${{ runner.os == 'Linux' && '/opt/ffmpeg/lib/pkgconfig' || '' }}
       - name: Build
