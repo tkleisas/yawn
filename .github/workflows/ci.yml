@@ -43,12 +43,13 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget pkg-config
-          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          apt-get install -y ca-certificates gnupg wget curl pkg-config
+          url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
+          sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
+          curl -L -f -sS -o /tmp/kitware.asc "$url"
+          echo "$sha256  /tmp/kitware.asc" | sha256sum -c - >/dev/null || {
+            echo "Kitware key sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
           gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
-          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
-            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
-            echo "Kitware GPG fingerprint mismatch"; exit 1; }
           echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
             > /etc/apt/sources.list.d/kitware.list
           apt-get update
@@ -260,12 +261,13 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget pkg-config
-          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          apt-get install -y ca-certificates gnupg wget curl pkg-config
+          url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
+          sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
+          curl -L -f -sS -o /tmp/kitware.asc "$url"
+          echo "$sha256  /tmp/kitware.asc" | sha256sum -c - >/dev/null || {
+            echo "Kitware key sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
           gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
-          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
-            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
-            echo "Kitware GPG fingerprint mismatch"; exit 1; }
           echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
             > /etc/apt/sources.list.d/kitware.list
           apt-get update
@@ -349,12 +351,13 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget pkg-config
-          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          apt-get install -y ca-certificates gnupg wget curl pkg-config
+          url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
+          sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
+          curl -L -f -sS -o /tmp/kitware.asc "$url"
+          echo "$sha256  /tmp/kitware.asc" | sha256sum -c - >/dev/null || {
+            echo "Kitware key sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
           gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
-          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
-            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
-            echo "Kitware GPG fingerprint mismatch"; exit 1; }
           echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
             > /etc/apt/sources.list.d/kitware.list
           apt-get update

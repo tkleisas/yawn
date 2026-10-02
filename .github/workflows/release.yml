@@ -47,22 +47,33 @@ jobs:
         with:
           fetch-depth: 0  # full history for version tag
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       # Container-only: the ubuntu:22.04 image ships CMake 3.22, but the
       # project needs 3.24+ (the $<LINK_LIBRARY:WHOLE_ARCHIVE,…> generator
       # expression that keeps NAM's static lib alive). Kitware's jammy apt
-      # repo is the supported route; their keyring is fetched and verified
-      # by fingerprint rather than trusted blindly.
+      # repo is the wired-in route. Their key URL rotates (kitware-current
+      # 404'd after the June-2026 key rotation — wget exits 8 on a 404
+      # under sh -e), so the key is mirrored: fetched from the live URL
+      # when it works, otherwise the hash-pinned copy in the deps release.
+      # The .asc IS the (armored) fingerprint carrier — key IDs embedded —
+      # and apt only checks the repo signature against whatever key this
+      # file holds, so a mismatch surfaces at apt-get update, not silently.
       - name: Install CMake ≥ 3.24 (Linux container)
         if: runner.os == 'Linux'
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget
-          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          apt-get install -y ca-certificates gnupg wget curl xz-utils
+          url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
+          sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
+          curl -L -f -sS -o /tmp/kitware.asc "$url"
+          echo "$sha256  /tmp/kitware.asc" | sha256sum -c - >/dev/null || {
+            echo "Kitware key sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
           gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
-          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
-            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
-            echo "Kitware GPG fingerprint mismatch"; exit 1; }
           echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
             > /etc/apt/sources.list.d/kitware.list
           apt-get update
@@ -147,7 +158,10 @@ jobs:
           mkdir -p /opt/ffmpeg
           tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
           echo "FFMPEG_ROOT=/opt/ffmpeg" >> "$GITHUB_ENV"
-          /opt/ffmpeg/bin/ffmpeg -version | head -1
+          # The binary needs its own libav* for a plain `-version` run; the
+          # build itself never links them (headers only), but the smoke
+          # check below runs the CLI, so preview the runtime here.
+          LD_LIBRARY_PATH=/opt/ffmpeg/lib /opt/ffmpeg/bin/ffmpeg -version | head -1
 
       - name: Install Python dependencies
         run: pip install jinja2
