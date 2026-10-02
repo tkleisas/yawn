@@ -290,8 +290,10 @@ jobs:
 
       - name: Package AppImage (Linux)
         if: runner.os == 'Linux'
-        # Non-fatal: the tarball carries the dlopen fix and must publish
-        # even if the (new, evolving) AppImage assembly flakes.
+        # Non-fatal for the RELEASE AS A WHOLE (tarball must publish even
+        # if AppImage assembly flakes) — but the in-script gates below
+        # (bundle completeness, DT_NEEDED closure) fail LOUDLY and abort
+        # this step, so a half-built AppImage can never reach the release.
         continue-on-error: true
         shell: bash   # container default is sh; this script uses bashisms
         run: |
@@ -332,14 +334,17 @@ jobs:
           # and checkout can't drift. Their external deps are harvested
           # with the ldd walker below, skipping the libs that must come
           # from the host (core runtime / graphics / audio servers).
-          find /opt/ffmpeg/lib -maxdepth 1 -name 'libavcodec.so*' -o \
-                                  -name 'libavformat.so*' -o \
-                                  -name 'libavutil.so*'   -o \
-                                  -name 'libswscale.so*'  -o \
-                                  -name 'libavdevice.so*' -o \
-                                  -name 'libswresample.so*' -o \
-                                  -name 'libavfilter.so*' \
-            -print0 | xargs -0 cp -P -t "$appdir/usr/lib/"
+          # Explicit copy list, not a `find … -o -name` chain: -print0
+          # binds to the last -name only (the v0.87.6 run copied just
+          # libavfilter and then died on the first probed soname).
+          cp -P /opt/ffmpeg/lib/libavcodec.so* \
+                /opt/ffmpeg/lib/libavformat.so* \
+                /opt/ffmpeg/lib/libavutil.so* \
+                /opt/ffmpeg/lib/libswscale.so* \
+                /opt/ffmpeg/lib/libavdevice.so* \
+                /opt/ffmpeg/lib/libswresample.so* \
+                /opt/ffmpeg/lib/libavfilter.so* \
+                "$appdir/usr/lib/"
           bundle_lib() {
             local f="$1" base dst
             base="$(basename "$f")"
@@ -362,6 +367,22 @@ jobs:
                         libswresample.so.4; do
             bundle_lib "$appdir/usr/lib/$soname"
           done
+          # Loud gate before squashing: the probed sonames must all be in
+          # the bundle. continue-on-error above would happily publish a
+          # partial AppImage otherwise.
+          for soname in libavcodec.so.60 libavformat.so.60 libavutil.so.58 \
+                        libswscale.so.7 libavdevice.so.60 libavfilter.so.9 \
+                        libswresample.so.4; do
+            [ -f "$appdir/usr/lib/$soname" ] || {
+              echo "MISSING from bundle: $soname"; exit 1; }
+          done
+          # Also verify the app binary itself has no unresolved DT_NEEDED
+          # the walker skipped (each entry must resolve inside usr/lib or
+          # the host denylist).
+          missing=$(LD_LIBRARY_PATH="$appdir/usr/lib" ldd "$appdir/usr/bin/YAWN" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
+          if [ -n "$missing" ]; then
+            echo "Unresolved DT_NEEDED for YAWN:"; echo "$missing"; exit 1
+          fi
 
           # ffmpeg/ffprobe CLI beside the app (usr/bin), so video *import*
           # (the transcode step shells out to 'ffmpeg') is self-contained
