@@ -94,7 +94,7 @@ jobs:
       - name: Install FFmpeg (Linux, from deps mirror)
         if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
+          set -eu
           url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
           sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
           curl -L -f -sS -o /tmp/libff.tar.xz "$url"
@@ -288,7 +288,7 @@ jobs:
 
       - name: Install FFmpeg (from deps mirror)
         run: |
-          set -euo pipefail
+          set -eu
           url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
           sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
           curl -L -f -sS -o /tmp/libff.tar.xz "$url"
@@ -378,7 +378,7 @@ jobs:
 
       - name: Install FFmpeg (from deps mirror)
         run: |
-          set -euo pipefail
+          set -eu
           url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
           sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
           curl -L -f -sS -o /tmp/libff.tar.xz "$url"

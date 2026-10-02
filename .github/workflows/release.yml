@@ -149,7 +149,7 @@ jobs:
       - name: Install FFmpeg (Linux, from deps mirror)
         if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
+          set -eu
           url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
           sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
           curl -L -f -sS -o /tmp/libff.tar.xz "$url"
@@ -277,6 +277,7 @@ jobs:
         # Non-fatal: the tarball carries the dlopen fix and must publish
         # even if the (new, evolving) AppImage assembly flakes.
         continue-on-error: true
+        shell: bash   # container default is sh; this script uses bashisms
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
