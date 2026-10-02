@@ -31,7 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      # Windows only — see release.yml: setup-python's toolcache CPython
+      # needs GLIBC_2.38 and shadows the container's own python3.
+      - name: Set up Python (Windows)
+        if: runner.os == 'Windows'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -85,6 +88,7 @@ jobs:
             libdbus-1-dev \
             libibus-1.0-dev \
             libudev-dev \
+            python3-pip \
             ccache \
             xvfb
 
@@ -252,11 +256,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
+      # No setup-python: its toolcache CPython needs GLIBC_2.38 and
+      # shadows the container's own python3 (see release.yml). apt
+      # python3 + python3-pip (in the package list below) is enough.
       - name: Install CMake ≥ 3.24 (Linux container)
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -284,7 +286,7 @@ jobs:
             libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
-            libibus-1.0-dev libudev-dev ccache
+            libibus-1.0-dev libudev-dev ccache python3-pip
 
       - name: Install FFmpeg (from deps mirror)
         run: |
@@ -342,11 +344,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
+      # No setup-python: its toolcache CPython needs GLIBC_2.38 and
+      # shadows the container's own python3 (see release.yml). apt
+      # python3 + python3-pip (in the package list below) is enough.
       - name: Install CMake ≥ 3.24 (Linux container)
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -374,7 +374,7 @@ jobs:
             libxfixes-dev libxi-dev libxinerama-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libwayland-dev \
             libdecor-0-dev libdrm-dev libgbm-dev libdbus-1-dev \
-            libibus-1.0-dev libudev-dev ccache
+            libibus-1.0-dev libudev-dev ccache python3-pip
 
       - name: Install FFmpeg (from deps mirror)
         run: |

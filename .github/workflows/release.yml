@@ -47,11 +47,6 @@ jobs:
         with:
           fetch-depth: 0  # full history for version tag
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       # Container-only: the ubuntu:22.04 image ships CMake 3.22, but the
       # project needs 3.24+ (the $<LINK_LIBRARY:WHOLE_ARCHIVE,…> generator
       # expression that keeps NAM's static lib alive). Kitware's jammy apt
@@ -163,8 +158,18 @@ jobs:
           # check below runs the CLI, so preview the runtime here.
           LD_LIBRARY_PATH=/opt/ffmpeg/lib /opt/ffmpeg/bin/ffmpeg -version | head -1
 
-      - name: Install Python dependencies
+      # No setup-python on Linux: its toolcache CPython is built for the
+      # newer runner images and needs GLIBC_2.38 — inside the jammy
+      # container it not only fails to load, it SHADOWS the container's
+      # own python3 on PATH. apt python3 (3.10) + python3-pip is enough
+      # for glad2's codegen (just needs jinja2).
+      - name: Install Python dependencies (Linux)
+        if: runner.os == 'Linux'
         run: python3 -m pip install jinja2
+
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: pip install jinja2
 
       # Cache the FetchContent git clones + built deps (SDL3, NAM, ableton_link,
       # VST3 SDK, eigen, …) — the dominant cost of the Linux build. Keyed on the
