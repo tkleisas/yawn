@@ -43,7 +43,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget curl pkg-config
+          apt-get install -y ca-certificates gnupg wget curl pkg-config python3-pip
           url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
           sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
           curl -L -f -sS -o /tmp/kitware.asc "$url"
@@ -134,7 +134,7 @@ jobs:
           Get-ChildItem "$root\bin" | Select-Object Name
 
       - name: Install Python dependencies
-        run: pip install jinja2
+        run: python3 -m pip install jinja2
 
       # Cache the FetchContent git clones + built deps — the dominant cost of
       # the Linux build. Shares the key with release.yml so a master CI run
@@ -261,7 +261,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget curl pkg-config
+          apt-get install -y ca-certificates gnupg wget curl pkg-config python3-pip
           url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
           sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
           curl -L -f -sS -o /tmp/kitware.asc "$url"
@@ -298,7 +298,7 @@ jobs:
           tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
 
       - name: Install Python dependencies
-        run: pip install jinja2
+        run: python3 -m pip install jinja2
 
       - name: Cache FetchContent deps
         uses: actions/cache@v4
@@ -351,7 +351,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y ca-certificates gnupg wget curl pkg-config
+          apt-get install -y ca-certificates gnupg wget curl pkg-config python3-pip
           url='https://github.com/tkleisas/yawn/releases/download/deps/kitware-2026.asc'
           sha256='801bc629e356c3c96f184351272914222ce427777400fa7d1baed3ab180b3e3b'
           curl -L -f -sS -o /tmp/kitware.asc "$url"
@@ -388,7 +388,7 @@ jobs:
           tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
 
       - name: Install Python dependencies
-        run: pip install jinja2
+        run: python3 -m pip install jinja2
 
       - name: Cache FetchContent deps
         uses: actions/cache@v4
