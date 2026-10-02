@@ -21,15 +21,25 @@ jobs:
             platform: windows
             build-type: Release
             archive-ext: zip
-          # Pinned (not ubuntu-latest): the Linux FFmpeg sonames the shim
-          # probes (libavcodec.so.60 family) and the AppImage's glibc floor
-          # (2.39) both come from this runner — don't let it float.
+          # Pinned (not ubuntu-latest) — and on Linux, pinned twice over:
+          #   1. The VM image stays floating (the ubuntu-22.04 *image* is
+          #      being deprecated); the Linux job instead runs in an
+          #      `ubuntu:22.04` container. The glibc the binary is built
+          #      against comes from the container (2.35), which becomes
+          #      the distro portability floor — anything ≥ Ubuntu 22.04 /
+          #      Debian 12 / RHEL 9, vs 24.04's 2.39 floor that failed the
+          #      appimage.github.io catalog test on older distros.
+          #   2. jammy ships CMake 3.22; the project needs 3.24+
+          #      (WHOLE_ARCHIVE generator expression), so Kitware's apt
+          #      repo is wired in below.
           - os: ubuntu-24.04
             platform: linux
             build-type: Release
+            container-image: ubuntu:22.04
             archive-ext: tar.gz
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container-image || '' }}
     name: Build (${{ matrix.platform }})
 
     steps:
@@ -37,16 +47,35 @@ jobs:
         with:
           fetch-depth: 0  # full history for version tag
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      # Container-only: the ubuntu:22.04 image ships CMake 3.22, but the
+      # project needs 3.24+ (the $<LINK_LIBRARY:WHOLE_ARCHIVE,…> generator
+      # expression that keeps NAM's static lib alive). Kitware's jammy apt
+      # repo is the supported route; their keyring is fetched and verified
+      # by fingerprint rather than trusted blindly.
+      - name: Install CMake ≥ 3.24 (Linux container)
+        if: runner.os == 'Linux'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates gnupg wget
+          wget -q -O /tmp/kitware.asc https://apt.kitware.com/keys/kitware-current.asc
+          gpg --dearmor < /tmp/kitware.asc > /usr/share/keyrings/kitware.gpg
+          gpg --show-keys --with-fingerprints /usr/share/keyrings/kitware.gpg | \
+            grep -q '6B73 0BD5 4DE2 6E7D 6749  B2D9 70E7 45DE 3169  BB49' || {
+            echo "Kitware GPG fingerprint mismatch"; exit 1; }
+          echo "deb [signed-by=/usr/share/keyrings/kitware.gpg] https://apt.kitware.com/ubuntu/ jammy main" \
+            > /etc/apt/sources.list.d/kitware.list
+          apt-get update
+          apt-get install -y cmake pkg-config
+          cmake --version | head -1
 
+      # sudo doesn't exist in the bare ubuntu:22.04 container image.
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
             libgl1-mesa-dev \
             libgles2-mesa-dev \
             libegl1-mesa-dev \
@@ -70,11 +99,9 @@ jobs:
             libdbus-1-dev \
             libibus-1.0-dev \
             libudev-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libswscale-dev \
-            libavdevice-dev \
+            git \
+            curl \
+            xz-utils \
             ccache
 
       - name: Install FFmpeg (Windows)
@@ -97,6 +124,30 @@ jobs:
           $root = (Get-ChildItem -Path $dest -Directory | Select-Object -First 1).FullName
           echo "FFMPEG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # Linux: same mirror strategy as the Windows FFmpeg above. apt's
+      # libavcodec-dev in the 22.04 container is FFmpeg 4.4 — outside the
+      # families FfmpegShim probes (6.x/7.x) and not ABI-verified against
+      # the shim's struct-access contract — so the build links *nothing*
+      # and the headers instead come from BtbN's n6.1.3 shared build,
+      # mirrored into the `deps` release (upstream prunes dated autobuilds
+      # within weeks; the mirror doesn't). The same tarball supplies the
+      # libav* runtime for the AppImage, so decode/capture sonames and the
+      # bundled checkout can never drift apart. Portable across old
+      # distros too: the closure needs at most GLIBC_2.28 (CLI: 2.14).
+      - name: Install FFmpeg (Linux, from deps mirror)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          url='https://github.com/tkleisas/yawn/releases/download/deps/libff.tar.xz'
+          sha256='43adb2b286dce7138432554fc772aa265914db35c70be0fc57b6715029cd10c1'
+          curl -L -f -sS -o /tmp/libff.tar.xz "$url"
+          echo "$sha256  /tmp/libff.tar.xz" | sha256sum -c - >/dev/null || {
+            echo "FFmpeg tarball sha256 mismatch — mirror tampered or URL wrong"; exit 1; }
+          mkdir -p /opt/ffmpeg
+          tar -xf /tmp/libff.tar.xz -C /opt/ffmpeg --strip-components=1
+          echo "FFMPEG_ROOT=/opt/ffmpeg" >> "$GITHUB_ENV"
+          /opt/ffmpeg/bin/ffmpeg -version | head -1
 
       - name: Install Python dependencies
         run: pip install jinja2
@@ -124,8 +175,15 @@ jobs:
           restore-keys: linux-ccache-
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }} ${{ runner.os == 'Windows' && format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) || '' }}
-
+        # Linux must go through the pkg-config route on purpose: it's the
+        # one POSIX path where CMakeLists links NO libav libraries (only
+        # headers — FfmpegShim dlopen()s the rest at runtime). Passing
+        # FFMPEG_ROOT on Linux would hit the manual route and hard-link
+        # DT_NEEDED entries back into the binary. BtbN ships .pc files,
+        # so PKG_CONFIG_PATH steers route 1 at the mirror checkout.
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DYAWN_HAS_STEM_SEPARATION=ON -DYAWN_HAS_BASIC_PITCH=ON ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || format('-DPython3_EXECUTABLE="{0}/python3.exe" -DPython_EXECUTABLE="{0}/python3.exe" -DFFMPEG_ROOT="{1}"', env.pythonLocation, env.FFMPEG_ROOT) }}
+        env:
+          PKG_CONFIG_PATH: ${{ runner.os == 'Linux' && '/opt/ffmpeg/lib/pkgconfig' || '' }}
       - name: Build
         run: cmake --build build --config ${{ matrix.build-type }} --parallel
 
@@ -236,11 +294,21 @@ jobs:
 
           # ── FFmpeg runtime closure ─────────────────────────────────
           # The app dlopen()s libav* at runtime (FfmpegShim), so the
-          # whole point of the AppImage is bundling them: walk the ldd
-          # closure of the five libav libs and copy everything EXCEPT
-          # core runtime / graphics drivers / audio servers — those must
-          # come from the host (glibc versioning, GPU driver match, JACK
-          # connectivity).
+          # whole point of the AppImage is bundling them. The five libav
+          # libs (plus swresample/avfilter — their DT_NEEDED, not probed
+          # by the shim but required at dlopen time) come from the SAME
+          # mirror tarball the build linked headers against, so sonames
+          # and checkout can't drift. Their external deps are harvested
+          # with the ldd walker below, skipping the libs that must come
+          # from the host (core runtime / graphics / audio servers).
+          find /opt/ffmpeg/lib -maxdepth 1 -name 'libavcodec.so*' -o \
+                                  -name 'libavformat.so*' -o \
+                                  -name 'libavutil.so*'   -o \
+                                  -name 'libswscale.so*'  -o \
+                                  -name 'libavdevice.so*' -o \
+                                  -name 'libswresample.so*' -o \
+                                  -name 'libavfilter.so*' \
+            -print0 | xargs -0 cp -P -t "$appdir/usr/lib/"
           bundle_lib() {
             local f="$1" base dst
             base="$(basename "$f")"
@@ -259,9 +327,17 @@ jobs:
               | while read -r dep; do [ -n "$dep" ] && bundle_lib "$dep"; done
           }
           for soname in libavcodec.so.60 libavformat.so.60 libavutil.so.58 \
-                        libswscale.so.7 libavdevice.so.60; do
-            bundle_lib "/usr/lib/x86_64-linux-gnu/$soname"
+                        libswscale.so.7 libavdevice.so.60 libavfilter.so.9 \
+                        libswresample.so.4; do
+            bundle_lib "$appdir/usr/lib/$soname"
           done
+
+          # ffmpeg/ffprobe CLI beside the app (usr/bin), so video *import*
+          # (the transcode step shells out to 'ffmpeg') is self-contained
+          # too — bundle_lib exclude-list above keeps their deps satisfied.
+          cp /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe "$appdir/usr/bin/"
+          export LD_LIBRARY_PATH="$PWD/$appdir/usr/lib"
+          "$appdir/usr/bin/ffmpeg" -version >/dev/null
 
           # ── AppImage skeleton ──────────────────────────────────────
           cp packaging/linux/com.yawn.daw.desktop "$appdir/com.yawn.daw.desktop"
@@ -294,8 +370,8 @@ jobs:
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x /tmp/appimagetool
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 /tmp/appimagetool \
-            "$appdir" "YAWN-${version}-linux-x86_64.AppImage"
-          ls -la "YAWN-${version}-linux-x86_64.AppImage"
+            "$appdir" "YAWN-${version}-x86_64.AppImage"
+          ls -la "YAWN-${version}-x86_64.AppImage"
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
@@ -311,7 +387,7 @@ jobs:
           name: YAWN-${{ matrix.platform }}
           path: |
             YAWN-*-linux.tar.gz
-            YAWN-*-linux-x86_64.AppImage
+            YAWN-*-x86_64.AppImage
 
   release:
     needs: build
