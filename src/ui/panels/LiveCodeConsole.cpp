@@ -9,6 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -43,17 +46,20 @@ std::vector<std::string> splitLines(const std::string& s) {
     return out;
 }
 
-enum class Zone : uint8_t { None, RunStop, Reload, Clear, TabLog, TabCode };
+enum class Zone : uint8_t { None, RunStop, Reload, Clear, Save, TabLog, TabCode, TabEdit };
 
 Zone zoneAt(const Rect& panel, float lx, float ly) {
-    // Buttons: header right side.
-    if (ly >= 4.0f && ly < 4.0f + kBtnH && panel.w > kPad + 3 * (kBtnW + 6.0f)) {
+    // Buttons: header right side (Save appears left of Run in the
+    // Edit tab only).
+    if (ly >= 4.0f && ly < 4.0f + kBtnH && panel.w > kPad + 4 * (kBtnW + 6.0f)) {
         float x = panel.w - kPad - kBtnW;              // rightmost = Clear
         if (lx >= x && lx < x + kBtnW) return Zone::Clear;
         x -= kBtnW + 6.0f;                             // Reload
         if (lx >= x && lx < x + kBtnW) return Zone::Reload;
         x -= kBtnW + 6.0f;                             // Run / Stop
         if (lx >= x && lx < x + kBtnW) return Zone::RunStop;
+        x -= kBtnW + 6.0f;                             // Save (Edit tab)
+        if (lx >= x && lx < x + kBtnW) return Zone::Save;
     }
     // Tabs: row under the header.
     const float tabY = kHeaderH + 2.0f;
@@ -61,11 +67,19 @@ Zone zoneAt(const Rect& panel, float lx, float ly) {
         if (lx >= kPad && lx < kPad + kTabW) return Zone::TabLog;
         if (lx >= kPad + kTabW + 6.0f &&
             lx < kPad + 2.0f * kTabW + 6.0f) return Zone::TabCode;
+        if (lx >= kPad + 2.0f * (kTabW + 6.0f) &&
+            lx < kPad + 3.0f * kTabW + 2.0f * 6.0f) return Zone::TabEdit;
     }
     return Zone::None;
 }
 
 } // namespace
+
+LiveCodeConsole::LiveCodeConsole() {
+    m_editor.onEvaluate = [this](const std::string& code) {
+        if (m_mgr) m_mgr->runScriptSource(code);
+    };
+}
 
 void LiveCodeConsole::toggle(fw2::UIContext& ctx) {
     if (isOpen()) close();
@@ -111,7 +125,10 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
         m_scroll = std::clamp(m_scroll, 0.0f, 100000.0f);
         return true;
     };
-    entry.onKey = [this](fw2::KeyEvent& e) {
+    entry.onKey = [this](fw2::KeyEvent& e) -> bool {
+        const bool ctrl = (e.modifiers & fw2::ModifierKey::Ctrl) != 0;
+        const bool shift = (e.modifiers & fw2::ModifierKey::Shift) != 0;
+        if (wantsKeys() && keyEvent(e.key, ctrl, shift)) return true;
         if (e.key == fw2::Key::Escape) { close(); return true; }
         return false;
     };
@@ -125,8 +142,14 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
     const float lx = e.x - panel.x, ly = e.y - panel.y;
     switch (zoneAt(panel, lx, ly)) {
         case Zone::RunStop:
-            if (m_mgr->isActive()) m_mgr->stop();
-            else                   m_mgr->runScript();
+            if (m_tab == 2) {
+                // Edit tab: Run evaluates the buffer directly.
+                if (m_editor.onEvaluate) m_editor.onEvaluate(m_editor.kernel().text());
+            } else if (m_mgr->isActive()) {
+                m_mgr->stop();
+            } else {
+                m_mgr->runScript();
+            }
             break;
         case Zone::Reload:
             m_mgr->reload();
@@ -135,15 +158,35 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             m_mgr->clearConsole();
             break;
         case Zone::TabLog:
-            m_tabCode = false;
+            m_tab = 0;
             m_scroll = 0.0f;
             break;
         case Zone::TabCode:
-            m_tabCode = true;
+            m_tab = 1;
             m_scroll = 0.0f;
             refreshCodeLens();
             break;
+        case Zone::TabEdit:
+            m_tab = 2;
+            m_scroll = 0.0f;
+            loadEditorBuffer();
+            break;
+        case Zone::Save:
+            saveBuffer();
+            break;
         case Zone::None:
+            if (m_tab == 2 && m_lastLineH > 0.0f) {
+                // Click inside the editor area → caret placement.
+                const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
+                const float areaH = panel.h - kPad - areaY;
+                const float ly2 = ly - areaY;
+                if (ly2 >= 0.0f && ly2 < areaH) {
+                    const Rect content{0.0f, areaY, panel.w, areaH};
+                    m_editor.click(lx, ly2, m_lastLineH,
+                                   fw2::theme().metrics.fontSizeSmall,
+                                   *m_lastMet, content);
+                }
+            }
             break;
     }
     return true;
@@ -151,7 +194,7 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
 
 void LiveCodeConsole::tick() {
     if (!isOpen() || !m_mgr || !m_project || !m_engine) return;
-    if (!m_tabCode) return;
+    if (m_tab != 1) return;
     m_codeLensAge += 1.0 / 60.0;
     if (m_codeLensAge >= 1.0 || m_codeLensDirty) refreshCodeLens();
 }
@@ -163,12 +206,62 @@ void LiveCodeConsole::refreshCodeLens() {
     m_codeLensDirty = false;
 }
 
+// ─── Edit tab ────────────────────────────────────────────────────────
+
+void LiveCodeConsole::loadEditorBuffer() {
+    if (!m_mgr) return;
+    // Fresh from disk when the buffer has no unsaved edits; otherwise
+    // keep what the user typed.
+    if (m_editorLoaded && m_editor.kernel().modified()) return;
+    if (!m_editorLoaded || !m_editor.kernel().modified()) {
+        std::ifstream f(m_mgr->defaultScriptPath(), std::ios::binary);
+        if (f) {
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            m_editor.kernel().setText(ss.str());
+        } else {
+            m_editor.kernel().setText("-- press Run to create the template\n");
+        }
+        m_editor.kernel().clearModified();
+        m_editorLoaded = true;
+    }
+}
+
+bool LiveCodeConsole::keyEvent(fw2::Key key, bool ctrl, bool shift) {
+    if (m_tab != 2) return false;
+    return m_editor.keyDown(key, ctrl, shift);
+}
+
+void LiveCodeConsole::forwardTextInput(const std::string& t) {
+    if (m_tab == 2) m_editor.textInput(t);
+}
+
+void LiveCodeConsole::saveBuffer() {
+    if (!m_mgr || m_tab != 2) return;
+    const std::string path = m_mgr->defaultScriptPath();
+    std::error_code ec;
+    std::filesystem::create_directories(
+        std::filesystem::path(path).parent_path(), ec);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) {
+        m_mgr->showToast("Live code: cannot save " + path, 2.5f, 2);
+        return;
+    }
+    f << m_editor.kernel().text();
+    f.close();
+    m_editor.kernel().clearModified();
+    m_mgr->pushConsole(0, "live code: saved " + path);
+    m_mgr->showToast("Live code script saved", 1.5f, 0);
+}
+
 void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     Renderer2D& r = *ctx.renderer;
     if (!ctx.textMetrics || !m_mgr) return;
     const auto& pal = theme().palette;
     const auto& met = theme().metrics;
     const float lineH = ctx.textMetrics->lineHeight(met.fontSizeSmall);
+    m_lastLineH = lineH;
+    m_lastMet = ctx.textMetrics;
 
     // Panel background + border.
     r.drawRect(panel.x, panel.y, panel.w, panel.h, pal.panelBg.withAlpha(238));
@@ -192,6 +285,10 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
         switch (zone) {
             case Zone::Clear:  x = panel.w - kPad - kBtnW; break;
             case Zone::Reload: x = panel.w - kPad - 2.0f * (kBtnW + 6.0f); break;
+            case Zone::RunStop:
+                x = panel.w - kPad - 3.0f * (kBtnW + 6.0f); break;
+            case Zone::Save:
+                x = panel.w - kPad - 4.0f * (kBtnW + 6.0f); break;
             default:           x = panel.w - kPad - 3.0f * (kBtnW + 6.0f); break;
         }
         const Rect br{panel.x + x, panel.y + 4.0f, kBtnW, kBtnH};
@@ -206,6 +303,7 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     drawBtn(Zone::RunStop, m_mgr->isActive() ? "Stop" : "Run");
     drawBtn(Zone::Reload,  "Reload");
     drawBtn(Zone::Clear,   "Clear");
+    if (m_tab == 2) drawBtn(Zone::Save, "Save");
 
     // ── Tab row ──
     {
@@ -221,8 +319,9 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
                                       tr.y + 5.0f, met.fontSizeSmall,
                                       active ? pal.textPrimary : pal.textSecondary);
         };
-        drawTab(0, !m_tabCode, "Console");
-        drawTab(1,  m_tabCode, "Code");
+        drawTab(0, m_tab == 0, "Console");
+        drawTab(1, m_tab == 1, "Code");
+        drawTab(2, m_tab == 2, "Edit");
     }
 
     // ── Content area ──
@@ -232,7 +331,7 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
 
     r.pushClip(panel.x, areaY, panel.w, areaH);
 
-    if (!m_tabCode) {
+    if (m_tab == 0) {
         // Console log — newest at the bottom, wheel scrolls into history.
         const auto& lines = m_mgr->console();
         const size_t total = lines.size();
@@ -250,6 +349,9 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
             ctx.textMetrics->drawText(r, ln.text, panel.x + kPad, y,
                                       met.fontSizeSmall, col);
         }
+    } else if (m_tab == 2) {
+        // Editor.
+        m_editor.paint(ctx, Rect{panel.x, areaY, panel.w, areaH});
     } else {
         // Code lens — regenerated project description.
         const auto lines = splitLines(m_codeLens);

@@ -1312,3 +1312,117 @@ TEST_F(LiveCodeManagerTest, CodeLensRoundTripConfluence) {
     ASSERT_NE(slot->midiClip, nullptr);
     EXPECT_EQ(slot->midiClip->note(1).channel, 1);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Editor kernel (phase 8 — framework-free; src/ui/panels header)
+// ─────────────────────────────────────────────────────────────────────────
+
+#include "ui/panels/LiveCodeEditorKernel.h"
+using K = yawn::ui::LiveCodeEditorKernel;
+
+TEST(LiveCodeEditorKernelTest, SetGetRoundTrip) {
+    K k;
+    k.setText("-- hi\nsong = { bpm = 120 }\n");
+    EXPECT_EQ(k.lines().size(), 2u);
+    EXPECT_EQ(k.lines()[0], "-- hi");
+    EXPECT_EQ(k.lines()[1], "song = { bpm = 120 }");
+    EXPECT_TRUE(!k.modified());
+}
+
+TEST(LiveCodeEditorKernelTest, TypingAndNavigation) {
+    K k;
+    k.setText("ab");
+    k.moveEnd();                            // after 'b'
+    k.insertText("cd");
+    EXPECT_EQ(k.lines()[0], "abcd");
+    EXPECT_EQ(k.caretCol(), 4);
+    k.moveLeft();
+    k.insertText("X");                      // abcdX → abcd       hmm:
+    EXPECT_EQ(k.lines()[0], "abcXd");
+    k.backspace();
+    EXPECT_EQ(k.lines()[0], "abcd");
+    // Split / join.
+    k.moveHome();
+    k.splitLine();
+    EXPECT_EQ(k.lines().size(), 2u);
+    EXPECT_EQ(k.lines()[0], "");
+    EXPECT_EQ(k.lines()[1], "abcd");
+    k.backspace();                          // joins back
+    EXPECT_EQ(k.lines().size(), 1u);
+    EXPECT_EQ(k.lines()[0], "abcd");
+    EXPECT_TRUE(k.modified());
+}
+
+TEST(LiveCodeEditorKernelTest, DeleteCharAcrossLineAndEnd) {
+    K k;
+    k.setText("one\ntwo");
+    k.moveEnd();
+    k.deleteChar();                         // at EOL → joins next line
+    EXPECT_EQ(k.lines().size(), 1u);
+    EXPECT_EQ(k.lines()[0], "onetwo");
+}
+
+TEST(LiveCodeEditorKernelTest, ColumnGoalKeptAcrossUpDown) {
+    K k;
+    k.setText("abcd\nxy\nlonger");
+    k.moveEnd();                            // line 0 col 4
+    k.moveDown();                           // line 1 (len 2) → col clamps to 2
+    EXPECT_EQ(k.caretLine(), 1);
+    EXPECT_EQ(k.caretCol(), 2);
+    k.moveDown();                           // line 2 → col back to goal 4
+    EXPECT_EQ(k.caretLine(), 2);
+    EXPECT_EQ(k.caretCol(), 4);
+}
+
+TEST(LiveCodeEditorKernelTest, CompletionFiltersAndAccepts) {
+    K k;
+    k.setText("yan");
+    k.moveEnd();
+    k.updateCompletion();
+    EXPECT_FALSE(k.completionOpen());   // "yan" prefixes nothing
+    k.setText("yaw");                   // use a real prefix
+    k.moveEnd();
+    k.updateCompletion();
+    EXPECT_TRUE(k.completionOpen());
+    const int n = static_cast<int>(k.completionItems().size());
+    EXPECT_GT(n, 5);                        // all yawn.* entries
+    EXPECT_EQ(k.completionItems()[0], "yawn.log");
+    k.selectNext();
+    EXPECT_EQ(k.completionSelected(), 1);
+    // Accept inserts only the remainder (items[1] = yawn.toast).
+    EXPECT_TRUE(k.acceptCompletion());
+    EXPECT_EQ(k.completionItems().size(), 0u);
+    EXPECT_EQ(k.lines()[0], "yawn.toast");
+}
+
+TEST(LiveCodeEditorKernelTest, CompletionDottedPrefix) {
+    K k;
+    k.setText("improv.l");
+    k.moveEnd();
+    k.updateCompletion();
+    ASSERT_TRUE(k.completionOpen());
+    EXPECT_EQ(k.completionItems()[0], "improv.lookahead");
+    EXPECT_EQ(k.completionItems()[1], "improv.late_policy");
+    EXPECT_TRUE(k.acceptCompletion());
+    EXPECT_EQ(k.lines()[0], "improv.lookahead");
+}
+
+TEST(LiveCodeEditorKernelTest, CompletionTooShortOrTooBroadCloses) {
+    K k;
+    k.setText("a");
+    k.moveEnd();
+    k.updateCompletion();
+    EXPECT_FALSE(k.completionOpen());       // < 2 chars
+    k.setText("");                          // empty prefix over full table
+    k.updateCompletion();
+    EXPECT_FALSE(k.completionOpen());
+}
+
+TEST(LiveCodeEditorKernelTest, UTF8BackspaceStepsContinuation) {
+    K k;
+    k.setText("\xCE\xBB");                  // λ (2 bytes)
+    k.moveEnd();
+    EXPECT_EQ(k.caretCol(), 2);
+    k.backspace();                          // removes the whole glyph
+    EXPECT_EQ(k.lines()[0], "");
+}

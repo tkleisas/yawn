@@ -788,3 +788,32 @@ sessions reproducible):
   state → generate the lens → re-parse it in a fresh Lua state → apply
   → **no-op with identical values** (name escaping, index params, note
   channels, velocity rounding). Full suite green (1524 tests).
+
+**Phase 8 — landed.** In-app editor (Edit tab of the `~` console):
+
+- **`LiveCodeEditorKernel`** (`src/ui/panels/LiveCodeEditorKernel.h`,
+  header-only, framework-free, test-driven): line buffer + caret
+  (line/UTF-8-col, continuation-aware backspace/move), column-goal
+  navigation, and the completion state machine — dotted-prefix
+  matching (`yawn.n` → `yawn.note`) over a static symbol table (Lua
+  keywords + `yawn.*`/`improv.*` API + song keys), ≤2 chars or >32
+  matches closes the popup, accept inserts only the remainder.
+- **`LiveCodeEditor`** (`src/ui/panels/LiveCodeEditor.{h,cpp}`): fw2
+  face — Lua tokenizer for syntax coloring (keywords pink, strings
+  amber, numbers cyan, comments slate, `yawn.*`/`improv.*` green,
+  `--[[ ]]` state crossing lines), gutter + line numbers, caret,
+  completion popup (8 rows, keyboard navigation), pixel hit-testing
+  for click-to-caret, caret-keeping vertical scroll.
+- **Console Edit tab**: loads the script file fresh from disk unless
+  the buffer has unsaved edits; Run evaluates the **buffer** as a new
+  generation (`LiveCodeManager::runScriptSource` →
+  `LiveCodeEngine::runString` — same gen semantics as file runs, song
+  harvest included); Save writes the buffer to the script path;
+  Ctrl+Enter evaluates without touching the mouse.
+- **App routing**: fw2 overlay keys first (sdlKeyToFw2 mapping
+  already in place) → editor consumes nav/commit keys; TEXT_INPUT
+  forwards to the console when open; virtual-keyboard guard extended
+  so typing doesn't play MIDI notes. `~` still toggles.
+- Tests: +8 LiveCodeEditorKernelTest cases (round-trip, edits, joins,
+  column goal, completion filter/dotted-accept/limits, UTF-8
+  backspace). Full suite green (1532 tests).

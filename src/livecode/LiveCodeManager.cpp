@@ -465,7 +465,30 @@ bool LiveCodeManager::runScript(const std::string& explicitPath) {
     const uint32_t oldGen = m_hasActiveGen ? m_activeGeneration : 0;
     const uint32_t newGen = m_nextGeneration++;
     m_lua->setGeneration(newGen);
-    const bool ok = m_lua->runFile(path);
+    return finishGenerationRun(oldGen, newGen, m_lua->runFile(path));
+}
+
+bool LiveCodeManager::runScriptSource(const std::string& code) {
+    if (!m_audioEngine) {
+        pushConsole(2, "live code: engine not ready");
+        return false;
+    }
+    if (!m_lua) {
+        m_lua = std::make_unique<LiveCodeEngine>();
+        if (!m_lua->init(this)) {
+            m_lua.reset();
+            return false;
+        }
+    }
+    setupProviders();
+
+    const uint32_t oldGen = m_hasActiveGen ? m_activeGeneration : 0;
+    const uint32_t newGen = m_nextGeneration++;
+    m_lua->setGeneration(newGen);
+    return finishGenerationRun(oldGen, newGen, m_lua->runString(code));
+}
+
+bool LiveCodeManager::finishGenerationRun(uint32_t oldGen, uint32_t newGen, bool ok) {
     if (!ok) {
         // Drop the new generation's entries; the previous generation keeps
         // performing (§1 G6).

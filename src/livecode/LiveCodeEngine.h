@@ -64,6 +64,10 @@ public:
     // Execute a file body as the current generation's program.
     bool runFile(const std::string& path);
 
+    // Execute a source string (in-app editor evaluates the buffer as a
+    // new generation — same semantics as runFile minus file I/O).
+    bool runString(const std::string& code);
+
     // Harvest the declarative `song` global table (§5.1) into a model.
     // Returns true when there is no song table (nothing to apply) or
     // parsing succeeded; false with `err` on malformed input.

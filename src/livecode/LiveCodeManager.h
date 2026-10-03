@@ -75,6 +75,11 @@ public:
     // yet. Returns false on hard failure (I/O error, parse/runtime error
     // is reported but not fatal — the old generation keeps running).
     bool runScript(const std::string& explicitPath = {});
+
+    // RUN the given source string as a new generation (in-app editor:
+    // Ctrl+Enter evaluates the buffer without touching the script file).
+    // Same generation semantics as runScript.
+    bool runScriptSource(const std::string& code);
     // STOP — drop every user generation's scheduled callbacks. State
     // (yawn.state, closures in the Lua state) survives.
     void stop();
@@ -195,6 +200,11 @@ public:
                              const std::string& kind);
 
 private:
+    // Shared tail of runScript/runScriptSource: register the new
+    // generation as active, harvest the `song` table, schedule the
+    // previous generation's swap-out. On failure drops the new gen's
+    // entries and reports (old gen keeps performing).
+    bool finishGenerationRun(uint32_t oldGen, uint32_t newGen, bool ok);
     // Scheduler-dispatch: call the reffed Lua function with one numeric arg.
     void dispatchRef(uint64_t id, int ref, double arg);
     // Installs transport/beat providers into the scheduler (once).

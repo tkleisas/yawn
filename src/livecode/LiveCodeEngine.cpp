@@ -733,6 +733,17 @@ bool LiveCodeEngine::runFile(const std::string& path) {
     return protectedCall(0, kBudgetRun);
 }
 
+bool LiveCodeEngine::runString(const std::string& code) {
+    if (!m_L) return false;
+    if (luaL_loadbuffer(m_L, code.c_str(), code.size(), "=editor") != LUA_OK) {
+        const char* msg = lua_tostring(m_L, -1);
+        pushConsoleError(msg ? msg : "<no error message>");
+        lua_pop(m_L, 1);
+        return false;
+    }
+    return protectedCall(0, kBudgetRun);
+}
+
 bool LiveCodeEngine::harvestSong(SongModel& out, std::string& err) const {
     if (!m_L) return true;
     lua_getglobal(m_L, "song");

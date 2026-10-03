@@ -502,7 +502,8 @@ void App::handleKeyEvent(const SDL_Event& event) {
              m_visualParamsPanel->hasEditingKnob()) ||
             m_browserPanel->hasEditingKnob() ||
             m_transportPanel->isEditing() ||
-            m_textInputDialog.isOpen();
+            m_textInputDialog.isOpen() ||
+            m_liveConsole.wantsKeys();
         if (!textInputActive) {
             if (m_virtualKeyboard.onKeyDown(event.key.key))
                 return;
@@ -785,6 +786,12 @@ void App::processEvents() {
             }
 
             case SDL_EVENT_TEXT_INPUT: {
+                // Live-code console Edit tab (fw2 overlay — owns the
+                // keystroke stream while its Edit tab is active).
+                if (m_liveConsole.isOpen()) {
+                    m_liveConsole.forwardTextInput(event.text.text);
+                    break;
+                }
                 // Text input dialog (modal) — takeTextInput pushes
                 // the text into the embedded FwTextInput.
                 if (m_textInputDialog.isOpen()) {
