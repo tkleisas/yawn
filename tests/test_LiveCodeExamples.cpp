@@ -266,7 +266,16 @@ TEST_F(LiveCodeExampleTest, SampleSynthLabForge) {
     ASSERT_NE(shapedSlot, nullptr);
     ASSERT_NE(shapedSlot->audioClip, nullptr);
     EXPECT_EQ(shapedSlot->audioClip->buffer->numFrames(), 65536);
-    // One-shot forges went through the instrument delivery hooks.
+    // One-shot forges assembled into pattern clips (4 beats @100bpm =
+    // 4 * 0.6 * 48000 frames) AND kept as instrument material.
+    for (int t : { 2, 3 }) {
+        auto* slot = m_project.getSlot(t, 0);
+        ASSERT_NE(slot, nullptr) << "track " << t;
+        ASSERT_NE(slot->audioClip, nullptr) << "track " << t;
+        ASSERT_NE(slot->audioClip->buffer, nullptr);
+        EXPECT_EQ(slot->audioClip->buffer->numFrames(),
+                  (int)(m_engine->sampleRate() * 0.6 * 4));
+    }
     EXPECT_EQ(delivered, 2);
     // Self-start still fired (transport reached, even pre-clip pass).
     m_engine->pumpInputForTest(nullptr, 512);

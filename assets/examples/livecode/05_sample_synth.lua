@@ -129,13 +129,50 @@ do
 end
 
 -- ── Install the forge ──
--- Sustained forges land as SESSION CLIPS (waveforms in the grid, they
--- play on launch); one-shot forges as instrument material for improv.
-yawn.set_clip(0, 1, PAD, "forged additive pad")        -- 8 s pad loop
+-- Sustained forges become scene clips directly. One-shots get assembled
+-- into PATTERN clips (buffer_concat + silence spacers) so all four
+-- tracks show waveforms and play on launch; the instruments keep the
+-- raw one-shots for the improv accents.
+yawn.set_clip(0, 1, PAD, "forged additive pad")         -- 8 s pad loop
 yawn.set_clip(1, 1, SHAPED or PAD, "spectrally shaped") -- 65536 texture
-yawn.load_sample(2, ZAPBUF or PAD, "sampler")
-yawn.load_sample(3, HATBUF or PAD, "sampler")
-yawn.log("forged 4 samples — sr " .. sr .. ", kit loaded")
+
+local function silence(n)
+    return yawn.new_buffer{ frames = n, channels = 1 }
+end
+local beatFrames = math.floor(sr * 60.0 / song.bpm)     -- 0.6 s @100 bpm
+
+-- Hat pattern: 8 sixteenth? — 8th-note ticks across 4 beats.
+do
+    local hit = math.floor(sr * 0.12)
+    local gap = beatFrames // 2 - hit
+    local pat = HATBUF or PAD
+    for i = 1, 7 do
+        pat = yawn.buffer_concat(pat, silence(gap))
+        pat = yawn.buffer_concat(pat, HATBUF or PAD)
+    end
+    pat = yawn.buffer_concat(pat, silence(gap))   -- complete the 4-beat loop
+    yawn.buffer_normalize(pat, 0.7)
+    yawn.set_clip(3, 1, pat, "hat 8ths (forged)")
+    PAT_HAT = pat
+end
+
+-- Zap pattern: accents on beats 1 and 3 of a 4-beat loop.
+do
+    local zap = ZAPBUF or PAD
+    local zapLen = yawn.buffer_info(zap).frames
+    local pat = zap
+    pat = yawn.buffer_concat(pat, silence(beatFrames - zapLen))
+    pat = yawn.buffer_concat(pat, silence(beatFrames))     -- beat 2 silent
+    pat = yawn.buffer_concat(pat, zap)                     -- beat 3 accent
+    pat = yawn.buffer_concat(pat, silence(beatFrames - zapLen))
+    pat = yawn.buffer_concat(pat, silence(beatFrames))     -- beat 4 silent
+    yawn.set_clip(2, 1, pat, "zap accents (forged)")
+    PAT_ZAP = pat
+end
+
+yawn.load_sample(2, ZAPBUF or PAD, "sampler")   -- improv accents
+yawn.load_sample(3, HATBUF or PAD, "sampler")   -- improv ghost ticks
+yawn.log("forged 4 samples — sr " .. sr .. ", patterns assembled")
 
 -- ═══ Layer 3: improv — play the forge ════════════════════════════════
 improv.lookahead(0.12)
@@ -144,19 +181,21 @@ improv.late_policy("drop")
 yawn.state = yawn.state or { root = 36 }
 local root = yawn.state.root
 
--- (Pad + Shaped play straight from their forged clips on scene launch;
---  the improv layer performs the one-shot forges over them.)
+-- All four forged clips play from the grid on scene launch; the improv
+-- layer adds human variation on top of the machine patterns.
 
--- Zap lead: sparse replies with random target pitch (sampler pitch = note).
-improv.every(1, function(beat)
-    if math.random() < 0.35 then
-        yawn.note(2, root + 12 + math.floor(12 * math.random()), 95, 0.4, 0, beat)
+-- Random raised-zap accents (sampler pitch shifts the forged buffer).
+improv.every(2, function(beat)
+    if math.random() < 0.4 then
+        yawn.note(2, root + 24 + math.floor(12 * math.random()), 90, 0.4, 0, beat)
     end
 end)
 
--- Hat ticks on the 8ths (fixed pitch — the sample carries the timbre).
-improv.every(0.5, function(beat)
-    yawn.note(3, root, beat % 8 == 0.5 and 110 or 70, 0.05, 0, beat)
+-- Ghost 16th ticks: quiet, probabilistic, double-time.
+improv.every(0.25, function(beat)
+    if math.random() < 0.18 then
+        yawn.note(3, root, 45, 0.05, 0, beat)
+    end
 end)
 
 -- Self-start (quantize resolves at fire time — stopped → downbeat now).
