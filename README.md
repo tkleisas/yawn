@@ -7,7 +7,7 @@
 
 <p align="center">
   A cross-platform digital audio workstation inspired by Ableton Live.<br/>
-  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · <strong>Ableton Link</strong> · Controller Scripting (Push 1 + Move + nanoKONTROL2 + Reface DX) · <strong>Visual / VJ Engine · Video Clips · 3D Models</strong> · <strong>Stem Separation · Audio→MIDI</strong><br/><br/>
+  Session View · Arrangement · Mixer · VST3 · Instruments · Effects · MIDI · Recording · Automation · Presets · <strong>Ableton Link</strong> · Controller Scripting (Push 1 + Move + nanoKONTROL2 + Reface DX) · <strong>Live Coding</strong> · <strong>Visual / VJ Engine · Video Clips · 3D Models</strong> · <strong>Stem Separation · Audio→MIDI</strong><br/><br/>
   <em>Made with AI-Sloptronic™ technology</em><br/>
   <sub>Where "it compiles" is the new "it works", every bug is a ✨feature request✨, and every feature request is a ✨pre-existing bug✨</sub>
 </p>
@@ -58,9 +58,10 @@ The [full feature list lives in **docs/features.md**](docs/features.md) — the 
 - **Automation & modulation** — Breakpoint envelopes (Read/Touch/Latch), per-track LFOs with named-target picker (incl. visual params)
 - **Ableton Link** — Drift-free LAN beat/tempo sync with Live, Logic, Bitwig, iOS apps
 - **Controller scripting** — Lua 5.4 `yawn.*` API with auto-detection + hot reload; Push 1, Move, nanoKONTROL2, Reface DX
+- **Live coding** — Code as the project representation: a Lua 5.4 script (declarative `song` + performative `improv` layers) is the project's source of truth; Ctrl+L reconciles the DAW by diff-apply, `~` opens a Quake console with a live code lens + editor (syntax highlighting, autocomplete, Ctrl+Enter eval), scenes self-start in lockstep, and `yawn.render` prerenders devices offline into clips/samplers/DrumRack pads/the library
 - **Visual / VJ engine** — Per-track GPU layers, Shadertoy-compatible hot-reload shaders, audio-reactive rendering, video import (ffmpeg) + live input, glTF 2.0 3D models with skeletal animation, Lua scene scripts, master post-FX, A–H knobs + automation
 - **Single fw2 UI framework** — Cached two-pass layout, capture-stomp guards, DPI scaling, native menus, scrollable dialogs
-- **Quality** — 1,360+ Google Test cases, zero audio-thread allocations, broken-code warnings promoted to compile errors
+- **Quality** — 1,550+ Google Test cases, zero audio-thread allocations, broken-code warnings promoted to compile errors
 
 ## Screenshots
 
@@ -132,6 +133,7 @@ self-contained releases are built, and the stem-separation model) are in
 | [CHANGELOG.md](CHANGELOG.md) | Release history, implementation phases, lessons learned |
 | [docs/visual.md](docs/visual.md) | Shader authoring, uniforms, video / live / 3D / Lua / automation |
 | [docs/controller-scripting.md](docs/controller-scripting.md) | Lua API + every controller's button/CC map |
+| [docs/live-coding.md](docs/live-coding.md) | Live-coding design doc — the `song`/`improv` layers, Lua API reference, scheduling model |
 | [docs/ableton-move.md](docs/ableton-move.md) | Ableton Move button map, encoders, LED palette |
 | [docs/ai-sound-design.md](docs/ai-sound-design.md) | AI/ML integration possibilities — CLAP tagging, sound matching, text→patch — ranked by reachability, with prototype plan |
 | [docs/ui-v2-architecture.md](docs/ui-v2-architecture.md) | fw2 UI framework internals ([events](docs/ui-v2-events.md), [layout](docs/ui-v2-measure-layout.md), [layer stack](docs/ui-v2-layer-stack.md), [theme](docs/ui-v2-theme.md)) |

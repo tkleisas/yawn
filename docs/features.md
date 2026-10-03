@@ -280,6 +280,21 @@ for build flags that gate some of these, see [building.md](building.md).
 >
 > See [controller-scripting.md](controller-scripting.md) for the full Lua API reference, every controller's button/CC map, and the guide to writing your own script.
 
+## Live Coding
+
+*The controller scripts started it: a Lua engine inside the DAW, driving MIDI hardware. Then the AI asked the obvious question — why do the controllers get to script the DAW while the DAW doesn't get to script itself? Now the project is the code. Press Ctrl+L. The music is a script. Change the script, run again, and the DAW converges without dropping a beat.*
+
+- **Lua 5.4 conductor** — The same vendored sandboxed Lua now drives the DAW itself: one script file holds a declarative `song` block (the durable project definition) and an `improv` layer (the ephemeral performance logic). Ctrl+L runs it as a new generation; Ctrl+Shift+L reloads from disk; `yawn.state` survives everything
+- **Declarative song layer** — `song = { bpm = 126, tracks = { { uid, name, instrument = {...}, fx = {...}, clips = { [scene] = { beats, notes } } } } }` reconciled by diff-apply: presence = ownership, track resolution by uid > name > create, and re-running unchanged code is a verified no-op (round-trip confluence test). Instruments/FX are created from the device factory with all params addressable by name or index
+- **Improv performer layer** — `improv.every/after/at/on_bar` schedule musical callbacks on the beat grid; they fire slightly ahead of their target moment (lookahead, default 100 ms) and receive the target beat/bar for sample-accurate placement; `improv.late_policy("play"|"drop")` decides what a missed window does. Entries are generation-tagged: a broken re-run keeps the previous layer performing
+- **Sample-accurate note dispatch** — `yawn.note(track, pitch, vel, dur, ch, at_beat)` parks beat-anchored notes in a bounded audio-thread queue drained after Link sync; flushes on seek and loop wrap
+- **Offline prerendering** — `yawn.render{ device = ..., params = ..., notes = ..., target = {...} }` renders any instrument offline on worker threads (deterministic, seeded — the spec is fixed at enqueue time) and delivers into clip slots, Sampler/Granular/Vocoder/DrumSlop, explicit DrumRack pads, the content library, or straight to disk
+- **The `~` console** — Quake-style drop-down with three tabs: the log ring, the **code lens** (read-only regeneration of the `song` block from live state — UI edits flow back into code), and an in-app **editor** with Lua syntax highlighting, dotted-prefix autocomplete and Ctrl+Enter evaluation. Save writes the buffer to the script file; Sync patches the script from project state while preserving comments byte-for-byte
+- **Lockstep self-start** — `yawn.launch_scene(n)` initializes everything first, then seeks to the downbeat and starts the transport with the clips firing on the first block — no one-bar silence after Run
+- **Content-driven track typing** — Track types follow their content (MIDI clips → Midi, audio clips → Audio, visual → Visual); the arrangement recorder, record-arm gates and code lens all agree with what the tracks actually hold
+
+> See [live-coding.md](live-coding.md) for the design doc — full API reference, scheduling model, and the phase-by-phase implementation status.
+
 ## Visual / VJ Engine
 
 *The AI wrote a DAW. Then it wrote a GPU-based VJ tool **inside** the DAW. Then it wrote an ffmpeg import pipeline so you can drop a Lumière Brothers film onto a visual track and bar-sync it to your bass line. This is how the singularity comes for techno.*
@@ -312,7 +327,7 @@ for build flags that gate some of these, see [building.md](building.md).
 > See [visual.md](visual.md) for the full shader-authoring guide, uniform reference, video / live / 3D / Lua / automation details, and file layout.
 
 ## Quality
-- **Test-Driven Development** — 1,360+ unit & integration tests across 159+ test suites via Google Test. The count goes up and down — we deleted ~80 v1-framework tests when their fw2 counterparts superseded them. The AI counts down too sometimes
+- **Test-Driven Development** — 1,550+ unit & integration tests across 190+ test suites via Google Test. The count goes up and down — we deleted ~80 v1-framework tests when their fw2 counterparts superseded them. The AI counts down too sometimes
 - **Zero audio-thread allocations** — All memory preallocated at startup
 - **All instruments handle CC 123** (All Notes Off) for clean MIDI effect removal
 - **Compile-time guards** — A handful of "this code is unconditionally broken" warnings (always-recursive function, missing return, uninitialised local, etc.) are promoted to errors so they can't lurk in the build output the way `fileNameFromPath` did before it stack-overflowed during a file drop
@@ -338,6 +353,10 @@ device works on first install. Attribution + license details live in
   spectrum bars, kaleidoscopes, etc.
 - **2 glTF 2.0 sample models** — `assets/examples/3d/Duck.glb`, `Fox.glb` —
   CC-BY 4.0, from the Khronos sample-asset repository
+- **4 live-coding proof-of-concept songs** — `assets/examples/livecode/` —
+  a declarative techno sketch, a pure improv performer layer, the two-layer
+  convention demo, and an offline sample-forge script; all executed headlessly
+  by the test suite so they ship verified
 - **Demucs v4 stem model** — bundled in official release downloads (`models/`
   beside the binary); not in the source tree. Source builds download it on
   demand. See [building.md](building.md)
