@@ -613,6 +613,14 @@ bool App::init() {
                                           std::unique_ptr<midi::MidiClip> clip) {
         return setMidiClipLive(track, scene, std::move(clip));
     });
+    // Content-driven track typing: flips push SetTrackTypeMsg at once so
+    // the engine's record/monitor gates (audio capture, MIDI record arm)
+    // follow the content the same frame (the full syncTracksToEngine flow
+    // also runs on the next structural op).
+    m_project.trackTypeChanged = [this](int t, int type) {
+        m_audioEngine.sendCommand(audio::SetTrackTypeMsg{
+            t, static_cast<uint8_t>(type)});
+    };
     m_liveConsole.init(&m_liveCode, &m_project, &m_audioEngine);
     // Prerender delivery (phase 3): clip target mirrors the stem-separation
     // flow (in-memory buffer; project save persists it to samples/).

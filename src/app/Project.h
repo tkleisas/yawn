@@ -255,6 +255,36 @@ public:
         return &m_clipSlots[trackIndex][sceneIndex];
     }
 
+    // ── Content-driven track typing ──
+    // Track.type is a capability hint (record/monitor gates, UI
+    // affordances); playback runs both clip engines for any track. It
+    // therefore follows the track's content: MIDI clips ⇒ Midi, audio
+    // clips ⇒ Audio, visual clips ⇒ Visual. Mixed content (or none)
+    // keeps the current type. `trackTypeChanged` fires on real flips so
+    // the host can push SetTrackTypeMsg immediately.
+    std::function<void(int trackIndex, int newType)> trackTypeChanged;
+
+    void refreshTrackType(int t) {
+        if (t < 0 || t >= numTracks()) return;
+        bool hasMidi = false, hasAudio = false, hasVisual = false;
+        for (const auto& slot : m_clipSlots[t]) {
+            hasMidi   = hasMidi   || slot.midiClip != nullptr;
+            hasAudio  = hasAudio  || slot.audioClip != nullptr;
+            hasVisual = hasVisual || slot.visualClip != nullptr;
+        }
+        const int kinds = (hasMidi ? 1 : 0) + (hasAudio ? 2 : 0)
+                        + (hasVisual ? 4 : 0);
+        Track::Type want = m_tracks[t].type;
+        if (kinds == 1)      want = Track::Type::Midi;
+        else if (kinds == 2) want = Track::Type::Audio;
+        else if (kinds == 4) want = Track::Type::Visual;
+        if (want != m_tracks[t].type) {
+            m_tracks[t].type = want;
+            if (trackTypeChanged)
+                trackTypeChanged(t, static_cast<int>(want));
+        }
+    }
+
     // Convenience: get audio clip (returns nullptr if slot is empty or MIDI)
     audio::Clip* getClip(int trackIndex, int sceneIndex) {
         auto* slot = getSlot(trackIndex, sceneIndex);
@@ -285,6 +315,7 @@ public:
         // graveyardSlotClips() docs.
         graveyardSlotClips(*slot);
         slot->audioClip = std::move(clip);
+        refreshTrackType(trackIndex);
         return slot->audioClip.get();
     }
 
@@ -294,6 +325,7 @@ public:
         if (!slot) return nullptr;
         graveyardSlotClips(*slot);
         slot->midiClip = std::move(clip);
+        refreshTrackType(trackIndex);
         return slot->midiClip.get();
     }
 
@@ -304,6 +336,7 @@ public:
         if (!slot) return nullptr;
         graveyardSlotClips(*slot);
         slot->visualClip = std::move(clip);
+        refreshTrackType(trackIndex);
         return slot->visualClip.get();
     }
 
@@ -327,6 +360,8 @@ public:
         src->followAction   = FollowAction{};
         src->clipAutomation = std::make_unique<automation::ClipAutomation>();
         src->launchQuantize = audio::QuantizeMode::NextBar;
+        refreshTrackType(srcTrack);
+        refreshTrackType(dstTrack);
     }
 
     // Copy a clip slot's contents (clones the clip)
@@ -353,6 +388,7 @@ public:
         if (!slot) return;
         graveyardSlotClips(*slot);
         replaceSlotAutomation(*slot, {});
+        refreshTrackType(trackIndex);
     }
 
     // ── Clip-pointer graveyard ─────────────────────────────────────

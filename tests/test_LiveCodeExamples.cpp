@@ -96,6 +96,11 @@ TEST_F(LiveCodeExampleTest, DeclarativeSongBuilding) {
     EXPECT_EQ(m_engine->instrument(3)->id(), std::string("fmsynth"));
     EXPECT_EQ(m_engine->instrument(4)->id(), std::string("karplus"));
 
+    // Content-driven typing: the adopted audio-typed defaults now hold
+    // MIDI clips — their type flips to Midi and stays put on re-runs.
+    EXPECT_EQ(m_project.track(0).type, Track::Type::Midi);
+    EXPECT_EQ(m_project.track(1).type, Track::Type::Midi);
+
     // Kick clip applied to track 0 scene 0.
     auto* slot = m_project.getSlot(0, 0);
     ASSERT_NE(slot, nullptr);

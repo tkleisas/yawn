@@ -445,14 +445,32 @@ SongApplyReport applySongModel(const SongModel& song,
             rep.ops.push_back("track '" + oldName + "' name → " + st.name);
             rep.changed = true;
         }
-        // Type: creation-only in v1.
+        // Type: declared type wins when the track has no content (fresh
+        // adoption of a default track); with content, type follows the
+        // content (Project::refreshTrackType on the setters) and the
+        // declaration is ignored with a note.
         if (!st.type.empty()) {
             Track::Type want = (st.type == "audio") ? Track::Type::Audio
                              : (st.type == "visual") ? Track::Type::Visual
                                                       : Track::Type::Midi;
-            if (tr.type != want)
-                rep.warnings.push_back("track '" + tr.name +
-                    "': type change not supported yet (keep UI)");
+            if (tr.type != want) {
+                bool hasContent = false;
+                for (int s = 0; s < project.numScenes(); ++s) {
+                    if (const auto* slot = project.getSlot(tiC, s);
+                        slot && !slot->empty()) { hasContent = true; break; }
+                }
+                hasContent |= !tr.arrangementClips.empty();
+                if (hasContent) {
+                    rep.warnings.push_back("track '" + tr.name +
+                        "': declared type ignored — content owns the type");
+                } else {
+                    tr.type = want;
+                    engine.sendCommand(audio::SetTrackTypeMsg{
+                        tiC, static_cast<uint8_t>(want)});
+                    rep.ops.push_back("track '" + tr.name + "' type → " + st.type);
+                    rep.changed = true;
+                }
+            }
         }
         // Mixer-ish fields — Project copy + command (same as UI paths).
         if (st.volume && std::abs(tr.volume - *st.volume) > 1e-5) {
