@@ -1654,3 +1654,59 @@ TEST_F(LiveCodeManagerTest, GhostNoteLedgerPendingToFired) {
     for (const auto& n : g)
         EXPECT_FALSE(n.fired);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Freeze take → sidecar track (improv capture)
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST_F(LiveCodeManagerTest, FreezeTakeBuildsNormalizedClip) {
+    std::unique_ptr<midi::MidiClip> taken;
+    std::string takenName;
+    int takenCount = -1;
+    m_mgr.setFreezeTakeHook([&](std::unique_ptr<midi::MidiClip> clip,
+                                const std::string& name, int count) {
+        taken = std::move(clip);
+        takenName = name;
+        takenCount = count;
+        return true;
+    });
+
+    // Script plays: an immediate note (transport stopped → beat 0),
+    // a scheduled note at beat 5.5 and one at beat 9 + dur 2.
+    writeScript(
+        "yawn.note(0, 60, 100, 0.5, 0, 0)\n"
+        "yawn.note(1, 62, 80, 1.0, 1, 5.5)\n"
+        "yawn.note(2, 64, 90, 2.0, 0, 9)\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    ASSERT_TRUE(m_mgr.freezeTake());
+
+    ASSERT_NE(taken, nullptr);
+    EXPECT_EQ(takenName, "Take 1");
+    EXPECT_EQ(takenCount, 3);
+    // Bar-round length: span = 9 + 2 - 0 = 11 → 12 beats (3 bars).
+    EXPECT_EQ(taken->lengthBeats(), 12.0);
+    ASSERT_EQ(taken->noteCount(), 3);
+    // Origin-anchored, sorted by insertion order preserved; check each.
+    EXPECT_EQ(taken->note(0).startBeat, 0.0);
+    EXPECT_EQ(taken->note(0).pitch, 60);
+    EXPECT_NEAR(taken->note(1).startBeat, 5.5, 1e-9);
+    EXPECT_EQ(taken->note(1).pitch, 62);
+    EXPECT_NEAR(taken->note(2).startBeat, 9.0, 1e-9);
+    EXPECT_EQ(taken->note(2).duration, 2.0);
+    // Velocity 7→16-bit conversion.
+    EXPECT_EQ(taken->note(1).velocity, midi::Convert::vel7to16(80));
+
+    // Capture cleared: a second freeze reports nothing.
+    EXPECT_FALSE(m_mgr.freezeTake());
+    // Counter advances.
+    m_mgr.captureLiveNote(0, 0.0, 0.25, 60, 100, 0);
+    ASSERT_TRUE(m_mgr.freezeTake());
+    EXPECT_EQ(takenName, "Take 2");
+}
+
+TEST_F(LiveCodeManagerTest, FreezeTakeEmptyAndNoHook) {
+    EXPECT_FALSE(m_mgr.freezeTake());          // nothing captured
+    writeScript("yawn.note(0, 60, 100, 0.25, 0, 2)\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    EXPECT_FALSE(m_mgr.freezeTake());          // no hook wired
+}

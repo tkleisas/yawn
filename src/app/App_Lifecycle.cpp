@@ -642,6 +642,25 @@ bool App::init() {
         markDirty();
         return true;
     });
+    // Freeze take: improv capture → new sidecar MIDI track (scene 1
+    // clip). Track creation mirrors addTrackOfType's MIDI path; no undo
+    // entry in v1 (the song layer + freeze ledger are the record).
+    m_liveCode.setFreezeTakeHook(
+        [this](std::unique_ptr<midi::MidiClip> clip, const std::string& name,
+               int noteCount) -> bool {
+            if (!clip) return false;
+            const int idx = m_project.numTracks();
+            if (idx >= kMaxTracks) return false;
+            m_project.addTrack(name, Track::Type::Midi);
+            m_audioEngine.sendCommand(audio::SetTrackTypeMsg{idx, 1});
+            m_project.setMidiClip(idx, 0, std::move(clip));
+            syncTracksToEngine();
+            updateDetailForSelectedTrack();
+            markDirty();
+            LOG_INFO("LiveCode", "Froze %d notes onto sidecar track '%s'",
+                     noteCount, name.c_str());
+            return true;
+        });
     // Content-driven track typing: flips push SetTrackTypeMsg at once so
     // the engine's record/monitor gates (audio capture, MIDI record arm)
     // follow the content the same frame (the full syncTracksToEngine flow

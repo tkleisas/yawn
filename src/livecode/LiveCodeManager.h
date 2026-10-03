@@ -100,9 +100,23 @@ public:
         bool fired = false;       // beat <= current transport beat
         double firedAtSec = 0.0;  // wall clock when it crossed the beat
     };
-    // Called from l_note (note-ons only) with the target beat (0 =
-    // immediate — resolved to the current transport beat on read).
+    // Called from l_note (note-ons only) with the target beat; dur < 0 =
+    // unknown-length (capture records the on event only).
     void trackGhostNote(int track, double atBeat, int pitch, int vel7);
+    // ── Freeze take → sidecar track (improv capture) ──
+    // Capture ledger: every yawn.note lands here (UI thread) with its
+    // absolute beat grid position. freezeTake() builds a normalized
+    // MIDI clip (origin-anchored, bar-round length) and hands it to the
+    // App-provided sidecar hook — new track, clip in scene 1, owned by
+    // the project, invisible to the song reconciler (undeclared).
+    void captureLiveNote(int track, double onBeat, double dur, int pitch,
+                         int vel7, int ch);
+    bool freezeTake();          // false when nothing captured / no hook
+    void setFreezeTakeHook(
+        std::function<bool(std::unique_ptr<midi::MidiClip>,
+                           const std::string& name, int noteCount)> fn) {
+        m_freezeTake = std::move(fn);
+    }
     // Snapshot for the UI: pending entries first, then the fired ring
     // (newest last). Crossed entries move pending→fired on read; stale
     // fired entries (>5 s) are pruned. Mutates internal rings.
@@ -314,6 +328,21 @@ private:
     std::function<bool(int, int, std::shared_ptr<audio::AudioBuffer>,
                        const std::string&)>
         m_setClipLive;
+    std::function<bool(std::unique_ptr<midi::MidiClip>,
+                       const std::string&, int)>
+        m_freezeTake;
+
+    // Freeze-take capture ledger (since the last freeze).
+    struct LiveNoteCapture {
+        int track = 0;
+        double onBeat = 0.0;
+        double dur = 0.0;
+        int pitch = 0;
+        int vel7 = 0;
+        int ch = 0;
+    };
+    std::deque<LiveNoteCapture> m_capture;
+    int m_takeCounter = 0;
 
     // Ghost-note ledger (improv visualization; UI thread only).
     struct GhostPending {

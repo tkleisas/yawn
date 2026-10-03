@@ -280,7 +280,7 @@ inline const std::vector<std::string> LiveCodeEditorKernel::kSymbols = {
     "yawn.buffer_fade", "yawn.buffer_mix", "yawn.buffer_reverse",
     "yawn.buffer_slice", "yawn.buffer_concat", "yawn.buffer_repeat",
     "yawn.buffer_mixdown", "yawn.fft", "yawn.ifft", "yawn.polyblep",
-    "yawn.set_clip",
+    "yawn.set_clip", "yawn.launch_scene", "yawn.launch_clip",
     "improv.every", "improv.after", "improv.at", "improv.on_bar",
     "improv.clear", "improv.clear_all", "improv.lookahead",
     "improv.late_policy",

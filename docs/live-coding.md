@@ -873,3 +873,16 @@ handle registry with `load_audio_file`/`yawn.render` results.
   `PatchScalarsKeepComments`, `PatchInsertsAndRemovesTracks`,
   `PatchClipLinesAndIdentity`, `PatchMultiLineClipGroupsLeftAlone`).
   Full suite green (1537 tests).
+
+**Freeze take → sidecar track (landed).** The improv layer only plays;
+nothing it fires touches the project (the script is the source of
+truth — auto-inserting notes into script-owned tracks would be erased
+by the next Run). Instead, a **Freeze** button (any `~` console tab)
+serializes the capture ledger — every `yawn.note` since the last
+freeze, with absolute beats, durations, channels, velocities — into a
+normalized `midi::MidiClip` (origin-anchored, bar-round length, 8192
+note cap, clamped inside the loop) and hands it to a sidecar hook:
+the app creates a *new* track (`Take N`, midi type), drops the clip in
+scene 1, and syncs. Undeclared tracks are invisible to the song
+reconciler, so the take survives re-runs, reloads and save/load.
+No undo entry in v1 (the ledger + song layer are the record).

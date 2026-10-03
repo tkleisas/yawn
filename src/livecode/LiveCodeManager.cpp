@@ -407,8 +407,7 @@ void LiveCodeManager::trackGhostNote(int track, double atBeat, int pitch,
 }
 
 std::vector<LiveCodeManager::GhostNote>
-LiveCodeManager::ghostNotes(double currentBeat, double nowSec) {
-    // Pending → fired as the transport crosses their target beats.
+LiveCodeManager::ghostNotes(double currentBeat, double nowSec) {    // Pending → fired as the transport crosses their target beats.
     for (auto it = m_ghostPending.begin(); it != m_ghostPending.end();) {
         if (it->beat > 0.0 && it->beat <= currentBeat + 1e-9) {
             if (m_ghostFired.size() >= 64) m_ghostFired.pop_front();
@@ -431,6 +430,73 @@ LiveCodeManager::ghostNotes(double currentBeat, double nowSec) {
     for (const auto& f : m_ghostFired)
         out.push_back(f);
     return out;
+}
+
+// ── Freeze take → sidecar track ─────────────────────────────────────────
+
+void LiveCodeManager::captureLiveNote(int track, double onBeat, double dur,
+                                      int pitch, int vel7, int ch) {
+    if (m_capture.size() >= 8192) m_capture.pop_front();
+    m_capture.push_back({track, onBeat, dur, pitch, vel7, ch});
+}
+
+bool LiveCodeManager::freezeTake() {
+    if (m_capture.empty()) {
+        pushConsole(1, "freeze: nothing captured since the last freeze");
+        showToast("Freeze: nothing captured", 2.0f, 1);
+        return false;
+    }
+    if (!m_freezeTake) {
+        pushConsole(1, "freeze: no sidecar hook (host not ready)");
+        return false;
+    }
+
+    // Full-set span; origin = earliest note-on.
+    double origin = 1e18, end = -1e18;
+    const int bpb = m_audioEngine
+        ? std::max(1, m_audioEngine->transport().beatsPerBar())
+        : 4;
+    for (const auto& c : m_capture) {
+        origin = std::min(origin, c.onBeat);
+        end = std::max(end, c.onBeat + std::max(c.dur, 0.25));
+    }
+    // Bar-round length: a take always loops on the bar grid.
+    const double span = std::max(end - origin, (double)bpb);
+    double length = (std::ceil(span / bpb - 1e-9)) * (double)bpb;
+    if (length < (double)bpb) length = (double)bpb;
+    if (length > 512.0) length = 512.0;   // runaway guard
+
+    auto clip = std::make_unique<midi::MidiClip>(length);
+    const int count = static_cast<int>(m_capture.size());
+    for (const auto& c : m_capture) {
+        // Off-grid captures can predate origin by float dust — clamp.
+        double start = c.onBeat - origin;
+        if (start < 0.0) start = 0.0;
+        midi::MidiNote n;
+        n.startBeat = start;
+        n.duration = c.dur > 0.0 ? c.dur : 0.25;
+        n.pitch = static_cast<uint8_t>(std::clamp(c.pitch, 0, 127));
+        n.channel = static_cast<uint8_t>(std::clamp(c.ch, 0, 15));
+        n.velocity = midi::Convert::vel7to16(
+            static_cast<uint8_t>(std::clamp(c.vel7, 0, 127)));
+        // Notes landing past the rounded length get clamped inside.
+        n.duration = std::min(n.duration, std::max(0.05, length - start));
+        clip->addNote(n);
+    }
+
+    const std::string name = "Take " + std::to_string(++m_takeCounter);
+    const bool ok = m_freezeTake(std::move(clip), name, count);
+    if (ok) {
+        m_capture.clear();
+        pushConsole(0, "freeze: " + std::to_string(count) +
+                       " notes → track '" + name + "' (sidecar)");
+        showToast("Froze " + std::to_string(count) +
+                  " notes onto '" + name + "'", 2.5f, 0);
+    } else {
+        pushConsole(1, "freeze: sidecar creation failed");
+        showToast("Freeze failed (see log)", 2.0f, 2);
+    }
+    return ok;
 }
 
 bool LiveCodeManager::applySong(const SongModel& song) {

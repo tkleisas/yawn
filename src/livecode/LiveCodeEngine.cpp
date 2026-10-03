@@ -604,6 +604,11 @@ static int l_note(lua_State* L) {
     // the command dispatch so failed sends can never be displayed as
     // pending (defense in depth for the earlier state-root bug class).
     mgr->trackGhostNote(track, atBeat, pitch, vel);
+    // Freeze-take capture: absolute-beat ledger of everything the layer
+    // plays (immediate notes anchor to the live transport position).
+    mgr->captureLiveNote(track,
+        atBeat > 0.0 ? atBeat : eng->transport().positionInBeats(),
+        dur, pitch, vel, ch);
 
     if (atBeat > 0.0) {
         // Scheduled: both messages beat-anchored in the audio queue.

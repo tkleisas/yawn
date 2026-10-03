@@ -47,12 +47,14 @@ std::vector<std::string> splitLines(const std::string& s) {
 }
 
 enum class Zone : uint8_t {
-    None, RunStop, Reload, Clear, Save, Eval, TabLog, TabCode, TabEdit, Scrollbar
+    None, RunStop, Reload, Clear, Save, Eval, Freeze, TabLog, TabCode,
+    TabEdit, Scrollbar
 };
 
 // Button slot layout per tab (right → left). Every tab has
-// Clear/Reload/Run-Stop; Edit adds Save+Eval, Code adds Sync.
-int slotCount(int tab) { return tab == 2 ? 5 : (tab == 1 ? 4 : 3); }
+// Clear/Reload/Run-Stop + Freeze; Edit adds Save+Eval, Code adds Sync.
+constexpr int kBaseSlots = 4;   // Clear, Reload, Run/Stop, Freeze
+int slotCount(int tab) { return kBaseSlots + (tab == 2 ? 2 : (tab == 1 ? 1 : 0)); }
 
 const char* slotLabel(int tab, int slot, bool active) {
     // slot 0 = rightmost...
@@ -62,6 +64,7 @@ const char* slotLabel(int tab, int slot, bool active) {
         case 2: return active ? "Stop" : "Run";
         case 3: return tab == 1 ? "Sync" : "Save";
         case 4: return "Eval";
+        case 5: return "Freeze";
         default: return "";
     }
 }
@@ -78,7 +81,8 @@ Zone zoneAt(const Rect& panel, float lx, float ly, int tab) {
                      : i == 1 ? Zone::Reload
                      : i == 2 ? Zone::RunStop
                      : i == 3 ? Zone::Save
-                              : Zone::Eval;
+                     : i == 4 ? Zone::Eval
+                              : Zone::Freeze;
             x -= kBtnW + 6.0f;
         }
     }
@@ -183,6 +187,9 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
         case Zone::Eval:
             if (m_tab == 2 && m_editor.onEvaluate)
                 m_editor.onEvaluate(m_editor.kernel().text());
+            break;
+        case Zone::Freeze:
+            m_mgr->freezeTake();
             break;
         case Zone::Reload:
             m_mgr->reload();
