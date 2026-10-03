@@ -57,14 +57,20 @@ constexpr int kBaseSlots = 4;   // Clear, Reload, Run/Stop, Freeze
 int slotCount(int tab) { return kBaseSlots + (tab == 2 ? 2 : (tab == 1 ? 1 : 0)); }
 
 const char* slotLabel(int tab, int slot, bool active) {
-    // slot 0 = rightmost...
+    // Fixed base: slot 0 rightmost = Clear, 1 = Reload, 2 = Run/Stop.
+    // Context slots grow leftward; the leftmost slot is always Freeze.
+    //   tab0 (4): [Freeze][Stop][Reload][Clear]
+    //   tab1 (5): [Sync][Freeze][Stop][Reload][Clear]
+    //   tab2 (6): [Eval][Save][Freeze][Stop][Reload][Clear]
+    const int n = slotCount(tab);
+    if (slot == n - 1) return "Freeze";
+    if (tab == 2 && slot == n - 2) return "Eval";
+    if (tab == 2 && slot == n - 3) return "Save";
+    if (tab == 1 && slot == n - 2) return "Sync";
     switch (slot) {
         case 0: return "Clear";
         case 1: return "Reload";
         case 2: return active ? "Stop" : "Run";
-        case 3: return tab == 1 ? "Sync" : "Save";
-        case 4: return "Eval";
-        case 5: return "Freeze";
         default: return "";
     }
 }
@@ -76,13 +82,15 @@ Zone zoneAt(const Rect& panel, float lx, float ly, int tab) {
         panel.w > kPad + static_cast<float>(n) * (kBtnW + 6.0f)) {
         float x = panel.w - kPad - kBtnW;
         for (int i = 0; i < n; ++i) {
-            if (lx >= x && lx < x + kBtnW)
+            if (lx >= x && lx < x + kBtnW) {
+                if (i == n - 1) return Zone::Freeze;
+                if (tab == 2 && i == n - 2) return Zone::Eval;
+                if (tab == 2 && i == n - 3) return Zone::Save;
+                if (tab == 1 && i == n - 2) return Zone::Save;   // Sync
                 return i == 0 ? Zone::Clear
                      : i == 1 ? Zone::Reload
-                     : i == 2 ? Zone::RunStop
-                     : i == 3 ? Zone::Save
-                     : i == 4 ? Zone::Eval
-                              : Zone::Freeze;
+                              : Zone::RunStop;
+            }
             x -= kBtnW + 6.0f;
         }
     }
