@@ -10,9 +10,11 @@
 #include "audio/AudioEngine.h"
 #include "app/Project.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 #ifndef YAWN_BUNDLED_LIVECODE_DIR
 #define YAWN_BUNDLED_LIVECODE_DIR "."
@@ -49,7 +51,11 @@ protected:
         m_engine = std::make_unique<audio::AudioEngine>();
         m_project.init(2, 2);
         m_tmp = std::filesystem::temp_directory_path() /
-                ("yawn_livecode_examples_" + std::to_string(::random()));
+                ("yawn_livecode_examples_" + std::to_string(
+                    std::hash<std::thread::id>{}(std::this_thread::get_id())
+                    ^ static_cast<size_t>(
+                        std::chrono::steady_clock::now()
+                            .time_since_epoch().count())));
         std::filesystem::create_directories(m_tmp);
         m_mgr.init(m_engine.get(), &m_project);
         m_mgr.setProjectPathProvider([this] { return m_tmp; });
