@@ -600,6 +600,11 @@ static int l_note(lua_State* L) {
     auto* eng = mgr->audioEngine();
     if (!eng) return 0;
 
+    // Ghost-note ledger (improv visualization): note-ons only, before
+    // the command dispatch so failed sends can never be displayed as
+    // pending (defense in depth for the earlier state-root bug class).
+    mgr->trackGhostNote(track, atBeat, pitch, vel);
+
     if (atBeat > 0.0) {
         // Scheduled: both messages beat-anchored in the audio queue.
         if (vel > 0) {

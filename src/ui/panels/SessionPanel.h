@@ -27,6 +27,7 @@ namespace yawn { namespace audio { class AudioEngine; struct Clip; } }
 #include <algorithm>
 #include <cstdlib>
 #include <string>
+#include <chrono>
 #include <functional>
 #include <unordered_set>
 
@@ -217,6 +218,22 @@ public:
     // none of which SessionPanel can reach on its own.
     using SceneLaunchCallback = std::function<void(int sceneIdx)>;
     void setOnSceneLaunch(SceneLaunchCallback cb) { m_onSceneLaunch = std::move(cb); }
+
+    // ─── Live-code ghost notes (improv visualization) ───────────────
+    // Provider snapshot type mirrors LiveCodeManager::GhostNote (kept
+    // structural here to avoid including livecode headers in the UI).
+    struct GhostNoteView {
+        int track = 0;
+        double beat = 0.0;
+        int pitch = 0;
+        int vel7 = 0;
+        bool fired = false;
+        double firedAtSec = 0.0;
+    };
+    // App-provided: returns current pending + recently-fired ghosts for
+    // the trace strips. Null provider → strips stay empty.
+    using GhostProvider = std::function<std::vector<GhostNoteView>()>;
+    void setGhostProvider(GhostProvider cb) { m_ghostProvider = std::move(cb); }
 
     // ─── Stop-all-clips (session corner button) ─────────────────────────
     // Fired by the Stop-All button in the top-left corner (scene-label
@@ -705,6 +722,8 @@ private:
     RenameCallback m_onTrackRenamed;
     VisualLaunchCallback m_onLaunchVisualClip;
     SceneLaunchCallback  m_onSceneLaunch;
+    GhostProvider        m_ghostProvider;
+    std::chrono::steady_clock m_ghostClock;
     VisualStopCallback   m_onStopVisualClip;
     VisualLiveStateCallback m_onQueryLiveState;
     StopAllClipsCallback m_onStopAllClips;

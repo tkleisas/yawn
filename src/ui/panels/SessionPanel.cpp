@@ -13,6 +13,10 @@
 #include "stb_image.h"
 #include <glad/gl.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+
 namespace yawn {
 namespace ui {
 namespace fw2 {
@@ -512,6 +516,57 @@ void SessionPanel::paintTrackHeaders(Renderer2D& r, TextMetrics& tm, float x, fl
 
     r.pushClip(x, y, w, h);
     const float labelSize = theme().metrics.fontSizeSmall;
+
+    // ── Live-code ghost strip (improv visualization) ──
+    // A 12px band at the bottom of each track header: this bar's
+    // improv fires as beat-positioned ticks. Outlines = upcoming,
+    // filled-fading = just fired (5 s window; alpha by age).
+    if (m_ghostProvider) {
+        const auto ghosts = m_ghostProvider();
+        if (!ghosts.empty()) {
+            const double pos = m_engine->transport().positionInBeats();
+            const int bpb = std::max(1, m_engine->transport().beatsPerBar());
+            const double barStart = std::floor(pos / bpb) * bpb;
+            const double nowSec =
+                std::chrono::duration<double>(
+                    m_ghostClock.now().time_since_epoch()).count();
+            const float stripH = 12.0f;
+            for (const auto& g : ghosts) {
+                if (g.track < 0 || g.track >= m_project->numTracks()) continue;
+                // Only ghosts within the current bar window render.
+                if (g.beat < barStart || g.beat >= barStart + bpb) {
+                    if (g.fired && g.beat < barStart && nowSec - g.firedAtSec < 4.0) {
+                        // fired just before the wrap — keep on view
+                    } else {
+                        continue;
+                    }
+                }
+                float tx = x + g.track * ::yawn::ui::Theme::kTrackWidth - m_scrollX;
+                float tw = ::yawn::ui::Theme::kTrackWidth;
+                if (tx + tw < x || tx > x + w) continue;
+                const float frac = static_cast<float>(
+                    (g.beat - barStart) / static_cast<double>(bpb));
+                const float gx = tx + 4.0f + frac * (tw - 8.0f) - 2.5f;
+                const float gy = y + h - stripH - 1.0f + (stripH - 5.0f) * 0.5f;
+                ::yawn::ui::Color col = ::yawn::ui::Theme::trackColors[
+                    m_project->track(g.track).colorIndex %
+                    ::yawn::ui::Theme::kNumTrackColors];
+                // Velocity → tick height (quiet ghosts are shorter);
+                // fired ghosts fade over ~3 s.
+                const float hh = 5.0f + 4.0f * (g.vel7 / 127.0f);
+                if (g.fired) {
+                    const double age = nowSec - g.firedAtSec;
+                    const uint8_t alpha = static_cast<uint8_t>(
+                        std::max(0.0, 1.0 - age / 3.0) * 255.0);
+                    col.a = alpha;
+                    r.drawRect(gx, gy, 5.0f, hh, col);
+                } else {
+                    col.a = 150;
+                    r.drawRectOutline(gx, gy, 5.0f, hh, col);
+                }
+            }
+        }
+    }
 
     for (int t = 0; t < m_project->numTracks(); ++t) {
         float tx = x + t * ::yawn::ui::Theme::kTrackWidth - m_scrollX;

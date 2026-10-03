@@ -241,6 +241,19 @@ bool App::init() {
     //   * Transport-record state only flips ON when at least one
     //     track is armed, so the all-launch case (no armed tracks)
     //     doesn't unexpectedly arm transport recording.
+    // Live-code ghost-note provider: the session grid's per-track trace
+    // strips read the manager's improv ledger (UI thread; the manager
+    // handles pending→fired transitions + pruning).
+    m_sessionPanel->setGhostProvider([this]() {
+        std::vector<ui::fw2::SessionPanel::GhostNoteView> out;
+        const double beat = m_audioEngine.transport().positionInBeats();
+        const double now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        for (const auto& g : m_liveCode.ghostNotes(beat, now))
+            out.push_back({g.track, g.beat, g.pitch, g.vel7,
+                           g.fired, g.firedAtSec});
+        return out;
+    });
     m_sessionPanel->setOnSceneLaunch([this](int sceneIdx) {
         if (sceneIdx < 0 || sceneIdx >= m_project.numScenes()) return;
         bool anyArmed = false;

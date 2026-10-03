@@ -390,6 +390,49 @@ void LiveCodeManager::flushPendingDeliveries() {
     m_pendingSetClips.clear();
 }
 
+// ── Ghost-note ledger (improv visualization) ────────────────────────────
+
+void LiveCodeManager::trackGhostNote(int track, double atBeat, int pitch,
+                                     int vel7) {
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (atBeat <= 0.0) {
+        // Immediate note — already audible: straight into the fired ring.
+        if (m_ghostFired.size() >= 64) m_ghostFired.pop_front();
+        m_ghostFired.push_back(GhostNote{track, 0.0, pitch, vel7, true, now});
+        return;
+    }
+    if (m_ghostPending.size() >= 512) m_ghostPending.pop_front();
+    m_ghostPending.push_back({track, atBeat, pitch, vel7});
+}
+
+std::vector<LiveCodeManager::GhostNote>
+LiveCodeManager::ghostNotes(double currentBeat, double nowSec) {
+    // Pending → fired as the transport crosses their target beats.
+    for (auto it = m_ghostPending.begin(); it != m_ghostPending.end();) {
+        if (it->beat > 0.0 && it->beat <= currentBeat + 1e-9) {
+            if (m_ghostFired.size() >= 64) m_ghostFired.pop_front();
+            m_ghostFired.push_back(GhostNote{it->track, it->beat,
+                                             it->pitch, it->vel7,
+                                             true, nowSec});
+            it = m_ghostPending.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Fired ring: drop everything older than the 5 s fade window.
+    while (!m_ghostFired.empty() && nowSec - m_ghostFired.front().firedAtSec > 5.0)
+        m_ghostFired.pop_front();
+
+    std::vector<GhostNote> out;
+    out.reserve(m_ghostPending.size() + m_ghostFired.size());
+    for (const auto& p : m_ghostPending)
+        out.push_back(GhostNote{p.track, p.beat, p.pitch, p.vel7, false, 0.0});
+    for (const auto& f : m_ghostFired)
+        out.push_back(f);
+    return out;
+}
+
 bool LiveCodeManager::applySong(const SongModel& song) {
     SongApplyContext ctx;
     ctx.project = m_project;

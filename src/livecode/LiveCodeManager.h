@@ -87,6 +87,26 @@ public:
     void reload();
     bool isRunning() const { return m_lua && m_lua->valid(); }
     bool isActive() const { return m_hasActiveGen; }
+    // ── Ghost-note ledger (improv visualization, UI thread only) ──
+    // Every yawn.note passes here at enqueue time — the manager keeps a
+    // rolling ledger of pending (future at-beat) and recently-fired
+    // notes so the session grid can render upcoming fires as outlines
+    // and fresh ones fading out. No audio-thread reads involved.
+    struct GhostNote {
+        int track = 0;
+        double beat = 0.0;        // scheduled target beat (0 = fired now)
+        int pitch = 0;
+        int vel7 = 0;
+        bool fired = false;       // beat <= current transport beat
+        double firedAtSec = 0.0;  // wall clock when it crossed the beat
+    };
+    // Called from l_note (note-ons only) with the target beat (0 =
+    // immediate — resolved to the current transport beat on read).
+    void trackGhostNote(int track, double atBeat, int pitch, int vel7);
+    // Snapshot for the UI: pending entries first, then the fired ring
+    // (newest last). Crossed entries move pending→fired on read; stale
+    // fired entries (>5 s) are pruned. Mutates internal rings.
+    std::vector<GhostNote> ghostNotes(double currentBeat, double nowSec);
 
     // Per-frame tick — fires due scheduler entries. Called from App::update().
     void update();
@@ -294,6 +314,16 @@ private:
     std::function<bool(int, int, std::shared_ptr<audio::AudioBuffer>,
                        const std::string&)>
         m_setClipLive;
+
+    // Ghost-note ledger (improv visualization; UI thread only).
+    struct GhostPending {
+        int track = 0;
+        double beat = 0.0;
+        int pitch = 0;
+        int vel7 = 0;
+    };
+    std::deque<GhostPending> m_ghostPending;   // upcoming fires (beat > now)
+    std::deque<GhostNote>   m_ghostFired;      // recent fires (cap 64, pruned)
     // Launch options for the pending request: quantize mode ("none" |
     // "beat" | "bar", empty = resolve at fire time — none when stopped,
     // bar when playing) + whether to seek to beat 0 first when stopped.

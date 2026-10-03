@@ -1614,3 +1614,43 @@ song = {
     EXPECT_NE(rep.patched.find("{2, 1, 67, 1}"), std::string::npos);
     EXPECT_NE(rep.patched.find("beats = 4"), std::string::npos);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Ghost-note ledger (improv visualization — UI thread only)
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST_F(LiveCodeManagerTest, GhostNoteLedgerPendingToFired) {
+    writeScript(
+        "yawn.note(0, 60, 100, 0, 0, 10)   -- beat 10: pending far\n"
+        "yawn.note(1, 62, 110, 0, 0, 4)    -- beat 4: fires when crossed\n"
+        "yawn.note(2, 64, 90, 0, 0, 0);    -- immediate → fired now\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+
+    const double t0 = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    // Snapshot at beat 3: beats 4/10 pending; the immediate note fired.
+    auto g = m_mgr.ghostNotes(3.0, t0);
+    int pending = 0, fired = 0;
+    int firedTrack = -1;
+    for (const auto& n : g) {
+        if (n.fired) { ++fired; firedTrack = n.track; }
+        else         ++pending;
+    }
+    // beat 4 > 3.0 → pending; beat 10 pending; the immediate note's
+    // entry (beat 0) has crossed → fired.
+    EXPECT_EQ(pending, 2);
+    EXPECT_EQ(fired, 1);
+    EXPECT_EQ(firedTrack, 2);
+
+    // Cross beat 4: it moves to fired; the beat-10 one stays pending.
+    g = m_mgr.ghostNotes(5.0, t0 + 2.0);
+    pending = 0;
+    for (const auto& n : g)
+        if (!n.fired) ++pending;
+    EXPECT_EQ(pending, 1);
+
+    // Fired ring prunes by age (>5 s).
+    g = m_mgr.ghostNotes(5.0, t0 + 8.0);
+    for (const auto& n : g)
+        EXPECT_FALSE(n.fired);
+}
