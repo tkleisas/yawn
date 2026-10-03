@@ -423,6 +423,47 @@ TEST_F(LiveCodeManagerTest, StateArrayTableSurvivesReload) {
     lua_pop(L, 3);
 }
 
+// Regression (audit report): top-level integer-keyed yawn.state entries
+// used to come back as STRING keys ("42") after migration — #yawn.state
+// returned 0 and ipairs broke. injectState now decides on intKey >= 0
+// alone and restores with lua_seti.
+TEST_F(LiveCodeManagerTest, StateTopLevelIntKeysSurviveReload) {
+    const std::string path = m_mgr.defaultScriptPath();
+    writeScript(
+        "yawn.state = { [1] = 10, [2] = 20, [3] = 30, label = \"L\" }\n");
+    ASSERT_TRUE(m_mgr.runScript(path));
+    m_mgr.reload();
+    ASSERT_TRUE(m_mgr.luaEngine());
+
+    lua_State* L = m_mgr.luaEngine()->state();
+    lua_getglobal(L, "yawn");
+    lua_getfield(L, -1, "state");
+    ASSERT_TRUE(lua_istable(L, -1));   // migrated table exists
+    EXPECT_EQ(lua_rawlen(L, -1), 3);   // sequence border intact: {10,20,30}
+
+    // Values live under TRUE integer keys (t[1/2/3]), not strings.
+    for (int i = 1; i <= 3; ++i) {
+        lua_geti(L, -1, i);
+        ASSERT_TRUE(lua_isnumber(L, -1)) << "integer key " << i
+                                          << " did not survive";
+        EXPECT_EQ(lua_tonumber(L, -1), 10.0 * i);
+        lua_pop(L, 1);
+    }
+    lua_getfield(L, -1, "label");
+    ASSERT_TRUE(lua_isstring(L, -1));  // string key untouched by the fix
+    EXPECT_STREQ(lua_tostring(L, -1), "L");
+    lua_pop(L, 1);
+
+    // ipairs walks the sequence after migration (3 iterations → 30).
+    EXPECT_EQ(luaL_dostring(m_mgr.luaEngine()->state(),
+        "local n = 0; local last = nil\n"
+        "for _, v in ipairs(yawn.state) do n = n + 1; last = v end\n"
+        "if last ~= 30 then error('ipairs walked ' .. tostring(n) ..\n"
+        "    ' entries, last=' .. tostring(last)) end\n"),
+        LUA_OK) << "ipairs broke after migration";
+    lua_pop(L, 2);   // pop state + yawn
+}
+
 TEST_F(LiveCodeManagerTest, NoteDispatchesNoteOnAndScheduledNoteOff) {
     std::vector<audio::AudioCommand> sent;
     m_mgr.setCommandSender([&sent](const audio::AudioCommand& cmd) {

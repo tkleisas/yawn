@@ -910,7 +910,11 @@ void LiveCodeEngine::injectState(const StateMap& harvested) {
     lua_newtable(m_L);
     int stateIdx = lua_gettop(m_L);
     for (const auto& [key, v] : harvested) {
-        const bool intKey = (v.intKey >= 0 && key.empty());
+        // Top-level integer keys were normalized to stringified keys in
+        // the map ("42" + intKey=42); the intKey field is the authority —
+        // key.empty() can never be true here. A literal string key "42"
+        // harvests with intKey == -1 and still restores as a string.
+        const bool intKey = (v.intKey >= 0);
         if (v.kind == StateVal::Kind::Table) {
             lua_newtable(m_L);
             int subIdx = lua_gettop(m_L);
