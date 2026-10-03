@@ -6,6 +6,8 @@
 --   · `improv` — the ephemeral performance layer (schedule tickets, fenced
 --                by generation — a failed re-run keeps the old layer live)
 --
+-- The script launches scene 1 after the song apply, so RUN = music.
+--
 -- This is the template shape the live-coding stage is built around.
 -- ─────────────────────────────────────────────────────────────────────
 
@@ -95,6 +97,9 @@ end)
 
 -- Keys: chords stab every other bar, lush voicing, voiced from state.
 yawn.state = yawn.state or { voicing = 0 }
+
+-- Self-start: launch scene 1 (deferred past the song apply).
+yawn.launch_scene(1)
 improv.every(2, function(beat)
     local v = yawn.state.voicing or 0
     local base = 60 + (v * 5)

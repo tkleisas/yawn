@@ -13,6 +13,8 @@
 --   4. Ctrl+Shift+L to hard-reload; yawn.state migrates across reloads.
 -- ─────────────────────────────────────────────────────────────────────
 
+yawn.set_playing(true)          -- start the transport (the improv layer
+                                -- is transport-anchored: no play, no notes)
 improv.lookahead(0.15)          -- schedule 150ms ahead of fire time
 improv.late_policy("drop")      -- a late iteration is skipped, not played
 

@@ -143,4 +143,5 @@ song = {
     },
 }
 
-yawn.toast("Declarative song applied — scene 1 launch, then scene 2 for the edit.")
+yawn.toast("Declarative song applied — scene 1 launches, scene 2 is the edit.")
+yawn.launch_scene(1)

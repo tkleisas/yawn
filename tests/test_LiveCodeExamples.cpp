@@ -125,6 +125,28 @@ TEST_F(LiveCodeExampleTest, DeclarativeSongIdempotent) {
         GTEST_MESSAGE_(w.c_str(), ::testing::TestPartResult::kNonFatalFailure);
 }
 
+// Self-start: yawn.launch_scene(1) in the script body defers past the
+// song apply, then launches the session — the transport is playing
+// headlessly after the run, with track 0's default scene set.
+TEST_F(LiveCodeExampleTest, DeclarativeSongSelfStarts) {
+    const auto files = demoFiles();
+    ASSERT_TRUE(runDemo(files[0]));
+    m_engine->pumpInputForTest(nullptr, 512);
+    EXPECT_TRUE(m_engine->transport().isPlaying());
+    EXPECT_EQ(m_project.track(0).defaultScene, 0);
+    EXPECT_EQ(m_project.track(2).defaultScene, 0);   // created track too
+}
+
+// yawn.launch_clip: immediate single-slot launch from improv surface.
+TEST_F(LiveCodeExampleTest, LaunchClipApi) {
+    const auto files = demoFiles();
+    ASSERT_TRUE(runDemo(files[0]));
+    m_mgr.runScriptSource("yawn.launch_clip(0, 2)");   // scene 2 (1-based)
+    m_engine->pumpInputForTest(nullptr, 512);
+    EXPECT_EQ(m_project.track(0).defaultScene, 0);     // unchanged (already 1)
+    EXPECT_TRUE(m_project.track(0).defaultScene == 0);
+}
+
 // 02 — improv only: registers scheduled entries without errors.
 TEST_F(LiveCodeExampleTest, ImprovPerformanceRegisters) {
     const auto files = demoFiles();

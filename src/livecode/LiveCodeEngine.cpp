@@ -463,6 +463,38 @@ static int l_render(lua_State* L) {
     return 1;
 }
 
+// Defer the launch to after the song apply (the script body runs before
+// the harvest, so an immediate launch would target the stale state).
+static int l_launch_scene(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    mgr->requestLaunchScene(
+        static_cast<int>(luaL_checkinteger(L, 1)));
+    return 0;
+}
+
+// Immediate single-slot launch (token engine-state; used once the song
+// state is stable — e.g. from improv callbacks).
+static int l_launch_clip(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr || !mgr->project()) return 0;
+    const int track = static_cast<int>(luaL_checkinteger(L, 1));
+    const int scene1 = static_cast<int>(luaL_checkinteger(L, 2));
+    const int scene = scene1 - 1;
+    auto* slot = mgr->project()->getSlot(track, scene);
+    if (!slot) return 0;
+    if (slot->midiClip) {
+        mgr->pushCommand(audio::LaunchMidiClipMsg{
+            track, scene, slot->midiClip.get(), slot->launchQuantize,
+            &slot->clipAutomation->lanes, slot->followAction});
+    } else if (slot->audioClip) {
+        mgr->pushCommand(audio::LaunchClipMsg{
+            track, scene, slot->audioClip.get(), slot->launchQuantize,
+            &slot->clipAutomation->lanes, slot->followAction});
+    }
+    return 0;
+}
+
 static int l_cancel_render(lua_State* L) {
     auto* mgr = getManager(L);
     if (!mgr) return 0;
@@ -684,6 +716,8 @@ void LiveCodeEngine::registerAPI() {
         {"load_sample",  l_load_sample},
         {"render",       l_render},
         {"cancel_render",l_cancel_render},
+        {"launch_scene", l_launch_scene},
+        {"launch_clip",  l_launch_clip},
         {"is_playing",   l_is_playing},
         {"set_playing",  l_set_playing},
         {"get_bpm",      l_get_bpm},

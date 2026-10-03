@@ -279,6 +279,41 @@ void LiveCodeManager::dispatchRef(uint64_t id, int ref, double arg) {
 
 // ── Declarative song layer (phase 2) ─────────────────────────────────────
 
+void LiveCodeManager::requestLaunchScene(int scene1) {
+    m_pendingLaunchScene = scene1;
+}
+
+void LiveCodeManager::launchSceneNow(int scene1) {
+    if (!m_project || scene1 < 1 || scene1 > m_project->numScenes()) return;
+    const int scene = scene1 - 1;
+    for (int t = 0; t < m_project->numTracks(); ++t) {
+        auto* slot = m_project->getSlot(t, scene);
+        if (slot && slot->audioClip) {
+            pushCommand(audio::LaunchClipMsg{
+                t, scene, slot->audioClip.get(), slot->launchQuantize,
+                &slot->clipAutomation->lanes, slot->followAction});
+            m_project->track(t).defaultScene = scene;
+        } else if (slot && slot->midiClip) {
+            pushCommand(audio::LaunchMidiClipMsg{
+                t, scene, slot->midiClip.get(), slot->launchQuantize,
+                &slot->clipAutomation->lanes, slot->followAction});
+            m_project->track(t).defaultScene = scene;
+        } else if (slot && slot->visualClip) {
+            if (m_launchVisual)
+                m_launchVisual(t, scene, slot->visualClip->firstShaderPath());
+            m_project->track(t).defaultScene = scene;
+        } else {
+            // Empty slots stop whatever plays on that track (audio+MIDI).
+            if (m_project->track(t).defaultScene >= 0) {
+                pushCommand(audio::StopClipMsg{t});
+                pushCommand(audio::StopMidiClipMsg{t});
+            }
+            m_project->track(t).defaultScene = -1;
+        }
+    }
+    pushConsole(0, "song: launching scene " + std::to_string(scene1));
+}
+
 bool LiveCodeManager::applySong(const SongModel& song) {
     SongApplyContext ctx;
     ctx.project = m_project;
@@ -493,6 +528,7 @@ bool LiveCodeManager::finishGenerationRun(uint32_t oldGen, uint32_t newGen, bool
         // Drop the new generation's entries; the previous generation keeps
         // performing (§1 G6).
         m_scheduler.clearGeneration(newGen);
+        m_pendingLaunchScene = -1;   // never launch a failed run
         pushConsole(1, "live code: run failed — previous generation continues");
         showToast("Live code error (see log)", 2.5f, 2);
         return false;
@@ -516,6 +552,14 @@ bool LiveCodeManager::finishGenerationRun(uint32_t oldGen, uint32_t newGen, bool
             pushConsole(2, "live code: song parse error — " + perr);
             showToast("Live code: song parse error (see log)", 2.5f, 2);
         }
+    }
+
+    // Deferred scene launch (yawn.launch_scene from the script body) —
+    // runs after the song apply so the newest clips are what launches.
+    if (m_pendingLaunchScene > 0) {
+        const int scene1 = m_pendingLaunchScene;
+        m_pendingLaunchScene = -1;
+        launchSceneNow(scene1);
     }
 
     // Swap out the previous generation at the next bar boundary (§3.3) —

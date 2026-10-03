@@ -155,6 +155,18 @@ public:
     void setLookahead(double seconds);
     double lookaheadSeconds() const { return m_lookaheadSec; }
 
+    // ── Scene launch (yawn.launch_scene) ──
+    // Called from the script body — defers to AFTER the declarative song
+    // apply so the freshly applied clips are the ones that launch.
+    void requestLaunchScene(int scene1);
+    // Direct launch mirror of SessionPanel::launchScene (audio + MIDI
+    // clips quantized, empty slots stop). Visual slots are reported
+    // through the App-provided hook (null → skipped with a warning).
+    void setLaunchVisualHook(std::function<void(int, int, const std::string&)> fn) {
+        m_launchVisual = std::move(fn);
+    }
+    void launchSceneNow(int scene1);
+
     // ── Declarative song layer (phase 2, §5) ──
     // App-provided hooks for the edit paths that need App coordination.
     void setEngineSyncHook(std::function<void()> fn) { m_engineSync = std::move(fn); }
@@ -232,7 +244,9 @@ private:
     std::function<double()> m_wallSecondsOverride;
 
     // Song layer hooks + ownership (phase 2).
-    std::function<void()> m_engineSync;
+        std::function<void()> m_engineSync;
+    std::function<void(int, int, const std::string&)> m_launchVisual;
+    int m_pendingLaunchScene = -1;   // deferred yawn.launch_scene (1-based)
     std::function<void()> m_markDirty;
     std::function<midi::MidiClip*(int, int, std::unique_ptr<midi::MidiClip>)>
         m_setMidiClipLive;
