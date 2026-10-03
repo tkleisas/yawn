@@ -733,6 +733,9 @@ bool LiveCodeEngine::init(LiveCodeManager* mgr) {
     registerAPI();
 
     // Host-managed persistent state table (migrated across recreations).
+    // NOTE: pre-seeded empty = truthy — scripts wanting defaults must use
+    // FIELD-level fallbacks (yawn.state.x = yawn.state.x or v); the
+    // table-level idiom `yawn.state = yawn.state or {...}` never fires.
     lua_getglobal(m_L, "yawn");
     lua_newtable(m_L);
     lua_setfield(m_L, -2, "state");

@@ -277,9 +277,12 @@ TEST_F(LiveCodeExampleTest, SampleSynthLabForge) {
                   (int)(m_engine->sampleRate() * 0.6 * 4));
     }
     EXPECT_EQ(delivered, 2);
-    // Self-start still fired (transport reached, even pre-clip pass).
+    // Self-start still fired, and dispatch-time callback errors must
+    // be absent after the improv layer has actually fired entries.
     m_engine->pumpInputForTest(nullptr, 512);
     EXPECT_TRUE(m_engine->transport().isPlaying());
+    for (const auto& e : consoleOfSeverity(2))
+        GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
     for (const auto& e : consoleOfSeverity(2))
         GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
 }

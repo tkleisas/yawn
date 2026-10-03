@@ -178,7 +178,9 @@ yawn.log("forged 4 samples — sr " .. sr .. ", patterns assembled")
 improv.lookahead(0.12)
 improv.late_policy("drop")
 
-yawn.state = yawn.state or { root = 36 }
+-- Field-level fallback: yawn.state is pre-seeded as an empty (truthy)
+-- table by the engine, so table-level `or {...}` fallbacks never fire.
+yawn.state.root = yawn.state.root or 36
 local root = yawn.state.root
 
 -- All four forged clips play from the grid on scene launch; the improv
