@@ -249,6 +249,14 @@ TEST(LiveCodeSchedulerTest, RemoveListenerSeesEveryRemoval) {
 // LiveCodeManager (sandbox, budget, state migration, dispatch)
 // ─────────────────────────────────────────────────────────────────────────
 
+// Lua string literal for paths: long-bracket form so Windows backslash
+// sequences (C:\Users\...) aren't parsed as escapes.
+static std::string luaPathLiteral(const std::string& p) {
+    std::string reps = "[";
+    while (p.find("[" + reps) != std::string::npos) reps += "=";
+    return reps + "[" + p + "]" + (reps.size() > 1 ? reps.substr(1) : std::string()) + "]";
+}
+
 class LiveCodeManagerTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -1205,9 +1213,9 @@ TEST_F(LiveCodeManagerTest, BufferHandleRoundTripViaFile) {
     ASSERT_TRUE(util::saveAudioBuffer(inPath, src, 48000));
 
     writeScript(
-        "local h = yawn.load_audio_file('" + inPath + "')\n"
+        "local h = yawn.load_audio_file(" + luaPathLiteral(inPath) + ")\n"
         "assert(h > 0, 'handle')\n"
-        "assert(yawn.save_audio_buffer(h, '" + outPath + "', "
+        "assert(yawn.save_audio_buffer(h, " + luaPathLiteral(outPath) + ", "
         "{ format = 'wav', depth = 'f32' }), 'save')\n");
     ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
 
@@ -1230,7 +1238,7 @@ TEST_F(LiveCodeManagerTest, LoadSampleIntoSampler) {
     ASSERT_TRUE(util::saveAudioBuffer(wavPath, buf, 48000));
 
     writeScript(
-        "local h = yawn.load_audio_file('" + wavPath + "')\n"
+        "local h = yawn.load_audio_file(" + luaPathLiteral(wavPath) + ")\n"
         "assert(h > 0, 'handle')\n"
         "yawn.load_sample(0, h, 'sampler')\n");
     auto* pm = m_mgr.prerenderManager();
