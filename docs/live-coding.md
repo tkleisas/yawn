@@ -767,6 +767,30 @@ sessions reproducible):
   round-trip, sampler delivery, script scan, autorun-on-open). Full
   suite green (1523 tests).
 
+**Phase 4.5 — landed.** Programmatic sample creation (§4.5):
+`src/livecode/LiveCodeBuffers.{h,cpp}` — buffers are forgeable,
+inspectable and transformable from the script and share the manager's
+handle registry with `load_audio_file`/`yawn.render` results.
+
+- **`yawn.new_buffer{...}`** — `{frames=, channels=, fill=fn(frame, ch,
+  frames, channels)}` or `{data = { {ch1...}, ... }}` (zero-filled
+  gaps). Bounds: frames ≤ 6M, channels ≤ 16. Returns a handle usable
+  by `load_sample` / `render` delivery / `save_audio_buffer`.
+- **Inspection** — `yawn.buffer_data(h)` (full sample round-trip as
+  Lua tables + `frames/channels/sr`), `yawn.buffer_info(h)`,
+  `yawn.free_buffer(h)`.
+- **In-place vector ops** — `buffer_gain`, `buffer_normalize`,
+  `buffer_fade(in,out)`, `buffer_mix(dst, src, level)`,
+  `buffer_reverse`; new-handle shapes: `buffer_slice/concat/repeat/
+  mixdown`. `load_sample` now returns true/false.
+- **Math** — `yawn.fft(t)` / `yawn.ifft(t)` (iterative radix-2,
+  power-of-two length, interleaved re/im tables) and
+  `yawn.polyblep(phase, dt)` (polyBLEP-2). `math.sin/cos/exp/...`
+  are available — the sandbox keeps `math/string/table`.
+- Tests: +10 (`LiveCodeBufTest`): fill/data/round-trip, vector ops,
+  structural ops, FFT bin, FFT→IFFT identity, pcall error path,
+  polyBLEP edge values, forged-buffer→sampler delivery.
+
 **Phase 6 — landed.** Code lens + console (§5.4 stage 1):
 
 - **`generateSongSource(project, engine)`** (`LiveCodeSong.cpp`) —

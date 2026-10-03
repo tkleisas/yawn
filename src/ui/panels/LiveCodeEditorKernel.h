@@ -239,7 +239,7 @@ public:
             if (ls.compare(0, lp.size(), lp) == 0)
                 m_items.push_back(sym);
         }
-        if (m_items.empty() || m_items.size() > 32) {
+        if (m_items.empty() || m_items.size() > 64) {
             m_completionOpen = false;   // too broad → noise
             m_items.clear();
             return;
@@ -275,6 +275,11 @@ inline const std::vector<std::string> LiveCodeEditorKernel::kSymbols = {
     "yawn.load_sample", "yawn.cancel_render", "yawn.is_playing",
     "yawn.set_playing", "yawn.get_bpm", "yawn.set_bpm", "yawn.get_beat",
     "yawn.get_bar", "yawn.state",
+    "yawn.new_buffer", "yawn.buffer_data", "yawn.buffer_info",
+    "yawn.free_buffer", "yawn.buffer_gain", "yawn.buffer_normalize",
+    "yawn.buffer_fade", "yawn.buffer_mix", "yawn.buffer_reverse",
+    "yawn.buffer_slice", "yawn.buffer_concat", "yawn.buffer_repeat",
+    "yawn.buffer_mixdown", "yawn.fft", "yawn.ifft", "yawn.polyblep",
     "improv.every", "improv.after", "improv.at", "improv.on_bar",
     "improv.clear", "improv.clear_all", "improv.lookahead",
     "improv.late_policy",

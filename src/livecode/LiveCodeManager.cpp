@@ -505,6 +505,25 @@ bool LiveCodeManager::loadSampleIntoTrack(int track, uint64_t handle,
     return ok;
 }
 
+// ── Programmatic buffer handles (LiveCodeBuffers) ────────────────────────
+
+uint64_t LiveCodeManager::newBufferHandle(std::shared_ptr<audio::AudioBuffer> buf) {
+    if (!buf) return 0;
+    const uint64_t id = m_nextBufferHandle++;
+    m_bufferHandles[id] = std::move(buf);
+    return id;
+}
+
+std::shared_ptr<audio::AudioBuffer>
+LiveCodeManager::bufferHandle(uint64_t id) const {
+    auto it = m_bufferHandles.find(id);
+    return it == m_bufferHandles.end() ? nullptr : it->second;
+}
+
+bool LiveCodeManager::freeBufferHandle(uint64_t id) {
+    return m_bufferHandles.erase(id) > 0;
+}
+
 // ── RUN / STOP / RELOAD / UPDATE ─────────────────────────────────────────
 
 bool LiveCodeManager::runScript(const std::string& explicitPath) {

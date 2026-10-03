@@ -212,6 +212,11 @@ public:
                                const std::string& bitDepth);
     bool loadSampleIntoTrack(int track, uint64_t handle,
                              const std::string& kind);
+    // Programmatic synthesis (LiveCodeBuffers): create / inspect / free.
+    uint64_t newBufferHandle(std::shared_ptr<audio::AudioBuffer> buf);
+    std::shared_ptr<audio::AudioBuffer>
+        bufferHandle(uint64_t id) const;       // null when unknown
+    bool freeBufferHandle(uint64_t id);
 
 private:
     // Shared tail of runScript/runScriptSource: register the new
@@ -265,7 +270,6 @@ private:
     // Buffer handles (phase 4): id → loaded audio material.
     uint64_t m_nextBufferHandle = 1;
     std::map<uint64_t, std::shared_ptr<audio::AudioBuffer>> m_bufferHandles;
-
     std::deque<ConsoleLine> m_console;
     bool m_providersSet = false;
     double m_lookaheadSec = 0.10;   // schedule-ahead horizon (§3.2)

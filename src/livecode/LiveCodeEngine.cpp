@@ -1,4 +1,5 @@
 #include "livecode/LiveCodeEngine.h"
+#include "livecode/LiveCodeBuffers.h"
 #include "livecode/LiveCodeManager.h"
 #include "audio/AudioEngine.h"
 #include "util/Factory.h"
@@ -278,12 +279,13 @@ static int l_save_audio_buffer(lua_State* L) {
 // yawn.load_sample(track, handle, [kind = "sampler"|"granular"|"drumslop"|"vocoder"])
 static int l_load_sample(lua_State* L) {
     auto* mgr = getManager(L);
-    if (!mgr) return 0;
+    if (!mgr) { lua_pushboolean(L, 0); return 1; }
     const int track = static_cast<int>(luaL_checkinteger(L, 1));
     uint64_t handle = static_cast<uint64_t>(luaL_checkinteger(L, 2));
     const char* kind = luaL_optstring(L, 3, "");
-    mgr->loadSampleIntoTrack(track, handle, kind ? kind : "");
-    return 0;
+    lua_pushboolean(L, mgr->loadSampleIntoTrack(track, handle,
+                                                kind ? kind : "") ? 1 : 0);
+    return 1;
 }
 
 // ── yawn.render — offline prerender (phase 3, §4) ────────────────────────
@@ -777,6 +779,10 @@ void LiveCodeEngine::registerAPI() {
     };
     luaL_setfuncs(m_L, improvFuncs, 0);
     lua_setglobal(m_L, "improv");
+
+    // Buffer/synthesis extension (LiveCodeBuffers): new_buffer, vector
+    // ops, FFT/IFFT, polyblep — appended into the yawn table.
+    registerBufferAPI(m_L);
 }
 
 bool LiveCodeEngine::protectedCall(int nargs, int budgetInstructions) {

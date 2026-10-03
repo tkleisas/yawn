@@ -457,6 +457,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeSong.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeBuffers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/PrerenderManager.cpp
     # Audio subsystem (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TimeStretcher.cpp
