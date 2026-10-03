@@ -37,6 +37,12 @@ if(YAWN_HAS_MODEL3D)
     )
 endif()
 
+# Live-coding proof-of-concept scripts (assets/examples/livecode) — the
+# example tests load and execute the real files.
+target_compile_definitions(yawn_tests PRIVATE
+    YAWN_BUNDLED_LIVECODE_DIR="${CMAKE_SOURCE_DIR}/assets/examples/livecode"
+)
+
 target_link_libraries(yawn_tests PRIVATE
     yawn_core
     GTest::gtest
