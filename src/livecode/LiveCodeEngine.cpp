@@ -14,7 +14,12 @@ namespace livecode {
 // Budget defaults (§3.1). Whole-file runs get a generous budget; scheduled
 // callback dispatches get a tight one so a runaway callback can't stall the
 // UI loop for more than a couple of milliseconds.
-static constexpr int kBudgetRun      = 50'000'000;
+// Whole-file runs get a generous budget: sample-forging fill callbacks
+// (yawn.new_buffer) execute hundreds of thousands of Lua calls per
+// buffer — the demo pad alone is ~150M instructions. Dispatches (§3)
+// stay tight so a runaway callback can't stall the UI for more than a
+// couple of milliseconds.
+static constexpr int kBudgetRun      = 400'000'000;
 static constexpr int kBudgetDispatch = 250'000;
 
 static const char* kRegistryKey = "yawn_livecode_manager";
@@ -283,9 +288,26 @@ static int l_load_sample(lua_State* L) {
     const int track = static_cast<int>(luaL_checkinteger(L, 1));
     uint64_t handle = static_cast<uint64_t>(luaL_checkinteger(L, 2));
     const char* kind = luaL_optstring(L, 3, "");
-    lua_pushboolean(L, mgr->loadSampleIntoTrack(track, handle,
-                                                kind ? kind : "") ? 1 : 0);
+    // Deferred: the song's instruments often only exist after the body
+    // ran (declarative songs are harvested post-body) — queue the
+    // delivery; failures surface through the console on flush.
+    mgr->requestSampleLoad(track, handle, kind ? kind : "");
+    lua_pushboolean(L, 1);
     return 1;
+}
+
+// yawn.set_clip(track, scene, handle, [name]) — place a forged/loaded
+// buffer into a session clip slot (deferred like load_sample; the App
+// hook mirrors the deliverClip path).
+static int l_set_clip(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;
+    const int track = static_cast<int>(luaL_checkinteger(L, 1));
+    const int scene1 = static_cast<int>(luaL_checkinteger(L, 2));
+    uint64_t handle = static_cast<uint64_t>(luaL_checkinteger(L, 3));
+    const char* name = luaL_optstring(L, 4, "forged");
+    mgr->requestSetClip(track, scene1, handle, name ? name : "forged");
+    return 0;
 }
 
 // ── yawn.render — offline prerender (phase 3, §4) ────────────────────────
@@ -749,6 +771,7 @@ void LiveCodeEngine::registerAPI() {
         {"load_audio_file", l_load_audio_file},
         {"save_audio_buffer", l_save_audio_buffer},
         {"load_sample",  l_load_sample},
+        {"set_clip",     l_set_clip},
         {"render",       l_render},
         {"cancel_render",l_cancel_render},
         {"launch_scene", l_launch_scene},

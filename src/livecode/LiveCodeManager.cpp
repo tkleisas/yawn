@@ -352,9 +352,42 @@ void LiveCodeManager::launchSceneNow(int scene1) {
     // hold the launch for a bar even in None mode's neighborhood.
     if (!wasPlaying && m_audioEngine) {
         m_audioEngine->resetClipQuantizeChecks();
+        // Self-start intent: even an all-empty scene starts the
+        // transport — the improv layer is transport-anchored, and a
+        // clip-less launch would otherwise never fire anything.
+        pushCommand(audio::TransportPlayMsg{});
     }
     pushConsole(0, "song: launching scene " + std::to_string(scene1) +
                    (q == audio::QuantizeMode::None ? " (now)" : " (quantized)"));
+}
+
+// ── Deferred body-time deliveries ────────────────────────────────────────
+
+void LiveCodeManager::requestSampleLoad(int track, uint64_t handle,
+                                        const std::string& kind) {
+    m_pendingSampleLoads.push_back({track, handle, kind});
+}
+
+void LiveCodeManager::requestSetClip(int track, int scene1, uint64_t handle,
+                                     const std::string& name) {
+    m_pendingSetClips.push_back({track, scene1, handle, name});
+}
+
+void LiveCodeManager::flushPendingDeliveries() {
+    for (const auto& p : m_pendingSampleLoads)
+        loadSampleIntoTrack(p.track, p.handle, p.kind);
+    m_pendingSampleLoads.clear();
+    for (const auto& p : m_pendingSetClips) {
+        auto buf = bufferHandle(p.handle);
+        bool ok = false;
+        if (buf && m_setClipLive)
+            ok = m_setClipLive(p.track, p.scene1 - 1, buf, p.name);
+        if (!ok)
+            pushConsole(1, "audio: set_clip failed (track " +
+                           std::to_string(p.track + 1) + " scene " +
+                           std::to_string(p.scene1) + ")");
+    }
+    m_pendingSetClips.clear();
 }
 
 bool LiveCodeManager::applySong(const SongModel& song) {
@@ -616,6 +649,11 @@ bool LiveCodeManager::finishGenerationRun(uint32_t oldGen, uint32_t newGen, bool
         }
     }
 
+    // Deferred body-time deliveries (load_sample / set_clip): the song's
+    // instruments now exist — flush before the launch so the launched
+    // clips already carry the forged material.
+    flushPendingDeliveries();
+
     // Deferred scene launch (yawn.launch_scene from the script body) —
     // runs after the song apply so the newest clips are what launches.
     if (m_pendingLaunchScene > 0) {
@@ -689,6 +727,9 @@ void LiveCodeManager::update() {
         runScript(path.string());
     }
     m_scheduler.tick();
+    // Safety net: improv-callback-time delivery requests (load_sample /
+    // set_clip) land on the next frame even without a run.
+    flushPendingDeliveries();
     // Deliver completed prerender jobs (delivery hooks are App-provided).
     if (m_prerenderMgmt) m_prerenderMgmt->poll();
 }

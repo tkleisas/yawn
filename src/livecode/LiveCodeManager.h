@@ -161,6 +161,28 @@ public:
     void requestLaunchScene(int scene1);
     void requestLaunchSceneOpts(int scene1, const std::string& quantize,
                                 bool fromStart);
+    // yawn.load_sample: a body-time call usually targets instruments the
+    // song layer will only create after the body — queue the delivery and
+    // flush it right after the song apply (same deferral pattern);
+    // update() drains leftovers too, so improv-callback loads land next
+    // frame. Returns true = accepted for delivery (final failures still
+    // surface through the console).
+    void requestSampleLoad(int track, uint64_t handle,
+                           const std::string& kind);
+    // yawn.set_clip: place a forged/loaded buffer into a session clip
+    // slot (App-provided hook mirrors the deliverClip path: Project
+    // setClip + graveyard RT-safety + engine sync + markDirty). Also
+    // deferred to after the song apply for fresh track indices.
+    void requestSetClip(int track, int scene1, uint64_t handle,
+                        const std::string& name);
+    void setClipLiveHook(std::function<bool(int, int,
+                        std::shared_ptr<audio::AudioBuffer>,
+                        const std::string&)> fn) {
+        m_setClipLive = std::move(fn);
+    }
+    // Drains queued sample loads + clip sets (after the song apply; also
+    // called from update() as a frame-level safety net).
+    void flushPendingDeliveries();
     // Direct launch mirror of SessionPanel::launchScene (audio + MIDI
     // clips quantized, empty slots stop). Visual slots are reported
     // through the App-provided hook (null → skipped with a warning).
@@ -254,6 +276,24 @@ private:
         std::function<void()> m_engineSync;
     std::function<void(int, int, const std::string&)> m_launchVisual;
     int m_pendingLaunchScene = -1;   // deferred yawn.launch_scene (1-based)
+    // Deferred body-time deliveries flushed after the song apply (and
+    // by update() as a safety net): load_sample + set_clip requests.
+    struct PendingSampleLoad {
+        int track = 0;
+        uint64_t handle = 0;
+        std::string kind;
+    };
+    std::vector<PendingSampleLoad> m_pendingSampleLoads;
+    struct PendingSetClip {
+        int track = 0;
+        int scene1 = 0;
+        uint64_t handle = 0;
+        std::string name;
+    };
+    std::vector<PendingSetClip> m_pendingSetClips;
+    std::function<bool(int, int, std::shared_ptr<audio::AudioBuffer>,
+                       const std::string&)>
+        m_setClipLive;
     // Launch options for the pending request: quantize mode ("none" |
     // "beat" | "bar", empty = resolve at fire time — none when stopped,
     // bar when playing) + whether to seek to beat 0 first when stopped.

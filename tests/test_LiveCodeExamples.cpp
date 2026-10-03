@@ -29,6 +29,7 @@ std::vector<std::string> demoFiles() {
         dir + "/01_declarative_song.lua",
         dir + "/02_improv_performance.lua",
         dir + "/03_song_plus_improv.lua",
+        dir + "/05_sample_synth.lua",
     };
     return out;
 }
@@ -52,6 +53,18 @@ protected:
         std::filesystem::create_directories(m_tmp);
         m_mgr.init(m_engine.get(), &m_project);
         m_mgr.setProjectPathProvider([this] { return m_tmp; });
+        // yawn.set_clip hook (the App wires this in production)
+        m_mgr.setClipLiveHook([this](int track, int scene,
+                                     std::shared_ptr<audio::AudioBuffer> buf,
+                                     const std::string& name) {
+            if (!buf || track < 0 || track >= m_project.numTracks() ||
+                scene < 0 || scene >= m_project.numScenes()) return false;
+            auto clip = std::make_unique<audio::Clip>();
+            clip->name = name.empty() ? "forged" : name;
+            clip->buffer = buf;
+            m_project.setClip(track, scene, std::move(clip));
+            return true;
+        });
     }
     void TearDown() override {
         m_mgr.shutdown();
@@ -223,6 +236,43 @@ TEST_F(LiveCodeExampleTest, SampleForgeQueues) {
             l.text.find("queued") != std::string::npos)
             ++queued;
     EXPECT_EQ(queued, 5);
+}
+
+
+// 05 — sample synth lab: four forged buffers land in the kit's delivery
+// hooks (sampler x3 + granular) with correct frame counts; the improv
+// layer registered without errors.
+TEST_F(LiveCodeExampleTest, SampleSynthLabForge) {
+    const auto files = demoFiles();
+    int delivered = 0;
+    if (auto* pm = m_mgr.prerenderManager()) {
+        pm->deliverSampler = [&delivered](
+                std::shared_ptr<audio::AudioBuffer> buf,
+                const std::string&, int) {
+            if (buf && buf->numFrames() > 0) ++delivered;
+            return true;
+        };
+        pm->deliverGranular = pm->deliverSampler;
+    }
+    ASSERT_TRUE(runDemo(files[3])) << "run failed";
+    // Sustained forges landed as session clips (visible + launch-audible).
+    auto* padSlot = m_project.getSlot(0, 0);
+    ASSERT_NE(padSlot, nullptr);
+    ASSERT_NE(padSlot->audioClip, nullptr);
+    ASSERT_NE(padSlot->audioClip->buffer, nullptr);
+    EXPECT_EQ(padSlot->audioClip->buffer->numFrames(),
+              m_engine->sampleRate() * 8);
+    auto* shapedSlot = m_project.getSlot(1, 0);
+    ASSERT_NE(shapedSlot, nullptr);
+    ASSERT_NE(shapedSlot->audioClip, nullptr);
+    EXPECT_EQ(shapedSlot->audioClip->buffer->numFrames(), 65536);
+    // One-shot forges went through the instrument delivery hooks.
+    EXPECT_EQ(delivered, 2);
+    // Self-start still fired (transport reached, even pre-clip pass).
+    m_engine->pumpInputForTest(nullptr, 512);
+    EXPECT_TRUE(m_engine->transport().isPlaying());
+    for (const auto& e : consoleOfSeverity(2))
+        GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
 }
 
 // Dispersed: the demos are also template-safe — every file runs

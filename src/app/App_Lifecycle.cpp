@@ -613,6 +613,22 @@ bool App::init() {
                                           std::unique_ptr<midi::MidiClip> clip) {
         return setMidiClipLive(track, scene, std::move(clip));
     });
+    // yawn.set_clip: forged/loaded buffers land in the session grid —
+    // same structural path as deliverClip (graveyard-protected Project
+    // setClip + engine sync + dirty).
+    m_liveCode.setClipLiveHook([this](int track, int scene,
+                                      std::shared_ptr<audio::AudioBuffer> buf,
+                                      const std::string& name) {
+        if (!buf || track < 0 || track >= m_project.numTracks() ||
+            scene < 0 || scene >= m_project.numScenes()) return false;
+        auto clip = std::make_unique<audio::Clip>();
+        clip->name = name.empty() ? "forged" : name;
+        clip->buffer = buf;
+        m_project.setClip(track, scene, std::move(clip));
+        syncTracksToEngine();
+        markDirty();
+        return true;
+    });
     // Content-driven track typing: flips push SetTrackTypeMsg at once so
     // the engine's record/monitor gates (audio capture, MIDI record arm)
     // follow the content the same frame (the full syncTracksToEngine flow
