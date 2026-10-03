@@ -46,20 +46,41 @@ std::vector<std::string> splitLines(const std::string& s) {
     return out;
 }
 
-enum class Zone : uint8_t { None, RunStop, Reload, Clear, Save, TabLog, TabCode, TabEdit };
+enum class Zone : uint8_t {
+    None, RunStop, Reload, Clear, Save, Eval, TabLog, TabCode, TabEdit, Scrollbar
+};
 
-Zone zoneAt(const Rect& panel, float lx, float ly) {
-    // Buttons: header right side (Save appears left of Run in the
-    // Edit tab only).
-    if (ly >= 4.0f && ly < 4.0f + kBtnH && panel.w > kPad + 4 * (kBtnW + 6.0f)) {
-        float x = panel.w - kPad - kBtnW;              // rightmost = Clear
-        if (lx >= x && lx < x + kBtnW) return Zone::Clear;
-        x -= kBtnW + 6.0f;                             // Reload
-        if (lx >= x && lx < x + kBtnW) return Zone::Reload;
-        x -= kBtnW + 6.0f;                             // Run / Stop
-        if (lx >= x && lx < x + kBtnW) return Zone::RunStop;
-        x -= kBtnW + 6.0f;                             // Save (Edit tab)
-        if (lx >= x && lx < x + kBtnW) return Zone::Save;
+// Button slot layout per tab (right → left). Every tab has
+// Clear/Reload/Run-Stop; Edit adds Save+Eval, Code adds Sync.
+int slotCount(int tab) { return tab == 2 ? 5 : (tab == 1 ? 4 : 3); }
+
+const char* slotLabel(int tab, int slot, bool active) {
+    // slot 0 = rightmost...
+    switch (slot) {
+        case 0: return "Clear";
+        case 1: return "Reload";
+        case 2: return active ? "Stop" : "Run";
+        case 3: return tab == 1 ? "Sync" : "Save";
+        case 4: return "Eval";
+        default: return "";
+    }
+}
+
+Zone zoneAt(const Rect& panel, float lx, float ly, int tab) {
+    // Buttons: header right side, only the drawn slots hit-test.
+    const int n = slotCount(tab);
+    if (ly >= 4.0f && ly < 4.0f + kBtnH &&
+        panel.w > kPad + static_cast<float>(n) * (kBtnW + 6.0f)) {
+        float x = panel.w - kPad - kBtnW;
+        for (int i = 0; i < n; ++i) {
+            if (lx >= x && lx < x + kBtnW)
+                return i == 0 ? Zone::Clear
+                     : i == 1 ? Zone::Reload
+                     : i == 2 ? Zone::RunStop
+                     : i == 3 ? Zone::Save
+                              : Zone::Eval;
+            x -= kBtnW + 6.0f;
+        }
     }
     // Tabs: row under the header.
     const float tabY = kHeaderH + 2.0f;
@@ -114,15 +135,23 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
         return handleMouseDown(e, panel);
     };
     entry.onMouseUp   = [this, panel = m_panel](fw2::MouseEvent& e) {
+        m_dragBarTab = -1;
         return panel.contains(e.x, e.y);
     };
     entry.onMouseMove = [this, panel = m_panel](fw2::MouseMoveEvent& e) {
-        return panel.contains(e.x, e.y);
+        if (!panel.contains(e.x, e.y)) return false;
+        if (m_dragBarTab >= 0) dragMove(panel, e.y - panel.y);
+        return true;
     };
     entry.onScroll = [this, panel = m_panel](fw2::ScrollEvent& e) {
         if (!panel.contains(e.x, e.y)) return false;
-        m_scroll += e.dy * 24.0f;
-        m_scroll = std::clamp(m_scroll, 0.0f, 100000.0f);
+        const float lineH = m_lastLineH > 0.0f ? m_lastLineH : 14.0f;
+        if (m_tab == 2) {
+            auto& k = m_editor.kernel();
+            k.setScrollY(k.scrollY() - e.dy * 3.0f * lineH);
+        } else {
+            m_scroll += e.dy * 24.0f;   // + = scrolled back into history
+        }
         return true;
     };
     entry.onKey = [this](fw2::KeyEvent& e) -> bool {
@@ -140,16 +169,20 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
     if (!panel.contains(e.x, e.y)) return false;
     if (!m_mgr) return true;
     const float lx = e.x - panel.x, ly = e.y - panel.y;
-    switch (zoneAt(panel, lx, ly)) {
+    switch (zoneAt(panel, lx, ly, m_tab)) {
         case Zone::RunStop:
-            if (m_tab == 2) {
-                // Edit tab: Run evaluates the buffer directly.
-                if (m_editor.onEvaluate) m_editor.onEvaluate(m_editor.kernel().text());
-            } else if (m_mgr->isActive()) {
-                m_mgr->stop();
+            if (m_mgr->isActive()) {
+                m_mgr->stop();   // improv layer off; session playback is
+                                 // ClipEngine-owned and keeps running
+                m_mgr->showToast("Improv layer stopped — session keeps playing",
+                                 2.5f, 1);
             } else {
                 m_mgr->runScript();
             }
+            break;
+        case Zone::Eval:
+            if (m_tab == 2 && m_editor.onEvaluate)
+                m_editor.onEvaluate(m_editor.kernel().text());
             break;
         case Zone::Reload:
             m_mgr->reload();
@@ -176,6 +209,7 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             else if (m_tab == 1) syncScript();
             break;
         case Zone::None:
+            dragMaybeStart(panel, lx, ly);
             if (m_tab == 2 && m_lastLineH > 0.0f) {
                 // Click inside the editor area → caret placement.
                 const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
@@ -284,6 +318,18 @@ void LiveCodeConsole::syncScript() {
     m_mgr->showToast("Script synced from project", 1.5f, 0);
 }
 
+
+// Content line counts per tab (for the scrollbar model).
+static float barHeight(size_t lines, float lineH) {
+    return static_cast<float>(lines) * lineH;
+}
+
+size_t LiveCodeConsole::tabContentLines(int tab) const {
+    if (tab == 0) return m_mgr ? m_mgr->console().size() : 0;
+    if (tab == 1) return splitLines(m_codeLens).size();
+    return m_editor.kernel().lines().size();
+}
+
 void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     Renderer2D& r = *ctx.renderer;
     if (!ctx.textMetrics || !m_mgr) return;
@@ -310,17 +356,11 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
         ctx.textMetrics->drawText(r, status, panel.x + kPad, panel.y + 8.0f,
                                   met.fontSizeSmall, pal.textPrimary);
     }
-    const auto drawBtn = [&](Zone zone, const std::string& label) {
-        float x = 0.0f;
-        switch (zone) {
-            case Zone::Clear:  x = panel.w - kPad - kBtnW; break;
-            case Zone::Reload: x = panel.w - kPad - 2.0f * (kBtnW + 6.0f); break;
-            case Zone::RunStop:
-                x = panel.w - kPad - 3.0f * (kBtnW + 6.0f); break;
-            case Zone::Save:
-                x = panel.w - kPad - 4.0f * (kBtnW + 6.0f); break;
-            default:           x = panel.w - kPad - 3.0f * (kBtnW + 6.0f); break;
-        }
+    const bool active = m_mgr && m_mgr->isActive();
+    const auto drawBtn = [&](int slot) {
+        const std::string label = slotLabel(m_tab, slot, active);
+        const float x = panel.w - kPad - static_cast<float>(slot + 1) * kBtnW
+                        - static_cast<float>(slot) * 6.0f;
         const Rect br{panel.x + x, panel.y + 4.0f, kBtnW, kBtnH};
         r.drawRect(br.x, br.y, br.w, br.h, pal.surface);
         r.drawRectOutline(br.x, br.y, br.w, br.h, pal.borderSubtle);
@@ -330,11 +370,7 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
                                   pal.textPrimary);
         return br;
     };
-    drawBtn(Zone::RunStop, m_mgr->isActive() ? "Stop" : "Run");
-    drawBtn(Zone::Reload,  "Reload");
-    drawBtn(Zone::Clear,   "Clear");
-    if (m_tab == 2) drawBtn(Zone::Save, "Save");
-    else if (m_tab == 1) drawBtn(Zone::Save, "Sync");
+    for (int slot = slotCount(m_tab) - 1; slot >= 0; --slot) drawBtn(slot);
 
     // ── Tab row ──
     {
@@ -403,6 +439,76 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     }
 
     r.popClip();
+
+    // Scrollbar (outside the content clip so it never hides).
+    if (m_lastLineH > 0.0f) {
+        const float contentH =
+            barHeight(tabContentLines(m_tab), m_lastLineH);
+        const Rect content{panel.x, areaY, panel.w, areaH};
+        drawScrollbar(ctx, panel, content, contentH);
+    }
+}
+
+
+// ─── Scrollbars ──────────────────────────────────────────────────────
+
+Rect LiveCodeConsole::drawScrollbar(fw2::UIContext& ctx, const Rect& panel,
+                                    const Rect& content, float contentH) {
+    Renderer2D& r = *ctx.renderer;
+    const auto& pal = fw2::theme().palette;
+    Rect track{panel.x + panel.w - 8.0f, content.y, 4.0f, content.h};
+    if (contentH <= content.h || content.h <= 0.0f) return track;
+    const float viewH = contentH - content.h;
+    const float scroll = (m_tab == 2) ? m_editor.kernel().scrollY()
+                                      : m_scroll;
+    const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
+    const float thumbY = track.y +
+        (viewH > 0.0f ? (scroll / viewH) * (content.h - thumbH) : 0.0f);
+    r.drawRect(track.x, track.y, track.w, track.h, pal.surface);
+    r.drawRect(track.x - 1.0f, thumbY, track.w + 2.0f, thumbH, pal.border);
+    return track;
+}
+
+void LiveCodeConsole::dragMaybeStart(const Rect& panel, float lx, float ly) {
+    // Start a drag when the gesture lands in the scrollbar track (the
+    // area is queried via the same geometry drawScrollbar used — the
+    // cached content height makes the thumb math repeatable).
+    if (ly < kHeaderH + 2.0f + kTabH + 4.0f) return;
+    const float barX = panel.w - 10.0f;
+    if (lx < barX || lx > barX + 8.0f) return;
+    const float scroll = (m_tab == 2) ? m_editor.kernel().scrollY()
+                                      : m_scroll;
+    const Rect content{0.0f, kHeaderH + 2.0f + kTabH + 4.0f,
+                       panel.w, panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f)};
+    const float contentH = barHeight(tabContentLines(m_tab), m_lastLineH);
+    if (contentH <= content.h) return;
+    const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
+    const float thumbY =
+        (contentH > content.h ? (scroll / (contentH - content.h)) : 0.0f) *
+        (content.h - thumbH);
+    m_dragBarTab = m_tab;
+    if (ly < thumbY || ly > thumbY + thumbH) {
+        m_dragOffset = thumbH * 0.5f;   // click on track: center thumb
+        dragMove(panel, ly);
+    } else {
+        m_dragOffset = ly - thumbY;
+    }
+}
+
+void LiveCodeConsole::dragMove(const Rect& panel, float ly) {
+    if (m_dragBarTab < 0 || m_lastLineH <= 0.0f) return;
+    const Rect content{0.0f, kHeaderH + 2.0f + kTabH + 4.0f,
+                       panel.w, panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f)};
+    const float contentH = barHeight(tabContentLines(m_tab), m_lastLineH);
+    if (contentH <= content.h) return;
+    const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
+    const float viewH = contentH - content.h;
+    float scroll =
+        (std::max(0.0f, ly - content.y - m_dragOffset) /
+         std::max(1.0f, content.h - thumbH)) * viewH;
+    scroll = std::clamp(scroll, 0.0f, viewH);
+    if (m_tab == 2) m_editor.kernel().setScrollY(scroll);
+    else            m_scroll = scroll;
 }
 
 } // namespace ui

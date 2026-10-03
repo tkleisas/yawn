@@ -74,6 +74,17 @@ private:
     float m_lastLineH = 0.0f;
     const fw2::TextMetrics* m_lastMet = nullptr;
 
+    // Scrollbar drag state (editor scrollbar + console/code list bars).
+    bool  m_dragBarTab = -1;      // tab whose scrollbar is being dragged
+    float m_dragOffset = 0.0f;    // pointer offset inside the thumb (px)
+    size_t tabContentLines(int tab) const;
+    ::yawn::ui::fw::Rect drawScrollbar(fw2::UIContext& ctx,
+                                       const ::yawn::ui::fw::Rect& panel,
+                                       const ::yawn::ui::fw::Rect& content,
+                                       float contentH);
+    void  dragMaybeStart(const ::yawn::ui::fw::Rect& panel, float lx, float ly);
+    void  dragMove(const ::yawn::ui::fw::Rect& panel, float ly);
+
     livecode::LiveCodeManager* m_mgr = nullptr;
     Project* m_project = nullptr;
     audio::AudioEngine* m_engine = nullptr;
