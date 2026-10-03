@@ -634,19 +634,18 @@ void App::clearAllArrangements() {
 
 int App::currentSessionScene(int track) {
     if (track < 0 || track >= m_project.numTracks()) return -1;
-    switch (m_project.track(track).type) {
-        case Track::Type::Audio: {
-            const auto& st = m_audioEngine.clipEngine().trackState(track);
-            return st.active ? st.sceneIndex : -1;
-        }
-        case Track::Type::Midi:
-            return m_audioEngine.midiClipEngine().isTrackPlaying(track)
-                ? m_audioEngine.midiClipEngine().trackState(track).sceneIndex : -1;
-        default:
-            // Visual: the App tracks the launched session visual clip's scene
-            // per track (set on launch, cleared to -1 on stop/follow-stop).
-            return m_visualController->activeVisualScene(track);
-    }
+    // Type-agnostic: record whatever engine is actually playing on the
+    // track (a MIDI clip can run under an Audio-typed track live, e.g.
+    // drums on adopted default tracks; the declared type lies then).
+    auto& midi = m_audioEngine.midiClipEngine();
+    if (midi.isTrackPlaying(track))
+        return midi.trackState(track).sceneIndex;
+    auto& clips = m_audioEngine.clipEngine();
+    const auto& st = clips.trackState(track);
+    if (st.active) return st.sceneIndex;
+    // Visual: the App tracks the launched session visual clip's scene
+    // per track (set on launch, cleared to -1 on stop/follow-stop).
+    return m_visualController->activeVisualScene(track);
 }
 
 void App::toggleArrangementRecord() {
