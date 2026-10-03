@@ -283,19 +283,54 @@ void LiveCodeManager::requestLaunchScene(int scene1) {
     m_pendingLaunchScene = scene1;
 }
 
+void LiveCodeManager::requestLaunchSceneOpts(int scene1,
+                                             const std::string& quantize,
+                                             bool fromStart) {
+    m_pendingLaunchScene = scene1;
+    m_pendingLaunchQuantize = quantize;
+    m_pendingLaunchFromStart = fromStart;
+}
+
 void LiveCodeManager::launchSceneNow(int scene1) {
     if (!m_project || scene1 < 1 || scene1 > m_project->numScenes()) return;
     const int scene = scene1 - 1;
+
+    // Resolve the quantize mode at fire time: a stopped transport
+    // self-starts in lockstep (clips fire on the first block), a playing
+    // transport keeps session-grid semantics (quantize to the next bar)
+    // unless the script asked otherwise. Explicit opts override both.
+    const bool wasPlaying =
+        m_audioEngine && m_audioEngine->transport().isPlaying();
+    audio::QuantizeMode q = audio::QuantizeMode::NextBar;
+    if (m_pendingLaunchQuantize.empty()) {
+        q = wasPlaying ? audio::QuantizeMode::NextBar : audio::QuantizeMode::None;
+    } else if (m_pendingLaunchQuantize == "none") {
+        q = audio::QuantizeMode::None;
+    } else if (m_pendingLaunchQuantize == "beat") {
+        q = audio::QuantizeMode::NextBeat;
+    } else if (m_pendingLaunchQuantize == "bar") {
+        q = audio::QuantizeMode::NextBar;
+    } else {
+        pushConsole(1, "song: unknown quantize '" + m_pendingLaunchQuantize +
+                       "' (none|beat|bar) — using session default");
+    }
+
+    // A stopped transport starts the song from the top: seek to beat 0
+    // BEFORE the launches so everything lands on the downbeat together
+    // (the launch handlers auto-start the transport). The seek also
+    // flushes parked at-beat notes inside the engine.
+    if (!wasPlaying && m_pendingLaunchFromStart && m_audioEngine)
+        pushCommand(audio::TransportSetPositionMsg{0});
     for (int t = 0; t < m_project->numTracks(); ++t) {
         auto* slot = m_project->getSlot(t, scene);
         if (slot && slot->audioClip) {
             pushCommand(audio::LaunchClipMsg{
-                t, scene, slot->audioClip.get(), slot->launchQuantize,
+                t, scene, slot->audioClip.get(), q,
                 &slot->clipAutomation->lanes, slot->followAction});
             m_project->track(t).defaultScene = scene;
         } else if (slot && slot->midiClip) {
             pushCommand(audio::LaunchMidiClipMsg{
-                t, scene, slot->midiClip.get(), slot->launchQuantize,
+                t, scene, slot->midiClip.get(), q,
                 &slot->clipAutomation->lanes, slot->followAction});
             m_project->track(t).defaultScene = scene;
         } else if (slot && slot->visualClip) {
@@ -303,15 +338,23 @@ void LiveCodeManager::launchSceneNow(int scene1) {
                 m_launchVisual(t, scene, slot->visualClip->firstShaderPath());
             m_project->track(t).defaultScene = scene;
         } else {
-            // Empty slots stop whatever plays on that track (audio+MIDI).
+            // Empty slots stop whatever plays on that track (audio+MIDI)
+            // in the same quantize envelope as the launches.
             if (m_project->track(t).defaultScene >= 0) {
-                pushCommand(audio::StopClipMsg{t});
-                pushCommand(audio::StopMidiClipMsg{t});
+                pushCommand(audio::StopClipMsg{t, q});
+                pushCommand(audio::StopMidiClipMsg{t, q});
             }
             m_project->track(t).defaultScene = -1;
         }
     }
-    pushConsole(0, "song: launching scene " + std::to_string(scene1));
+    // Reset the engines' quantize bookkeeping when self-starting: the
+    // stale last-boundary index from the previous playback would else
+    // hold the launch for a bar even in None mode's neighborhood.
+    if (!wasPlaying && m_audioEngine) {
+        m_audioEngine->resetClipQuantizeChecks();
+    }
+    pushConsole(0, "song: launching scene " + std::to_string(scene1) +
+                   (q == audio::QuantizeMode::None ? " (now)" : " (quantized)"));
 }
 
 bool LiveCodeManager::applySong(const SongModel& song) {

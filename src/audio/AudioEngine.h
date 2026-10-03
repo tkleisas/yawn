@@ -203,6 +203,13 @@ public:
     const Transport& transport() const { return m_transport; }
     ClipEngine& clipEngine() { return m_clipEngine; }
     MidiClipEngine& midiClipEngine() { return m_midiClipEngine; }
+    // Re-arm the engines' quantize-boundary detection (e.g. when the
+    // transport starts fresh at beat 0 — stale bookkeeping from the
+    // previous playback would hold a quantized launch one bar).
+    void resetClipQuantizeChecks() {
+        m_clipEngine.resetQuantizeCheck();
+        m_midiClipEngine.resetQuantizeCheck();
+    }
     ArrangementPlayback& arrangementPlayback() { return m_arrPlayback; }
     Mixer& mixer() { return m_mixer; }
     const Mixer& mixer() const { return m_mixer; }

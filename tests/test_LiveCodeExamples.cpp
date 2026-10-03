@@ -142,6 +142,41 @@ TEST_F(LiveCodeExampleTest, DeclarativeSongSelfStarts) {
     EXPECT_EQ(m_project.track(2).defaultScene, 0);   // created track too
 }
 
+// Self-start latency (bug report): the transport used to start
+// immediately while the clips waited for the NEXT bar boundary
+// (quantize NextBar from a stopped, mid-bar playhead) — one bar of
+// silence. Now: a stopped transport seeks to beat 0 and launches
+// immediately — the scene is ACTIVE on the first block, still inside
+// the first bar.
+TEST_F(LiveCodeExampleTest, SelfStartsOnTheDownbeat) {
+    const auto files = demoFiles();
+    ASSERT_TRUE(runDemo(files[0]));
+    m_engine->pumpInputForTest(nullptr, 512);
+    const auto& midi = m_engine->midiClipEngine();
+    EXPECT_TRUE(midi.isTrackPlaying(0));
+    EXPECT_EQ(midi.trackState(0).sceneIndex, 0);   // fired NOW, not pending
+    // Playback did not outrun the music: we are still in bar 1.
+    const double spb = m_engine->transport().samplesPerBar();
+    EXPECT_LT(m_engine->transport().positionInSamples(), spb);
+}
+
+// Jamming semantics: launching while the transport PLAYS quantizes to
+// the next bar (pending, old clip keeps running until the boundary).
+TEST_F(LiveCodeExampleTest, LaunchSceneQuantizedWhenPlaying) {
+    const auto files = demoFiles();
+    ASSERT_TRUE(runDemo(files[0]));               // scene 1 active (None)
+    m_engine->pumpInputForTest(nullptr, 512);
+    ASSERT_TRUE(m_engine->midiClipEngine().isTrackPlaying(0));
+    // Re-launch scene 2 from a live edit while playing.
+    ASSERT_TRUE(m_mgr.runScriptSource("yawn.launch_scene(2, { quantize = 'bar' })"));
+    m_engine->pumpInputForTest(nullptr, 512);
+    // Pending: the OLD clip (scene 1) is still playing — no boundary
+    // crossed, no immediate takeover. Scene 2 has no Kick clip, so the
+    // slot bookkeeping already records the stop (defaultScene → -1).
+    EXPECT_EQ(m_engine->midiClipEngine().trackState(0).sceneIndex, 0);
+    EXPECT_EQ(m_project.track(0).defaultScene, -1);
+}
+
 // yawn.launch_clip: immediate single-slot launch from improv surface.
 TEST_F(LiveCodeExampleTest, LaunchClipApi) {
     const auto files = demoFiles();

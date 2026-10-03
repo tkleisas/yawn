@@ -159,6 +159,8 @@ public:
     // Called from the script body — defers to AFTER the declarative song
     // apply so the freshly applied clips are the ones that launch.
     void requestLaunchScene(int scene1);
+    void requestLaunchSceneOpts(int scene1, const std::string& quantize,
+                                bool fromStart);
     // Direct launch mirror of SessionPanel::launchScene (audio + MIDI
     // clips quantized, empty slots stop). Visual slots are reported
     // through the App-provided hook (null → skipped with a warning).
@@ -247,6 +249,11 @@ private:
         std::function<void()> m_engineSync;
     std::function<void(int, int, const std::string&)> m_launchVisual;
     int m_pendingLaunchScene = -1;   // deferred yawn.launch_scene (1-based)
+    // Launch options for the pending request: quantize mode ("none" |
+    // "beat" | "bar", empty = resolve at fire time — none when stopped,
+    // bar when playing) + whether to seek to beat 0 first when stopped.
+    std::string m_pendingLaunchQuantize;
+    bool        m_pendingLaunchFromStart = true;
     std::function<void()> m_markDirty;
     std::function<midi::MidiClip*(int, int, std::unique_ptr<midi::MidiClip>)>
         m_setMidiClipLive;

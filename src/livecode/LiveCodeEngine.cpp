@@ -465,31 +465,64 @@ static int l_render(lua_State* L) {
 
 // Defer the launch to after the song apply (the script body runs before
 // the harvest, so an immediate launch would target the stale state).
+// opts (optional): { quantize = "none"|"beat"|"bar", from_start = bool }.
+// Defaults resolve at fire time: quantize none when the transport is
+// stopped (self-start in lockstep), bar when playing; from_start true
+// when stopped (seek to beat 0 first).
 static int l_launch_scene(lua_State* L) {
     auto* mgr = getManager(L);
     if (!mgr) return 0;
-    mgr->requestLaunchScene(
-        static_cast<int>(luaL_checkinteger(L, 1)));
+    const int scene1 = static_cast<int>(luaL_checkinteger(L, 1));
+    std::string quantize;
+    bool fromStart = true;
+    if (lua_gettop(L) >= 2 && lua_istable(L, 2)) {
+        lua_getfield(L, 2, "quantize");
+        if (lua_isstring(L, -1)) { const char* s = lua_tostring(L, -1); if (s) quantize = s; }
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "from_start");
+        if (lua_isboolean(L, -1)) fromStart = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    mgr->requestLaunchSceneOpts(scene1, quantize, fromStart);
     return 0;
 }
 
 // Immediate single-slot launch (token engine-state; used once the song
-// state is stable — e.g. from improv callbacks).
+// state is stable — e.g. from improv callbacks). Same opts as above;
+// defaults: quantize from the slot's launchQuantize (session semantics).
 static int l_launch_clip(lua_State* L) {
     auto* mgr = getManager(L);
     if (!mgr || !mgr->project()) return 0;
     const int track = static_cast<int>(luaL_checkinteger(L, 1));
     const int scene1 = static_cast<int>(luaL_checkinteger(L, 2));
     const int scene = scene1 - 1;
+    audio::QuantizeMode q{};
+    bool haveQ = false;
+    if (lua_gettop(L) >= 3 && lua_istable(L, 3)) {
+        lua_getfield(L, 3, "quantize");
+        if (lua_isstring(L, -1)) {
+            const char* s = lua_tostring(L, -1);
+            if (s) {
+                haveQ = true;
+                if (std::strcmp(s, "none") == 0)      q = audio::QuantizeMode::None;
+                else if (std::strcmp(s, "beat") == 0) q = audio::QuantizeMode::NextBeat;
+                else if (std::strcmp(s, "bar") == 0)  q = audio::QuantizeMode::NextBar;
+                else haveQ = false;
+            }
+        }
+        lua_pop(L, 1);
+    }
     auto* slot = mgr->project()->getSlot(track, scene);
     if (!slot) return 0;
     if (slot->midiClip) {
         mgr->pushCommand(audio::LaunchMidiClipMsg{
-            track, scene, slot->midiClip.get(), slot->launchQuantize,
+            track, scene, slot->midiClip.get(),
+            haveQ ? q : slot->launchQuantize,
             &slot->clipAutomation->lanes, slot->followAction});
     } else if (slot->audioClip) {
         mgr->pushCommand(audio::LaunchClipMsg{
-            track, scene, slot->audioClip.get(), slot->launchQuantize,
+            track, scene, slot->audioClip.get(),
+            haveQ ? q : slot->launchQuantize,
             &slot->clipAutomation->lanes, slot->followAction});
     }
     return 0;
