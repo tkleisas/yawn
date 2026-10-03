@@ -817,3 +817,35 @@ sessions reproducible):
 - Tests: +8 LiveCodeEditorKernelTest cases (round-trip, edits, joins,
   column goal, completion filter/dotted-accept/limits, UTF-8
   backspace). Full suite green (1532 tests).
+
+**Phase 9 — landed.** Remaining post-v1 items:
+
+- **Render targets completed** (§4.3): `drumslop` and `vocoder` now
+  reach the render path (they were only reachable via handle-based
+  `load_sample` before); `drumrack` gained a `pad=n` field with a new
+  `deliverDrumRackPad` hook (`App::loadBufferToDrumRackPad`, explicit
+  pad — no selected-pad side effect); `library` target: the render is
+  saved as WAV under the first configured library root (creating
+  `<home>/YAWN Samples` and registering it when none exists — filename
+  sanitized + numbered for uniqueness) and the root is rescanned so
+  the file surfaces in the browser. `noteSource` as a worker-thread
+  Lua chunk stays the only deferred §4 item (thread-ownership of the
+  Lua state needs its own design; C++ callback machinery is in place).
+- **Template-preserving two-way round-trip (§5.4 stage 2)**:
+  `patchSongSource(original, project, engine)` — line-oriented value
+  rewrite of the `song` block: bpm/scenes scalars, the generator-shaped
+  track opener line (`{ uid = N, name = …, volume = …,`), standalone
+  `volume/mute/solo` lines, and single-line clip declarations are
+  rewritten in place; comments (inline + anywhere outside the block)
+  survive byte-for-byte; track blocks are inserted (canonical shape via
+  the shared `appendTrackBlock` used by `generateSongSource`) / removed
+  by uid; unrecognizable lines (e.g. multi-line clip groups) are left
+  untouched and reported as warnings. `patched` is always the full new
+  text; `changed` flags byte differences (idempotence: patching the
+  patched text is a no-op — tested). Console: **Sync** button on the
+  Code tab reads the script file, patches it, writes it back, and
+  reloads the Edit tab buffer.
+- Tests: +5 (`PatchGeneratedSourceIsNoOp`,
+  `PatchScalarsKeepComments`, `PatchInsertsAndRemovesTracks`,
+  `PatchClipLinesAndIdentity`, `PatchMultiLineClipGroupsLeftAlone`).
+  Full suite green (1537 tests).

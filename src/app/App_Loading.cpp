@@ -543,6 +543,24 @@ bool App::loadBufferToDrumSlop(std::shared_ptr<audio::AudioBuffer> buf,
     return true;
 }
 
+bool App::loadBufferToDrumRackPad(std::shared_ptr<audio::AudioBuffer> buf,
+                                   const std::string& name, int trackIndex,
+                                   int pad) {
+    if (!buf) return false;
+    auto* inst = m_audioEngine.instrument(trackIndex);
+    auto* rack = dynamic_cast<instruments::DrumRack*>(inst);
+    if (!rack) return false;
+    if (pad < 0 || pad >= instruments::DrumRack::kNumPads) return false;
+    std::vector<float> il; int frames, chans;
+    interleaveBuffer(*buf, il, frames, chans);
+    rack->loadPad(pad, il.data(), frames, chans);
+    LOG_INFO("LiveCode", "Rendered '%s' into DrumRack pad %d on Track %d",
+             name.c_str(), pad, trackIndex + 1);
+    updateDetailForSelectedTrack();
+    markDirty();
+    return true;
+}
+
 bool App::loadBufferToGranular(std::shared_ptr<audio::AudioBuffer> buf,
                                 const std::string& name, int trackIndex) {
     if (!buf) return false;

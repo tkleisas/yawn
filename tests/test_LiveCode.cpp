@@ -1426,3 +1426,150 @@ TEST(LiveCodeEditorKernelTest, UTF8BackspaceStepsContinuation) {
     k.backspace();                          // removes the whole glyph
     EXPECT_EQ(k.lines()[0], "");
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Template-preserving round-trip (phase 9 — patchSongSource)
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST_F(LiveCodeManagerTest, PatchGeneratedSourceIsNoOp) {
+    const std::string generated = livecode::generateSongSource(m_project, *m_engine);
+    const auto rep = livecode::patchSongSource(generated, m_project, *m_engine);
+    EXPECT_FALSE(rep.changed) << rep.patched;
+    EXPECT_TRUE(rep.warnings.empty());
+    if (rep.changed)
+        std::cout << rep.patched << std::endl;
+}
+
+TEST_F(LiveCodeManagerTest, PatchScalarsKeepComments) {
+    // Hand-shaped template with comments and unusual layout.
+    const std::string script = R"LUA(
+-- My live set
+song = {
+    bpm = 120,          -- party tempo
+    scenes = 2,
+    tracks = {
+        { uid = 1, name = "Bass", type = "midi",
+          volume = 0.8, },
+    },
+}
+-- after
+)LUA";
+    // UI-side mutations: bpm 124, loud track.
+    (void)m_engine->sendCommand(audio::TransportSetBPMMsg{124.0});
+    m_engine->pumpInputForTest(nullptr, 256);   // queued → consumed headlessly
+    EXPECT_NEAR(m_engine->transport().bpm(), 124.0, 1e-6);
+    m_project.track(0).volume = 1.0f;
+    const auto rep = livecode::patchSongSource(script, m_project, *m_engine);
+    ASSERT_TRUE(rep.changed);
+    EXPECT_NE(rep.patched.find("-- party tempo"), std::string::npos);
+    EXPECT_NE(rep.patched.find("-- My live set"), std::string::npos);
+    EXPECT_NE(rep.patched.find("-- after"), std::string::npos);
+    EXPECT_NE(rep.patched.find("bpm = 124"), std::string::npos);
+    // Track block rewritten with model state.
+    EXPECT_NE(rep.patched.find("volume = 1"), std::string::npos);
+    // Nothing else disturbed.
+    EXPECT_NE(rep.patched.find("name = \"Bass\""), std::string::npos);
+}
+
+TEST_F(LiveCodeManagerTest, PatchInsertsAndRemovesTracks) {
+    const std::string script = R"LUA(
+song = {
+    bpm = 120,
+    tracks = {
+        { uid = 1, name = "One", type = "midi", volume = 1, },
+        { uid = 2, name = "Two", type = "midi", volume = 1, },
+        { uid = 3, name = "Ghost", type = "midi", volume = 1, },
+    },
+}
+)LUA";
+    // Project has tracks uid 1..2 (init(2,2)) — uid 3 must be dropped.
+    const auto rep = livecode::patchSongSource(script, m_project, *m_engine);
+    ASSERT_TRUE(rep.changed);
+    EXPECT_EQ(rep.patched.find("Ghost"), std::string::npos);
+    EXPECT_NE(rep.patched.find("One"), std::string::npos);
+    EXPECT_NE(rep.patched.find("Two"), std::string::npos);
+    // Removed exactly one block, braces still balanced.
+    int depth = 0, minDepth = 0;
+    for (char c : rep.patched) {
+        if (c == '{') ++depth;
+        else if (c == '}') { --depth; minDepth = std::min(minDepth, depth); }
+    }
+    EXPECT_EQ(depth, 0);
+    EXPECT_GE(minDepth, 0);
+
+    // Inverse: script with only uid 1 → uid 2 block gets inserted.
+    const std::string shortScript = R"LUA(
+song = {
+    bpm = 120,
+    tracks = {
+        { uid = 1, name = "One", type = "midi", volume = 1, },
+    },
+}
+)LUA";
+    const auto rep2 = livecode::patchSongSource(shortScript, m_project, *m_engine);
+    ASSERT_TRUE(rep2.changed);
+    EXPECT_NE(rep2.patched.find("uid = 1"), std::string::npos);
+    EXPECT_NE(rep2.patched.find("uid = 2"), std::string::npos);
+}
+
+TEST_F(LiveCodeManagerTest, PatchClipLinesAndIdentity) {
+    // Give track 0 a clip.
+    auto clip = std::make_unique<midi::MidiClip>(1.0);
+    clip->addNote({0.0, 1.0, 60, 0, 40960});
+    auto* slot = m_project.getSlot(0, 0);
+    ASSERT_NE(slot, nullptr);
+    slot->midiClip = std::move(clip);
+
+    const std::string script = R"LUA(
+song = {
+    bpm = 120,
+    tracks = {
+        { uid = 1, name = "One", type = "midi", volume = 1,
+          clips = {
+            [1] = { beats = 4, notes = { {0, 2, 36, 1} } },   -- drums
+          },
+        },
+    },
+}
+)LUA";
+    // Divergent clip line → regenerated to match the project (incl. comment).
+    const auto rep = livecode::patchSongSource(script, m_project, *m_engine);
+    ASSERT_TRUE(rep.changed);
+    EXPECT_NE(rep.patched.find("-- drums"), std::string::npos);
+    EXPECT_NE(rep.patched.find("beats = 1"), std::string::npos);
+    EXPECT_NE(rep.patched.find("{0, 1, 60" /* 0, dur 1, pitch 60*/), std::string::npos);
+    EXPECT_EQ(rep.patched.find("{0, 2, 36"), std::string::npos);
+
+    // Re-patching the patched text converges (idempotence).
+    const auto rep2 = livecode::patchSongSource(rep.patched, m_project, *m_engine);
+    EXPECT_FALSE(rep2.changed);
+}
+
+TEST_F(LiveCodeManagerTest, PatchMultiLineClipGroupsLeftAlone) {
+    const std::string script = R"LUA(
+song = {
+    bpm = 120,
+    tracks = {
+        { uid = 1, name = "One", type = "midi", volume = 1,
+          clips = {
+            [1] = {
+                beats = 4,
+                notes = {
+                    {0, 1, 60, 1},
+                    {2, 1, 67, 1},
+                },
+            },
+          },
+        },
+        { uid = 2, name = "Two", type = "midi", volume = 1, },
+    },
+}
+)LUA";
+    const auto rep = livecode::patchSongSource(script, m_project, *m_engine);
+    EXPECT_FALSE(rep.changed);
+    EXPECT_TRUE(rep.warnings.empty())
+        << (rep.warnings.empty() ? "" : rep.warnings.front());
+    // The clip group (and its notes) survives byte-for-byte.
+    EXPECT_NE(rep.patched.find("{2, 1, 67, 1}"), std::string::npos);
+    EXPECT_NE(rep.patched.find("beats = 4"), std::string::npos);
+}

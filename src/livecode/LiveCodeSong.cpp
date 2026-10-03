@@ -18,6 +18,8 @@ extern "C" {
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <set>
 
 namespace yawn {
 namespace livecode {
@@ -745,6 +747,486 @@ std::string generateSongSource(const Project& project,
     out += "  },\n";
     out += "}\n";
     return out;
+}
+
+// ─── Template-preserving two-way round-trip (§5.4 stage 2) ──────────────
+//
+// patchSongSource(original, project, engine) rewrites *value literals* of
+// the declarative `song` block in the script source so UI-side mutations
+// flow back into the script file without clobbering the user's template:
+// comments, layout, unknown keys and everything outside the block are
+// preserved byte-for-byte. Structural reconcile covers tracks (insert
+// new blocks / remove dead ones by uid); scalar, note and param lines
+// are rewritten in place. Anything the line-recognizer cannot classify
+// is left untouched and reported as a warning.
+
+namespace {
+
+bool isSpaceChar(char c) { return c == ' ' || c == '\t' || c == '\r'; }
+bool isIdentCharAny(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+std::string trimStr(const std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && isSpaceChar(s[b])) ++b;
+    while (e > b && isSpaceChar(s[e - 1])) --e;
+    return s.substr(b, e - b);
+}
+
+struct CodeComment {
+    std::string code;      // up to (not incl.) the `--`
+    std::string comment;   // "--…" rest ("" when none)
+};
+
+// Splits a source line at its first `--` that is not inside a quoted
+// string (naive — adequate for value lines).
+CodeComment splitInlineComment(const std::string& line) {
+    CodeComment out;
+    bool inStr = false;
+    char quote = 0;
+    for (size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (inStr) {
+            if (c == '\\') { ++i; continue; }
+            if (c == quote) inStr = false;
+            continue;
+        }
+        if (c == '"' || c == '\'') { inStr = true; quote = c; continue; }
+        if (c == '-' && i + 1 < line.size() && line[i + 1] == '-') {
+            out.code = line.substr(0, i);
+            out.comment = line.substr(i);
+            return out;
+        }
+    }
+    out.code = line;
+    return out;
+}
+
+// Net brace delta of a code line (comments/strings excluded).
+int lineBraceDelta(const std::string& line) {
+    const CodeComment cc = splitInlineComment(line);
+    int d = 0;
+    for (char c : cc.code) {
+        if (c == '{') ++d;
+        else if (c == '}') --d;
+    }
+    return d;
+}
+
+// Line (comment-split code) reads `key = …` (spaces allowed around '=').
+bool startsWithKey(const std::string& code, const std::string& key) {
+    const std::string t = trimStr(code);
+    if (t.rfind(key, 0) != 0) return false;
+    size_t j = key.size();
+    while (j < t.size() && isSpaceChar(t[j])) ++j;
+    return j < t.size() && t[j] == '=';
+}
+
+// Value text of `key = <value>` (with trailing comma stripped).
+std::string keyValueText(const std::string& code, const std::string& key) {
+    const std::string t = trimStr(code);
+    if (t.rfind(key, 0) != 0) return "";
+    const size_t eq = t.find('=', key.size());
+    if (eq == std::string::npos) return "";
+    size_t v = eq + 1;
+    while (v < t.size() && isSpaceChar(t[v])) ++v;
+    size_t e = t.size();
+    if (e > v && t[e - 1] == ',') --e;
+    return t.substr(v, e - v);
+}
+
+// Reads an integer `key = N` anywhere in `code` (word-bounded key),
+// returning false when absent.
+bool keyIntValue(const std::string& code, const std::string& key, int& out) {
+    const CodeComment cc = splitInlineComment(code);
+    const std::string& s = cc.code;
+    size_t pos = s.find(key);
+    while (pos != std::string::npos) {
+        const bool boundedBefore =
+            pos == 0 || !isIdentCharAny(s[pos - 1]);
+        size_t j = pos + key.size();
+        const bool boundedAfter =
+            j >= s.size() || !isIdentCharAny(s[j]);
+        if (boundedBefore && boundedAfter) {
+            while (j < s.size() && isSpaceChar(s[j])) ++j;
+            if (j < s.size() && s[j] == '=') {
+                ++j;
+                while (j < s.size() && isSpaceChar(s[j])) ++j;
+                if (j < s.size() && (std::isdigit(static_cast<unsigned char>(s[j])) ||
+                                     s[j] == '-' || s[j] == '+')) {
+                    out = static_cast<int>(std::strtol(s.c_str() + j, nullptr, 10));
+                    return true;
+                }
+            }
+        }
+        pos = s.find(key, pos + 1);
+    }
+    return false;
+}
+
+// ─── Script track-block segmentation ────────────────────────────────────
+
+struct ScriptTrack {
+    long start = -1;   // line index of the "{" opener
+    long end   = -1;   // line index of the matching close
+    int  uid   = -1;
+};
+
+// Finds `tracks = {` in [begin,end) and segments its track blocks.
+std::vector<ScriptTrack> findScriptTracks(const std::vector<std::string>& lines,
+                                          long begin, long end,
+                                          long& tracksOpen, long& tracksClose) {
+    std::vector<ScriptTrack> out;
+    tracksOpen = tracksClose = -1;
+    for (long i = begin; i <= end; ++i) {
+        const std::string code = splitInlineComment(lines[i]).code;
+        if (startsWithKey(code, "tracks")) {
+            if (code.find('{') != std::string::npos) tracksOpen = i;
+            break;
+        }
+    }
+    if (tracksOpen < 0) return out;
+    int depth = 0;
+    for (long i = tracksOpen; i <= end; ++i) {
+        depth += lineBraceDelta(lines[i]);
+        if (depth <= 0) { tracksClose = i; break; }
+    }
+    if (tracksClose < 0) return out;
+
+    // Track blocks: first non-ws char is '{' while at depth 1 inside
+    // `tracks` (clip keys start with '[' — no clash).
+    ScriptTrack cur;
+    int d = 0;
+    for (long i = tracksOpen; i < tracksClose; ++i) {
+        const std::string tcode = trimStr(splitInlineComment(lines[i]).code);
+        const int before = d;
+        d += lineBraceDelta(lines[i]);
+        // Start: '{'-leading line reached while inside the array.
+        if (before == 1 && !tcode.empty() && tcode[0] == '{' &&
+            cur.start < 0) {
+            cur = ScriptTrack{};
+            cur.start = i;
+        }
+        // Close: depth back at array level after the line — covers
+        // multi-line blocks and one-line `{ … },` blocks alike.
+        if (cur.start >= 0 && cur.end < 0 && d <= 1) {
+            cur.end = i;
+            for (long k = cur.start; k <= i; ++k)
+                if (keyIntValue(lines[k], "uid", cur.uid)) break;
+            out.push_back(cur);
+            cur = ScriptTrack{};
+        }
+    }
+    // Unterminated final block (script being written): clamp to close.
+    if (cur.start >= 0 && cur.end < 0) {
+        cur.end = tracksClose;
+        for (long k = cur.start; k <= tracksClose; ++k) {
+            const std::string v =
+                keyValueText(splitInlineComment(lines[k]).code, "uid");
+            if (!v.empty()) { cur.uid = (int)std::strtol(v.c_str(), nullptr, 10); break; }
+        }
+        out.push_back(cur);
+    }
+    return out;
+}
+
+// Emits one canonical track block at the given indentation (shared with
+// generateSongSource so inserts match its shape exactly).
+void appendTrackBlock(std::string& out, const Project& project,
+                      audio::AudioEngine& engine, int t,
+                      const std::string& indent) {
+    const Track& tr = project.track(t);
+    out += indent + "{ uid = " + std::to_string(tr.uid) + ", name = \"" +
+           escapeLuaString(tr.name) + "\", type = \"" +
+           (tr.type == Track::Type::Audio  ? "audio"
+          : tr.type == Track::Type::Midi   ? "midi" : "visual") + "\"";
+    out += ", volume = " + num(tr.volume);
+    if (tr.muted) out += ", mute = true";
+    if (tr.soloed) out += ", solo = true";
+    out += ",\n";
+
+    auto* inst = engine.instrument(t);
+    if (inst) {
+        out += indent + "  instrument = ";
+        appendDevice(out, inst->id(), inst);
+        out += ",\n";
+    }
+
+    const auto& chain = engine.mixer().trackEffects(t);
+    if (chain.count() > 0) {
+        out += indent + "  fx = {\n";
+        for (int i = 0; i < chain.count(); ++i) {
+            auto* fx = chain.effectAt(i);
+            if (!fx) continue;
+            out += indent + "    ";
+            appendDevice(out, fx->id(), fx);
+            out += ",\n";
+        }
+        out += indent + "  },\n";
+    }
+
+    bool wroteClips = false;
+    for (int s = 0; s < project.numScenes(); ++s) {
+        auto* slot = project.getSlot(t, s);
+        if (!slot) continue;
+        if (slot->midiClip) {
+            if (!wroteClips) { out += indent + "  clips = {\n"; wroteClips = true; }
+            out += indent + "    [" + std::to_string(s + 1) + "] = { beats = " +
+                   num(slot->midiClip->lengthBeats()) + ", notes = {";
+            for (int n = 0; n < slot->midiClip->noteCount(); ++n) {
+                const auto& note = slot->midiClip->note(n);
+                out += (n ? ", " : " ");
+                out += "{" + num(note.startBeat) + ", " + num(note.duration)
+                     + ", " + std::to_string(note.pitch) + ", "
+                     + num(note.velocity / 65535.0);
+                if (note.channel != 0)
+                    out += ", " + std::to_string(note.channel);
+                out += "}";
+            }
+            out += " } },\n";
+        }
+    }
+    if (wroteClips) out += indent + "  },\n";
+    out += indent + "},\n";
+}
+
+} // namespace
+
+SongPatchReport patchSongSource(const std::string& original,
+                                const Project& project,
+                                const audio::AudioEngine& engine) {
+    SongPatchReport rep;
+
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (char c : original) {
+            if (c == '\n') { lines.push_back(cur); cur.clear(); }
+            else           cur += c;
+        }
+        if (!cur.empty()) lines.push_back(cur);
+    }
+
+    // Locate `song = { … }`.
+    long songOpen = -1, songClose = -1;
+    int depth = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string t = trimStr(splitInlineComment(lines[i]).code);
+        if (songOpen < 0) {
+            if (t.rfind("song", 0) == 0 &&
+                t.find('=', 4) != std::string::npos &&
+                t.find('{') != std::string::npos &&
+                t.find("[[") == std::string::npos) {
+                songOpen = (long)i;
+                depth = lineBraceDelta(lines[i]);
+            }
+            continue;
+        }
+        depth += lineBraceDelta(lines[i]);
+        if (depth <= 0) { songClose = (long)i; break; }
+    }
+    if (songOpen < 0 || songClose <= songOpen) {
+        rep.warnings.push_back("no `song = { … }` block found");
+        return rep;
+    }
+
+    auto setLine = [&](size_t i, const std::string& replacement) {
+        if (lines[i] != replacement) { lines[i] = replacement; rep.changed = true; }
+    };
+    auto indentOf = [&](size_t i) {
+        size_t n = 0;
+        while (n < lines[i].size() && isSpaceChar(lines[i][n])) ++n;
+        return lines[i].substr(0, n);
+    };
+
+    // ── Scalar lines: bpm / scenes ──
+    for (size_t i = (size_t)songOpen + 1; i <= (size_t)songClose; ++i) {
+        const CodeComment cc = splitInlineComment(lines[i]);
+        const std::string key = (trimStr(cc.code).rfind("bpm", 0) == 0 &&
+                                 trimStr(cc.code).find('=') == 4) ? "bpm" : "";
+        if (key == "bpm") {
+            std::string rebuilt = indentOf(i) + "bpm = " +
+                                  num(engine.transport().bpm()) + ",";
+            if (!cc.comment.empty()) rebuilt += " " + cc.comment;
+            setLine(i, rebuilt);
+        } else if (startsWithKey(cc.code, "scenes")) {
+            std::string rebuilt = indentOf(i) + "scenes = " +
+                                  std::to_string(project.numScenes()) + ",";
+            if (!cc.comment.empty()) rebuilt += " " + cc.comment;
+            setLine(i, rebuilt);
+        }
+    }
+
+    // ── Track blocks ──
+    long tracksOpen = -1, tracksClose = -1;
+    const std::vector<ScriptTrack> scriptTracks =
+        findScriptTracks(lines, songOpen, songClose, tracksOpen, tracksClose);
+
+    std::map<uint64_t, int> modelByUid;   // uid → track index
+    std::set<uint64_t> modelUids;
+    for (int t = 0; t < project.numTracks(); ++t) {
+        const uint64_t uid = project.track(t).uid;
+        modelByUid.emplace(uid, t);
+        modelUids.insert(uid);
+    }
+
+    // Patch a single, canonically-shaped track block: scalar mixer
+    // lines + single-line clip declarations.
+    auto patchTrackBlock = [&](int trackIndex, long a, long b) {
+        const Track& tr = project.track(trackIndex);
+        const auto emit = [&](size_t i, std::string body) {
+            if (!splitInlineComment(lines[i]).comment.empty())
+                body += " " + splitInlineComment(lines[i]).comment;
+            setLine(i, body);
+        };
+        for (size_t i = (size_t)a; i <= (size_t)b; ++i) {
+            const CodeComment cc = splitInlineComment(lines[i]);
+            const std::string pad = indentOf(i);
+            // Generator-shaped opener: `{ uid = N, name = "…", type = "T",
+            // volume = V[, mute = true][, solo = true],` — rebuild from
+            // the model when nothing else rides on the line.
+            if (startsWithKey(cc.code, "{ uid =")) {
+                const std::string code = trimStr(cc.code);
+                if (code.find("instrument") != std::string::npos ||
+                    code.find("fx") != std::string::npos ||
+                    code.find("clips") != std::string::npos ||
+                    code.find("params") != std::string::npos)
+                    continue;   // extended opening line: untouched
+                std::string rebuilt = pad + "{ uid = " +
+                    std::to_string(tr.uid) + ", name = \"" +
+                    escapeLuaString(tr.name) + "\", type = \"" +
+                    (tr.type == Track::Type::Audio  ? "audio"
+                   : tr.type == Track::Type::Midi   ? "midi" : "visual") +
+                    "\", volume = " + num(tr.volume);
+                if (tr.muted) rebuilt += ", mute = true";
+                if (tr.soloed) rebuilt += ", solo = true";
+                rebuilt += ",";
+                if (!cc.comment.empty()) rebuilt += " " + cc.comment;
+                setLine(i, rebuilt);
+                continue;
+            }
+            if (startsWithKey(cc.code, "volume")) {
+                emit(i, pad + "volume = " + num(tr.volume) + ",");
+            } else if (startsWithKey(cc.code, "mute")) {
+                emit(i, pad + "mute = " + (tr.muted ? "true" : "false") + ",");
+            } else if (startsWithKey(cc.code, "solo")) {
+                emit(i, pad + "solo = " + (tr.soloed ? "true" : "false") + ",");
+
+            } else if (!trimStr(cc.code).empty() &&
+                       trimStr(cc.code)[0] == '[' &&
+                       cc.code.find("] = {") != std::string::npos) {
+                // `[N] = { beats = …, notes = { … } } }` single-line shape.
+                if (cc.code.find("notes") == std::string::npos ||
+                    cc.code.find('{') == std::string::npos)
+                    continue;   // multi-line clip group: untouched, v1
+                // When the block closes on the same line we can patch it.
+                int bdelta = 0;
+                for (char c : trimStr(splitInlineComment(cc.code).code))
+                    (c == '{') ? ++bdelta : (c == '}' ? --bdelta : bdelta);
+                if (bdelta != 0) {
+                    rep.warnings.push_back(
+                        "multi-line clip groups are left untouched (rewrite by hand or regenerate)");
+                    continue;
+                }
+                const std::string keyPart = trimStr(
+                    cc.code.substr(0, cc.code.find('{')));
+                const size_t p1 = keyPart.find('['), p2 = keyPart.find(']');
+                if (p1 == std::string::npos || p2 == std::string::npos || p2 <= p1)
+                    continue;
+                const int scene = (int)std::strtol(
+                    keyPart.substr(p1 + 1, p2 - p1).c_str(), nullptr, 10) - 1;
+                if (scene < 0 || scene >= project.numScenes()) continue;
+                auto* slot = project.getSlot(trackIndex, scene);
+                if (!slot || !slot->midiClip) continue;
+                const auto& mc = *slot->midiClip;
+                std::string clip = pad + "[" + std::to_string(scene + 1) +
+                                   "] = { beats = " + num(mc.lengthBeats()) +
+                                   ", notes = {";
+                for (int n = 0; n < mc.noteCount(); ++n) {
+                    const auto& note = mc.note(n);
+                    clip += (n ? ", " : " ") + std::string("{") +
+                            num(note.startBeat) + ", " + num(note.duration) +
+                            ", " + std::to_string(note.pitch) + ", " +
+                            num(note.velocity / 65535.0);
+                    if (note.channel != 0) clip += ", " + std::to_string(note.channel);
+                    clip += "}";
+                }
+                clip += " } },";
+                emit(i, clip);
+            }
+        }
+    };
+
+    for (const auto& st : scriptTracks) {
+        if (st.uid < 0 || st.start < 0) {
+            rep.warnings.push_back("track block without uid left untouched");
+            continue;
+        }
+        auto it = modelByUid.find((uint64_t)st.uid);
+        if (it == modelByUid.end()) continue;
+        patchTrackBlock(it->second, st.start, st.end);
+    }
+
+    // ── Structural: drop dead blocks, insert missing tracks ──
+    std::set<uint64_t> present;
+    for (const auto& st : scriptTracks)
+        if (st.uid >= 0 && modelUids.count((uint64_t)st.uid))
+            present.insert((uint64_t)st.uid);
+
+    std::set<size_t> kill;
+    for (const auto& st : scriptTracks)
+        if (st.uid >= 0 && !present.count((uint64_t)st.uid))
+            for (long k = st.start; k <= st.end; ++k) kill.insert((size_t)k);
+
+    std::vector<std::string> additions;
+    for (int t = 0; t < project.numTracks(); ++t) {
+        const uint64_t uid = project.track(t).uid;
+        if (present.count(uid)) continue;
+        std::string block;
+        appendTrackBlock(block, project, const_cast<audio::AudioEngine&>(engine), t, "    ");
+        additions.push_back(block);
+    }
+    if (!kill.empty() || !additions.empty()) rep.changed = true;
+
+    if (!kill.empty() || !additions.empty()) {
+        // Insertion point: before the tracks-close line, after all
+        // surviving track blocks.
+        std::vector<std::string> result;
+        result.reserve(lines.size());
+        const size_t insAt = tracksClose >= 0 ? (size_t)tracksClose : lines.size();
+        size_t ai = 0;
+        (void)ai;
+        auto pushBlock = [&](const std::string& block) {
+            std::string cur;
+            for (char c : block) {
+                if (c == '\n') { result.push_back(cur); cur.clear(); }
+                else           cur += c;
+            }
+            if (!cur.empty()) result.push_back(cur);
+        };
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (i == insAt && !additions.empty())
+                for (const auto& a : additions) pushBlock(a);
+            if (!kill.count(i)) result.push_back(lines[i]);
+        }
+        if (insAt >= lines.size() && !additions.empty())
+            for (const auto& a : additions) pushBlock(a);
+        lines.swap(result);
+    }
+
+    // Serialize back (patched is always the full new text so callers
+    // can use it uniformly; changed signals whether bytes differ).
+    rep.patched.reserve(lines.size());
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) rep.patched += '\n';
+        rep.patched += lines[i];
+    }
+    // Preserve the original trailing newline semantics.
+    if (!rep.patched.empty() &&
+        (original.empty() || original.back() != '\n'))
+        rep.patched.pop_back();
+    return rep;
 }
 
 } // namespace livecode

@@ -645,6 +645,15 @@ bool App::init() {
                                     const std::string& name, int track) {
             return loadBufferToVocoder(std::move(buf), name, track);
         };
+        pm->deliverDrumRackPad = [this](std::shared_ptr<audio::AudioBuffer> buf,
+                                        const std::string& name, int track,
+                                        int pad) {
+            return loadBufferToDrumRackPad(std::move(buf), name, track, pad);
+        };
+        pm->deliverLibrary = [this](std::shared_ptr<audio::AudioBuffer> buf,
+                                    const std::string& name) {
+            return deliverRenderToLibrary(std::move(buf), name);
+        };
     }
 
     // Wire MidiEngine: scan ports, open inputs, connect to AudioEngine
@@ -1695,6 +1704,50 @@ bool App::init() {
     initUiCommandServer();
 
     updateWindowTitle();
+    return true;
+}
+
+bool App::deliverRenderToLibrary(std::shared_ptr<audio::AudioBuffer> buf,
+                                 const std::string& name) {
+    if (!buf) return false;
+    // Target root: first configured library path, else create
+    // "<home>/YAWN Samples" and register it.
+    auto paths = m_libraryDb.getLibraryPaths();
+    std::filesystem::path root;
+    int64_t rootId = 0;
+    if (!paths.empty()) {
+        root = paths.front().path;
+        rootId = paths.front().id;
+    } else {
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        root = std::filesystem::path(home ? home : ".") / "YAWN Samples";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        if (ec) root = std::filesystem::current_path();
+        rootId = m_libraryDb.addLibraryPath(root.string());
+        if (rootId == 0) return false;
+    }
+
+    // Sanitize + make the filename unique.
+    std::string stem;
+    for (char c : name)
+        stem += (std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+                 c == '-' || c == ' ')
+                    ? c : '_';
+    while (!stem.empty() && stem.back() == '_') stem.pop_back();
+    if (stem.empty()) stem = "render";
+    std::error_code ec;
+    std::filesystem::path file = root / (stem + ".wav");
+    for (int i = 1; std::filesystem::exists(file, ec); ++i)
+        file = root / (stem + "_" + std::to_string(i) + ".wav");
+
+    if (!FileIO::saveAudioBuffer(file.string(), *buf,
+                                 static_cast<int>(m_audioEngine.sampleRate())))
+        return false;
+    LOG_INFO("LiveCode", "Render delivered to library: %s", file.string().c_str());
+    if (m_libraryScanner)
+        m_libraryScanner->scanLibraryPath(rootId, root.string());
     return true;
 }
 

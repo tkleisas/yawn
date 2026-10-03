@@ -100,6 +100,19 @@ void PrerenderManager::poll() {
         } else if (job->target.kind == "granular") {
             if (deliverGranular)
                 delivered = deliverGranular(buf, name, job->target.track);
+        } else if (job->target.kind == "drumslop") {
+            if (deliverDrumSlop)
+                delivered = deliverDrumSlop(buf, name, job->target.track);
+        } else if (job->target.kind == "vocoder") {
+            if (deliverVocoder)
+                delivered = deliverVocoder(buf, name, job->target.track);
+        } else if (job->target.kind == "drumrack") {
+            if (deliverDrumRackPad)
+                delivered = deliverDrumRackPad(buf, name, job->target.track,
+                                               job->target.pad);
+        } else if (job->target.kind == "library") {
+            if (deliverLibrary)
+                delivered = deliverLibrary(buf, name);
         } else if (job->target.kind == "file") {
             const std::string path = job->target.path;
             if (!path.empty())

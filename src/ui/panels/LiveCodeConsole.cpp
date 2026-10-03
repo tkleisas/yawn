@@ -172,7 +172,8 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             loadEditorBuffer();
             break;
         case Zone::Save:
-            saveBuffer();
+            if (m_tab == 2) saveBuffer();
+            else if (m_tab == 1) syncScript();
             break;
         case Zone::None:
             if (m_tab == 2 && m_lastLineH > 0.0f) {
@@ -254,6 +255,35 @@ void LiveCodeConsole::saveBuffer() {
     m_mgr->showToast("Live code script saved", 1.5f, 0);
 }
 
+void LiveCodeConsole::syncScript() {
+    if (!m_mgr || !m_project || !m_engine) return;
+    const std::string path = m_mgr->defaultScriptPath();
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        m_mgr->pushConsole(1, "live code: no script file to sync");
+        return;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    const auto rep = livecode::patchSongSource(ss.str(), *m_project, *m_engine);
+    for (const auto& w : rep.warnings) m_mgr->pushConsole(1, "sync: " + w);
+    if (!rep.changed) {
+        m_mgr->pushConsole(0, "live code: script already in sync");
+        return;
+    }
+    std::ofstream g(path, std::ios::binary | std::ios::trunc);
+    if (!g) {
+        m_mgr->pushConsole(2, "live code: cannot write " + path);
+        return;
+    }
+    g << rep.patched;
+    g.close();
+    m_editorLoaded = false;   // Edit tab reloads the patched file next time
+    m_codeLensDirty = true;
+    m_mgr->pushConsole(0, "live code: script patched from project state");
+    m_mgr->showToast("Script synced from project", 1.5f, 0);
+}
+
 void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     Renderer2D& r = *ctx.renderer;
     if (!ctx.textMetrics || !m_mgr) return;
@@ -304,6 +334,7 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     drawBtn(Zone::Reload,  "Reload");
     drawBtn(Zone::Clear,   "Clear");
     if (m_tab == 2) drawBtn(Zone::Save, "Save");
+    else if (m_tab == 1) drawBtn(Zone::Save, "Sync");
 
     // ── Tab row ──
     {

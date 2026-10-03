@@ -118,7 +118,15 @@ private:
     bool loadBufferToSampler(std::shared_ptr<audio::AudioBuffer> buf,
                               const std::string& name, int trackIndex);
     bool loadBufferToDrumSlop(std::shared_ptr<audio::AudioBuffer> buf,
-                               const std::string& name, int trackIndex);
+                              const std::string& name, int trackIndex);
+    bool loadBufferToDrumRackPad(std::shared_ptr<audio::AudioBuffer> buf,
+                                 const std::string& name, int trackIndex, int pad);
+    // Rendered-buffer delivery into the content library: writes a WAV
+    // under the first library root (creating "YAWN Samples" in the home
+    // dir when none is configured) and rescans that root so the file
+    // shows up in the browser.
+    bool deliverRenderToLibrary(std::shared_ptr<audio::AudioBuffer> buf,
+                                const std::string& name);
     bool loadBufferToGranular(std::shared_ptr<audio::AudioBuffer> buf,
                                const std::string& name, int trackIndex);
     bool loadBufferToVocoder(std::shared_ptr<audio::AudioBuffer> buf,

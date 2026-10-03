@@ -30,9 +30,11 @@ namespace livecode {
 class PrerenderManager {
 public:
     struct Target {
-        std::string kind;    // "clip" | "sampler" | "granular" | "file"
+        std::string kind;    // "clip" | "sampler" | "granular" | "drumslop"
+                             // | "vocoder" | "drumrack" | "library" | "file"
         int track = 0;
         int scene = 0;
+        int pad = 0;         // kind="drumrack"
         std::string path;    // kind="file"
         std::string name;    // display name for the delivered asset
     };
@@ -90,6 +92,10 @@ public:
                        const std::string& name, int track)> deliverDrumSlop;
     std::function<bool(std::shared_ptr<audio::AudioBuffer>,
                        const std::string& name, int track)> deliverVocoder;
+    std::function<bool(std::shared_ptr<audio::AudioBuffer>,
+                       const std::string& name, int track, int pad)> deliverDrumRackPad;
+    std::function<bool(std::shared_ptr<audio::AudioBuffer>,
+                       const std::string& name)> deliverLibrary;
     std::function<void(const std::string& msg)> report;
 
 private:

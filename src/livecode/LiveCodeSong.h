@@ -143,5 +143,21 @@ SongApplyReport applySongModel(const SongModel& song,
 std::string generateSongSource(const Project& project,
                                const audio::AudioEngine& engine);
 
+// ── Template-preserving round-trip (§5.4 stage 2) ────────────────────────
+// Rewrite the value literals of the `song` block in `original` so the
+// script mirrors the live project: comments, layout, unknown keys and
+// text outside the block survive byte-for-byte; track blocks are
+// inserted/removed structurally by uid. `patched` is the full new text
+// (set when `changed`). Unrecognized lines are left untouched and
+// reported as warnings.
+struct SongPatchReport {
+    bool changed = false;
+    std::string patched;                 // full new source (when changed)
+    std::vector<std::string> warnings;
+};
+SongPatchReport patchSongSource(const std::string& original,
+                                const Project& project,
+                                const audio::AudioEngine& engine);
+
 } // namespace livecode
 } // namespace yawn

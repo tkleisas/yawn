@@ -57,6 +57,9 @@ public:
     void forwardTextInput(const std::string& t);
     // Write the editor buffer to the script file (Save button).
     void saveBuffer();
+    // Patch the script file from project state — preserving comments
+    // and layout (template-preserving round-trip, §5.4 stage 2).
+    void syncScript();
 
 private:
     void pushOverlay(fw2::UIContext& ctx);

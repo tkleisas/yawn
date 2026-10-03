@@ -438,6 +438,9 @@ static int l_render(lua_State* L) {
         lua_getfield(L, -1, "scene");
         if (lua_isnumber(L, -1)) target.scene = static_cast<int>(lua_tonumber(L, -1));
         lua_pop(L, 1);
+        lua_getfield(L, -1, "pad");
+        if (lua_isnumber(L, -1)) target.pad = static_cast<int>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
         lua_getfield(L, -1, "path");
         if (lua_isstring(L, -1)) { const char* s = lua_tostring(L, -1); if (s) target.path = s; }
         lua_pop(L, 1);
