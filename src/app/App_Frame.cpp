@@ -336,6 +336,12 @@ void App::update() {
     // Poll controller scripts (MIDI input → Lua callbacks)
     m_controllerManager.update();
 
+    // Tick the live-code scheduler (beat-anchored callbacks, note-offs)
+    m_liveCode.update();
+
+    // Console overlay housekeeping (code-lens refresh while visible)
+    m_liveConsole.tick();
+
     // Sync controller session focus rectangle to SessionPanel
     {
         const auto& focus = m_controllerManager.sessionFocus();

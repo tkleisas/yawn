@@ -1190,6 +1190,7 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         const auto& tr = project.track(t);
         json tj;
         tj["name"] = tr.name;
+        if (tr.uid != 0) tj["uid"] = tr.uid;
         tj["type"] = (tr.type == Track::Type::Audio)  ? "Audio"
                     : (tr.type == Track::Type::Midi)   ? "Midi"
                                                          : "Visual";
@@ -1325,6 +1326,23 @@ bool ProjectSerializer::saveToFolder(const fs::path& folderPath,
         scenes.push_back(sj);
     }
     root["scenes"] = scenes;
+
+    // Live-code scripts (§6.1) — sparse: omitted when the project has none.
+    if (!project.liveCodeScripts().empty()) {
+        json lc;
+        lc["format"] = 1;
+        lc["enabled"] = true;
+        json scripts = json::array();
+        for (const auto& s : project.liveCodeScripts()) {
+            json sj;
+            sj["name"] = s.name;
+            sj["path"] = s.path;
+            if (s.autorun) sj["autorun"] = true;
+            scripts.push_back(std::move(sj));
+        }
+        lc["scripts"] = std::move(scripts);
+        root["livecode"] = std::move(lc);
+    }
 
     // Clips (sparse: only non-empty slots)
     json clips = json::object();
@@ -1533,6 +1551,7 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             try {
             auto& tr = project.track(t);
             tr.name = tj.value("name", "Track " + std::to_string(t + 1));
+            tr.uid = tj.value("uid", 0ull);   // 0 → backfilled below
             std::string typeStr = tj.value("type", "Audio");
             tr.type = (typeStr == "Midi")   ? Track::Type::Midi
                      : (typeStr == "Visual") ? Track::Type::Visual
@@ -1667,6 +1686,31 @@ bool ProjectSerializer::loadFromFolder(const fs::path& folderPath,
             }
             ++t;
         }
+        // Legacy projects (no uid in JSON) — backfill stable ids for the
+        // live-coding reconciliation layer. One-time, transparent.
+        for (int u = 0; u < project.numTracks(); ++u)
+            project.assignTrackUid(project.track(u));
+    }
+
+    // Live-code script defs (§6.1) — authoritative for autorun on load.
+    if (root.contains("livecode") && root["livecode"].is_object()) {
+        const auto& lc = root["livecode"];
+        std::vector<yawn::Project::LiveCodeScriptDef> defs;
+        if (lc.contains("scripts") && lc["scripts"].is_array()) {
+            for (const auto& sj : lc["scripts"]) {
+                try {
+                    yawn::Project::LiveCodeScriptDef def;
+                    def.name = sj.value("name", "main");
+                    def.path = sj.value("path", "");
+                    def.autorun = sj.value("autorun", false);
+                    if (!def.path.empty()) defs.push_back(std::move(def));
+                } catch (const std::exception& e) {
+                    LOG_WARN("Project", "Skipping corrupt livecode script def: %s",
+                             e.what());
+                }
+            }
+        }
+        project.setLiveCodeScripts(std::move(defs));
     }
 
     // Scenes

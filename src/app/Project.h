@@ -26,6 +26,11 @@ struct Track {
     enum class VisualBlendMode : uint8_t { Normal, Add, Multiply, Screen };
 
     std::string name;
+    // Stable identity for the live-coding reconciliation layer
+    // (docs/live-coding.md §5.3): assigned at creation, persisted in
+    // project.json, backfilled on load for legacy projects. Indices
+    // remain the internal currency everywhere else.
+    uint64_t uid = 0;
     Type type = Type::Audio;
     int colorIndex = 0;
     float volume = 1.0f;
@@ -163,6 +168,21 @@ enum class ViewMode : uint8_t { Session, Arrangement };
 // Owned by the UI thread. Clip pointers are passed to the audio engine.
 class Project {
 public:
+    // Live-code scripts attached to this project (docs/live-coding.md
+    // §6.1). Populated on save from the project folder's livecode/ dir;
+    // entries are authoritative for autorun behaviour on next load.
+    struct LiveCodeScriptDef {
+        std::string name;
+        std::string path;        // project-relative ("livecode/main.lua")
+        bool autorun = false;
+    };
+    const std::vector<LiveCodeScriptDef>& liveCodeScripts() const {
+        return m_liveCodeScripts;
+    }
+    void setLiveCodeScripts(std::vector<LiveCodeScriptDef> defs) {
+        m_liveCodeScripts = std::move(defs);
+    }
+
     Project() = default;
 
     void init(int numTracks = kDefaultNumTracks, int numScenes = kDefaultNumScenes) {
@@ -173,6 +193,7 @@ public:
         for (int t = 0; t < numTracks; ++t) {
             m_tracks[t].name = "Track " + std::to_string(t + 1);
             m_tracks[t].colorIndex = t;
+            assignTrackUid(m_tracks[t]);
             m_clipSlots[t].resize(numScenes);
         }
         for (int s = 0; s < numScenes; ++s) {
@@ -411,6 +432,7 @@ public:
         Track t;
         t.name = "Track " + std::to_string(m_tracks.size() + 1);
         t.colorIndex = static_cast<int>(m_tracks.size());
+        assignTrackUid(t);
         m_tracks.push_back(t);
 
         m_clipSlots.emplace_back();
@@ -422,10 +444,30 @@ public:
         t.name = name;
         t.type = type;
         t.colorIndex = static_cast<int>(m_tracks.size());
+        assignTrackUid(t);
         m_tracks.push_back(t);
 
         m_clipSlots.emplace_back();
         m_clipSlots.back().resize(numScenes());
+    }
+
+    // Stable-uid assignment (live-coding reconciliation). Monotonic,
+    // never reused; 0 = "unset".
+    void assignTrackUid(Track& t) {
+        if (t.uid == 0) t.uid = m_nextTrackUid++;
+        else if (t.uid >= m_nextTrackUid) m_nextTrackUid = t.uid + 1;
+    }
+    int findTrackByUid(uint64_t uid) const {
+        if (uid == 0) return -1;
+        for (int t = 0; t < numTracks(); ++t)
+            if (m_tracks[t].uid == uid) return t;
+        return -1;
+    }
+    int findTrackByName(const std::string& name) const {
+        if (name.empty()) return -1;
+        for (int t = 0; t < numTracks(); ++t)
+            if (m_tracks[t].name == name) return t;
+        return -1;
     }
 
     // Remove the last track (used by undo of Add Track)
@@ -626,6 +668,10 @@ private:
     };
 
     std::vector<Track> m_tracks;
+    // Monotonic uid counter for stable track identity (live-coding §5.3).
+    uint64_t m_nextTrackUid = 1;
+    // Live-code script definitions (§6.1); populated at save, consumed at load.
+    std::vector<LiveCodeScriptDef> m_liveCodeScripts;
     std::vector<Scene> m_scenes;
     // m_clipSlots[trackIndex][sceneIndex]
     std::vector<std::vector<ClipSlot>> m_clipSlots;

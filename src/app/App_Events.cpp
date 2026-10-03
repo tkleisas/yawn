@@ -188,6 +188,11 @@ void App::handleKeyEvent(const SDL_Event& event) {
             case SDLK_Y: // Redo
                 if (m_undoManager.canRedo()) { m_undoManager.redo(); markDirty(); }
                 break;
+            case SDLK_L: // Live code run/stop toggle (Ctrl+L), reload (Ctrl+Shift+L)
+                if (shift) m_liveCode.reload();
+                else if (m_liveCode.isActive()) m_liveCode.stop();
+                else m_liveCode.runScript();
+                break;
             case SDLK_C: { // Copy clip
                 // Arrangement view: copy the selected arrangement clip
                 if (m_project.viewMode() == ViewMode::Arrangement) {
@@ -705,6 +710,11 @@ void App::handleKeyEvent(const SDL_Event& event) {
                     updateDetailForSelectedTrack();
                 }
             }
+            break;
+
+        // Live-code console drop-down (`~`, Quake-style)
+        case SDLK_GRAVE:
+            m_liveConsole.toggle(m_fw2Context);
             break;
 
         // Enter launches/stops selected clip

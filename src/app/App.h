@@ -30,9 +30,11 @@
 #include "ui/panels/TransportPanel.h"
 #include "ui/panels/BrowserPanel.h"
 #include "ui/panels/VisualParamsPanel.h"
+#include "ui/panels/LiveCodeConsole.h"
 #include "library/LibraryDatabase.h"
 #include "library/LibraryScanner.h"
 #include "controllers/ControllerManager.h"
+#include "livecode/LiveCodeManager.h"
 #include "ui/panels/ReturnMasterPanel.h"
 #include "audio/AudioEngine.h"
 #include "audio/Clip.h"
@@ -450,6 +452,8 @@ private:
     library::LibraryDatabase m_libraryDb;
     std::unique_ptr<library::LibraryScanner> m_libraryScanner;
     controllers::ControllerManager m_controllerManager;
+    livecode::LiveCodeManager      m_liveCode;
+    ui::LiveCodeConsole            m_liveConsole;
     bool m_running = false;
     uint64_t m_lastFrameTicks = 0;
     GLuint m_iconTexture = 0;

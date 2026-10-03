@@ -281,6 +281,10 @@ void App::doSaveProject(const std::filesystem::path& path) {
     if (projectDir.extension() != ".yawn")
         projectDir += ".yawn";
 
+    // Record live-code script defs (from the folder being saved to) so
+    // autorun behaviour round-trips (docs/live-coding.md §6.1).
+    m_project.setLiveCodeScripts(m_liveCode.scanProjectScripts(projectDir));
+
     if (ProjectSerializer::saveToFolder(projectDir, m_project, m_audioEngine, &m_midiLearnManager, &m_visualEngine)) {
         m_projectPath = projectDir;
         m_projectDirty = false;
@@ -341,7 +345,9 @@ void App::doOpenProject(const std::filesystem::path& path) {
                      repaired);
         }
         syncTracksToEngine();
-        // Re-read any IR files referenced by ConvolutionReverb
+        // Live-code scripts: queue autorun scripts recorded in the
+        // project (phase 5). Runs are deferred to the frame loop.
+        m_liveCode.onProjectOpened(projectDir, m_project);
         // effects in this project. ProjectSerializer's extra-state
         // hook preserves the file PATH (cheap, portable across
         // machines) but doesn't read the file itself — we do that

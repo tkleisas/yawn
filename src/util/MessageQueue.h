@@ -144,7 +144,12 @@ struct MetronomeSetModeMsg {
     int mode; // 0=Always, 1=RecordOnly, 2=PlayOnly, 3=Off
 };
 
-// Send a MIDI message to a specific track's instrument
+// Send a MIDI message to a specific track's instrument.
+// atBeat > 0 schedules the message at a transport beat: the audio thread
+// parks it in a bounded pending queue until the block whose beat window
+// contains atBeat, then inserts it into the track's MidiBuffer with the
+// matching sub-block frameOffset (sample-accurate, docs/live-coding.md
+// §3.2). atBeat <= 0 fires as soon as possible (next block, frame 0).
 struct SendMidiToTrackMsg {
     int trackIndex;
     uint8_t type;       // MidiMessage::Type as uint8_t
@@ -153,7 +158,19 @@ struct SendMidiToTrackMsg {
     uint16_t velocity;
     uint32_t value;     // for CC, pitch bend, etc.
     uint16_t ccNumber = 0;
+    double atBeat = 0.0;
 };
+
+// Live-code scheduler late policy for notes whose scheduled beat was
+// missed (UI hitch longer than the lookahead): false = play immediately
+// (default), true = drop. See docs/live-coding.md §3.2.
+struct SetSchedLatePolicyMsg {
+    bool drop;
+};
+
+// Flush every scheduled-but-not-yet-fired note in the audio-side pending
+// queue (transport seek/stop housekeeping).
+struct FlushScheduledNotesMsg {};
 
 // Launch a MIDI clip on a track
 struct LaunchMidiClipMsg {
@@ -398,7 +415,9 @@ using AudioCommand = std::variant<
     TransportSetLoopEnabledMsg,
     TransportSetLoopRangeMsg,
     SetSidechainSourceMsg,
-    SetResampleSourceMsg
+    SetResampleSourceMsg,
+    SetSchedLatePolicyMsg,
+    FlushScheduledNotesMsg
 >;
 
 // Messages sent from audio thread → UI thread (lock-free)

@@ -343,6 +343,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiClipEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/OfflineRenderer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Prerender.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/FileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/MidiFileIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ProjectSerializer.cpp
@@ -449,6 +450,14 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiMonitorBuffer.cpp
     # Automation engine (implementation split from header)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/automation/AutomationEngine.cpp
+    # Live-coding layer (docs/live-coding.md): scheduler, Lua engine,
+    # manager, declarative song layer. Lua-link is unconditional below —
+    # no GL/SDL deps here.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeScheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/LiveCodeSong.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/livecode/PrerenderManager.cpp
     # Audio subsystem (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TimeStretcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Transport.cpp
@@ -494,6 +503,10 @@ target_include_directories(yawn_core PUBLIC
     ${stb_SOURCE_DIR}
 )
 target_compile_definitions(yawn_core PUBLIC YAWN_CORE_BUILD)
+
+# Lua 5.4 — the live-coding layer (src/livecode) uses it unconditionally
+# (the controller layer links from the exe; M3DSceneScript under MODEL3D).
+target_link_libraries(yawn_core PUBLIC lua54)
 
 # TcpLineServer uses winsock2 on Windows; PUBLIC so the test binary
 # (which links yawn_core and opens its own client sockets) gets it too.

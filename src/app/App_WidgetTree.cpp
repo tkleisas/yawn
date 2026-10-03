@@ -263,7 +263,12 @@ void App::showKeyboardShortcutsDialog() {
         "  Delete / Bksp    Delete selection\n"
         "\n"
         "OTHER\n"
-        "  Esc              Close menu / exit fullscreen / quit";
+        "  Esc              Close menu / exit fullscreen / quit\n"
+        "\n"
+        "LIVE CODE\n"
+        "  Ctrl+L           Run / Stop live code script\n"
+        "  Ctrl+Shift+L     Reload script from disk\n"
+        "  ~                Live code console (drop-down)";
     ui::fw2::DialogButton ok;
     ok.label   = "OK";
     ok.primary = true;
@@ -474,6 +479,18 @@ void App::setupMenuBar() {
     // Tools menu — procedural preset generation. Runs on a worker
     // thread; results land in the global preset library and show up in
     // the Browser → Presets tab (where they can be auditioned/loaded).
+    m_menuBar.addMenu("Live Code", {
+        M::item(m_liveCode.isActive() ? "Stop (Ctrl+L)" : "Run (Ctrl+L)", [this]() {
+            if (m_liveCode.isActive()) m_liveCode.stop();
+            else m_liveCode.runScript();
+        }),
+        M::item("Reload From Disk (Ctrl+Shift+L)", [this]() { m_liveCode.reload(); }),
+        M::separator(),
+        M::item("Show Console (~)", [this]() {
+            if (!m_liveConsole.isOpen()) m_liveConsole.toggle(m_fw2Context);
+        }),
+    });
+
     m_menuBar.addMenu("Tools", {
         M::item("Generate Preset Library (balanced names)", [this]() {
             startPresetGeneration(0.5f, /*selectedDeviceOnly*/false);

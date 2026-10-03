@@ -18,6 +18,7 @@
 #include "util/RtRetireList.h"
 #include <portaudio.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -447,6 +448,11 @@ public:
     uint64_t cmdsConsumedForTest() const {
         return m_cmdsConsumed.load(std::memory_order_acquire);
     }
+    // Scheduled-note queue introspection (paired with pumpInputForTest).
+    int scheduledPendingForTest() const { return m_schedCount; }
+    int schedOverflowForTest()   const { return m_schedOverflowCount.load(std::memory_order_acquire); }
+    int schedLateDroppedForTest() const { return m_schedLateDropped.load(std::memory_order_acquire); }
+    int schedFlushedForTest()    const { return m_schedFlushedTotal.load(std::memory_order_acquire); }
 
     // ─── Private audio capture (auto-sampler, sample tools) ──────────
     //
@@ -643,6 +649,12 @@ private:
 
     void processAudio(const float* input, float* output, unsigned long numFrames);
     void processCommands();
+    // Live-code scheduled-note queue (docs/live-coding.md §3.2): parked
+    // future-dated SendMidiToTrackMsgs; drained per block into
+    // m_liveInputMidi with sub-block frame offsets.
+    void enqueueScheduledNote(const SendMidiToTrackMsg& msg, double atBeat);
+    void drainScheduledNotes(int nf);
+    int  flushScheduledNotes();          // returns count flushed
     void emitPositionUpdate();
     void emitClipStates();
     void emitMeterUpdates();
@@ -688,6 +700,26 @@ private:
     std::vector<midi::MidiBuffer> m_trackMidiBuffers;
     // Captures virtual keyboard / UI MIDI input for recording
     std::vector<midi::MidiBuffer> m_liveInputMidi;
+
+    // ── Scheduled-note pending queue (audio thread only) ──
+    // Future-dated SendMidiToTrackMsgs (live-code at_beat scheduling).
+    // Bounded ring; entries are parked until the block whose beat window
+    // contains their atBeat, then inserted into m_liveInputMidi with the
+    // matching frameOffset. Heap-backed single allocation (AudioEngine
+    // stack-size warning applies to inline members).
+    struct ScheduledNote {
+        double atBeat = 0.0;
+        SendMidiToTrackMsg msg;
+    };
+    static constexpr int kMaxScheduledNotes = 1024;
+    std::unique_ptr<std::array<ScheduledNote, kMaxScheduledNotes>> m_schedNotes;
+    int                m_schedHead = 0;   // first live entry
+    int                m_schedCount = 0;  // live entries
+    int                m_blockFrames = 0; // block size seen by processCommands
+    std::atomic<bool>  m_schedLateDrop{false};   // SetSchedLatePolicyMsg
+    std::atomic<int>   m_schedOverflowCount{0};  // enqueues dropped (full)
+    std::atomic<int>   m_schedLateDropped{0};    // late-dropped (drop policy)
+    std::atomic<int>   m_schedFlushedTotal{0};   // flushes (seek/wrap/flush cmd)
 
     CommandQueue m_commandQueue;
     EventQueue m_eventQueue;

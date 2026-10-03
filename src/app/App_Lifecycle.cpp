@@ -599,6 +599,54 @@ bool App::init() {
     m_controllerManager.scanScripts("scripts/controllers");
     m_controllerManager.autoConnect();
 
+    // ── Live coding (docs/live-coding.md, phase 0) ──
+    m_liveCode.init(&m_audioEngine, &m_project);
+    m_liveCode.setToastHandler([this](const std::string& msg, float dur, int sev) {
+        m_toastManager.show(msg, dur, static_cast<ui::ToastManager::Severity>(sev));
+    });
+    m_liveCode.setProjectPathProvider([this]() { return m_projectPath; });
+    // Song-layer hooks (phase 2): structural edits route through the same
+    // paths the UI uses.
+    m_liveCode.setEngineSyncHook([this]() { syncTracksToEngine(); });
+    m_liveCode.setMarkDirtyHook([this]() { markDirty(); });
+    m_liveCode.setMidiClipLiveHook([this](int track, int scene,
+                                          std::unique_ptr<midi::MidiClip> clip) {
+        return setMidiClipLive(track, scene, std::move(clip));
+    });
+    m_liveConsole.init(&m_liveCode, &m_project, &m_audioEngine);
+    // Prerender delivery (phase 3): clip target mirrors the stem-separation
+    // flow (in-memory buffer; project save persists it to samples/).
+    if (auto* pm = m_liveCode.prerenderManager()) {
+        pm->deliverClip = [this](const std::shared_ptr<audio::AudioBuffer>& buf,
+                                 int track, int scene, const std::string& name) {
+            if (!buf || track < 0 || track >= m_project.numTracks() ||
+                scene < 0 || scene >= m_project.numScenes()) return false;
+            auto clip = std::make_unique<audio::Clip>();
+            clip->name = name;
+            clip->buffer = buf;
+            m_project.setClip(track, scene, std::move(clip));
+            syncTracksToEngine();
+            markDirty();
+            return true;
+        };
+        pm->deliverSampler = [this](std::shared_ptr<audio::AudioBuffer> buf,
+                                    const std::string& name, int track) {
+            return loadBufferToSampler(std::move(buf), name, track);
+        };
+        pm->deliverGranular = [this](std::shared_ptr<audio::AudioBuffer> buf,
+                                     const std::string& name, int track) {
+            return loadBufferToGranular(std::move(buf), name, track);
+        };
+        pm->deliverDrumSlop = [this](std::shared_ptr<audio::AudioBuffer> buf,
+                                     const std::string& name, int track) {
+            return loadBufferToDrumSlop(std::move(buf), name, track);
+        };
+        pm->deliverVocoder = [this](std::shared_ptr<audio::AudioBuffer> buf,
+                                    const std::string& name, int track) {
+            return loadBufferToVocoder(std::move(buf), name, track);
+        };
+    }
+
     // Wire MidiEngine: scan ports, open inputs, connect to AudioEngine
     // Skip ports claimed by controller scripts (exclusive access on Windows)
     auto claimedInputs = m_controllerManager.claimedInputPortNames();
@@ -1663,7 +1711,8 @@ void App::run() {
 }
 
 void App::shutdown() {
-    // Stop controller scripts
+    // Stop live code + controller scripts
+    m_liveCode.shutdown();
     m_controllerManager.shutdown();
 
     // Stop library scanner before anything else

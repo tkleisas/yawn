@@ -66,6 +66,7 @@ AudioEngine::AudioEngine()
     m_retireList.setHeartbeat(&m_rtSeq);
     for (auto& chain : m_midiEffectChains)
         chain.setRetireList(&m_retireList);
+    m_schedNotes = std::make_unique<std::array<ScheduledNote, kMaxScheduledNotes>>();
 }
 
 AudioEngine::~AudioEngine() {
@@ -802,6 +803,9 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Process any pending commands from the UI thread
     // (also populates m_liveInputMidi for virtual keyboard MIDI)
     for (int t = 0; t < kMaxTracks; ++t) m_liveInputMidi[t].clear();
+    // The command handlers classify at-beat messages against THIS block's
+    // beat window — publish the block size before draining.
+    m_blockFrames = static_cast<int>(numFrames);
     // Snapshot the transport BPM BEFORE processing commands so we can
     // tell whether the queue carried a local tempo edit. The flag is
     // forwarded into LinkManager so a UI-driven change isn't clobbered
@@ -1078,6 +1082,11 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
         for (int i = 0; i < vkBuf.count(); ++i)
             m_trackMidiBuffers[t].addMessage(vkBuf[i]);
     }
+
+    // Drain the live-code scheduled-note queue: entries whose atBeat falls
+    // inside this block's beat window are inserted with sub-block frame
+    // offsets (sample-accurate); late entries follow the late policy.
+    drainScheduledNotes(nf);
 
     // Capture pre-effect MIDI for recording (raw input: held chords, etc.)
     // Recording pre-effect means the clip stores your actual key presses.
@@ -1528,6 +1537,9 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
     // Reset arrangement playback state when loop wraps
     if (m_transport.didLoopWrap()) {
         m_arrPlayback.resetAllTracks();
+        // Beats restarted at the loop start — parked at-beat notes beyond
+        // the old end are musically stale (docs/live-coding.md §3.2).
+        flushScheduledNotes();
     }
 
     // Periodically send position updates to the UI (~30 Hz)
@@ -1542,8 +1554,7 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
 }
 
 void AudioEngine::processCommands() {
-    // Snapshot the produced counter BEFORE draining: quiesceCommands()
-    // on the UI thread treats consumed >= target as proof that every
+    // Snapshot the produced counter BEFORE draining: quiesceCommands()    // on the UI thread treats consumed >= target as proof that every
     // command produced up to `target` was popped. Storing the
     // start-of-drain observation (rather than an end-of-drain one)
     // keeps that implication exact — a command produced after the
@@ -1601,6 +1612,9 @@ void AudioEngine::processCommands() {
             else if constexpr (std::is_same_v<T, TransportSetPositionMsg>) {
                 m_transport.setPositionInSamples(msg.positionInSamples);
                 m_arrPlayback.resetAllTracks();
+                // A seek makes every parked at-beat note musically stale —
+                // drop them (docs/live-coding.md §3.2 transport rules).
+                flushScheduledNotes();
             }
             else if constexpr (std::is_same_v<T, TestToneMsg>) {
                 m_testTone.enabled = msg.enabled;
@@ -1681,6 +1695,42 @@ void AudioEngine::processCommands() {
                     m.velocity = msg.velocity;
                     m.value = msg.value;
                     m.ccNumber = msg.ccNumber;
+
+                    if (msg.atBeat > 0.0) {
+                        // Beat-anchored scheduling (live-code at_beat).
+                        // Block window: [blockStart, blockStart + block).
+                        const double blockStartBeat =
+                            m_transport.positionInBeats();
+                        const double blockEndBeat = blockStartBeat +
+                            (m_config.sampleRate > 0
+                                ? (static_cast<double>(m_blockFrames) /
+                                   m_config.sampleRate) *
+                                  (m_transport.bpm() / 60.0)
+                                : 0.0);
+                        if (msg.atBeat > blockEndBeat) {
+                            // Future — park until its block arrives.
+                            enqueueScheduledNote(msg, msg.atBeat);
+                            return;   // from the visit lambda
+                        }
+                        if (msg.atBeat < blockStartBeat) {
+                            // Missed its window (UI hitch) — late policy.
+                            if (m_schedLateDrop.load(std::memory_order_relaxed)) {
+                                m_schedLateDropped.fetch_add(1, std::memory_order_relaxed);
+                                return;
+                            }
+                            m.frameOffset = 0;   // play now
+                        } else {
+                            // Inside this block — sub-block placement.
+                            const double spb = m_transport.samplesPerBeat();
+                            int32_t frame = 0;
+                            if (spb > 0.0) {
+                                frame = static_cast<int32_t>(
+                                    (msg.atBeat - blockStartBeat) * spb + 0.5);
+                            }
+                            m.frameOffset = std::clamp(frame, 0,
+                                std::max(m_blockFrames - 1, 1));
+                        }
+                    }
                     // Store in live input buffer (merged into track buffer later)
                     m_liveInputMidi[msg.trackIndex].addMessage(m);
                     if (m.isNoteOn())
@@ -2024,6 +2074,12 @@ void AudioEngine::processCommands() {
                     m_trackResampleSource[msg.trackIndex] = msg.sourceTrack;
                 }
             }
+            else if constexpr (std::is_same_v<T, SetSchedLatePolicyMsg>) {
+                m_schedLateDrop.store(msg.drop, std::memory_order_relaxed);
+            }
+            else if constexpr (std::is_same_v<T, FlushScheduledNotesMsg>) {
+                flushScheduledNotes();
+            }
             else if constexpr (std::is_same_v<T, SetTrackMidiOutputMsg>) {
                 if (msg.trackIndex >= 0 && msg.trackIndex < kMaxTracks) {
                     m_trackMidiOutPort[msg.trackIndex] = msg.portIndex;
@@ -2109,6 +2165,81 @@ void AudioEngine::processCommands() {
     // observes >= its target also sees every side effect of the popped
     // commands.
     m_cmdsConsumed.store(producedAtStart, std::memory_order_release);
+}
+
+// ── Scheduled-note pending queue (live-code at_beat) ─────────────────────
+
+void AudioEngine::enqueueScheduledNote(const SendMidiToTrackMsg& msg, double atBeat) {
+    if (m_schedCount >= kMaxScheduledNotes) {
+        m_schedOverflowCount.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const int idx = (m_schedHead + m_schedCount) % kMaxScheduledNotes;
+    (*m_schedNotes)[idx] = ScheduledNote{atBeat, msg};
+    m_schedCount++;
+}
+
+void AudioEngine::drainScheduledNotes(int nf) {
+    if (m_schedCount == 0) return;
+
+    const double bpm = m_transport.bpm();
+    const double blockStartBeat = m_transport.positionInBeats();
+    const double blockEndBeat = blockStartBeat +
+        (m_config.sampleRate > 0
+            ? (static_cast<double>(nf) / m_config.sampleRate) * (bpm / 60.0)
+            : 0.0);
+    const bool lateDrop = m_schedLateDrop.load(std::memory_order_relaxed);
+
+    int write = 0;
+    for (int read = 0; read < m_schedCount; ++read) {
+        const int idx = (m_schedHead + read) % kMaxScheduledNotes;
+        ScheduledNote& sn = (*m_schedNotes)[idx];
+
+        if (sn.atBeat > blockEndBeat) {
+            // Still in the future — keep parked. Compact forward.
+            if (write != read) {
+                (*m_schedNotes)[(m_schedHead + write) % kMaxScheduledNotes] = sn;
+            }
+            ++write;
+            continue;
+        }
+
+        // Due (or late) — place into the track's live-input buffer.
+        midi::MidiMessage m{};
+        m.type = static_cast<midi::MidiMessage::Type>(sn.msg.type);
+        m.channel = sn.msg.channel;
+        m.note = sn.msg.note;
+        m.velocity = sn.msg.velocity;
+        m.value = sn.msg.value;
+        m.ccNumber = sn.msg.ccNumber;
+        if (sn.atBeat >= blockStartBeat) {
+            const double spb = m_transport.samplesPerBeat();
+            int32_t frame = 0;
+            if (spb > 0.0) {
+                frame = static_cast<int32_t>(
+                    (sn.atBeat - blockStartBeat) * spb + 0.5);
+            }
+            m.frameOffset = std::clamp(frame, 0, std::max(nf - 1, 1));
+        } else {
+            // Late — missed window (UI hitch longer than lookahead).
+            if (lateDrop) {
+                m_schedLateDropped.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            m.frameOffset = 0;   // play now
+        }
+        if (sn.msg.trackIndex >= 0 && sn.msg.trackIndex < kMaxTracks)
+            m_liveInputMidi[sn.msg.trackIndex].addMessage(m);
+    }
+    m_schedCount = write;
+}
+
+int AudioEngine::flushScheduledNotes() {
+    const int n = m_schedCount;
+    m_schedCount = 0;
+    if (n > 0)
+        m_schedFlushedTotal.fetch_add(n, std::memory_order_relaxed);
+    return n;
 }
 
 void AudioEngine::checkPendingRecordStops(int bufferSize) {
