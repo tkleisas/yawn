@@ -4,6 +4,7 @@
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
 #include "visual/VisualModBus.h"
+#include "visual/VisualGhostBus.h"
 #include "transcribe/AudioToMidi.h"
 #include "ui/framework/v2/Fw2Painters.h"
 #include "ui/framework/v2/Tooltip.h"
@@ -60,6 +61,7 @@
 #include "presets/MidiLoopManager.h"
 #include "presets/DrumPatterns.h"
 #include "presets/MelodicPatterns.h"
+#include <chrono>
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <cinttypes>
@@ -338,6 +340,27 @@ void App::update() {
 
     // Tick the live-code scheduler (beat-anchored callbacks, note-offs)
     m_liveCode.update();
+    // Publish the improv ghost snapshot → visual shader uniforms
+    // (upcoming fires only; fired notes already reach shaders through
+    // the audio-thread note bus).
+    {
+        const auto& t = m_audioEngine.transport();
+        const double beat = t.positionInBeats();
+        const double now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto ghosts = m_liveCode.ghostNotes(beat, now);
+        visual::VisualGhostBus::GhostVec gv[visual::VisualGhostBus::kMaxGhosts];
+        uint32_t n = 0;
+        for (const auto& g : ghosts) {
+            if (g.fired || g.beat <= beat) continue;
+            if (n >= visual::VisualGhostBus::kMaxGhosts) break;
+            gv[n++] = {static_cast<float>(g.pitch) / 127.0f,
+                       static_cast<float>(g.vel7) / 127.0f,
+                       static_cast<float>(std::max(0.0, g.beat - beat)),
+                       static_cast<float>(g.track)};
+        }
+        visual::VisualGhostBus::instance().publish(gv, n, t.beatsPerBar());
+    }
 
     // Console overlay housekeeping (code-lens refresh while visible)
     m_liveConsole.tick();

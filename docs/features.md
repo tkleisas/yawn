@@ -348,7 +348,7 @@ device works on first install. Attribution + license details live in
   amp captures from `pelennor2170/NAM_models` (GPL v3) with the original
   capturers' names preserved in filenames. Neural Amp's file dialog opens here
   by default
-- **25 visual shaders** — `assets/shaders/examples/` — original MIT-licensed
+- **26 visual shaders** — `assets/shaders/examples/` — original MIT-licensed
   Shadertoy-style shaders covering plasma, palette sweeps, audio-reactive
   spectrum bars, kaleidoscopes, etc.
 - **2 glTF 2.0 sample models** — `assets/examples/3d/Duck.glb`, `Fox.glb` —

@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include "livecode/LiveCodeScheduler.h"
 #include "livecode/LiveCodeManager.h"
+#include "visual/VisualGhostBus.h"
 #include "audio/AudioEngine.h"
 #include "app/Project.h"
 
@@ -1725,4 +1726,72 @@ TEST_F(LiveCodeManagerTest, FreezeTakeEmptyAndNoHook) {
     writeScript("yawn.note(0, 60, 100, 0.25, 0, 2)\n");
     ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
     EXPECT_FALSE(m_mgr.freezeTake());          // no hook wired
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// VisualGhostBus (phase B — improv fires as shader uniforms)
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST(VisualGhostBusTest, SeqlockPublishReadRoundTrip) {
+    auto& bus = yawn::visual::VisualGhostBus::instance();
+    yawn::visual::VisualGhostBus::GhostVec in[yawn::visual::VisualGhostBus::kMaxGhosts];
+    for (uint32_t i = 0; i < 4; ++i)
+        in[i] = {0.45f, 0.8f, 2.0f - 0.5f * float(i), float(i) * 0.25f};
+    bus.publish(in, 4, 4);
+
+    yawn::visual::VisualGhostBus::GhostVec out[8];
+    uint32_t n = bus.read(out);
+    ASSERT_EQ(n, 4u);
+    EXPECT_FLOAT_EQ(out[0].pitch01, 0.45f);
+    EXPECT_FLOAT_EQ(out[0].vel01, 0.8f);
+    EXPECT_FLOAT_EQ(out[3].track, 0.75f);
+    EXPECT_EQ(bus.bpb(), 4);
+
+    // Overwrite with fewer entries — count must shrink atomically.
+    in[0] = {0.1f, 0.2f, 0.3f, 0.4f};
+    bus.publish(in, 1, 7);
+    n = bus.read(out);
+    ASSERT_EQ(n, 1u);
+    EXPECT_FLOAT_EQ(out[0].untilFire, 0.3f);
+    EXPECT_EQ(bus.bpb(), 7);
+
+    // Clamping: publishing more than kMaxGhosts is capped.
+    for (uint32_t i = 0; i < 16; ++i) in[i % 8] = {1, 1, 1, 1};
+    bus.publish(in, 16, 4);
+    n = bus.read(out);
+    EXPECT_LE(n, yawn::visual::VisualGhostBus::kMaxGhosts);
+}
+
+TEST_F(LiveCodeManagerTest, GhostUniformsCarryUpcomingFires) {
+    // Script schedules two future fires; pump the ghost publisher the
+    // way the App frame does, then verify the bus snapshot contents.
+    writeScript(
+        "yawn.note(0, 60, 100, 0.25, 0, 8)   -- +8 beats out\n"
+        "yawn.note(1, 72, 110, 0.25, 0, 3)   -- +3 beats out\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+
+    auto& bus = yawn::visual::VisualGhostBus::instance();
+    const double t0 = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    // Publisher equivalent (mirrors App_Frame's tick block).
+    double beat = m_engine->transport().positionInBeats();
+    auto ghosts = m_mgr.ghostNotes(beat, t0 + 1.0);
+    yawn::visual::VisualGhostBus::GhostVec gv[8];
+    uint32_t n = 0;
+    for (const auto& g : ghosts) {
+        if (g.fired || g.beat <= beat) continue;
+        if (n >= 8) break;
+        gv[n++] = {(float)g.pitch / 127.0f, (float)g.vel7 / 127.0f,
+                   (float)(g.beat - beat), (float)g.track};
+    }
+    bus.publish(gv, n, m_engine->transport().beatsPerBar());
+
+    yawn::visual::VisualGhostBus::GhostVec out[8];
+    const uint32_t read = bus.read(out);
+    ASSERT_EQ(read, 2u);
+    // Sorted by enqueue order (beat 8 first, beat 3 second).
+    EXPECT_FLOAT_EQ(out[0].untilFire, 8.0f);
+    EXPECT_FLOAT_EQ(out[0].pitch01, 60.0f / 127.0f);
+    EXPECT_FLOAT_EQ(out[1].untilFire, 3.0f);
+    EXPECT_FLOAT_EQ(out[1].track, 1.0f);
 }

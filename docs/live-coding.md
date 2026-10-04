@@ -886,3 +886,22 @@ the app creates a *new* track (`Take N`, midi type), drops the clip in
 scene 1, and syncs. Undeclared tracks are invisible to the song
 reconciler, so the take survives re-runs, reloads and save/load.
 No undo entry in v1 (the ledger + song layer are the record).
+
+**Phase B — landed.** Improv ↔ shaders (visual channels integration):
+
+- **`VisualGhostBus`** (`src/visual/VisualGhostBus.h`): lock-free
+  UI→visual-thread mailbox (seqlock, fixed 8×4-float payload) published
+  per frame from the App's tick using the improv ledger's *upcoming*
+  fires (fired notes already reach shaders through the audio-thread
+  `VisualNoteBus`) — payload: pitch/127, velocity, beats-until-fire,
+  track (+ beats-per-bar at publish).
+- **New built-in shader uniforms** (layer, composite and post-FX
+  programs; declared-name-optional like every other uniform):
+  `iGhostCount` (float, 0..8), `iGhost0..7` (vec4 — upcoming fires in
+  schedule order), and `iBeatBarFrac` (0..1 inside the current bar, a
+  partner to `iBeat`). Unused by a shader → costs nothing (loc=-1).
+- **Example**: `assets/shaders/examples/31_ghost_accent.frag` — orbits
+  one glyph per upcoming fire toward its bar position, glowing harder
+  as the fire moment approaches.
+- Tests: seqlock round-trip (payload, count shrink, max clamp, bpb) and
+  the ledger→bus pipeline content check. Suite green.

@@ -1,6 +1,7 @@
 #include "visual/VisualEngine.h"
 #include "visual/VisualEngineAPI.h"
 #include "visual/VisualNoteBus.h"
+#include "visual/VisualGhostBus.h"
 #include "ui/GlCaps.h"
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
 #include "visual/gltf/M3DModel.h"
@@ -21,6 +22,10 @@
 #include <regex>
 
 namespace yawn {
+namespace visual {
+// Bus singleton for the frame ghost-uniform appender in this TU.
+static VisualGhostBus& ghostBus() { return VisualGhostBus::instance(); }
+} // namespace visual
 namespace visual {
 
 // ── RAII context scope ─────────────────────────────────────────────────────
@@ -656,6 +661,10 @@ void VisualEngine::cacheUniformLocations(Layer& L) {
     L.loc_iAudioMid          = loc("iAudioMid");
     L.loc_iAudioHigh         = loc("iAudioHigh");
     L.loc_iKick              = loc("iKick");
+    L.loc_iBeatBarFrac       = loc("iBeatBarFrac");
+    L.loc_iGhostCount        = loc("iGhostCount");
+    for (int gi = 0; gi < 8; ++gi)
+        L.loc_iGhost[gi]     = loc(("iGhost" + std::to_string(gi)).c_str());
     L.loc_iChannel[0]        = loc("iChannel0");
     L.loc_iChannel[1]        = loc("iChannel1");
     L.loc_iChannel[2]        = loc("iChannel2");
@@ -1456,6 +1465,10 @@ void VisualEngine::cacheChainPassUniformLocations(Layer::ChainPass& cp) {
     cp.loc_iAudioMid          = loc("iAudioMid");
     cp.loc_iAudioHigh         = loc("iAudioHigh");
     cp.loc_iKick              = loc("iKick");
+    cp.loc_iBeatBarFrac       = loc("iBeatBarFrac");
+    cp.loc_iGhostCount        = loc("iGhostCount");
+    for (int gi = 0; gi < 8; ++gi)
+        cp.loc_iGhost[gi]     = loc(("iGhost" + std::to_string(gi)).c_str());
     cp.loc_iChannel[0]        = loc("iChannel0");
     cp.loc_iChannel[1]        = loc("iChannel1");
     cp.loc_iChannel[2]        = loc("iChannel2");
@@ -1640,6 +1653,10 @@ void VisualEngine::cachePostFXUniformLocations(PostEffect& pe) {
     pe.loc_iAudioMid         = loc("iAudioMid");
     pe.loc_iAudioHigh        = loc("iAudioHigh");
     pe.loc_iKick             = loc("iKick");
+    pe.loc_iBeatBarFrac      = loc("iBeatBarFrac");
+    pe.loc_iGhostCount       = loc("iGhostCount");
+    for (int gi = 0; gi < 8; ++gi)
+        pe.loc_iGhost[gi]    = loc(("iGhost" + std::to_string(gi)).c_str());
     pe.loc_iPrev             = loc("iPrev");
     pe.loc_iFeedback         = loc("iFeedback");
 }
@@ -2031,6 +2048,23 @@ M3DCamera autoFrameInstances(const std::vector<M3DInstance>& insts,
 
 // ── Per-layer render ───────────────────────────────────────────────────────
 
+// Ghost-note + beat-phase uniforms (improv visualization, phase B):
+// global per-frame data — pushes the pending-fire snapshot from the bus
+// into whichever slots the shader declared. loc names differ (Layer vs
+// PostEffect share field shapes; both sources carry the fields).
+static void setGhostsFor(const VisualGhostBus& bus, int32_t iGhostCount,
+                         const int32_t (&iGhost)[8], float transportBeats) {
+    if (iGhostCount >= 0 || iGhost[0] >= 0) {
+        VisualGhostBus::GhostVec gv[VisualGhostBus::kMaxGhosts];
+        const uint32_t gn = bus.read(gv);
+        if (iGhostCount >= 0)
+            glUniform1f(iGhostCount, static_cast<float>(gn));
+        for (uint32_t gi = 0; gi < gn && gi < VisualGhostBus::kMaxGhosts; ++gi)
+            glUniform4f(iGhost[gi], gv[gi].pitch01, gv[gi].vel01,
+                        gv[gi].untilFire, gv[gi].track);
+    }
+}
+
 void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
                                       double transportBeats, bool playing) {
     if (!L.program || !L.fbo) return;
@@ -2413,6 +2447,16 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
         if (src.loc_iAudioMid   >= 0) glUniform1f(src.loc_iAudioMid,   audioBands.mid);
         if (src.loc_iAudioHigh  >= 0) glUniform1f(src.loc_iAudioHigh,  audioBands.high);
         if (src.loc_iKick       >= 0) glUniform1f(src.loc_iKick,       audioKick);
+        if (src.loc_iBeatBarFrac >= 0) {
+            const int bpb = visual::ghostBus().bpb() > 0
+                                ? visual::ghostBus().bpb() : 4;
+            const double inBar = transportBeats -
+                                 std::floor(transportBeats / bpb) * (double)bpb;
+            glUniform1f(src.loc_iBeatBarFrac,
+                        static_cast<float>(inBar / (double)bpb));
+        }
+        setGhostsFor(visual::ghostBus(), src.loc_iGhostCount,
+                     src.loc_iGhost, transportBeats);
 
         // iChannel0..3 — the underlying GL texture bindings on TU0..3
         // are stable across passes (we set them at the same time we
@@ -2778,6 +2822,16 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
             if (pe.loc_iAudioMid         >= 0) glUniform1f(pe.loc_iAudioMid,   m_postSmoothedMid);
             if (pe.loc_iAudioHigh        >= 0) glUniform1f(pe.loc_iAudioHigh,  m_postSmoothedHigh);
             if (pe.loc_iKick             >= 0) glUniform1f(pe.loc_iKick,       m_postKickLevel);
+            if (pe.loc_iBeatBarFrac      >= 0) {
+                const int bpb = visual::ghostBus().bpb() > 0
+                                    ? visual::ghostBus().bpb() : 4;
+                const double inBar = transportBeats -
+                                     std::floor(transportBeats / bpb) * (double)bpb;
+                glUniform1f(pe.loc_iBeatBarFrac,
+                            static_cast<float>(inBar / (double)bpb));
+            }
+            setGhostsFor(visual::ghostBus(), pe.loc_iGhostCount,
+                         pe.loc_iGhost, transportBeats);
 
             for (const auto& p : pe.params) {
                 if (p.location >= 0) glUniform1f(p.location, p.value);

@@ -357,6 +357,9 @@ private:
         GLint loc_iAudioMid          = -1;
         GLint loc_iAudioHigh         = -1;
         GLint loc_iKick              = -1;
+        GLint loc_iBeatBarFrac       = -1;
+        GLint loc_iGhostCount        = -1;
+        GLint loc_iGhost[8]          = {-1, -1, -1, -1, -1, -1, -1, -1};
         GLint loc_iChannel[4]        = {-1, -1, -1, -1};
         GLint loc_iChannelResolution = -1;
         GLint loc_iChannelTime       = -1;
@@ -508,6 +511,9 @@ private:
             GLint loc_iAudioMid          = -1;
             GLint loc_iAudioHigh         = -1;
             GLint loc_iKick              = -1;
+            GLint loc_iBeatBarFrac       = -1;
+            GLint loc_iGhostCount        = -1;
+            GLint loc_iGhost[8]          = {-1, -1, -1, -1, -1, -1, -1, -1};
             GLint loc_iChannel[4]        = {-1, -1, -1, -1};
             GLint loc_iChannelResolution = -1;
             GLint loc_iChannelTime       = -1;
@@ -576,6 +582,9 @@ private:
         GLint loc_iAudioMid         = -1;
         GLint loc_iAudioHigh        = -1;
         GLint loc_iKick             = -1;
+        GLint loc_iBeatBarFrac      = -1;
+        GLint loc_iGhostCount       = -1;
+        GLint loc_iGhost[8]         = {-1, -1, -1, -1, -1, -1, -1, -1};
         GLint loc_iPrev             = -1;
         GLint loc_iFeedback         = -1;
 
