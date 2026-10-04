@@ -626,7 +626,9 @@ bool VisualEngine::compileShaderForLayer(Layer& L, const std::string& userSrc,
     full += userSrc;
     GLuint program = compileShaderProgram(kFullscreenVS, full.c_str(),
                                            sourceLabel.c_str());
-    if (!program) return false;
+    if (!program) {
+        return false;
+    }
     if (L.program) glDeleteProgram(L.program);
     L.program = program;
     cacheUniformLocations(L);
