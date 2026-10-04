@@ -19,7 +19,7 @@ vec3 cool(float t) {     // cyan → violet ramp
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     vec2 p = (uv - vec2(0.5, 0.44)) * vec2(iResolution.x / iResolution.y, 1.0);
-    const float dist = length(p);
+    float dist = length(p);
 
     // ── Ambient: two beat-locked rings + bar sweep + center core ──
     float barBeat = iBeatBarFrac * 4.0;                  // 0..4
