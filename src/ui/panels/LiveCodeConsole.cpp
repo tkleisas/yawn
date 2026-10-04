@@ -354,6 +354,22 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     m_lastLineH = lineH;
     m_lastMet = ctx.textMetrics;
 
+    // Normalize scroll against the real content height every frame —
+    // the wheel path can overshoot the visible area (the scrollbar
+    // thumb then drew past the panel bounds).
+    {
+        const float contentH =
+            barHeight(tabContentLines(m_tab), lineH);
+        const float areaH =
+            panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f);
+        const float maxScroll = std::max(0.0f, contentH - areaH);
+        if (m_tab == 2)
+            m_editor.kernel().setScrollY(
+                std::clamp(m_editor.kernel().scrollY(), 0.0f, maxScroll));
+        else
+            m_scroll = std::clamp(m_scroll, 0.0f, maxScroll);
+    }
+
     // Panel background + border.
     r.drawRect(panel.x, panel.y, panel.w, panel.h, pal.panelBg.withAlpha(238));
     r.drawRectOutline(panel.x, panel.y, panel.w, panel.h, pal.border);
@@ -474,8 +490,9 @@ Rect LiveCodeConsole::drawScrollbar(fw2::UIContext& ctx, const Rect& panel,
     Rect track{panel.x + panel.w - 8.0f, content.y, 4.0f, content.h};
     if (contentH <= content.h || content.h <= 0.0f) return track;
     const float viewH = contentH - content.h;
-    const float scroll = (m_tab == 2) ? m_editor.kernel().scrollY()
-                                      : m_scroll;
+    const float scroll = std::clamp(
+        (m_tab == 2) ? m_editor.kernel().scrollY() : m_scroll,
+        0.0f, viewH);
     const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
     const float thumbY = track.y +
         (viewH > 0.0f ? (scroll / viewH) * (content.h - thumbH) : 0.0f);

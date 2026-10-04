@@ -141,9 +141,14 @@ float tokenRunWidth(const fw2::TextMetrics& met, float fontSize,
 
 // ─── Input ───────────────────────────────────────────────────────────
 
-bool LiveCodeEditor::keyDown(fw2::Key key, bool ctrl, bool /*shift*/) {
+bool LiveCodeEditor::keyDown(fw2::Key key, bool ctrl, bool shift) {
     if (ctrl && key == Key::Enter) {
-        if (onEvaluate) onEvaluate(m_k.text());
+        if (!onEvaluate) return true;
+        // Ctrl+Shift+Enter = run the REGION at the caret (blank-line
+        // delimited block — the script's structural units); Ctrl+Enter
+        // evaluates the whole buffer.
+        if (shift) onEvaluate(m_k.blockTextAt(m_k.caretLine()));
+        else       onEvaluate(m_k.text());
         return true;
     }
     switch (key) {
@@ -229,6 +234,29 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     m_visibleLines = visible;
 
     r2.drawRect(r.x, r.y, gutterW, r.h, pal.background);
+
+    // Region indicators: one subtle pill per block (blank-line runs) on
+    // the gutter's left edge; the caret's block is highlighted.
+    {
+        const auto [caretLo, caretHi] = m_k.blockRange(m_k.caretLine());
+        int blockStart = 0;
+        int blockIdx = 0;
+        for (int l = 0; l <= static_cast<int>(lines.size()); ++l) {
+            const bool end = (l == static_cast<int>(lines.size())) ||
+                             m_k.lines()[l].empty();
+            if (end && l > blockStart) {
+                const bool isCaret = (caretLo >= blockStart && caretLo < l);
+                const Color c = isCaret ? pal.accent : pal.borderSubtle;
+                r2.drawRect(r.x + 2.0f, r.y + static_cast<float>(blockStart)
+                                * lineH - scrollY + 2.0f,
+                            3.0f, static_cast<float>(l - blockStart) * lineH
+                                - 4.0f, c);
+                ++blockIdx;
+            }
+            if (end) blockStart = l + 1;
+        }
+        (void)blockIdx;
+    }
 
     std::vector<std::vector<Tok>> toks(lines.size());
     bool longComment = false;

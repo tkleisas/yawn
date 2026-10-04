@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace yawn {
@@ -174,7 +175,39 @@ public:
         closeCompletion();
     }
 
-    // ─── Completion ──────────────────────────────────────────────────
+    // ─── Region/block evaluation (Ctrl+Shift+Enter) ──────────────────
+    // A block is a maximal run of non-blank lines ("paragraphs" — blank
+    // lines are the region separators, matching the demo-script style).
+    // Range is [begin, end) — end EXCLUSIVE and file-clamped.
+    std::pair<int, int> blockRange(int line) const {
+        int lo = line, hi = line;
+        if (lo < 0 || lo >= static_cast<int>(m_lines.size())) return {0, 0};
+        while (lo > 0 && !trimCopy(m_lines[lo - 1]).empty()) --lo;
+        while (hi < static_cast<int>(m_lines.size()) &&
+               !trimCopy(m_lines[hi]).empty())
+            ++hi;
+        return {lo, lo == hi ? lo + 1 : hi};   // caret on a blank line
+    }
+
+    std::string blockTextAt(int line) const {
+        const auto [lo, hi] = blockRange(line);
+        std::string out;
+        for (int i = lo; i < hi; ++i) {
+            if (i > lo) out += '\n';
+            out += m_lines[i];
+        }
+        return out;
+    }
+
+private:
+    static std::string trimCopy(const std::string& s) {
+        size_t b = 0, e = s.size();
+        while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r')) ++b;
+        while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r')) --e;
+        return s.substr(b, e - b);
+    }
+
+public:
     // Word in front of the caret: [A-Za-z0-9_.] run (dotted prefixes
     // complete as a whole — "yawn.n" → "yawn.note").
     std::string completionPrefix() const {

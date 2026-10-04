@@ -120,7 +120,18 @@ static yawn::ui::fw2::MouseButton sdlBtnToFw2(int btn) {
 }
 
 void App::handleKeyEvent(const SDL_Event& event) {
-    if (event.key.repeat) return;
+    // Key-repeat policy: repeats are globally filtered (nothing in the
+    // DAW wants auto-repeat) EXCEPT the live-code editor — held
+    // arrows/backspace must eat rows like any text editor.
+    if (event.key.repeat) {
+        if (m_liveConsole.isOpen() && m_liveConsole.wantsKeys()) {
+            m_liveConsole.keyEvent(
+                sdlKeyToFw2(event.key.key),
+                (event.key.mod & SDL_KMOD_CTRL) != 0,
+                (event.key.mod & SDL_KMOD_SHIFT) != 0);
+        }
+        return;
+    }
     bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
     bool ctrl  = (event.key.mod & SDL_KMOD_CTRL)  != 0;
 
