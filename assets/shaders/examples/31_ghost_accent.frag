@@ -36,14 +36,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     float dist = length(p);
 
     // ── Backdrop: vertical blues + vignette ──
-    vec3 col = mix(vec3(0.03, 0.05, 0.10), vec3(0.05, 0.08, 0.16), uv.y);
-    col *= 1.0 - 0.55 * smoothstep(0.55, 1.15, dist);
+    vec3 col = mix(vec3(0.06, 0.10, 0.22), vec3(0.10, 0.17, 0.34), uv.y);
+    col *= 1.0 - 0.35 * smoothstep(0.55, 1.15, dist);
 
     // ── Clock face: two crisp rings, beat-locked pulse ──
     float r1 = 0.30 + 0.012 * cos(iBeat * 1.5707963);
     float r2 = 0.56 + 0.010 * cos(iBeat * 0.7853982);
-    col += cool(0.28) * ambience * 0.35 * aa(0.0035, abs(dist - r1));
-    col += cool(0.50) * ambience * 0.22 * aa(0.0025, abs(dist - r2));
+    col += cool(0.28) * ambience * 0.9 * aa(0.0035, abs(dist - r1));
+    col += cool(0.50) * ambience * 0.6 * aa(0.0025, abs(dist - r2));
     // ticks each beat around r1 (bar phase aligned)
     float sector = floor(fract(iBeat / 4.0) * 4.0);
     for (int k = 0; k < 4; ++k) {
@@ -51,7 +51,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         vec2 dir = vec2(cos(a), sin(a));
         float tick = aa(0.012, abs(dist - r1)) *
                      aa(0.035, abs(atan(p.y, p.x) - a + (a > 3.0 ? -TAU : 0.0)));
-        col += cool(0.4) * ambience * tick * 0.5 * (k == int(sector) ? 1.6 : 0.8);
+        col += cool(0.55) * ambience * tick * 1.1 * (k == int(sector) ? 1.8 : 1.0);
     }
 
     // ── Accent glyphs: one per upcoming improv fire ──
@@ -72,14 +72,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         // fill + outline: bright fill rushes in as the fire nears
         vec3 glow = mix(cool(0.15) * 0.5, vec3(1.05, 1.05, 1.15), t01);
         col += glow * dm * (0.45 + 1.1 * t01) * g.y;
-        col += cool(0.75) * aa(r + 0.02, abs(q.x) + abs(q.y)) *
-               (1.0 - dm) * (0.3 + 0.9 * t01) * 0.55;
+        col += cool(0.85) * aa(r + 0.025, abs(q.x) + abs(q.y)) *
+               (1.0 - dm) * (0.5 + 1.2 * t01);
         // inward streak toward centre as it approaches
         float rayD = abs((dot(normalize(-c), p - c) - length(p - c)) * length(p - c));
         (void)rayD;
         float streak = exp(-9.0 * max(0.0, length(p - c) - r)) *
                        (1.0 - exp(-3.0 * (length(p - c) - r + 0.01)));
-        col += vec3(0.45, 0.62, 1.0) * streak * t01 * g.y * 0.55;
+        col += vec3(0.55, 0.72, 1.0) * streak * t01 * g.y * 0.9;
     }
 
     fragColor = vec4(col, 1.0);
