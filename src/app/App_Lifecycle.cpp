@@ -670,6 +670,39 @@ bool App::init() {
             t, static_cast<uint8_t>(type)});
     };
     m_liveConsole.init(&m_liveCode, &m_project, &m_audioEngine);
+    // yawn.set_visual: bare shader names resolve against the example
+    // roots; the visual clip gets tempoSync (beat-locked iTime).
+    m_liveCode.setVisualLiveHook([this](int track, int scene,
+                                        const std::string& shaderPath,
+                                        const std::string& name) {
+        if (track < 0 || track >= m_project.numTracks() ||
+            scene < 0 || scene >= m_project.numScenes() || shaderPath.empty())
+            return false;
+        std::filesystem::path full(shaderPath);
+        std::error_code ec;
+        if (!std::filesystem::exists(full, ec)) {
+            full = std::filesystem::path("assets/shaders/examples") / shaderPath;
+            if (!std::filesystem::exists(full, ec))
+                full = std::filesystem::path("build/bin/assets/shaders/examples")
+                       / shaderPath;
+        }
+        auto vc = std::make_unique<visual::VisualClip>();
+        vc->source.shaderPath = full.string();
+        vc->name = name.empty() ? full.stem().string() : name;
+        vc->tempoSync = true;
+        m_project.setVisualClip(track, scene, std::move(vc));
+        syncTracksToEngine();
+        markDirty();
+        return true;
+    });
+    // Script-driven scene launches: visual slots load through the same
+    // quantized controller path the UI uses.
+    m_liveCode.setLaunchVisualHook([this](int track, int scene,
+                                          const std::string& shaderPath) {
+        (void)shaderPath;   // re-derived from the slot
+        visual().launchVisualClipQuantized(
+            track, scene, m_audioEngine.transport().isPlaying());
+    });
     // Prerender delivery (phase 3): clip target mirrors the stem-separation
     // flow (in-memory buffer; project save persists it to samples/).
     if (auto* pm = m_liveCode.prerenderManager()) {

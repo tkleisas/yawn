@@ -86,7 +86,12 @@ bool LibraryDatabase::open() {
     if (m_db) return true;
 
     auto path = databasePath().string();
-    int rc = sqlite3_open(path.c_str(), &m_db);
+    // FULLMUTEX: the single connection is touched from multiple threads
+    // (scanner worker + UI paths); serialized mode makes every API call
+    // internally thread-safe even where a caller path misses m_mutex.
+    int rc = sqlite3_open_v2(path.c_str(), &m_db,
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                             SQLITE_OPEN_FULLMUTEX, nullptr);
     if (rc != SQLITE_OK) {
         LOG_ERROR("LibraryDB", "Failed to open %s: %s", path.c_str(), sqlite3_errmsg(m_db));
         sqlite3_close(m_db);

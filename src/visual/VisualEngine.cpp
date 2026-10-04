@@ -795,6 +795,7 @@ void VisualEngine::setOutputVisible(bool visible) {
     m_outputVisible = visible;
 }
 
+
 void VisualEngine::setFullscreen(bool fullscreen) {
     if (!m_outputWindow || fullscreen == m_fullscreen) return;
     SDL_SetWindowFullscreen(m_outputWindow, fullscreen);
