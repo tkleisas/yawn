@@ -360,6 +360,17 @@ void App::update() {
                        static_cast<float>(g.track)};
         }
         visual::VisualGhostBus::instance().publish(gv, n, t.beatsPerBar());
+        {
+            // TEMP diagnostic (ghost viz debugging)
+            static double lastLog = 0.0;
+            if (now - lastLog > 1.0 && (n > 0 || t.isPlaying())) {
+                lastLog = now;
+                LOG_INFO("GHOSTPUB", "n=%u playing=%d beat=%.2f first=(%.3f,%.3f,%.3f,%.1f)",
+                         n, t.isPlaying() ? 1 : 0, beat, n ? gv[0].pitch01 : -1.f,
+                         n ? gv[0].vel01 : -1.f, n ? gv[0].untilFire : -1.f,
+                         n ? gv[0].track : -1.f);
+            }
+        }
     }
 
     // Console overlay housekeeping (code-lens refresh while visible)

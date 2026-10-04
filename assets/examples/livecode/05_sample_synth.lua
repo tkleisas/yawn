@@ -186,17 +186,25 @@ local root = yawn.state.root
 -- All four forged clips play from the grid on scene launch; the improv
 -- layer adds human variation on top of the machine patterns.
 
--- Random raised-zap accents (sampler pitch shifts the forged buffer).
-improv.every(2, function(beat)
-    if math.random() < 0.4 then
-        yawn.note(2, root + 24 + math.floor(12 * math.random()), 90, 0.4, 0, beat)
+-- Accent patterns scheduled ONE BAR AHEAD (docs §3.2 musical
+-- scheduling): on_bar plans the next bar's zaps/hats at their exact
+-- beats — which is also what turns them into legible ghost-note
+-- pre-glow for the visual channel (beats of warning, not a 100 ms blink).
+improv.on_bar(function(bar)
+    local bpb = 4.0
+    local base = (bar - 1) * bpb
+    -- Zap accents: beats 1.0 + 2.75 of the NEXT bar, one octave up.
+    for _, off in ipairs({ 0.0, 2.75 }) do
+        if math.random() < 0.55 then
+            yawn.note(2, root + 24 + math.floor(12 * math.random()),
+                      90, 0.4, 0, base + off)
+        end
     end
-end)
-
--- Ghost 16th ticks: quiet, probabilistic, double-time.
-improv.every(0.25, function(beat)
-    if math.random() < 0.18 then
-        yawn.note(3, root, 45, 0.05, 0, beat)
+    -- Ghost 16th ticks: quiet, probabilistic slots through the bar.
+    for step = 0, 15 do
+        if math.random() < 0.18 then
+            yawn.note(3, root, 45, 0.05, 0, base + step * 0.25)
+        end
     end
 end)
 
