@@ -23,6 +23,8 @@ float diamond(vec2 p, float r) {
     return aa(r, d);
 }
 
+mat2 rot(float a) { return mat2(cos(a), -sin(a), sin(a), cos(a)); }
+
 vec3 cool(float t) {
     return clamp(vec3(0.12 + 0.95 * t, 0.35 + 0.45 * t, 1.30 - 0.75 * t),
                  0.0, 1.0);
@@ -83,5 +85,3 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     fragColor = vec4(col, 1.0);
 }
 
-// rotate helper (kept last so the prefix scan can hoist it fine)
-mat2 rot(float a) { return mat2(cos(a), -sin(a), sin(a), cos(a)); }
