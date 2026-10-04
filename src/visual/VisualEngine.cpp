@@ -110,6 +110,21 @@ uniform float iAudioMid;
 uniform float iAudioHigh;
 uniform float iKick;
 
+// Live-coding improvisation ghosts (phase B): iGhostN = upcoming fires
+// in schedule order — vec4(pitch/127, velocity 0..1, beats until the
+// fire moment, track index). iGhostCount carries the valid entry count
+// (0..8). iBeatBarFrac is the 0..1 position inside the current bar.
+uniform float iGhostCount;
+uniform vec4 iGhost0;
+uniform vec4 iGhost1;
+uniform vec4 iGhost2;
+uniform vec4 iGhost3;
+uniform vec4 iGhost4;
+uniform vec4 iGhost5;
+uniform vec4 iGhost6;
+uniform vec4 iGhost7;
+uniform float iBeatBarFrac;
+
 // Rendered pixel width of the clip's text strip on iChannel1. Use this
 // for wrap-correct scrolling: e.g. `mod(pxX, iTextWidth) / iTextTexWidth`.
 uniform float iTextWidth;
