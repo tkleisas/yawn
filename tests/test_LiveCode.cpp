@@ -10,6 +10,7 @@
 #include "app/Project.h"
 
 #include <algorithm>
+#include <atomic>
 #include <fstream>
 
 using namespace yawn;   // makes yawn::audio and yawn::livecode reachable
@@ -265,8 +266,15 @@ protected:
         // stream. Scripts go to a temp "project" dir, not the real ~/.yawn.
         m_engine = std::make_unique<audio::AudioEngine>();
         m_project.init(2, 2);
+        // gtest_discover_tests spawns every test as its own (possibly
+        // concurrent) process; random_seed() is time-based and can
+        // collide between two processes — combine with thread id + a
+        // monotonic counter so parallel ctest never shares a dir.
+        static std::atomic<int> seq{0};
         m_tmp = std::filesystem::temp_directory_path() /
-                ("yawn_livecode_test_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+                ("yawn_livecode_test_" +
+                 std::to_string(reinterpret_cast<size_t>(this)) + "_" +
+                 std::to_string(seq.fetch_add(1)));
         std::filesystem::create_directories(m_tmp);
         m_mgr.init(m_engine.get(), &m_project);
         m_mgr.setProjectPathProvider([this] { return m_tmp; });

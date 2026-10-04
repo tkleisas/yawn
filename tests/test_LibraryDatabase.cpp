@@ -67,7 +67,8 @@ protected:
         // directly to test the schema-migration + classifier logic
         // without touching the global DB. See each TEST_F.
         m_tempPath = fs::temp_directory_path() /
-                     ("yawn_libdb_test_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + ".db");
+                     ("yawn_libdb_test_" +
+                     std::to_string(reinterpret_cast<size_t>(this)) + ".db");
         std::error_code ec;
         fs::remove(m_tempPath, ec);
     }
