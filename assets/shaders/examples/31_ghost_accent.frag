@@ -1,56 +1,87 @@
 // Live-coding ghost accents — the visual face of Y.A.W.N's improv layer.
-// Always-alive ambient (beat-locked rings + bar sweep) with one glyph
-// orbit per UPCOMING improv fire, brightening as the fire moment
-// approaches. MIT License.
+// Crisp beat-locked clock face with one glowing diamond per UPCOMING
+// improv fire; glyphs brighten and rush clockwise toward their fire
+// moment. MIT License.
 //
 // YAWN built-in uniforms used (all optional):
-//   iBeat, iBeatBarFrac          — transport clocks
-//   iGhostCount, iGhost0..7      — vec4(pitch01, vel01, beatsUntilFire,
-//                                      trackF), in schedule order
-uniform float ring;    // @range 0.2..2 default=0.85
-uniform float spin;    // @range 0..4 default=0.9
-uniform float ambience; // @range 0..1 default=0.34 — ambient intensity
+//   iBeat, iBeatBarFrac            — transport clocks
+//   iGhostCount, iGhost0..iGhost7  — vec4(pitch01, vel01,
+//                                       beatsUntilFire, trackF)
 
-vec3 cool(float t) {     // cyan → violet ramp
-    return clamp(vec3(0.15 + 0.85 * t, 0.35 + 0.4 * t, 1.25 - 0.6 * t),
+uniform float spin;      // @range 0..4 default=0.5
+uniform float ambience;  // @range 0..1 default=0.55
+
+const float TAU = 6.28318530718;
+
+float aa(float edge, float d) {       // cheap analytic AA
+    return smoothstep(edge, edge - 2.0 * 0.003, d);
+}
+
+// An anti-aliased diamond mask.
+float diamond(vec2 p, float r) {
+    float d = abs(p.x) + abs(p.y);
+    return aa(r, d);
+}
+
+vec3 cool(float t) {
+    return clamp(vec3(0.12 + 0.95 * t, 0.35 + 0.45 * t, 1.30 - 0.75 * t),
                  0.0, 1.0);
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
-    vec2 p = (uv - vec2(0.5, 0.44)) * vec2(iResolution.x / iResolution.y, 1.0);
+    vec2 p = (uv - vec2(0.5, 0.5)) * vec2(iResolution.x / iResolution.y, 1.0);
     float dist = length(p);
 
-    // ── Ambient: two beat-locked rings + bar sweep + center core ──
-    float barBeat = iBeatBarFrac * 4.0;                  // 0..4
-    float ringPulse = 0.0;
-    ringPulse += 0.5 * exp(-6.0 * abs(dist - (ring * (0.30 + 0.06 * sin(iBeat * 1.570796)))));
-    ringPulse += 0.3 * exp(-5.0 * abs(dist - ring * 0.55));
-    // radial spoke sweep, one rotation per bar
-    float ang = atan(p.y, p.x);
-    float sweep = 0.10 * exp(-8.0 * abs(fract((ang + iBeatBarFrac * 6.2831853) / 6.2831853) - 0.5) * 6.0);
-    float core = 0.16 * exp(-3.0 * dist);
-    float amb = (ringPulse + sweep + core) * max(ambience, 0.0);
+    // ── Backdrop: vertical blues + vignette ──
+    vec3 col = mix(vec3(0.03, 0.05, 0.10), vec3(0.05, 0.08, 0.16), uv.y);
+    col *= 1.0 - 0.55 * smoothstep(0.55, 1.15, dist);
 
-    vec3 col = vec3(0.06, 0.10, 0.16) + cool(0.30) * amb;
+    // ── Clock face: two crisp rings, beat-locked pulse ──
+    float r1 = 0.30 + 0.012 * cos(iBeat * 1.5707963);
+    float r2 = 0.56 + 0.010 * cos(iBeat * 0.7853982);
+    col += cool(0.28) * ambience * 0.35 * aa(0.0035, abs(dist - r1));
+    col += cool(0.50) * ambience * 0.22 * aa(0.0025, abs(dist - r2));
+    // ticks each beat around r1 (bar phase aligned)
+    float sector = floor(fract(iBeat / 4.0) * 4.0);
+    for (int k = 0; k < 4; ++k) {
+        float a = TAU * (float(k) / 4.0) - iBeatBarFrac * TAU;
+        vec2 dir = vec2(cos(a), sin(a));
+        float tick = aa(0.012, abs(dist - r1)) *
+                     aa(0.035, abs(atan(p.y, p.x) - a + (a > 3.0 ? -TAU : 0.0)));
+        col += cool(0.4) * ambience * tick * 0.5 * (k == int(sector) ? 1.6 : 0.8);
+    }
 
-    // ── Upcoming improv fires: orbiting glyphs brightening at fire ──
+    // ── Accent glyphs: one per upcoming improv fire ──
     for (int i = 0; i < 8; ++i) {
         if (i >= int(iGhostCount)) break;
         vec4 g = (i == 0) ? iGhost0 : (i == 1) ? iGhost1 : (i == 2) ? iGhost2
               : (i == 3) ? iGhost3 : (i == 4) ? iGhost4 : (i == 5) ? iGhost5
               : (i == 6) ? iGhost6 : iGhost7;
-        float t01 = 1.0 - clamp(g.z / 4.0, 0.0, 1.0);   // 0 = far, 1 = firing
-        float angle = g.w * 1.5708 + spin * iBeatBarFrac * 6.2831853;
+        float t01 = 1.0 - clamp(g.z / 4.0, 0.0, 1.0);   // 0 far → 1 firing
+        float slot = mod(g.w, 8.0);
+        float angle = TAU * (slot / 8.0) + spin * iBeat * 0.2652582
+                    + TAU * iBeatBarFrac;
         vec2 dir = vec2(cos(angle), sin(angle));
-        vec2 c = dir * (ring * (0.62 - 0.34 * t01));
-        float h = 0.045 + 0.075 * g.y;
-        float d = length((p - c) * vec2(1.0, (0.03 + h) / h));
-        float glyph = smoothstep(0.55, 0.05, d);
-        col += vec3(0.35, 0.65, 1.0) * glyph * g.y * (0.25 + 1.15 * t01);
-        // trailing wake behind near-fire glyphs
-        col += cool(t01) * 0.5 * exp(-3.5 * abs(dist - length(c))) * g.y * t01;
+        vec2 c = dir * mix(0.56, 0.30, t01 * t01);      // fall inward
+        vec2 q = (p - c) * rot(-angle);                  // rotate with slot
+        float r = 0.055 + 0.06 * g.y * (0.35 + 0.65 * t01);
+        float dm = diamond(q, r);
+        // fill + outline: bright fill rushes in as the fire nears
+        vec3 glow = mix(cool(0.15) * 0.5, vec3(1.05, 1.05, 1.15), t01);
+        col += glow * dm * (0.45 + 1.1 * t01) * g.y;
+        col += cool(0.75) * aa(r + 0.02, abs(q.x) + abs(q.y)) *
+               (1.0 - dm) * (0.3 + 0.9 * t01) * 0.55;
+        // inward streak toward centre as it approaches
+        float rayD = abs((dot(normalize(-c), p - c) - length(p - c)) * length(p - c));
+        (void)rayD;
+        float streak = exp(-9.0 * max(0.0, length(p - c) - r)) *
+                       (1.0 - exp(-3.0 * (length(p - c) - r + 0.01)));
+        col += vec3(0.45, 0.62, 1.0) * streak * t01 * g.y * 0.55;
     }
 
     fragColor = vec4(col, 1.0);
 }
+
+// rotate helper (kept last so the prefix scan can hoist it fine)
+mat2 rot(float a) { return mat2(cos(a), -sin(a), sin(a), cos(a)); }
