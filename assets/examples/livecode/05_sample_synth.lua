@@ -30,6 +30,7 @@ song = {
           instrument = { id = "sampler" } },
         { uid = 4, name = "Hat", volume = 0.6,
           instrument = { id = "sampler" } },
+        { name = "Visuals", type = "visual", volume = 1.0 },
     },
 }
 
@@ -173,6 +174,10 @@ end
 yawn.load_sample(2, ZAPBUF or PAD, "sampler")   -- improv accents
 yawn.load_sample(3, HATBUF or PAD, "sampler")   -- improv ghost ticks
 yawn.log("forged 4 samples — sr " .. sr .. ", patterns assembled")
+
+-- The visual face: the ghost-accent shader on its own visual track,
+-- beat-locked (iTime = beats), launched with the scene.
+yawn.set_visual(4, 1, "31_ghost_accent.frag", "ghost accents")
 
 -- ═══ Layer 3: improv — play the forge ════════════════════════════════
 improv.lookahead(0.12)

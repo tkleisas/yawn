@@ -882,13 +882,14 @@ bool VisualEngine::loadLayer(int track, const std::string& path, int audioSource
     const size_t fileBytes = (size_t)in.tellg();
     LOG_INFO("Visual", "loadLayer track=%d bytes=%zu audioSrc=%d",
              track, fileBytes, audioSource);
+    in.clear();
+    in.seekg(0, std::ios::beg);
     std::stringstream buf;
     buf << in.rdbuf();
 
     Layer& L = ensureLayer(track);
     ContextScope scope(m_outputWindow, m_outputContext);
     if (!compileShaderForLayer(L, buf.str(), path)) return false;
-
     L.shaderPath = path;
     std::error_code ec;
     auto mt = std::filesystem::last_write_time(path, ec);
@@ -898,6 +899,9 @@ bool VisualEngine::loadLayer(int track, const std::string& path, int audioSource
     updateAudioWiring();
     LOG_INFO("Visual", "Layer %d loaded: %s (source %d)",
              track, path.c_str(), audioSource);
+    // A visual launch is the user asking to see visuals: surface the
+    // output window if it's hidden (and we're not in an offline render).
+    if (!m_offlineRender) setOutputVisible(true);
     return true;
 }
 
