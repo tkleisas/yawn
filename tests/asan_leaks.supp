@@ -1,0 +1,5 @@
+# SDL's EGL offscreen-video platform init (used by the shader-corpus
+# harness' headless GL context) allocates a one-time driver data block
+# via dlopen'ed EGL libraries and never frees it. Known SDL platform
+# behavior — suppress only that allocation site.
+leak:SDL_EGL_InitializeOffscreen

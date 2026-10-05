@@ -1,5 +1,7 @@
 #pragma once
 
+#include <SDL3/SDL.h>
+
 // ShaderTestKernel — the GL compile path used by BOTH the visual engine
 // and the shader test harness (tests/test_ShaderCorpus.cpp).
 //
@@ -22,6 +24,11 @@ namespace shadertest {
 
 // Initialization: create an offscreen GL context (SDL) and load gl.
 // Thin: returns false with reason on failure. Call once per process.
+// Held so the test environment can destroy the window + context before
+// SDL_Quit (LSan flags driver-side allocations otherwise).
+inline SDL_Window*    s_win = nullptr;
+inline SDL_GLContext  s_ctx = nullptr;
+
 bool initContext(std::string& err);
 
 // Engine-identical fragment stream (for golden/line-mapping tests).

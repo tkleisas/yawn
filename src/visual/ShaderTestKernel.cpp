@@ -133,11 +133,11 @@ bool initContext(std::string& err) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_Window* w = SDL_CreateWindow("shader probe", 64, 64,
-                                     SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-    if (!w) { err = std::string("window: ") + SDL_GetError(); return false; }
-    SDL_GLContext ctx = SDL_GL_CreateContext(w);
-    if (!ctx) { err = std::string("context: ") + SDL_GetError(); return false; }
+    s_win = SDL_CreateWindow("shader probe", 64, 64,
+                             SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+    if (!s_win)    { err = std::string("window: ") + SDL_GetError(); return false; }
+    s_ctx = SDL_GL_CreateContext(s_win);
+    if (!s_ctx)    { err = std::string("context: ") + SDL_GetError(); return false; }
     const int version = gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress);
     if (version == 0) {
         err = "glad load failed";
@@ -152,6 +152,8 @@ bool initContext(std::string& err) {
 }
 
 void shutdownContext() {
+    if (s_ctx)    { SDL_GL_DestroyContext(s_ctx);    s_ctx = nullptr; }
+    if (s_win)    { SDL_DestroyWindow(s_win);     s_win = nullptr; }
     SDL_Quit();
 }
 
