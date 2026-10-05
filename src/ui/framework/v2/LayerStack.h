@@ -107,6 +107,13 @@ struct OverlayEntry {
     //   action).
     bool dismissOnOutsideClick = true;
 
+    //   captureMouseWhileDown: an overlay that drags (scrollbars,
+    //   splitters). When onMouseDown consumes the press, the
+    //   LayerStack routes every subsequent mouse MOVE and UP to this
+    //   entry — regardless of the cursor's position — until the mouse
+    //   button is released. Fixes drag-outside-the-panel freezes.
+    bool captureMouseWhileDown = false;
+
     // Fires once when the entry is removed — explicit remove(),
     // outside-click dismiss, Escape, or Handle destruction all route
     // through here. Idempotent (LayerStack guarantees single fire).
@@ -203,6 +210,11 @@ public:
     // constructed handle.
     void remove(OverlayHandle& h);
 
+    // Drag-capture state (set when a captureMouseWhileDown entry
+    // consumes a mouse-down; cleared on the next mouse-up). The
+    // console scrollbars / any future splitter drags rely on this.
+    std::uint64_t capturedEntryId() const { return m_capturedEntry; }
+
     // ─── Per-frame paint ──────────────────────────────────────────
     // Paint all layers in enum order (Modal first, Toast last). Call
     // AFTER the main widget tree has painted. `viewport` is the full
@@ -240,6 +252,8 @@ public:
     void dumpState(std::ostream& os) const;
 
 private:
+    std::uint64_t m_capturedEntry = 0;   // drag capture (0 = none)
+
     friend class OverlayHandle;
 
     // Layer storage. Index by static_cast<int>(OverlayLayer). Main

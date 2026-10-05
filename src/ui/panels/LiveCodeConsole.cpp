@@ -48,7 +48,7 @@ std::vector<std::string> splitLines(const std::string& s) {
 
 enum class Zone : uint8_t {
     None, RunStop, Reload, Clear, Save, Eval, Freeze, TabLog, TabCode,
-    TabEdit, Scrollbar
+    TabEdit, Scrollbar, Resize
 };
 
 // Button slot layout per tab (right → left). Every tab has
@@ -76,6 +76,9 @@ const char* slotLabel(int tab, int slot, bool active) {
 }
 
 Zone zoneAt(const Rect& panel, float lx, float ly, int tab) {
+    // Resize grip: bottom-right 18 px corner (in front of everything).
+    if (lx >= panel.w - 18.0f && ly >= panel.h - 18.0f)
+        return Zone::Resize;
     // Buttons: header right side, only the drawn slots hit-test.
     const int n = slotCount(tab);
     if (ly >= 4.0f && ly < 4.0f + kBtnH &&
@@ -130,8 +133,11 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
     m_scroll = 0.0f;
 
     const float vw = ctx.viewport.w, vh = ctx.viewport.h;
-    const float w = std::min(kPanelW, std::max(340.0f, vw - 32.0f));
-    const float h = std::min(kPanelH, std::max(220.0f, vh * 0.55f));
+    const float w = std::min(m_panelW > 0.0f ? m_panelW : kPanelW,
+                             std::max(340.0f, vw - 32.0f));
+    const float h = std::min(m_panelH > 0.0f ? m_panelH : kPanelH,
+                             std::max(220.0f, vh * 0.86f));
+    m_panelW = w; m_panelH = h;
     m_panel = Rect{16.0f, 8.0f, w, h};
 
     OverlayEntry entry;
@@ -140,23 +146,36 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
     entry.bounds         = m_panel;
     entry.modal          = false;
     entry.dismissOnOutsideClick = false;
-    entry.paint = [this, panel = m_panel](fw2::UIContext& c) {
-        paintBody(c, panel);
+    // Dragging the scrollbar (or the resize grip) must keep tracking the
+    // pointer outside the panel — otherwise a fast drag freezes the
+    // moment the cursor crosses the console's edge.
+    entry.captureMouseWhileDown = true;
+    // Closures read m_panel LIVE: the resize drag mutates it.
+    entry.paint = [this](fw2::UIContext& c) {
+        paintBody(c, m_panel);
     };
-    entry.onMouseDown = [this, panel = m_panel](fw2::MouseEvent& e) {
-        return handleMouseDown(e, panel);
+    entry.onMouseDown = [this](fw2::MouseEvent& e) {
+        return handleMouseDown(e, m_panel);
     };
-    entry.onMouseUp   = [this, panel = m_panel](fw2::MouseEvent& e) {
+    entry.onMouseUp   = [this](fw2::MouseEvent& e) {
         m_dragBarTab = -1;
-        return panel.contains(e.x, e.y);
+        m_resizing   = false;
+        return m_panel.contains(e.x, e.y);
     };
-    entry.onMouseMove = [this, panel = m_panel](fw2::MouseMoveEvent& e) {
-        if (!panel.contains(e.x, e.y)) return false;
-        if (m_dragBarTab >= 0) dragMove(panel, e.y - panel.y);
+    entry.onMouseMove = [this](fw2::MouseMoveEvent& e) {
+        if (m_dragBarTab >= 0) {
+            dragMove(m_panel, e.y - m_panel.y);
+            return true;
+        }
+        if (m_resizing) {
+            resizeTo(e.x, e.y);
+            return true;
+        }
+        if (!m_panel.contains(e.x, e.y)) return false;
         return true;
     };
-    entry.onScroll = [this, panel = m_panel](fw2::ScrollEvent& e) {
-        if (!panel.contains(e.x, e.y)) return false;
+    entry.onScroll = [this](fw2::ScrollEvent& e) {
+        if (!m_panel.contains(e.x, e.y)) return false;
         const float lineH = m_lastLineH > 0.0f ? m_lastLineH : 14.0f;
         if (m_tab == 2) {
             auto& k = m_editor.kernel();
@@ -218,6 +237,9 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             m_tab = 2;
             m_scroll = 0.0f;
             loadEditorBuffer();
+            break;
+        case Zone::Resize:
+            m_resizing = true;
             break;
         case Zone::Save:
             if (m_tab == 2) saveBuffer();
@@ -381,6 +403,8 @@ size_t LiveCodeConsole::tabContentLines(int tab) const {
 }
 
 void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
+    m_lastViewportW = ctx.viewport.w;
+    m_lastViewportH = ctx.viewport.h;
     Renderer2D& r = *ctx.renderer;
     if (!ctx.textMetrics || !m_mgr) return;
     const auto& pal = theme().palette;
@@ -522,6 +546,16 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
         const Rect content{panel.x, areaY, panel.w, areaH};
         drawScrollbar(ctx, panel, content, contentH);
     }
+
+    // Resize grip — bottom-right corner.
+    r.drawRect(panel.x + panel.w - 16.0f, panel.y + panel.h - 16.0f,
+               16.0f, 16.0f, ::yawn::ui::Theme::panelBg);
+    for (int i = 1; i <= 3; ++i) {
+        const float o = static_cast<float>(i) * 4.0f;
+        r.drawRect(panel.x + panel.w - o - 3.0f,
+                   panel.y + panel.h - o - 3.0f, 3.0f, 3.0f,
+                   pal.textSecondary);
+    }
 }
 
 
@@ -569,6 +603,16 @@ void LiveCodeConsole::dragMaybeStart(const Rect& panel, float lx, float ly) {
     } else {
         m_dragOffset = ly - thumbY;
     }
+}
+
+// Resize drag: the window-coords pointer maps to the new panel size
+// (the panel is anchored top-left). Clamped to the viewport minus the
+// chrome, and to a readable minimum.
+void LiveCodeConsole::resizeTo(float winX, float winY) {
+    if (m_lastViewportW <= 0.0f) return;
+    m_panelW = std::clamp(winX - m_panel.x, 340.0f, m_lastViewportW - 32.0f);
+    m_panelH = std::clamp(winY - m_panel.y, 220.0f, m_lastViewportH - 16.0f);
+    m_panel = Rect{m_panel.x, m_panel.y, m_panelW, m_panelH};
 }
 
 void LiveCodeConsole::dragMove(const Rect& panel, float ly) {

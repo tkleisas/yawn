@@ -285,3 +285,111 @@ TEST(PatternParse, DrumGridErrors) {
     EXPECT_FALSE(parseDrumGrid(lanes, 0.0, pc, err));
     EXPECT_NE(err.find("is empty"), std::string::npos) << err;
 }
+
+// ── Arpeggiated chords (!pattern suffix) ──────────────────────────────
+
+TEST(PatternParse, ArpUpCyclesChordTones) {
+    PatternClip pc;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*8!up", pc, err)) << err;
+    ASSERT_EQ(pc.notes.size(), 8u);
+    // Sorted tones: C3(48) E3(52) G3(55); 8 steps cycle up.
+    const int expect[] = {48, 52, 55, 48, 52, 55, 48, 52};
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_EQ(pc.notes[i].pitch, expect[i]) << "step " << i;
+        EXPECT_DOUBLE_EQ(pc.notes[i].start, i * 0.25);
+        EXPECT_DOUBLE_EQ(pc.notes[i].dur, 0.25);
+    }
+    EXPECT_DOUBLE_EQ(pc.beats, 2.0);
+}
+
+TEST(PatternParse, ArpUpWithOctavesExtends) {
+    PatternClip pc;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*8!up2", pc, err)) << err;
+    ASSERT_EQ(pc.notes.size(), 8u);
+    // Tones: 48 52 55 60 64 67 → 8 steps: ...48 52 at the wrap.
+    const int expect[] = {48, 52, 55, 60, 64, 67, 48, 52};
+    for (int i = 0; i < 8; ++i)
+        EXPECT_EQ(pc.notes[i].pitch, expect[i]) << "step " << i;
+}
+
+TEST(PatternParse, ArpDownAndPingPong) {
+    PatternClip a, b, c;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*6!down", a, err)) << err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*6!updown", b, err)) << err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*6!downup", c, err)) << err;
+    const int down[] = {55, 52, 48, 55, 52, 48};
+    for (int i = 0; i < 6; ++i) EXPECT_EQ(a.notes[i].pitch, down[i]);
+    const int updown[] = {48, 52, 55, 52, 48, 52};   // no repeated endpoints
+    for (int i = 0; i < 6; ++i) EXPECT_EQ(b.notes[i].pitch, updown[i]);
+    const int downup[] = {55, 52, 48, 52, 55, 52};
+    for (int i = 0; i < 6; ++i) EXPECT_EQ(c.notes[i].pitch, downup[i]);
+}
+
+TEST(PatternParse, ArpRandomDeterministicPerText) {
+    PatternClip a, b;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*8!random", a, err)) << err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16*8!random", b, err)) << err;
+    ASSERT_EQ(a.notes.size(), 8u);
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_EQ(a.notes[i].pitch, b.notes[i].pitch) << "step " << i;
+        // A random sequence must actually visit the tones, not one tone.
+        EXPECT_TRUE(a.notes[i].pitch == 48 || a.notes[i].pitch == 52 ||
+                    a.notes[i].pitch == 55);
+    }
+    int distinct = 0;
+    for (int p : {48, 52, 55}) {
+        for (const auto& n : a.notes)
+            if (n.pitch == p) { ++distinct; break; }
+    }
+    EXPECT_EQ(distinct, 3);
+}
+
+TEST(PatternParse, ArpAsPlayedKeepsChordOrder) {
+    PatternClip pc;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("[G3E3C3]_16*4!asplayed", pc, err)) << err;
+    ASSERT_EQ(pc.notes.size(), 4u);
+    const int expect[] = {55, 52, 48, 55};   // typed order cycles
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(pc.notes[i].pitch, expect[i]);
+}
+
+TEST(PatternParse, ArpVelAppliesToAllSteps) {
+    PatternClip pc;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3]_16*4!up@1", pc, err)) << err;
+    for (const auto& n : pc.notes) EXPECT_DOUBLE_EQ(n.vel, 1.0);
+}
+
+TEST(PatternParse, ArpErrors) {
+    std::string err;
+    PatternClip pc;
+    EXPECT_FALSE(parseMelodicPhrase("[C3E3G3]_16*8!wibble", pc, err));
+    EXPECT_NE(err.find("unknown arp pattern"), std::string::npos) << err;
+
+    EXPECT_FALSE(parseMelodicPhrase("[C3E3G3]_16*8!up9", pc, err));
+    EXPECT_NE(err.find("1..4"), std::string::npos) << err;
+
+    // A single-step arp degrades to the plain chord (never fails a run).
+    PatternClip one;
+    ASSERT_TRUE(parseMelodicPhrase("[C3E3G3]_16!up", one, err)) << err;
+    EXPECT_EQ(one.notes.size(), 3u);
+}
+
+TEST(PatternParse, ArpMixedPhraseKeepsSequence) {
+    PatternClip pc;
+    std::string err;
+    ASSERT_TRUE(parseMelodicPhrase("C2_8 [C3E3G3]_16*4!up E2_8", pc, err)) << err;
+    ASSERT_EQ(pc.notes.size(), 6u);   // 1 + 4 + 1
+    EXPECT_EQ(pc.notes[0].pitch, 36);
+    // Arp tones cycle sorted up: 48 52 55 48.
+    EXPECT_EQ(pc.notes[1].pitch, 48);
+    EXPECT_EQ(pc.notes[2].pitch, 52);
+    EXPECT_EQ(pc.notes[3].pitch, 55);
+    EXPECT_EQ(pc.notes[4].pitch, 48);
+    EXPECT_EQ(pc.notes[5].pitch, 40);   // E2 after the arp's 1-beat block
+    EXPECT_DOUBLE_EQ(pc.notes[5].start, 1.5);
+}

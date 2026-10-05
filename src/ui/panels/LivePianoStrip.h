@@ -108,28 +108,35 @@ public:
         m_keysY = ky; m_keysH = kh;
         layoutKeys(r.x + 6.0f, r.w - 12.0f);
 
+        // Whites: ivory face with a soft front edge — reads as a keybed.
+        static const Color ivory{235, 235, 228, 255};
+        static const Color ivoryEdge{190, 190, 182, 255};
         for (int w = 0; w < 7; ++w) {
             const auto& k = m_white[w];
-            renderer.drawRect(k.rect.x, ky, k.rect.w - 1.0f, kh,
-                              ::yawn::ui::Theme::panelBg);
-            renderer.drawRect(k.rect.x, ky, k.rect.w - 1.0f, kh,
-                              ::yawn::ui::Theme::clipSlotBorder);
+            renderer.drawRect(k.rect.x, ky, k.rect.w - 1.0f, kh, ivory);
+            renderer.drawRect(k.rect.x, ky + kh - 4.0f, k.rect.w - 1.0f,
+                              4.0f, ivoryEdge);
             const std::string lbl = keyLetter(w) + std::to_string(m_octave);
             tm.drawText(renderer, lbl,
                         k.rect.x + (k.rect.w - tm.textWidth(lbl, fs)) * 0.5f,
-                        ky + kh - tm.lineHeight(fs) - 2.0f, fs,
-                        pal.textSecondary);
+                        ky + kh - tm.lineHeight(fs) - 6.0f, fs,
+                        Color{90, 90, 95, 255});
         }
+        // Blacks: near-black raised keys with a thin top highlight —
+        // they overlap the whites' top 62%.
+        static const Color ebony{28, 28, 32, 255};
+        static const Color ebonyEdge{90, 90, 98, 255};
         for (const auto& k : m_black) {
             if (k.rect.w <= 0.0f) continue;
-            renderer.drawRect(k.rect.x, ky, k.rect.w, kh * 0.62f,
-                              ::yawn::ui::Theme::clipSlotBorder);
+            renderer.drawRect(k.rect.x, ky, k.rect.w, kh * 0.62f, ebony);
+            renderer.drawRect(k.rect.x + 1.0f, ky, k.rect.w - 2.0f, 2.0f,
+                              ebonyEdge);
             const std::string lbl =
                 std::string(keyLetter(k.whiteIdx)) + "#";   // after C → C#
             tm.drawText(renderer, lbl,
                         k.rect.x + (k.rect.w - tm.textWidth(lbl, fs)) * 0.5f,
-                        ky + kh * 0.62f - tm.lineHeight(fs) - 1.0f, fs,
-                        pal.textSecondary);
+                        ky + kh * 0.62f - tm.lineHeight(fs) - 3.0f, fs,
+                        Color{200, 200, 205, 255});
         }
     }
 #endif

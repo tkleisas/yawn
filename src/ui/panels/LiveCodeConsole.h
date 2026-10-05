@@ -82,8 +82,16 @@ private:
     const fw2::TextMetrics* m_lastMet = nullptr;
 
     // Scrollbar drag state (editor scrollbar + console/code list bars).
-    bool  m_dragBarTab = -1;      // tab whose scrollbar is being dragged
+    int   m_dragBarTab = -1;      // tab whose scrollbar is being dragged
+                                  // (int: -1 sentinel; a bool would make -1
+                                  // just `true` and drag on every move)
     float m_dragOffset = 0.0f;    // pointer offset inside the thumb (px)
+    // Resizable console: bottom-right grip drags the panel size (which
+    // persists across toggles).
+    bool  m_resizing = false;
+    float m_panelW = 0.0f, m_panelH = 0.0f;   // 0 = defaults
+    float m_lastViewportW = 0.0f, m_lastViewportH = 0.0f;
+    void  resizeTo(float winX, float winY);
     size_t tabContentLines(int tab) const;
     ::yawn::ui::fw::Rect drawScrollbar(fw2::UIContext& ctx,
                                        const ::yawn::ui::fw::Rect& panel,

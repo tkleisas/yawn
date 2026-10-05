@@ -953,7 +953,20 @@ yawn.midi("C2_8 C2_8 D#2_8*2 R_8 G2_4") -- *N multiplies length; R = rest
 yawn.midi("C2_16@1 C2_16@0.5")          -- @vel suffix (0..1, default 0.8)
 yawn.midi("[C3E3G3]_2 C4_4 | A2_2")     -- chords; | separators are cosmetic
 yawn.midi("C2_16*16")                   -- exactly one bar of 16ths
+
+-- Arpeggiated chords: !pattern after the duration (the Arpeggiator's
+-- own direction vocabulary), optional octave count 1..4:
+yawn.midi("[C3E3G3]_16*8!up")           -- 8 x 16ths: C3 E3 G3 C3 ...
+yawn.midi("[C3E3G3]_16*8!up2")          -- 2 octaves: C3 E3 G3 C4 E4 G4 ...
+yawn.midi("[G3E3C3]_16*4!asplayed")     -- typed chord order cycles
+yawn.midi("[C3E3]_16*4!up@1")           -- accents everything
 ```
+
+Arp patterns: `up`, `down`, `updown`/`downup` (ping-pong without
+repeated endpoints), `random` (deterministic — same text, same
+sequence), `asplayed`. Steps = the base division's beat count; a
+single-step chord degrades to the plain chord. Chord tones play
+*simultaneously* without the suffix, so both shapes live side by side.
 
 Durations: `_1 _2 _4 _8 _16 _32` (whole-note fractions → 4/2/1/0.5/0.25/
 0.125 beats). Clip length = the exact sum, so a phrase can be a partial

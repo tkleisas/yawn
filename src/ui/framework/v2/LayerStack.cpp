@@ -127,7 +127,10 @@ bool LayerStack::dispatchMouseDown(MouseEvent& e) {
             // `entry` dangling.
             auto handler = entry.onMouseDown;
             const bool isModal = entry.modal;
-            if (handler && handler(e)) return true;
+            if (handler && handler(e)) {
+                if (entry.captureMouseWhileDown) m_capturedEntry = entry.id;
+                return true;
+            }
             if (isModal) return true;
             return false;   // non-handling, non-modal — event passes through
         }
@@ -169,6 +172,23 @@ bool LayerStack::dispatchMouseDown(MouseEvent& e) {
 }
 
 bool LayerStack::dispatchMouseUp(MouseEvent& e) {
+    // A drag-capture entry receives the up (and releases the capture)
+    // even when the cursor has left its bounds — the whole point of
+    // captureMouseWhileDown drags.
+    if (m_capturedEntry != 0) {
+        auto& overlays = m_layers[static_cast<int>(OverlayLayer::Overlay)];
+        for (auto& entry : overlays) {
+            if (entry.id == m_capturedEntry) {
+                m_capturedEntry = 0;
+                if (entry.onMouseUp) {
+                    MouseEvent ev = e;
+                    if (entry.onMouseUp(ev)) return true;
+                }
+                return true;   // the captured drag consumed the gesture
+            }
+        }
+        m_capturedEntry = 0;   // entry gone; fall through
+    }
     // MouseUp never dismisses; just routes to whichever entry is
     // under the pointer. Allows drag-release on an overlay widget.
     auto& overlays = m_layers[static_cast<int>(OverlayLayer::Overlay)];
@@ -197,6 +217,21 @@ bool LayerStack::dispatchMouseUp(MouseEvent& e) {
 }
 
 bool LayerStack::dispatchMouseMove(MouseMoveEvent& e) {
+    // Active drag-capture: the captured entry sees every move until the
+    // matching mouse-up, wherever the cursor went.
+    if (m_capturedEntry != 0) {
+        auto& overlays = m_layers[static_cast<int>(OverlayLayer::Overlay)];
+        for (auto& entry : overlays) {
+            if (entry.id == m_capturedEntry) {
+                if (entry.onMouseMove) {
+                    MouseMoveEvent ev = e;
+                    if (entry.onMouseMove(ev)) return true;
+                }
+                return false;   // captured drag didn't want the move
+            }
+        }
+        m_capturedEntry = 0;   // entry gone; fall through
+    }
     // Route to topmost entry whose bounds contain the pointer. Don't
     // dismiss (hover-out dismissal is a per-widget concern, not a
     // global rule).
