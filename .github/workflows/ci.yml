@@ -336,7 +336,7 @@ jobs:
       - name: Test
         working-directory: build-asan
         env:
-          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/asan_leaks.supp:print_suppressions=1
+          LSAN_OPTIONS: suppressions=../tests/asan_leaks.supp:print_suppressions=1
         run: ./bin/yawn_tests
 
   # Debug build: the assert()s in src/ (e.g. AudioBuffer bounds checks)
