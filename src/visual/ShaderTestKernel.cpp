@@ -164,13 +164,7 @@ static bool YAWN_kernel_trace() {
 
 bool compileFragment(const std::string& name, const std::string& userSrc,
                      std::string& errOut) {
-    static bool firstDumpDone = false;
     const std::string full = buildUserSource(userSrc);
-    if (name == "31_ghost_accent.frag" && !firstDumpDone) {
-        firstDumpDone = true;
-        std::ofstream df("kernel_full_dump.frag", std::ios::binary);
-        df << full;
-    }
 
     auto compileOne = [](GLenum type, const char* stageSrc,
                          const char* typeName, std::string& errOut) -> GLuint {
