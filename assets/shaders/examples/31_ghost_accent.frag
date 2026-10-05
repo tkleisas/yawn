@@ -75,8 +75,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         col += cool(0.85) * aa(r + 0.025, abs(q.x) + abs(q.y)) *
                (1.0 - dm) * (0.5 + 1.2 * t01);
         // inward streak toward centre as it approaches
-        float rayD = abs((dot(normalize(-c), p - c) - length(p - c)) * length(p - c));
-        (void)rayD;
         float streak = exp(-9.0 * max(0.0, length(p - c) - r)) *
                        (1.0 - exp(-3.0 * (length(p - c) - r + 0.01)));
         col += vec3(0.55, 0.72, 1.0) * streak * t01 * g.y * 0.9;

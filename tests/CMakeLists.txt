@@ -66,3 +66,23 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(yawn_tests)
+
+# ─── GL shader-test infrastructure ────────────────────────────────────────
+# Headless (SDL offscreen) GL context + glad for the shader corpus tests:
+# every example shader compiles through the REAL VisualEngine preamble;
+# live-coding ghost uniforms validated end to end.
+set(YAWN_SHADER_TEST_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/visual/ShaderTestKernel.cpp
+)
+target_sources(yawn_tests PRIVATE
+    ${YAWN_SHADER_TEST_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ShaderCorpus.cpp
+)
+target_include_directories(yawn_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_link_libraries(yawn_tests PRIVATE SDL3::SDL3 glad)
+target_compile_definitions(yawn_tests PRIVATE
+    YAWN_BUNDLED_SHADER_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/assets/shaders/examples"
+    YAWN_GLSL_TEST=1
+)

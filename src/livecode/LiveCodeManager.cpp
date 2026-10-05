@@ -373,6 +373,12 @@ void LiveCodeManager::requestSetClip(int track, int scene1, uint64_t handle,
     m_pendingSetClips.push_back({track, scene1, handle, name});
 }
 
+void LiveCodeManager::requestSetVisual(int track, int scene1,
+                                       const std::string& shaderPath,
+                                       const std::string& name) {
+    m_pendingSetVisuals.push_back({track, scene1, shaderPath, name});
+}
+
 void LiveCodeManager::flushPendingDeliveries() {
     for (const auto& p : m_pendingSampleLoads)
         loadSampleIntoTrack(p.track, p.handle, p.kind);
@@ -388,6 +394,17 @@ void LiveCodeManager::flushPendingDeliveries() {
                            std::to_string(p.scene1) + ")");
     }
     m_pendingSetClips.clear();
+    for (const auto& p : m_pendingSetVisuals) {
+        bool ok = false;
+        if (m_setVisualLive)
+            ok = m_setVisualLive(p.track, p.scene1 - 1, p.shaderPath, p.name);
+        if (!ok)
+            pushConsole(1, "visual: set_visual failed (track " +
+                           std::to_string(p.track + 1) + " scene " +
+                           std::to_string(p.scene1) + " shader '" +
+                           p.shaderPath + "')");
+    }
+    m_pendingSetVisuals.clear();
 }
 
 // ── Ghost-note ledger (improv visualization) ────────────────────────────

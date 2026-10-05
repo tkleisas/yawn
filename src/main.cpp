@@ -25,6 +25,7 @@
 #endif
 
 #include "app/App.h"
+#include "visual/VisualEngine.h"
 #include "util/Logger.h"
 #include "presets/PresetGenerator.h"
 #include <cstdio>
@@ -34,6 +35,7 @@
 #include <exception>
 #include <ctime>
 #include <string>
+#include <filesystem>
 #include <vector>
 
 #ifndef _WIN32
@@ -284,6 +286,69 @@ static int runAppSEH() {
 }
 #endif
 
+// ─── Shader-compile probe CLI (GL pipeline harness) ─────────────────────────
+// `YAWN --probe-shader <path>` — mirrors the app's GL setup (main window
+// + fallback-chain context via ui::Window, GlCaps init) and compiles the
+// given shader file through the REAL VisualEngine preamble. Prints the
+// result + the mapped driver error line; exits. No audio, no panels.
+int runAppProbeShader(int argc, char* argv[], int pathArg) {
+    using namespace yawn;
+    if (pathArg + 1 >= argc) {
+        std::fprintf(stderr, "usage: YAWN --probe-shader <shader.frag>\n");
+        return 2;
+    }
+    initLogging();
+    initCrashHandler();
+
+    auto app = std::make_unique<App>();
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+        return 2;
+    }
+    ui::WindowConfig wc;
+    wc.title = "YAWN shader probe";
+    wc.width = 320; wc.height = 240;
+    wc.resizable = false;
+    if (!app->m_mainWindow.create(wc)) {   // runs the full fallback chain
+        std::fprintf(stderr, "window/context creation failed\n");
+        return 2;
+    }
+    app->m_mainWindow.makeCurrent();
+
+    // Resolve like the engine does: bare name → build/bin assets path,
+    // repo assets path.
+    std::string path = argv[pathArg + 1];
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        for (const char* base : { "assets/shaders/examples",
+                                  "build/bin/assets/shaders/examples" }) {
+            std::filesystem::path cand =
+                std::filesystem::path(base) / path;
+            if (std::filesystem::exists(cand, ec)) { path = cand.string(); break; }
+        }
+    }
+
+    auto& vs = app->m_visualEngine;
+    bool ok = false;
+    {
+        // VisualEngine::init creates the output window + context; loadLayer
+        // needs it for its ContextScope.
+        ok = vs.init();
+        if (!ok) std::fprintf(stderr, "VisualEngine init failed\n");
+        if (ok) ok = vs.loadLayer(0, path, -1);
+    }
+    if (ok) {
+        std::fprintf(stderr, "PROBE OK: %s compiled and loaded\n", path.c_str());
+    } else {
+        std::fprintf(stderr, "PROBE FAIL: see yawn.log for the mapped error\n");
+        // stderr gets eaten by initLogging's file redirect — mirror the
+        // failure into the log so the probe lines never vanish.
+        LOG_INFO("Probe", "%s failed to compile; engine compile errors above", path.c_str());
+    }
+    vs.shutdown();
+    return ok ? 0 : 1;
+}
+
 // ─── Headless preset-generation CLI ──────────────────────────────────────────
 // `YAWN --gen-presets [--seed N] [--alien 0..1] [--no-validate]
 //                     [--device <id>] [--count N]`
@@ -351,6 +416,12 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gen-presets") == 0)
             return runGenPresets(argc, argv);
+        if (std::strcmp(argv[i], "--probe-shader") == 0) {
+            // Harness: same GL setup as the app, compiles a shader file
+            // through the REAL VisualEngine preamble and reports the
+            // mapped error line. No audio, no panels, no windows shown.
+            return runAppProbeShader(argc, argv, i);
+        }
     }
 
     initLogging();

@@ -18,6 +18,7 @@
 #include <sstream>
 #include <ctime>
 #include <algorithm>
+#include <regex>
 #include <cmath>
 #include <regex>
 
@@ -243,10 +244,10 @@ void main() {
 
 GLuint VisualEngine::compileShaderProgram(const char* vertSrc, const char* fragSrc,
                                             const char* name) {
-    auto compileOne = [](GLenum type, const char* src, const char* stageName,
-                         const char* programName) -> GLuint {
+    auto compileOne = [](GLenum type, const char* srcStage,
+                         const char* stageName, const char* programName) -> GLuint {
         GLuint shader = glCreateShader(type);
-        const char* sources[2] = { ui::GlCaps::glslVersionLine(), src };
+        const char* sources[2] = { ui::GlCaps::glslVersionLine(), srcStage };
         glShaderSource(shader, 2, sources, nullptr);
         glCompileShader(shader);
         GLint ok = 0;
@@ -258,11 +259,42 @@ GLuint VisualEngine::compileShaderProgram(const char* vertSrc, const char* fragS
             glGetShaderInfoLog(shader, len, nullptr, log.data());
             LOG_ERROR("Visual", "%s %s compile failed:\n%s",
                       programName, stageName, log.data());
+            // Map the driver's "0:N(M)" line onto the stage's own source
+            // so the failing GLSL text is readable in the log.
+            {
+                const std::string zone = log.data();
+                const size_t colon = zone.find("0:");
+                if (colon != std::string::npos) {
+                    const size_t close = zone.find('(', colon);
+                    if (close != std::string::npos && close > colon + 2) {
+                        const int wantLine = std::atoi(
+                            zone.substr(colon + 2, close - colon - 2).c_str());
+                        const std::string txt = srcStage;
+                        size_t pos = 0;
+                        int ln = 1;
+                        std::string target;
+                        while (ln <= wantLine && pos <= txt.size()) {
+                            const size_t nl = txt.find('\n', pos);
+                            const size_t nlEnd =
+                                nl != std::string::npos ? nl : txt.size();
+                            if (ln == wantLine) {
+                                target = txt.substr(pos, nlEnd - pos);
+                                break;
+                            }
+                            pos = nlEnd + 1;
+                            ++ln;
+                        }
+                        LOG_ERROR("Visual", ">>> |line %d| = |%s|",
+                                  wantLine, target.c_str());
+                    }
+                }
+            }
             glDeleteShader(shader);
             return 0;
         }
         return shader;
     };
+    (void)name;
 
     GLuint vs = compileOne(GL_VERTEX_SHADER, vertSrc, "vertex shader", name);
     if (!vs) return 0;
@@ -288,8 +320,6 @@ GLuint VisualEngine::compileShaderProgram(const char* vertSrc, const char* fragS
     glDeleteShader(fs);
     return program;
 }
-
-// ── Init / shutdown ────────────────────────────────────────────────────────
 
 bool VisualEngine::init() {
     if (m_initialized) return true;
@@ -622,7 +652,28 @@ VisualEngine::parseShaderFileParams(const std::string& shaderPath) {
 
 bool VisualEngine::compileShaderForLayer(Layer& L, const std::string& userSrc,
                                            const std::string& sourceLabel) {
-    std::string full = kShaderToyPreamble;
+    std::string full;
+    const char* bisect = std::getenv("YAWN_SHADER_BISECT");
+    if (bisect && bisect[0] == '2') {
+        // full preamble minus the phase-B ghost block
+        const std::string ghostBlock =
+            "\n// Live-coding improvisation ghosts (phase B)";
+        std::string pre = kShaderToyPreamble;
+        const size_t begin = pre.find(ghostBlock);
+        const size_t end = pre.find("uniform float iBeatBarFrac;");
+        if (begin != std::string::npos && end != std::string::npos) {
+            size_t cutEnd = end + std::string("uniform float iBeatBarFrac;").size();
+            pre = pre.replace(begin, cutEnd - begin, "");
+            full = pre;
+            LOG_WARN("Visual", "BISECT mode 2: preamble WITHOUT ghost block");
+        } else full = kShaderToyPreamble;
+    } else if (bisect && bisect[0] == '1') {
+        LOG_WARN("Visual", "BISECT mode 1: NO preamble (raw user source)");
+    } else if (bisect && bisect[0] == '0') {
+        full = kShaderToyPreamble;
+    } else {
+        full = kShaderToyPreamble;
+    }
     full += userSrc;
     GLuint program = compileShaderProgram(kFullscreenVS, full.c_str(),
                                            sourceLabel.c_str());
@@ -827,6 +878,10 @@ bool VisualEngine::loadLayer(int track, const std::string& path, int audioSource
         LOG_ERROR("Visual", "Cannot open shader file: %s", path.c_str());
         return false;
     }
+    in.seekg(0, std::ios::end);
+    const size_t fileBytes = (size_t)in.tellg();
+    LOG_INFO("Visual", "loadLayer track=%d bytes=%zu audioSrc=%d",
+             track, fileBytes, audioSource);
     std::stringstream buf;
     buf << in.rdbuf();
 

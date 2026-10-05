@@ -1,5 +1,8 @@
 #pragma once
 
+// The shader-probe CLI compiles through this engine (friend access).
+int runAppProbeShader(int, char*[], int);
+
 #include "ui/Window.h"
 #include "ui/Renderer.h"
 #include "visual/VisualEngine.h"
@@ -91,6 +94,7 @@ public:
     int  exitCode() const { return m_exitCode; }
 
 private:
+    friend int ::runAppProbeShader(int, char*[], int);
     void processEvents();
     void handleKeyEvent(const SDL_Event& event);
     void update();
@@ -373,7 +377,9 @@ private:
     static void SDLCALL onOpenFolderResult(void* userdata, const char* const* filelist, int filter);
     static void SDLCALL onSaveFolderResult(void* userdata, const char* const* filelist, int filter);
 
-    ui::Window m_mainWindow;
+public:
+    ui::Window m_mainWindow;   // probe mode touches window/context setup
+private:
     visual::VisualEngine m_visualEngine;
     // Visual-clip state machine (launch queue, follow actions,
     // arrangement playback, knob automation, macro mappings, video
@@ -381,6 +387,8 @@ private:
     // Created in init() after the engine + project exist.
     std::unique_ptr<VisualClipController> m_visualController;
     VisualClipController& visual() { return *m_visualController; }
+    // Shader-probe CLI compiles through the real engine.
+    visual::VisualEngine& visualEngine() { return m_visualEngine; }
 
     // VisualClipHost implementation (services the controller needs).
     void vccMarkDirty() override { markDirty(); }

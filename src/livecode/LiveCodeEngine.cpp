@@ -552,10 +552,22 @@ static int l_launch_clip(lua_State* L) {
     return 0;
 }
 
-static int l_cancel_render(lua_State* L) {
+// yawn.set_visual(track, scene, shaderPath, [name]) — place a shader in
+// a session slot as a visual clip (deferred like set_clip).
+static int l_set_visual(lua_State* L) {
     auto* mgr = getManager(L);
     if (!mgr) return 0;
-    uint64_t id = static_cast<uint64_t>(luaL_checkinteger(L, 1));
+    const int track = static_cast<int>(luaL_checkinteger(L, 1));
+    const int scene1 = static_cast<int>(luaL_checkinteger(L, 2));
+    const char* path = luaL_checkstring(L, 3);
+    const char* name = luaL_optstring(L, 4, "");
+    mgr->requestSetVisual(track, scene1, path ? path : "", name ? name : "");
+    return 0;
+}
+
+static int l_cancel_render(lua_State* L) {
+    auto* mgr = getManager(L);
+    if (!mgr) return 0;    uint64_t id = static_cast<uint64_t>(luaL_checkinteger(L, 1));
     mgr->cancelPrerender(id);
     return 0;
 }
@@ -789,6 +801,7 @@ void LiveCodeEngine::registerAPI() {
         {"cancel_render",l_cancel_render},
         {"launch_scene", l_launch_scene},
         {"launch_clip",  l_launch_clip},
+        {"set_visual",   l_set_visual},
         {"is_playing",   l_is_playing},
         {"set_playing",  l_set_playing},
         {"get_bpm",      l_get_bpm},
