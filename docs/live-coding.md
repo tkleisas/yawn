@@ -905,3 +905,30 @@ No undo entry in v1 (the ledger + song layer are the record).
   as the fire moment approaches.
 - Tests: seqlock round-trip (payload, count shrink, max clamp, bpb) and
   the ledger→bus pipeline content check. Suite green.
+
+**Shader corpus harness (landed, v0.88.3+).** The compile path a live
+shader takes in the app is now under test: `ShaderTestKernel`
+(`src/visual/ShaderTestKernel.{h,cpp}`) opens a real offscreen GL
+context (SDL offscreen driver + glad), publishes the engine's exact
+`GlCaps`, and `tests/test_ShaderCorpus.cpp` compiles **every bundled
+shader through the production preamble and two-source `glShaderSource`
+call** — failures report the driver message *with the mapped source
+line* (Mesa's `0:NN(M)` attribution can point at the preamble even when
+the fault is in the shader body; the mapped line is what made the
+`(void)`-cast bug in `31_ghost_accent.frag` findable). Contract tests
+cover the ghost uniforms and the knob uniforms end-to-end through the
+same path. The root cause of the long-standing black visual channel was
+also found with this harness — `loadLayer`'s byte-count probe left its
+ifstream at EOF, so every shader loaded with an empty user source
+(compiled preamble-only, then failed link with `unresolved reference to
+mainImage`). See `docs/visual.md` → "Testing the pipeline".
+
+**Visual render thread (landed, v0.88.4).** The visual channel now
+renders on a dedicated thread (see `docs/visual.md` → "Architecture
+overview") — its ~60 Hz pace is independent of the UI loop and of
+compositor throttling of a backgrounded main window, which matters for
+live-coding: shader saves, `set_visual` deliveries and ghost-uniform
+updates keep presenting at full frame rate even when the DAW window is
+minimized or parked behind the editor you're typing in. GL-touching
+live-code APIs (`set_visual`, `set_clip` deliveries) marshal onto the
+render thread internally; callers see unchanged signatures and returns.

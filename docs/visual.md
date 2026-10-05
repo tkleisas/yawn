@@ -32,6 +32,7 @@ shader-authoring conventions, video workflow, and known limitations.
 - [Output window & fullscreen](#output-window--fullscreen)
 - [Bundled shader pack](#bundled-shader-pack)
 - [Limitations](#limitations)
+- [Testing the pipeline](#testing-the-pipeline)
 
 ---
 
@@ -39,7 +40,8 @@ shader-authoring conventions, video workflow, and known limitations.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  VisualEngine  (UI thread, separate GL context)         │
+│  VisualEngine  (dedicated render thread,                │
+│                 separate GL context)                    │
 │                                                         │
 │   ┌──────────┐   ┌──────────┐   ┌──────────┐            │
 │   │ Layer 0  │   │ Layer 1  │   │ Layer N  │   per track│
@@ -64,11 +66,26 @@ shader-authoring conventions, video workflow, and known limitations.
                               (FFT for iChannel0)
 ```
 
-Everything GL-related runs on the UI thread; the audio thread only writes
-to lock-free data structures (per-channel peaks, band-analyzer peaks, a
-circular master-sample tap). The output window gets its own SDL3 GL
-context sharing resources with the main UI context, so textures and
-shaders are visible across both.
+The visual channel renders on a **dedicated render thread** that owns
+the output window's GL context and paces its own ~60 Hz loop —
+independent of the UI frame loop (its swaps and vsync) and of whatever
+the compositor does to the main window when it's minimized or parked
+behind other windows. The UI frame loop does not render visuals at all.
+
+Main-thread engine entry points (`loadLayer`, the video/image/live/
+model setters, additional-passes, post-FX add/remove, text, layer
+clears, model thumbnails) **marshal onto the render thread** through a
+job queue (`execOnRenderThread` — `packaged_task` futures preserve the
+return values; when the thread isn't running — e.g. in headless tests —
+they execute inline). All GL touching shares a recursive engine mutex
+(`m_glMutex`), so the render loop, marshaled jobs, and the video-export
+path (which renders deterministically from the main thread with the
+offline-render gate — the worker stands down while it's active)
+serialize cleanly. The audio thread only writes to lock-free data
+structures (per-channel peaks, band-analyzer peaks, a circular
+master-sample tap, the note/ghost buses). The output window gets its
+own SDL3 GL context sharing resources with the main UI context, so
+textures and shaders are visible across both.
 
 ## Visual tracks & the session grid
 
@@ -196,14 +213,14 @@ Three tiers of audio information are wired through to shaders:
 
 2. **Master FFT** on `iChannel0`: a 512-bin magnitude row + 512-sample
    waveform row, updated every frame from a 1024-sample circular tap on
-   the master bus. Windowed radix-2 Cooley–Tukey on the UI thread.
+   the master bus. Windowed radix-2 Cooley–Tukey on the render thread.
 
 3. **Kick detector**: baseline-tracking envelope on the low band with
    an 80 ms refractory window. Drives `iKick` as a decaying impulse
    with ~120 ms visible tail.
 
-The audio thread writes plain `float` peaks; the UI thread reads and
-envelope-smooths. The torn-read risk is identical to YAWN's existing
+The audio thread writes plain `float` peaks; the render thread reads
+and envelope-smooths. The torn-read risk is identical to YAWN's existing
 metering path and harmless at 60 Hz.
 
 ## LFO modulation & MIDI learn
@@ -221,8 +238,8 @@ Each of the 8 A–H knobs has an **optional LFO**:
 
 - Right-click → MIDI Learn… → turn a CC on your controller. Done.
 - Routing is audio-thread-safe: MidiEngine writes into a lock-free
-  `VisualKnobBus` per-slot atomic; the UI thread drains each frame and
-  applies to the live layer + persists to the clip.
+  `VisualKnobBus` per-slot atomic; the render thread drains each frame
+  and applies to the live layer + persists to the clip.
 - Mapping label shows in the menu; "Remove MIDI Mapping" unbinds.
 
 ## Parameter automation
@@ -662,13 +679,17 @@ distances.
 
 ## Bundled shader pack
 
-`assets/shaders/examples/` — 25 original MIT-licensed shaders covering
+`assets/shaders/examples/` — 31 original MIT-licensed shaders covering
 plasma, palette sweeps, flow noise, rings, spectrum/waveform visualisers,
 spirals, chequerboards, voronoi, tunnels, fractal circles, triangular
 grids, FBM clouds, kaleidoscopes, pulse grids, auroras, radial EQ bars,
 RGB-split, beat strobes, kick flashes, the text shaders (marquee, kick
-pulse, glitch, debug), and the audio-reactive 3D example
-(`25_model_audio_glow.frag`). All use the `@range` annotation
+pulse, glitch, debug), the audio-reactive 3D example
+(`25_model_audio_glow.frag`), the 60's hypnotic spiral
+(`27_hypno_spiral.frag`), text crawl (`28`), the raymarched disco ball
+(`29`), the 4D hypercube morph (`30`), and the live-coding ghost accent
+clock (`31_ghost_accent.frag` — pre-glowing diamonds for upcoming
+improv fires; see `docs/live-coding.md`). All use the `@range` annotation
 convention so they play nicely with the knob UI out of the box.
 
 `assets/shaders/default.frag` — the startup demo; uses A–E knobs as
@@ -700,8 +721,9 @@ clip immediately shows the skeletal-animation path end to end.
 - **Import requires the `ffmpeg` binary in `$PATH`**, in addition to
   the `libav*` headers/libs used by the runtime decoder.
 - **No drag-drop of shader files** yet — use the right-click menu.
-- **No in-app shader editor** — edit `.frag` files with your favourite
-  editor; hot reload picks up changes on save.
+- **In-app shader authoring** lives in the live-coding editor's `~`
+  console (see `docs/live-coding.md`); shader *files* are still edited
+  externally — hot reload picks up changes on save.
 - **Scrub bar** (click-drag playhead on a video clip) isn't implemented;
   the Video Trim submenu picks fixed sub-ranges instead.
 - **Cross-fade between post-FX chains** — not a feature. Chain edits
@@ -722,3 +744,19 @@ clip immediately shows the skeletal-animation path end to end.
 - **Lua scene scripts only clone the clip's primary model** — loading
   additional `.glb` files from Lua (e.g. `load_model("cube.glb")`) is
   a planned follow-up. Per-instance material overrides also deferred.
+
+## Testing the pipeline
+
+`tests/test_ShaderCorpus.cpp` opens a real offscreen GL context (SDL
+offscreen driver + glad) and compiles **every bundled shader through
+the engine's exact compile path** — the same `GlCaps` version line, the
+same Shadertoy preamble, the same two-source `glShaderSource` — so a
+shader that passes the corpus cannot fail to compile in the app, and a
+shader that regresses fails in CI with the driver's message *plus the
+mapped source line* (the driver's `0:NN(M)` attribution can point at
+the preamble even when the fault is in the shader body, so the mapped
+line is what makes the failure readable). Contract tests also verify
+the ghost uniforms (`iGhostCount`, `iGhost0..7`, `iBeatBarFrac`) and
+the knob uniforms compile through. For interactive one-off checks,
+`YAWN --probe-shader <path>` compiles a shader through the app's real
+engine setup and reports to the log.
