@@ -29,6 +29,91 @@ static VisualGhostBus& ghostBus() { return VisualGhostBus::instance(); }
 } // namespace visual
 namespace visual {
 
+// ── Visual render thread ──────────────────────────────────────────────────
+
+thread_local std::atomic<bool> VisualEngine::s_onRenderThread{false};
+
+void VisualEngine::startRenderThread() {
+    if (m_threadRun.load()) return;
+    if (!m_initialized || !m_outputWindow) return;
+    m_threadRun.store(true, std::memory_order_release);
+    m_renderThread = std::thread([this] { renderThreadLoop(); });
+    m_threadStarted.store(true, std::memory_order_release);
+    LOG_INFO("Visual", "render thread started");
+}
+
+void VisualEngine::stopRenderThread() {
+    if (!m_threadStarted.load()) return;
+    m_threadRun.store(false, std::memory_order_release);
+    m_queueCv.notify_all();
+    if (m_renderThread.joinable()) m_renderThread.join();
+    m_renderThread = std::thread();
+    m_threadStarted.store(false, std::memory_order_release);
+    LOG_INFO("Visual", "render thread stopped");
+}
+
+void VisualEngine::renderThreadLoop() {
+    s_onRenderThread.store(true, std::memory_order_relaxed);
+    // Own the output context for this thread's lifetime: one MakeCurrent
+    // (subsequent frames skip it unless a main-thread export stole the
+    // binding).
+    if (SDL_GL_GetCurrentContext() != m_outputContext)
+        SDL_GL_MakeCurrent(m_outputWindow, m_outputContext);
+
+    using clk = std::chrono::steady_clock;
+    auto next = clk::now();
+    const auto frameBudget = std::chrono::microseconds(16667);  // ~60 Hz
+
+    while (m_threadRun.load(std::memory_order_acquire)) {
+        // Drain the main thread's GL jobs under the engine GL mutex.
+        std::vector<std::function<void()>> jobs;
+        {
+            std::lock_guard<std::mutex> lk(m_queueMutex);
+            jobs.swap(m_glQueue);
+        }
+        for (auto& job : jobs) {
+            if (!m_threadRun.load(std::memory_order_acquire)) break;
+            std::lock_guard<std::recursive_mutex> gl(m_glMutex);
+            job();
+        }
+        {
+            std::unique_lock<std::mutex> lk(m_queueMutex);
+            // notify anyone blocked on execOnRenderThread()
+            m_queueCv.notify_all();
+        }
+
+        // Paced live tick. Offline (video export) frames render from the
+        // main thread — never here.
+        if (m_initialized && m_outputWindow && m_outputVisible.load() &&
+            !m_offlineRender.load()) {
+            if (SDL_GL_GetCurrentContext() != m_outputContext)
+                SDL_GL_MakeCurrent(m_outputWindow, m_outputContext);
+            double sr = 48000.0;
+            double seconds = 0.0, beats = 0.0;
+            bool playing = false;
+            if (m_audioEngine) {
+                const auto& tr = m_audioEngine->transport();
+                sr = std::max(1.0, m_audioEngine->sampleRate());
+                seconds = tr.positionInSamples() / sr;
+                beats   = tr.positionInBeats();
+                playing = tr.isPlaying();
+            }
+            std::lock_guard<std::recursive_mutex> gl(m_glMutex);
+            tick(seconds, beats, playing);
+        }
+
+        // Pace: finish-on-time + a bounded catch-up so we can never
+        // spiral when a burst of GL work lands materially late.
+        next += frameBudget;
+        auto now = clk::now();
+        if (now > next + frameBudget) next = now + frameBudget;
+        std::this_thread::sleep_until(next);
+    }
+
+    LOG_INFO("Visual", "render thread loop ended");
+    s_onRenderThread.store(false, std::memory_order_relaxed);
+}
+
 // ── RAII context scope ─────────────────────────────────────────────────────
 
 VisualEngine::ContextScope::ContextScope(SDL_Window* newWin, SDL_GLContext newCtx) {
@@ -352,6 +437,7 @@ bool VisualEngine::init() {
 }
 
 void VisualEngine::shutdown() {
+    stopRenderThread();
     if (m_outputWindow && m_outputContext) {
         ContextScope scope(m_outputWindow, m_outputContext);
         for (auto& [trackIdx, layer] : m_layers) destroyLayer(layer);
@@ -873,6 +959,12 @@ bool VisualEngine::hasLayer(int track) const {
 }
 
 bool VisualEngine::loadLayer(int track, const std::string& path, int audioSource) {
+    return execOnRenderThread([this, track, &path, &audioSource] {
+        return loadLayerImpl(track, path, audioSource);
+    });
+}
+
+bool VisualEngine::loadLayerImpl(int track, const std::string& path, int audioSource) {
     std::ifstream in(path);
     if (!in) {
         LOG_ERROR("Visual", "Cannot open shader file: %s", path.c_str());
@@ -1053,6 +1145,10 @@ bool VisualEngine::isLayerKnobUsedByShader(int track, int idx) const {
 }
 
 void VisualEngine::setLayerText(int track, const std::string& text) {
+    execOnRenderThread([this, track, &text] { setLayerTextImpl(track, text); });
+}
+
+void VisualEngine::setLayerTextImpl(int track, const std::string& text) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return;
     Layer& L = it->second;
@@ -1083,6 +1179,12 @@ void VisualEngine::setLayerVideoTiming(int track, int loopBars, float rate) {
 }
 
 bool VisualEngine::setLayerVideo(int track, const std::string& path) {
+    return execOnRenderThread([this, track, &path] {
+        return setLayerVideoImpl(track, path);
+    });
+}
+
+bool VisualEngine::setLayerVideoImpl(int track, const std::string& path) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return false;
     Layer& L = it->second;
@@ -1144,6 +1246,12 @@ void VisualEngine::clearLayerImageSource(Layer& L) {
 }
 
 bool VisualEngine::setLayerImage(int track, const std::string& path) {
+    return execOnRenderThread([this, track, &path] {
+        return setLayerImageImpl(track, path);
+    });
+}
+
+bool VisualEngine::setLayerImageImpl(int track, const std::string& path) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return false;
     Layer& L = it->second;
@@ -1209,6 +1317,12 @@ std::string VisualEngine::getLayerLiveError(int track) const {
 }
 
 bool VisualEngine::setLayerLiveInput(int track, const std::string& url) {
+    return execOnRenderThread([this, track, &url] {
+        return setLayerLiveInputImpl(track, url);
+    });
+}
+
+bool VisualEngine::setLayerLiveInputImpl(int track, const std::string& url) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return false;
     Layer& L = it->second;
@@ -1340,6 +1454,13 @@ void VisualEngine::setLayerArrangementVideo(int track, int lengthMode,
 
 bool VisualEngine::setLayerModel(int track, const std::string& path,
                                  const std::vector<std::string>& extraResolved) {
+    return execOnRenderThread([this, track, &path, &extraResolved] {
+        return setLayerModelImpl(track, path, extraResolved);
+    });
+}
+
+bool VisualEngine::setLayerModelImpl(int track, const std::string& path,
+                                 const std::vector<std::string>& extraResolved) {
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return false;
@@ -1444,6 +1565,12 @@ std::string VisualEngine::layerAnimationName(int track, int index) const {
 }
 
 GLuint VisualEngine::ensureModelThumbnail(const std::string& path) {
+    return execOnRenderThread([this, &path] {
+        return ensureModelThumbnailImpl(path);
+    });
+}
+
+GLuint VisualEngine::ensureModelThumbnailImpl(const std::string& path) {
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
     if (path.empty() || !m_outputWindow || !m_outputContext) return 0;
     auto it = m_thumbCache.find(path);
@@ -1515,6 +1642,10 @@ GLuint VisualEngine::cachedModelThumbnail(const std::string& path) const {
 }
 
 void VisualEngine::clearLayer(int track) {
+    execOnRenderThread([this, track] { clearLayerImpl(track); });
+}
+
+void VisualEngine::clearLayerImpl(int track) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return;
     ContextScope scope(m_outputWindow, m_outputContext);
@@ -1665,6 +1796,13 @@ void VisualEngine::setLayerChainPassBypass(int track, int passIdx,
 
 bool VisualEngine::setLayerAdditionalPasses(int track,
         const std::vector<ChainPassSpec>& passes) {
+    return execOnRenderThread([this, track, &passes] {
+        return setLayerAdditionalPassesImpl(track, passes);
+    });
+}
+
+bool VisualEngine::setLayerAdditionalPassesImpl(int track,
+        const std::vector<ChainPassSpec>& passes) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return false;
     Layer& L = it->second;
@@ -1796,6 +1934,10 @@ void VisualEngine::checkPostFXHotReload(PostEffect& pe) {
 }
 
 bool VisualEngine::addPostFX(const std::string& path) {
+    return execOnRenderThread([this, &path] { return addPostFXImpl(path); });
+}
+
+bool VisualEngine::addPostFXImpl(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
         LOG_ERROR("Visual", "Post-FX: cannot open %s", path.c_str());
@@ -1820,6 +1962,10 @@ bool VisualEngine::addPostFX(const std::string& path) {
 }
 
 void VisualEngine::removePostFX(int index) {
+    execOnRenderThread([this, index] { removePostFXImpl(index); });
+}
+
+void VisualEngine::removePostFXImpl(int index) {
     if (index < 0 || index >= static_cast<int>(m_postFX.size())) return;
     ContextScope scope(m_outputWindow, m_outputContext);
     destroyPostFX(m_postFX[index]);
@@ -2719,6 +2865,7 @@ int VisualEngine::compositeWidth()  const { return kInternalWidth; }
 int VisualEngine::compositeHeight() const { return kInternalHeight; }
 
 bool VisualEngine::readComposite(std::vector<uint8_t>& outRGBA) {
+    std::lock_guard<std::recursive_mutex> gl(m_glMutex);
     if (!m_initialized || !m_outputWindow) return false;
     const GLuint fbo = m_accumFBO[m_lastAccumIdx];
     if (!fbo) return false;
@@ -2741,8 +2888,10 @@ bool VisualEngine::readComposite(std::vector<uint8_t>& outRGBA) {
 }
 
 void VisualEngine::tick(double transportSeconds, double transportBeats, bool playing) {
-    // Offline render bypasses the visibility gate — we render to the FBOs
-    // (and read them back) even with the output window hidden.
+    // Serializes with the render thread / marshaled main-thread jobs (the
+    // recursion safety net: the render thread already holds this when it
+    // calls tick).
+    std::lock_guard<std::recursive_mutex> gl(m_glMutex);
     if (!m_initialized || !m_outputWindow) return;
     if (!m_outputVisible && !m_offlineRender) return;
     // Synthetic clock for deterministic offline render (drives post-FX time).

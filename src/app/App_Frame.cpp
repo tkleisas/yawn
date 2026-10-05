@@ -875,13 +875,11 @@ void App::render() {
     // restores the current GL context, so it's safe to call here without
     // disturbing the next main-window frame. Skipped during a video export —
     // the worker thread owns the output context then.
-    if (!isVideoExporting() && m_visualEngine.isOutputVisible()) {
-        const auto& transport = m_audioEngine.transport();
-        const double sr = std::max(1.0, m_audioEngine.sampleRate());
-        const double seconds = static_cast<double>(transport.positionInSamples()) / sr;
-        const double beats   = transport.positionInBeats();
-        m_visualEngine.tick(seconds, beats, transport.isPlaying());
-    }
+    // Visual output runs on its own render thread (paced independently
+    // from this loop's swaps — see VisualEngine::startRenderThread).
+    // Nothing to tick here; the video export path drives tick() from the
+    // main thread with the offline-render gate while the visual thread
+    // stands down.
 }
 
 // ---------------------------------------------------------------------------

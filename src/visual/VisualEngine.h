@@ -12,11 +12,20 @@
 //     them back-to-front into the output window using mixer track volume
 //     as layer opacity. Two visual tracks = cross-fader; N tracks = stack.
 //
-// Thread model: everything runs on the main (UI) thread. The audio thread
-// never touches GL. Video decode (later) will push frames via an SPSC queue.
+// Thread model: a dedicated visual render thread owns the output GL
+// context and paces its own ~60 Hz loop; UI-side GL entry points marshal
+// onto it. The audio thread never touches GL. Video export renders
+// deterministically from the main thread with the offline-render gate.
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <future>
+#include <mutex>
+#include <thread>
 
 #include "visual/VisualLFO.h"
 #include <cstdint>
@@ -56,6 +65,17 @@ public:
 
     bool init();
     void shutdown();
+
+    // ── Visual render thread ────────────────────────────────────────
+    // Dedicated thread owns the output GL context and paces its own
+    // ~60 Hz render loop; the UI loop's pace (vsync, swaps, whatever
+    // the compositor throttles when windows go background) has NO
+    // effect on the visual channel. Main-thread GL entry points
+    // marshal onto this thread internally. Video export takes over
+    // via beginOfflineRender before it renders from the main thread.
+    void startRenderThread();
+    void stopRenderThread();
+    bool renderThreadRunning() const { return m_threadStarted.load(); }
 
     void setOutputVisible(bool visible);
     bool isOutputVisible() const { return m_outputVisible; }
@@ -286,6 +306,59 @@ public:
     bool isLayerKnobUsedByShader(int track, int idx) const;
 
 private:
+    // Height of the live render thread pump / serial GL work.
+    void lockGL()   { m_glMutex.lock(); }
+    void unlockGL() { m_glMutex.unlock(); }
+
+    // Visual render thread state (startRenderThread/stopRenderThread).
+    std::atomic<bool>     m_threadRun{false};
+    std::atomic<bool>     m_threadStarted{false};
+    std::thread           m_renderThread;
+
+    // GL serialization + the render thread pump.
+    mutable std::recursive_mutex          m_glMutex;
+    std::mutex                            m_queueMutex;
+    std::condition_variable               m_queueCv;
+    std::vector<std::function<void()>>    m_glQueue;
+    void renderThreadLoop();
+
+    bool loadLayerImpl(int track, const std::string& path, int audioSource);
+    void setLayerTextImpl(int track, const std::string& text);
+    bool setLayerVideoImpl(int track, const std::string& path);
+    bool setLayerImageImpl(int track, const std::string& path);
+    bool setLayerLiveInputImpl(int track, const std::string& url);
+    bool setLayerModelImpl(int track, const std::string& path,
+                           const std::vector<std::string>& extraResolved);
+    GLuint ensureModelThumbnailImpl(const std::string& path);
+    void clearLayerImpl(int track);
+    bool setLayerAdditionalPassesImpl(int track,
+           const std::vector<ChainPassSpec>& passes);
+    bool addPostFXImpl(const std::string& path);
+    void removePostFXImpl(int index);
+
+    // Run `f` on the visual render thread when it's up and safe;
+    // inline otherwise (tests, or already on the thread).
+    template <typename F>
+    auto execOnRenderThread(F&& f) -> std::invoke_result_t<F&> {
+        using R = std::invoke_result_t<F&>;
+        if (!m_threadRun.load(std::memory_order_acquire) ||
+            s_onRenderThread.load(std::memory_order_relaxed)) {
+            // No thread (tests) or already executing on it: inline.
+            return std::forward<F>(f)();
+        }
+        auto task = std::make_shared<std::packaged_task<R()>>(
+            std::forward<F>(f));
+        auto fut = task->get_future();
+        {
+            std::lock_guard<std::mutex> lk(m_queueMutex);
+            m_glQueue.push_back([task] { (*task)(); });
+        }
+        m_queueCv.notify_all();
+        return fut.get();
+    }
+
+    static thread_local std::atomic<bool> s_onRenderThread;
+
     struct ContextScope {
         SDL_Window*   prevWindow  = nullptr;
         SDL_GLContext prevContext = nullptr;
@@ -719,12 +792,12 @@ private:
 
     const audio::AudioEngine* m_audioEngine = nullptr;
 
-    bool m_outputVisible = false;
+    std::atomic<bool> m_outputVisible = false;
     bool m_fullscreen    = false;
     bool m_initialized   = false;
 
     // Offline render (video export): deterministic time + readback.
-    bool   m_offlineRender = false;
+    std::atomic<bool> m_offlineRender = false;
     double m_offlineSeconds = 0.0;   // synthetic "now" (= transportSeconds)
     int    m_lastAccumIdx   = 0;     // accum FBO holding the last composite
 };

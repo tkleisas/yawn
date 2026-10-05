@@ -118,6 +118,9 @@ bool App::init() {
         LOG_WARN("Visual", "VisualEngine init failed — visual output disabled");
     }
     m_visualEngine.setAudioEngine(&m_audioEngine);
+    // The visual render thread owns the output context and paces the
+    // visual channel independently from this loop's swaps/vsync.
+    m_visualEngine.startRenderThread();
     m_mainWindow.makeCurrent();  // init() left the main context current, but be explicit
 
     // Load application icon — set window icon and create GL texture for About dialog
