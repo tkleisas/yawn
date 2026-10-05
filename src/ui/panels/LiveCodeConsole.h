@@ -19,6 +19,7 @@
 #include "ui/framework/v2/UIContext.h"
 #include "ui/framework/v2/Widget.h"
 #include "ui/panels/LiveCodeEditor.h"
+#include "ui/panels/LivePianoStrip.h"
 
 #include <functional>
 #include <string>
@@ -57,6 +58,12 @@ public:
     void forwardTextInput(const std::string& t);
     // Write the editor buffer to the script file (Save button).
     void saveBuffer();
+    // Notation keyboard: insert a token at the editor caret.
+    void insertAtCaret(const std::string& tok);
+    // MIDI monitor feeding the notation keyboard's capture toggle.
+    void setPianoMonitor(midi::MidiMonitorBuffer* buf) {
+        m_piano.setMidiMonitor(buf);
+    }
     // Patch the script file from project state — preserving comments
     // and layout (template-preserving round-trip, §5.4 stage 2).
     void syncScript();
@@ -95,6 +102,8 @@ private:
     int   m_tab = 0;            // 0=Console, 1=Code, 2=Edit
     bool  m_editorLoaded = false;
     LiveCodeEditor m_editor;
+    fw::LivePianoStrip m_piano;         // Edit-tab notation keyboard
+    ::yawn::ui::fw::Rect m_pianoRect{}; // cached for hit-testing
     std::string m_codeLens;
     double m_codeLensAge = 0.0; // seconds since last regen
     bool  m_codeLensDirty = true;

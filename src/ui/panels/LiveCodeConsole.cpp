@@ -225,6 +225,18 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             break;
         case Zone::None:
             dragMaybeStart(panel, lx, ly);
+            if (m_tab == 2 && m_pianoRect.w > 0.0f &&
+                ly >= m_pianoRect.y - panel.y &&
+                ly < m_pianoRect.y - panel.y + m_pianoRect.h) {
+                // Notation keyboard (inserts at the editor caret). The
+                // strip caches paint-space geometry — convert this
+                // panel-local click into the same space.
+                m_piano.click(lx + panel.x, ly + panel.y,
+                              [this](const std::string& tok) {
+                                  insertAtCaret(tok);
+                              });
+                return true;
+            }
             if (m_tab == 2 && m_lastLineH > 0.0f) {
                 // Click inside the editor area → caret placement.
                 const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
@@ -244,6 +256,7 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
 
 void LiveCodeConsole::tick() {
     if (!isOpen() || !m_mgr || !m_project || !m_engine) return;
+    if (m_tab == 2) { m_piano.pollMidi(); return; }
     if (m_tab != 1) return;
     m_codeLensAge += 1.0 / 60.0;
     if (m_codeLensAge >= 1.0 || m_codeLensDirty) refreshCodeLens();
@@ -284,6 +297,28 @@ bool LiveCodeConsole::keyEvent(fw2::Key key, bool ctrl, bool shift) {
 
 void LiveCodeConsole::forwardTextInput(const std::string& t) {
     if (m_tab == 2) m_editor.textInput(t);
+}
+
+// Notation keyboard → editor: insert the token at the caret, with a
+// space separator when the previous character would glue tokens
+// together (e.g. "C2_8" followed by "A3_16" reads as one long token
+// without the gap; after '(', '"', '=' or whitespace no space is
+// needed).
+void LiveCodeConsole::insertAtCaret(const std::string& tok) {
+    if (m_tab != 2) return;
+    auto& k = m_editor.kernel();
+    const auto& lines = k.lines();
+    const std::string& cur = lines[std::min(k.caretLine(),
+                                            static_cast<int>(lines.size()) - 1)];
+    const int col = k.caretCol();
+    if (!cur.empty() && col > 0 && col <= static_cast<int>(cur.size())) {
+        const char prev = cur[col - 1];
+        if (std::isalnum(static_cast<unsigned char>(prev)) ||
+            prev == '_' || prev == '#' || prev == ']' || prev == '@')
+            k.insertText(" ");
+    }
+    k.insertText(tok);
+    m_codeLensDirty = false;
 }
 
 void LiveCodeConsole::saveBuffer() {
@@ -448,8 +483,17 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
                                       met.fontSizeSmall, col);
         }
     } else if (m_tab == 2) {
-        // Editor.
-        m_editor.paint(ctx, Rect{panel.x, areaY, panel.w, areaH});
+        // Editor + the notation keyboard strip at the bottom (hidden
+        // when the console is too short to spare the space).
+        float editH = areaH;
+        m_pianoRect = Rect{};
+        if (areaH > fw::LivePianoStrip::height() + 60.0f) {
+            editH = areaH - fw::LivePianoStrip::height();
+            m_pianoRect = Rect{panel.x, areaY + editH,
+                               panel.w, fw::LivePianoStrip::height()};
+            m_piano.paint(ctx, m_pianoRect);
+        }
+        m_editor.paint(ctx, Rect{panel.x, areaY, panel.w, editH});
     } else {
         // Code lens — regenerated project description.
         const auto lines = splitLines(m_codeLens);

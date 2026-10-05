@@ -504,6 +504,10 @@ yawn.set_track_volume/pan/mute/solo/send (mostly existing controller API)
 yawn.new_midi_clip(track, scene, length_beats)
 yawn.midi_clip(track, scene) -> handle {notes(), set_notes(), clear(), ...}
 
+── pattern notations (strings → clip specs)
+yawn.midi("A1_16B1_16D#3_8")                 -- melodic phrase → {beats, notes}
+yawn.drums{ BD="x---x---x---x---", ... }     -- step grid → {beats, notes}
+
 ── prerender
 yawn.render(spec, [callback]) -> job_id      -- spec params by name or index
 yawn.cancel_render(job_id)
@@ -932,3 +936,53 @@ updates keep presenting at full frame rate even when the DAW window is
 minimized or parked behind the editor you're typing in. GL-touching
 live-code APIs (`set_visual`, `set_clip` deliveries) marshal onto the
 render thread internally; callers see unchanged signatures and returns.
+
+## 11. Pattern notations (yawn.midi / yawn.drums)
+
+Text notations for musical patterns, parsed by `src/livecode/PatternParse`
+into the standard clip-spec table (`{beats, notes}`) that the declarative
+song layer, `yawn.set_notes` and the prerender specs all consume
+directly — so `clips = { [1] = yawn.midi("...") }` just works.
+
+**Melodic** — sequential; each note starts where the previous one ends.
+Pitch is `[A-G][#|b]?<octave>` (MIDI 60 = C4, matching the rest of YAWN):
+
+```lua
+yawn.midi("A1_16B1_16D#3_8")            -- the user's example, no spaces needed
+yawn.midi("C2_8 C2_8 D#2_8*2 R_8 G2_4") -- *N multiplies length; R = rest
+yawn.midi("C2_16@1 C2_16@0.5")          -- @vel suffix (0..1, default 0.8)
+yawn.midi("[C3E3G3]_2 C4_4 | A2_2")     -- chords; | separators are cosmetic
+yawn.midi("C2_16*16")                   -- exactly one bar of 16ths
+```
+
+Durations: `_1 _2 _4 _8 _16 _32` (whole-note fractions → 4/2/1/0.5/0.25/
+0.125 beats). Clip length = the exact sum, so a phrase can be a partial
+bar. Malformed input fails the run with the offending token named.
+
+**Drums** — one lane per voice, one character per 16th step; lanes may
+differ in length (each loops; clip = longest lane, or `{beats=N}` forces
+it). Velocities reuse the factory-loop vocabulary: `X` accent (0.88),
+`x` normal (0.76), `o` soft (0.6), `g` ghost (0.31), `.`/`-` rest.
+
+```lua
+yawn.drums{
+  BD = "x---x---x---x---",
+  SN = "----x-------x---",
+  HH = "x-x-x-x-x-x-x-x-",
+  OH = "------------x---",
+}
+```
+
+Lane names (case-insensitive aliases): `kick/bd`, `snare/sn`,
+`clap/cp`, `rim/rs`, `hihat/hh/ch/closedhat`, `openhh/oh/openhat`,
+`floortom/ft`, `lowtom/lt`, `tom/tommid/tm`, `hightom/ht`,
+`crash/cr/cy/cymbal`, `ride/rd`. All notes land on **GM channel 9**
+at the standard GM pitches (36/38/42/46/…), so patterns fire hardware
+DrumRack pads loaded at GM notes.
+
+**Editor keyboard** — the `~` console's Edit tab has a notation
+keyboard strip below the editor: one octave of piano keys, an octave
+stepper, the `_N` length buttons and a `×N` multiplier cycle. Clicking
+a key inserts its token at the caret; the **MIDI** button arms capture
+so a real keyboard's note-ons type themselves in (played pitch, the
+selected length).

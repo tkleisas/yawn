@@ -304,6 +304,7 @@ inline const std::vector<std::string> LiveCodeEditorKernel::kSymbols = {
     "repeat", "return", "then", "true", "until", "while",
     "yawn.log", "yawn.toast", "yawn.note", "yawn.note_off",
     "yawn.set_notes", "yawn.get_notes", "yawn.clear_notes",
+    "yawn.midi", "yawn.drums",
     "yawn.new_midi_clip", "yawn.load_audio_file", "yawn.save_audio_buffer",
     "yawn.load_sample", "yawn.cancel_render", "yawn.is_playing",
     "yawn.set_playing", "yawn.get_bpm", "yawn.set_bpm", "yawn.get_beat",

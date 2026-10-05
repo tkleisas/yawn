@@ -673,6 +673,7 @@ bool App::init() {
             t, static_cast<uint8_t>(type)});
     };
     m_liveConsole.init(&m_liveCode, &m_project, &m_audioEngine);
+    m_liveConsole.setPianoMonitor(&m_midiMonitor);   // notation keyboard capture
     // yawn.set_visual: bare shader names resolve against the example
     // roots; the visual clip gets tempoSync (beat-locked iTime).
     m_liveCode.setVisualLiveHook([this](int track, int scene,

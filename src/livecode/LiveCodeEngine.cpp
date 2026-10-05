@@ -1,12 +1,14 @@
 #include "livecode/LiveCodeEngine.h"
 #include "livecode/LiveCodeBuffers.h"
 #include "livecode/LiveCodeManager.h"
+#include "livecode/PatternParse.h"
 #include "audio/AudioEngine.h"
 #include "util/Factory.h"
 #include "util/Logger.h"
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 namespace yawn {
 namespace livecode {
@@ -227,6 +229,73 @@ static int l_clear_notes(lua_State* L) {
     mgr->setMidiClipLive(track, sceneIdx,
                          std::make_unique<midi::MidiClip>(beats));
     return 0;
+}
+
+// ── Pattern notations (yawn.midi / yawn.drums) ────────────────────────────
+
+// Push a PatternClip as a clip-spec table the song layer and set_notes
+// both consume directly: { beats=…, notes={ {start,dur,pitch,vel,ch}, … } }.
+static void pushPatternClip(lua_State* L, const livecode::PatternClip& pc) {
+    lua_createtable(L, 0, 2);
+    lua_pushnumber(L, pc.beats);
+    lua_setfield(L, -2, "beats");
+    lua_createtable(L, static_cast<int>(pc.notes.size()), 0);
+    for (size_t i = 0; i < pc.notes.size(); ++i) {
+        const auto& n = pc.notes[i];
+        lua_createtable(L, 0, 5);
+        lua_pushnumber(L, n.start); lua_setfield(L, -2, "start");
+        lua_pushnumber(L, n.start); lua_setfield(L, -2, "beat");
+        lua_pushnumber(L, n.dur);   lua_setfield(L, -2, "dur");
+        lua_pushinteger(L, n.pitch); lua_setfield(L, -2, "pitch");
+        lua_pushnumber(L, n.vel);   lua_setfield(L, -2, "vel");
+        lua_pushinteger(L, n.ch);   lua_setfield(L, -2, "ch");
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_setfield(L, -2, "notes");
+}
+
+// yawn.midi("A1_16 B1_16 D#3_8") -> clip spec {beats, notes}
+// Sequential notation: each note starts where the previous one ends.
+static int l_midi(lua_State* L) {
+    const char* s = luaL_checkstring(L, 1);
+    livecode::PatternClip pc;
+    std::string err;
+    if (!livecode::parseMelodicPhrase(s ? s : "", pc, err))
+        return luaL_error(L, "yawn.midi: %s", err.c_str());
+    pushPatternClip(L, pc);
+    return 1;
+}
+
+// yawn.drums{ BD="x---x---x---x---", SN="----x-------x---", beats=N }
+//   -> clip spec on the GM drum channel (9). One character per 16th step:
+//   X accent, x normal, o soft, g ghost, . or - rest. Lanes may differ in
+//   length; each loops over the clip (length = longest lane or `beats`).
+static int l_drums(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::map<std::string, std::string> lanes;
+    double forceBeats = 0.0;
+    lua_getfield(L, 1, "beats");
+    if (lua_isnumber(L, -1)) forceBeats = lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_pushnil(L);
+    while (lua_next(L, 1) != 0) {
+        // key at -2, value at -1
+        if (lua_isstring(L, -2) && lua_isstring(L, -1)) {
+            const char* k = lua_tostring(L, -2);
+            const char* v = lua_tostring(L, -1);
+            if (k && v && std::strcmp(k, "beats") != 0)
+                lanes[k] = v;
+        }
+        lua_pop(L, 1);
+    }
+
+    livecode::PatternClip pc;
+    std::string err;
+    if (!livecode::parseDrumGrid(lanes, forceBeats, pc, err))
+        return luaL_error(L, "yawn.drums: %s", err.c_str());
+    pushPatternClip(L, pc);
+    return 1;
 }
 
 // yawn.new_midi_clip(track, scene, [beats=4])
@@ -791,6 +860,8 @@ void LiveCodeEngine::registerAPI() {
         {"note_off",     l_note_off},
         {"set_notes",    l_set_notes},
         {"get_notes",    l_get_notes},
+        {"midi",         l_midi},
+        {"drums",        l_drums},
         {"clear_notes",  l_clear_notes},
         {"new_midi_clip",l_new_midi_clip},
         {"load_audio_file", l_load_audio_file},

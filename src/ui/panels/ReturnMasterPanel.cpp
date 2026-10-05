@@ -305,6 +305,66 @@ void ReturnMasterPanel::paintMasterStrip(UIContext& ctx, float x, float y,
                                       kMeterWidth * 2 + 2, faderH}, ctx);
     m_masterStrip.meter.render(ctx);
 
+    // ── Master spectrum strip ("visual candy") ──
+    // 40 log-spaced bars from the mixer's lock-free 1024-sample master
+    // tap — the same data the visual engine's iChannel0 FFT eats, now
+    // visible even with no shader on screen. Recomputed every 3rd frame
+    // (~20 Hz) with peak-hold decay so the bars read at a glance.
+    {
+        constexpr int kBars = 40;
+        auto& mixer = m_engine->mixer();
+        float tap[audio::Mixer::kVisTapSize];
+        mixer.readVisualSamples(tap, audio::Mixer::kVisTapSize);
+        if (++m_specTick >= 3) {
+            m_specTick = 0;
+            constexpr int n = audio::Mixer::kVisTapSize;
+            static thread_local float re[n], im[n];   // NOLINT
+            for (int i = 0; i < n; ++i) {
+                const float w = 0.5f *
+                    (1.0f - std::cos(2.0f * static_cast<float>(M_PI) *
+                                     static_cast<float>(i) / (n - 1)));
+                re[i] = tap[i] * w;
+                im[i] = 0.0f;
+            }
+            audio::TimeStretcher::fft(re, im, n, false);
+            const float sr = std::max<float>(1.0f, m_engine->sampleRate());
+            for (int b = 0; b < kBars; ++b) {
+                const float f0 = 30.0f * std::pow(16000.0f / 30.0f,
+                                                  b / static_cast<float>(kBars));
+                const float f1 = 30.0f * std::pow(16000.0f / 30.0f,
+                                                  (b + 1) / static_cast<float>(kBars));
+                int bin0 = std::clamp(static_cast<int>(f0 * n / sr), 1, n / 2 - 1);
+                int bin1 = std::clamp(static_cast<int>(f1 * n / sr),
+                                      bin0 + 1, n / 2 - 1);
+                float mag = 0.0f;
+                for (int k = bin0; k <= bin1; ++k)
+                    mag = std::max(mag,
+                                   std::sqrt(re[k] * re[k] + im[k] * im[k]) /
+                                       static_cast<float>(n));
+                const float dB = 20.0f * std::log10(std::max(mag, 1e-6f));
+                const float norm = std::clamp((dB + 84.0f) / 84.0f, 0.0f, 1.0f);
+                // Peak-hold with slow fall — snappy attack, graceful decay.
+                m_spec[b] = std::max<float>(norm, m_spec[b] - 0.06f);
+            }
+        }
+        const float stripH = 34.0f;
+        const float specY = y + h - stripH - 16.0f;
+        const float barW = (w - 8.0f) / kBars;
+        for (int b = 0; b < kBars; ++b) {
+            const float bh = m_spec[b] * stripH;
+            if (bh < 1.0f) continue;
+            // Quiet → loud: theme accent fades to warm red at the top.
+            const uint8_t rr = static_cast<uint8_t>(
+                80 + m_spec[b] * 175.0f);
+            const uint8_t gg = static_cast<uint8_t>(
+                200 - m_spec[b] * 140.0f);
+            const uint8_t bb = static_cast<uint8_t>(90 + 40 * (1 - m_spec[b]));
+            r.drawRect(x + 4 + b * barW, specY + stripH - bh,
+                       std::max(1.0f, barW - 1.0f), bh,
+                       Color{rr, gg, bb, 220});
+        }
+    }
+
     const float smallSize = met.fontSizeSmall;
     const float db = (master.volume > 0.001f) ? 20.0f * std::log10(master.volume) : -60.0f;
     char dbText[16];

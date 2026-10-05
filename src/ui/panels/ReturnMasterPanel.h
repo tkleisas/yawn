@@ -20,6 +20,7 @@
 #endif
 #include "ui/Theme.h"
 #include "audio/Mixer.h"
+#include "audio/TimeStretcher.h"
 #include "audio/AudioEngine.h"
 #include "app/Project.h"
 #include "core/Constants.h"
@@ -261,6 +262,11 @@ private:
 
     ReturnMeter m_returnMeters[kMaxReturnBuses] = {};
     ReturnMeter m_masterMeter = {};
+
+    // Master spectrum strip (visual candy): peak-hold log-band bars.
+    static constexpr int kSpecBars = 40;
+    float m_spec[kSpecBars] = {};
+    int   m_specTick = 0;
 
     StripWidgets m_returnStrips[kMaxReturnBuses];
     StripWidgets m_masterStrip;

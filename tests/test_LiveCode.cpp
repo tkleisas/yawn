@@ -1795,3 +1795,79 @@ TEST_F(LiveCodeManagerTest, GhostUniformsCarryUpcomingFires) {
     EXPECT_FLOAT_EQ(out[1].untilFire, 3.0f);
     EXPECT_FLOAT_EQ(out[1].track, 1.0f);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Pattern notations through the Lua engine (yawn.midi / yawn.drums)
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST_F(LiveCodeManagerTest, MidiNotationBuildsClipViaSongLayer) {
+    writeScript(R"lua(
+song = {
+  bpm = 120,
+  tracks = {
+    { uid = 1234501, name = "bass",
+      clips = { [1] = yawn.midi("A1_16B1_16D#3_8") } },
+  },
+}
+)lua");
+    ASSERT_TRUE(m_mgr.runScript());
+    for (const auto& ln : m_mgr.console())
+        std::cout << "  [console] " << ln.text << "\n";
+
+    const int ti = m_project.findTrackByUid(1234501);
+    ASSERT_GE(ti, 0);
+    auto* slot = m_project.getSlot(ti, 0);
+    ASSERT_NE(slot, nullptr);
+    ASSERT_NE(slot->midiClip, nullptr);
+    EXPECT_DOUBLE_EQ(slot->midiClip->lengthBeats(), 1.0);   // 16+16+8 16ths
+    ASSERT_EQ(slot->midiClip->noteCount(), 3);
+    EXPECT_EQ(slot->midiClip->note(0).pitch, 33);           // A1 (C4 = 60)
+    EXPECT_EQ(slot->midiClip->note(1).pitch, 35);           // B1
+    EXPECT_EQ(slot->midiClip->note(2).pitch, 51);           // D#3
+    EXPECT_DOUBLE_EQ(slot->midiClip->note(1).startBeat, 0.25);
+    EXPECT_DOUBLE_EQ(slot->midiClip->note(2).startBeat, 0.5);
+}
+
+TEST_F(LiveCodeManagerTest, DrumGridBuildsClipViaSongLayer) {
+    writeScript(R"lua(
+song = {
+  bpm = 120,
+  tracks = {
+    { uid = 1234502, name = "drums",
+      clips = { [1] = yawn.drums{
+        BD = "x---x---x---x---",
+        SN = "----x-------x---",
+        HH = "x-x-x-x-x-x-x-x-",
+    } } },
+  },
+}
+)lua");
+    ASSERT_TRUE(m_mgr.runScript());
+
+    const int ti = m_project.findTrackByUid(1234502);
+    ASSERT_GE(ti, 0);
+    auto* slot = m_project.getSlot(ti, 0);
+    ASSERT_NE(slot, nullptr);
+    ASSERT_NE(slot->midiClip, nullptr);
+    EXPECT_DOUBLE_EQ(slot->midiClip->lengthBeats(), 4.0);
+    // 4 BD + 2 SN + 8 HH.
+    ASSERT_EQ(slot->midiClip->noteCount(), 14);
+    int bd = 0, sn = 0, hh = 0;
+    for (int i = 0; i < slot->midiClip->noteCount(); ++i) {
+        const auto& n = slot->midiClip->note(i);
+        EXPECT_EQ(n.channel, 9);
+        if (n.pitch == 36) ++bd;
+        if (n.pitch == 38) ++sn;
+        if (n.pitch == 42) ++hh;
+    }
+    EXPECT_EQ(bd, 4);
+    EXPECT_EQ(sn, 2);
+    EXPECT_EQ(hh, 8);
+}
+
+TEST_F(LiveCodeManagerTest, MidiNotationBadStringFailsRunCleanly) {
+    writeScript(R"lua(
+song = { tracks = { { name = "bass", clips = { [1] = yawn.midi("H3_4") } } } }
+)lua");
+    EXPECT_FALSE(m_mgr.runScript());   // error surfaces; no song applied
+}

@@ -1045,6 +1045,53 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
         // MIDI notes
         if (mClip && mClip->noteCount() > 0) {
             float nY = iy + 18, nH = ih - 22 - kPillRowReserve;
+
+            // Drum-grid glyph: a clip whose notes are all on the GM drum
+            // channel (9 — what yawn.drums{} and the factory loops emit)
+            // reads better as a step grid than as pitch bars.
+            bool isDrum = true;
+            for (int i = 0; i < mClip->noteCount(); ++i) {
+                if (mClip->note(i).channel != 9) { isDrum = false; break; }
+            }
+            if (isDrum) {
+                double len = mClip->lengthBeats();
+                // Rows: distinct pitches, most-active first (cap 4 — a
+                // row per voice; the rare extras share the last row).
+                std::vector<std::pair<int, int>> voices;   // pitch, hits
+                for (int i = 0; i < mClip->noteCount(); ++i) {
+                    const int p = mClip->note(i).pitch;
+                    bool found = false;
+                    for (auto& v : voices)
+                        if (v.first == p) { ++v.second; found = true; break; }
+                    if (!found) voices.push_back({p, 1});
+                }
+                std::sort(voices.begin(), voices.end(),
+                          [](const auto& a, const auto& b) {
+                              return a.second > b.second;
+                          });
+                if (voices.size() > 4) voices.resize(4);
+                std::sort(voices.begin(), voices.end());   // draw low→high
+                const float rowH = nH / static_cast<float>(voices.size());
+                const float dotW = std::max(2.0f, (contentW - 8.0f) *
+                                                  (1.0f / 16.0f) * 0.6f);
+                for (const auto& v : voices) {
+                    const float rowY = nY + nH -
+                        (static_cast<float>(voices.rend() - std::find(
+                             voices.rbegin(), voices.rend(), v)) /
+                         static_cast<float>(voices.size())) * nH;
+                    for (int i = 0; i < mClip->noteCount(); ++i) {
+                        const auto& n = mClip->note(i);
+                        if (n.pitch != v.first) continue;
+                        const float nx = contentX + 4 +
+                            static_cast<float>(n.startBeat / len) *
+                            (contentW - 8);
+                        const uint8_t a = static_cast<uint8_t>(
+                            90 + static_cast<float>(n.velocity) / 65535.0f * 150.0f);
+                        r.drawRect(nx, rowY + (rowH - dotW) * 0.5f,
+                                   dotW, dotW, trkCol.withAlpha(a));
+                    }
+                }
+            } else {
             ::yawn::ui::Color noteCol = trkCol.withAlpha(180);
             int minP = 127, maxP = 0;
             for (int i = 0; i < mClip->noteCount(); ++i) {
@@ -1076,7 +1123,12 @@ void SessionPanel::paintClipSlot(Renderer2D& r, TextMetrics& tm, int ti, int si,
                 float bandTop = nY + nH -
                     (static_cast<float>(n.pitch - minP + 1) / pRange) * nH;
                 float ny = bandTop + (bandH - drawH) * 0.5f;
-                r.drawRect(nx, ny, nw, drawH, noteCol);
+                // Velocity shading: louder notes are more opaque, so a
+                // groove's accents read at a glance.
+                const uint8_t a = static_cast<uint8_t>(
+                    70 + static_cast<float>(n.velocity) / 65535.0f * 150.0f);
+                r.drawRect(nx, ny, nw, drawH, trkCol.withAlpha(a));
+            }
             }
 
             // MIDI playhead
