@@ -292,6 +292,10 @@ private:
         bool          restored    = false;
         ContextScope(SDL_Window* newWin, SDL_GLContext newCtx);
         ~ContextScope();
+        // Frame-path optimization: skip the destructor's restore — the
+        // caller makes its own context current right after anyway. Saves
+        // the round-trip MakeCurrent (~10-14 ms on some drivers).
+        void dismissRestore() { restored = true; }
     };
 
     // Shared shader-parameter descriptor used by both layers and post-FX.

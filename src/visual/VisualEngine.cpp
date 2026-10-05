@@ -2747,7 +2747,6 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
     if (!m_outputVisible && !m_offlineRender) return;
     // Synthetic clock for deterministic offline render (drives post-FX time).
     if (m_offlineRender) m_offlineSeconds = transportSeconds;
-
     ContextScope scope(m_outputWindow, m_outputContext);
 
     // Drain MIDI note-ons published by the audio thread (lock-free) into
@@ -2954,6 +2953,7 @@ void VisualEngine::tick(double transportSeconds, double transportBeats, bool pla
     glBindTexture(GL_TEXTURE_2D, 0);
 
     SDL_GL_SwapWindow(m_outputWindow);
+    scope.dismissRestore();   // next frame's render() re-makes its ctx
 }
 
 // ── Free-accessor registrar (header in VisualEngineAPI.h) ─────────────────

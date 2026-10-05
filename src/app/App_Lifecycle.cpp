@@ -1869,6 +1869,10 @@ void App::shutdown() {
     m_audioEngine.shutdown();
     // Tear down visual output window + GL resources while SDL is still up.
     m_visualEngine.shutdown();
+    // The tick path leaves the visual output context current (see
+    // dismissRestore) and the engine teardown just destroyed it. Restore
+    // the main context before touching main-context GL objects.
+    m_mainWindow.makeCurrent();
     // Destroy cached cursors
     if (m_cursorDefault)  SDL_DestroyCursor(m_cursorDefault);
     if (m_cursorEWResize) SDL_DestroyCursor(m_cursorEWResize);
