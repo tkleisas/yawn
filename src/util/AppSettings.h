@@ -41,6 +41,11 @@ struct AppSettings {
     // Preferences → Theme tab.
     float fontScale = 1.25f;   // default bumped per user feedback
 
+    // Live-code console editor font scale (Edit tab's A- / A+ pair).
+    // Multiplies the theme's fontSizeSmall for the Lua buffer only.
+    // 1.0 = theme size; clamped 0.75..2.0 by the buttons.
+    float editorFontScale = 1.0f;
+
     // Plugin Delay Compensation — Edit → Preferences → Audio.
     // Off by default (most chains have no latency-introducing
     // effects; users with serious mixes flip it on once).
@@ -106,6 +111,7 @@ struct AppSettings {
             s.countInBars = j.value("countInBars", 0);
             s.metronomeVisualStyle = j.value("metronomeVisualStyle", 0);
             s.fontScale = j.value("fontScale", 1.25f);
+            s.editorFontScale = j.value("editorFontScale", 1.0f);
             s.latencyCompensation = j.value("latencyCompensation", false);
             s.linkEnabled = j.value("linkEnabled", false);
             s.linkStartStopSync = j.value("linkStartStopSync", false);
@@ -135,6 +141,7 @@ struct AppSettings {
             j["countInBars"] = s.countInBars;
             j["metronomeVisualStyle"] = s.metronomeVisualStyle;
             j["fontScale"] = s.fontScale;
+            j["editorFontScale"] = s.editorFontScale;
             j["latencyCompensation"] = s.latencyCompensation;
             j["linkEnabled"] = s.linkEnabled;
             j["linkStartStopSync"] = s.linkStartStopSync;

@@ -47,26 +47,33 @@ std::vector<std::string> splitLines(const std::string& s) {
 }
 
 enum class Zone : uint8_t {
-    None, RunStop, Reload, Clear, Save, Eval, Freeze, TabLog, TabCode,
-    TabEdit, Scrollbar, Resize
+    None, RunStop, Reload, Clear, Save, Eval, Freeze, FontUp, FontDown,
+    TabLog, TabCode, TabEdit, Scrollbar, Resize
 };
 
 // Button slot layout per tab (right → left). Every tab has
-// Clear/Reload/Run-Stop + Freeze; Edit adds Save+Eval, Code adds Sync.
+// Clear/Reload/Run-Stop + Freeze; Edit adds Save+Eval and the
+// editor font-size pair (A- / A+), Code adds Sync.
 constexpr int kBaseSlots = 4;   // Clear, Reload, Run/Stop, Freeze
-int slotCount(int tab) { return kBaseSlots + (tab == 2 ? 2 : (tab == 1 ? 1 : 0)); }
+int slotCount(int tab) { return kBaseSlots + (tab == 2 ? 4 : (tab == 1 ? 1 : 0)); }
 
 const char* slotLabel(int tab, int slot, bool active) {
     // Fixed base: slot 0 rightmost = Clear, 1 = Reload, 2 = Run/Stop.
-    // Context slots grow leftward; the leftmost slot is always Freeze.
+    // Context slots grow leftward; the leftmost slots are tab-specific.
     //   tab0 (4): [Freeze][Stop][Reload][Clear]
     //   tab1 (5): [Sync][Freeze][Stop][Reload][Clear]
-    //   tab2 (6): [Eval][Save][Freeze][Stop][Reload][Clear]
+    //   tab2 (8): [A-][A+][Eval][Save][Freeze][Stop][Reload][Clear]
     const int n = slotCount(tab);
-    if (slot == n - 1) return "Freeze";
-    if (tab == 2 && slot == n - 2) return "Eval";
-    if (tab == 2 && slot == n - 3) return "Save";
-    if (tab == 1 && slot == n - 2) return "Sync";
+    if (tab == 2) {
+        if (slot == n - 1) return "A-";
+        if (slot == n - 2) return "A+";
+        if (slot == n - 3) return "Eval";
+        if (slot == n - 4) return "Save";
+        if (slot == n - 5) return "Freeze";
+    } else {
+        if (slot == n - 1) return "Freeze";
+        if (tab == 1 && slot == n - 2) return "Sync";
+    }
     switch (slot) {
         case 0: return "Clear";
         case 1: return "Reload";
@@ -85,15 +92,23 @@ Zone zoneAt(const Rect& panel, float lx, float ly, int tab) {
         panel.w > kPad + static_cast<float>(n) * (kBtnW + 6.0f)) {
         float x = panel.w - kPad - kBtnW;
         for (int i = 0; i < n; ++i) {
-            if (lx >= x && lx < x + kBtnW) {
-                if (i == n - 1) return Zone::Freeze;
-                if (tab == 2 && i == n - 2) return Zone::Eval;
-                if (tab == 2 && i == n - 3) return Zone::Save;
-                if (tab == 1 && i == n - 2) return Zone::Save;   // Sync
+        if (lx >= x && lx < x + kBtnW) {
+            if (tab == 2) {
+                if (i == n - 1) return Zone::FontDown;
+                if (i == n - 2) return Zone::FontUp;
+                if (i == n - 3) return Zone::Eval;
+                if (i == n - 4) return Zone::Save;
+                if (i == n - 5) return Zone::Freeze;
                 return i == 0 ? Zone::Clear
                      : i == 1 ? Zone::Reload
                               : Zone::RunStop;
             }
+            if (i == n - 1) return Zone::Freeze;
+            if (tab == 1 && i == n - 2) return Zone::Save;   // Sync
+            return i == 0 ? Zone::Clear
+                 : i == 1 ? Zone::Reload
+                          : Zone::RunStop;
+        }
             x -= kBtnW + 6.0f;
         }
     }
@@ -216,7 +231,8 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
                                         0.0f, areaH - 1.0f);
             const float lx = e.x - m_panel.x;
             m_editor.dragTo(lx, ly, m_lastLineH,
-                            fw2::theme().metrics.fontSizeSmall,
+                            fw2::theme().metrics.fontSizeSmall
+                                * m_editorFontScale,
                             *m_lastMet, fw::Rect{0.0f, 0.0f, m_panel.w, areaH});
             return true;
         }
@@ -266,6 +282,12 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             break;
         case Zone::Freeze:
             m_mgr->freezeTake();
+            break;
+        case Zone::FontDown:
+            setEditorFontScale(m_editorFontScale - 0.1f);
+            break;
+        case Zone::FontUp:
+            setEditorFontScale(m_editorFontScale + 0.1f);
             break;
         case Zone::Reload:
             m_mgr->reload();
@@ -319,7 +341,8 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
                 const float ly2 = ly - areaY;
                 if (ly2 >= 0.0f && ly2 < areaH) {
                     const Rect content{0.0f, 0.0f, panel.w, areaH};
-                    const float fs = fw2::theme().metrics.fontSizeSmall;
+                    const float fs = fw2::theme().metrics.fontSizeSmall
+                                   * m_editorFontScale;
                     if (e.clickCount >= 2) {
                         // Double-click: word (or whitespace run) select.
                         m_editor.doubleClick(lx, ly2, m_lastLineH, fs,

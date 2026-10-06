@@ -81,6 +81,10 @@ public:
     LiveCodeEditorKernel& kernel() { return m_k; }
     const LiveCodeEditorKernel& kernel() const { return m_k; }
 
+    // Font zoom for the buffer only (multiplies fontSizeSmall).
+    void  setFontScale(float s) { m_fontScale = s; }
+    float fontScale() const     { return m_fontScale; }
+
     // Eval-error feedback: highlight a buffer line (0-based, -1 =
     // none). The console parses the Lua error chunk line number.
     void setErrorLine(int line0) {
@@ -103,6 +107,7 @@ private:
     LiveCodeEditorKernel m_k;
     int m_visibleLines = 20;      // set by paint; kept for hit-testing
     int m_errorLine = -1;         // eval-error row highlight (0-based)
+    float m_fontScale = 1.0f;     // buffer zoom (A-/A+ buttons)
     // Caret-follow bookkeeping: keep-in-view only runs when the caret
     // MOVED (scrollbar drags must not be re-centered by paint).
     int m_lastFollowLine = -1, m_lastFollowCol = -1;

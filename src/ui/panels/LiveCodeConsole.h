@@ -21,6 +21,7 @@
 #include "ui/panels/LiveCodeEditor.h"
 #include "ui/panels/LivePianoStrip.h"
 
+#include <algorithm>
 #include <functional>
 #include <string>
 
@@ -52,6 +53,17 @@ public:
     // internal fallback string keeps Ctrl+X → Ctrl+V working.
     std::function<void(const std::string&)> onClipboardOut;
     std::function<std::string()>            onClipboardIn;
+
+    // ─── Editor font size (A- / A+ in the header) ─────────────────
+    // Scale over the theme's fontSizeSmall, clamped 0.75..2.0. The
+    // app persists it via onEditorFontScale (AppSettings).
+    float editorFontScale() const { return m_editorFontScale; }
+    void  setEditorFontScale(float s) {
+        m_editorFontScale = std::clamp(s, 0.75f, 2.0f);
+        m_editor.setFontScale(m_editorFontScale);
+        if (onEditorFontScale) onEditorFontScale(m_editorFontScale);
+    }
+    std::function<void(float)> onEditorFontScale;
 
     // Per-frame housekeeping (code-lens throttle while visible).
     void tick();
@@ -121,6 +133,7 @@ private:
     fw::LivePianoStrip m_piano;         // Edit-tab notation keyboard
     std::string m_clipFallback;         // internal clipboard when the
                                         // app doesn't bridge SDL
+    float m_editorFontScale = 1.0f;     // Edit-tab buffer zoom
     ::yawn::ui::fw::Rect m_pianoRect{}; // cached for hit-testing
     std::string m_codeLens;
     double m_codeLensAge = 0.0; // seconds since last regen

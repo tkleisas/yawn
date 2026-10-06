@@ -685,6 +685,13 @@ bool App::init() {
         SDL_free(c);
         return t;
     };
+    // Editor font zoom: seed from settings, persist on change (the
+    // debounced settings flush writes it out).
+    m_liveConsole.setEditorFontScale(m_settings.editorFontScale);
+    m_liveConsole.onEditorFontScale = [this](float s) {
+        m_settings.editorFontScale = s;
+        m_settingsDirty = true;
+    };
     // yawn.set_visual: bare shader names resolve against the example
     // roots; the visual clip gets tempoSync (beat-locked iTime).
     m_liveCode.setVisualLiveHook([this](int track, int scene,

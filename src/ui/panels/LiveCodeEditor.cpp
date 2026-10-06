@@ -325,7 +325,7 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     if (!ctx.textMetrics) return;
     const auto& pal = theme().palette;
     const auto& met = theme().metrics;
-    const float fontSize = met.fontSizeSmall;
+    const float fontSize = met.fontSizeSmall * m_fontScale;
     const fw2::TextMetrics& tm = *ctx.textMetrics;
     const float lineH = tm.lineHeight(fontSize);
     if (lineH <= 0.0f) return;
