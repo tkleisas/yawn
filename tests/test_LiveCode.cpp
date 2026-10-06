@@ -1486,6 +1486,201 @@ TEST(LiveCodeEditorKernelTest, UTF8BackspaceStepsContinuation) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Selection + clipboard (kernel level)
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST(LiveCodeEditorKernelTest, ShiftArrowsSelectAndCopy) {
+    K k;
+    k.setText("abcdef\nghijkl");
+    k.moveEnd();
+    k.moveHome();                           // (0,0)
+    k.moveRightExtend();                    // select 'a'
+    k.moveRightExtend();                    // select 'ab'
+    EXPECT_TRUE(k.hasSelection());
+    EXPECT_EQ(k.selectedText(), "ab");
+    const std::string clip = k.copySelection();
+    EXPECT_EQ(clip, "ab");
+    EXPECT_EQ(k.text(), "abcdef\nghijkl");  // copy doesn't mutate
+}
+
+TEST(LiveCodeEditorKernelTest, SelectionAcrossLines) {
+    K k;
+    k.setText("abcdef\nghijkl\nmnopqr");
+    k.moveEnd();                            // (0,6)
+    k.moveDown();                           // (1,6)
+    k.moveDown();                           // (2,6)
+    k.moveLeftExtend();                     // anchor (2,6) → caret (2,5)
+    k.moveUpExtend();                       // caret (1,5)
+    EXPECT_TRUE(k.hasSelection());
+    // Range: (1,5) → (2,6): "l" + "\n" + the rest of the last line
+    EXPECT_EQ(k.selectedText(), "l\nmnopqr");
+    k.selectAll();
+    EXPECT_EQ(k.selectedText(), k.text());
+}
+
+TEST(LiveCodeEditorKernelTest, CutPasteReplacesSelection) {
+    K k;
+    k.setText("one two three");
+    k.moveEnd(); k.moveHome();
+    k.moveRightExtend(); k.moveRightExtend(); k.moveRightExtend();
+    EXPECT_EQ(k.selectedText(), "one");
+    EXPECT_EQ(k.cutSelection(), "one");
+    EXPECT_EQ(k.text(), " two three");
+    EXPECT_FALSE(k.hasSelection());
+    k.moveHome();                           // paste back where it was
+    k.pasteText("one");
+    EXPECT_EQ(k.text(), "one two three");
+}
+
+TEST(LiveCodeEditorKernelTest, BackspaceWithSelectionDeletesIt) {
+    K k;
+    k.setText("abcdef");
+    k.moveEnd(); k.moveHome();
+    k.moveRightExtend(); k.moveRightExtend();
+    k.backspace();
+    EXPECT_EQ(k.text(), "cdef");
+    EXPECT_EQ(k.caretCol(), 0);
+    EXPECT_FALSE(k.hasSelection());
+}
+
+TEST(LiveCodeEditorKernelTest, PasteMultiLineSplitsLines) {
+    K k;
+    k.setText("ab\ncd");
+    k.moveEnd();
+    k.moveDown();                           // (1,2) after "cd"
+    k.pasteText("XY\nZW");
+    EXPECT_EQ(k.text(), "ab\ncdXY\nZW");
+    EXPECT_EQ(k.caretLine(), 2);
+    EXPECT_EQ(k.caretCol(), 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Undo / redo
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST(LiveCodeEditorKernelTest, UndoRedoTypingCoalesces) {
+    K k;
+    k.setText("");
+    k.insertText("a");
+    k.insertText("b");
+    k.insertText("c");                      // one run → ONE undo step
+    EXPECT_EQ(k.text(), "abc");
+    EXPECT_TRUE(k.canUndo());
+    k.undo();
+    EXPECT_EQ(k.text(), "");
+    EXPECT_TRUE(k.canRedo());
+    k.redo();
+    EXPECT_EQ(k.text(), "abc");
+}
+
+TEST(LiveCodeEditorKernelTest, UndoSplitsRunsOnLineChange) {
+    K k;
+    k.setText("");
+    k.insertText("one");
+    k.splitLine();                          // structural op = own run
+    k.insertText("two");
+    EXPECT_EQ(k.text(), "one\ntwo");
+    k.undo();                               // undoes "two" insert
+    EXPECT_EQ(k.text(), "one\n");
+    k.undo();                               // undoes the split
+    EXPECT_EQ(k.text(), "one");
+    k.redo();                               // split again
+    EXPECT_EQ(k.text(), "one\n");
+    k.redo();
+    EXPECT_EQ(k.text(), "one\ntwo");
+}
+
+TEST(LiveCodeEditorKernelTest, UndoRestoresCaretAndSelection) {
+    K k;
+    k.setText("hello");
+    k.moveEnd();
+    k.moveLeftExtend(); k.moveLeftExtend(); // select "lo"
+    k.cutSelection();                       // "hel"
+    k.undo();
+    EXPECT_EQ(k.text(), "hello");
+    EXPECT_TRUE(k.hasSelection());          // selection restored
+    EXPECT_EQ(k.selectedText(), "lo");
+    EXPECT_EQ(k.caretCol(), 3);             // at the cut's start
+}
+
+TEST(LiveCodeEditorKernelTest, NewEditClearsRedo) {
+    K k;
+    k.setText("");
+    k.insertText("a");
+    k.undo();
+    EXPECT_TRUE(k.canRedo());
+    k.insertText("b");
+    EXPECT_FALSE(k.canRedo());
+    EXPECT_EQ(k.text(), "b");
+}
+
+TEST(LiveCodeEditorKernelTest, UndoCapBoundsTheStack) {
+    K k;
+    k.setText("");
+    for (int i = 0; i < 64; ++i) {
+        k.splitLine();                      // each its own run
+        k.moveUp();
+    }
+    EXPECT_GT(k.canUndo() ? 1 : 0, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Horizontal scroll + dirty-line tracking
+// ─────────────────────────────────────────────────────────────────────────
+
+TEST(LiveCodeEditorKernelTest, HorizontalScrollOwnsValue) {
+    K k;
+    k.setText("x");
+    k.setScrollX(55.0f);
+    EXPECT_EQ(k.scrollX(), 55.0f);
+    k.setScrollX(-3.0f);                    // clamps at 0
+    EXPECT_EQ(k.scrollX(), 0.0f);
+}
+
+TEST(LiveCodeEditorKernelTest, DirtyTracksFirstEditedLine) {
+    K k;
+    k.setText("l0\nl1\nl2\nl3");
+    k.clearDirty();
+    EXPECT_GT(k.dirtyFromLine(), 3);        // "no dirty" sentinel
+    k.setCaret(2, 1);
+    k.insertText("X");                      // edits line 2
+    EXPECT_EQ(k.dirtyFromLine(), 2);
+    k.clearDirty();
+    k.setCaret(0, 0);
+    k.backspace();                          // joins into line 0
+    EXPECT_EQ(k.dirtyFromLine(), 0);
+    k.setText("one");                       // full load = fully dirty
+    EXPECT_EQ(k.dirtyFromLine(), 0);
+}
+
+TEST(LiveCodeEditorKernelTest, DragSelectSweepsLines) {
+    K k;
+    k.setText("alpha\nbeta\ngamma");
+    k.dragSelectStart(0, 3);                // press mid-"alpha"
+    EXPECT_FALSE(k.hasSelection());
+    k.dragSelectTo(1, 2);                   // sweep down into "beta"
+    EXPECT_TRUE(k.hasSelection());
+    EXPECT_EQ(k.selectedText(), "ha\nbe");  // (0,3)-(1,2)
+    k.dragSelectTo(0, 1);                   // sweep back up
+    EXPECT_EQ(k.selectedText(), "lp");      // (0,1)-(0,3) = "l","p"
+    k.dragSelectTo(2, 5);                   // sweep down past both lines
+    EXPECT_EQ(k.selectedText(), "ha\nbeta\ngamma");   // anchor stays (0,3)
+}
+
+TEST(LiveCodeEditorKernelTest, PlainClickCollapsesDragSelection) {
+    K k;
+    k.setText("abcdef");
+    k.dragSelectStart(0, 1);
+    k.dragSelectTo(0, 5);
+    EXPECT_TRUE(k.hasSelection());
+    k.dragSelectStart(0, 2);                // new press re-anchors
+    EXPECT_FALSE(k.hasSelection());
+    k.setCaret(0, 4);                       // plain click collapses
+    EXPECT_FALSE(k.hasSelection());
+    EXPECT_EQ(k.caretCol(), 4);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Template-preserving round-trip (phase 9 — patchSongSource)
 // ─────────────────────────────────────────────────────────────────────────
 

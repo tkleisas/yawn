@@ -45,6 +45,35 @@ public:
     virtual void drawText(Renderer2D& r, const std::string& s,
                           float x, float y, float fontSize,
                           Color color) const = 0;
+
+    // Click → caret: the UTF-8 byte offset of the codepoint whose
+    // midpoint is nearest `x` (which is measured from the string's
+    // LEFT edge — callers subtract their own text origin). Walks the
+    // string codepoint-by-codepoint, so multi-byte chars select as a
+    // unit. Past the end → s.size(). Virtual so mocks can override.
+    virtual int byteOffsetAtX(const std::string& s, float fontSize,
+                              float x) const {
+        int col = 0;
+        float px = 0.0f;
+        while (col < static_cast<int>(s.size())) {
+            const int next = col + utf8CharBytes(s, col);
+            const float cw = textWidth(s.substr(col, next - col), fontSize);
+            if (x < px + cw * 0.5f) return col;
+            px += cw;
+            col = next;
+        }
+        return col;
+    }
+
+    // UTF-8 codepoint byte-length at byte offset `i` (1 for ASCII).
+    static int utf8CharBytes(const std::string& s, size_t i) {
+        const auto b = static_cast<unsigned char>(s[i]);
+        if (b < 0x80)           return 1;
+        if ((b & 0xE0) == 0xC0) return 2;
+        if ((b & 0xF0) == 0xE0) return 3;
+        if ((b & 0xF8) == 0xF0) return 4;
+        return 1;   // malformed — treat as single byte so we can escape
+    }
 };
 
 class UIContext {

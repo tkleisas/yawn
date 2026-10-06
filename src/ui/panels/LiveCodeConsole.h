@@ -46,6 +46,13 @@ public:
     bool isOpen() const { return m_handle.active(); }
     void close();
 
+    // ─── Clipboard bridging (editor is SDL-free) ──────────────────
+    // The app wires onClipboardOut/onClipboardIn to the SDL clipboard
+    // (SDL_SetClipboardText / SDL_GetClipboardText). Unwired, an
+    // internal fallback string keeps Ctrl+X → Ctrl+V working.
+    std::function<void(const std::string&)> onClipboardOut;
+    std::function<std::string()>            onClipboardIn;
+
     // Per-frame housekeeping (code-lens throttle while visible).
     void tick();
 
@@ -89,6 +96,7 @@ private:
     // Resizable console: bottom-right grip drags the panel size (which
     // persists across toggles).
     bool  m_resizing = false;
+    bool  m_dragSelecting = false;   // sweep-select in the editor
     float m_panelW = 0.0f, m_panelH = 0.0f;   // 0 = defaults
     float m_lastViewportW = 0.0f, m_lastViewportH = 0.0f;
     void  resizeTo(float winX, float winY);
@@ -111,6 +119,8 @@ private:
     bool  m_editorLoaded = false;
     LiveCodeEditor m_editor;
     fw::LivePianoStrip m_piano;         // Edit-tab notation keyboard
+    std::string m_clipFallback;         // internal clipboard when the
+                                        // app doesn't bridge SDL
     ::yawn::ui::fw::Rect m_pianoRect{}; // cached for hit-testing
     std::string m_codeLens;
     double m_codeLensAge = 0.0; // seconds since last regen

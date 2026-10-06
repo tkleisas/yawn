@@ -24,6 +24,7 @@ public:
             m_undoStack.back().description = std::move(entry.description);
         } else {
             m_undoStack.push_back(std::move(entry));
+            trimOldest();
         }
         // Any new action invalidates the redo stack
         m_redoStack.clear();
@@ -60,12 +61,22 @@ public:
         m_redoStack.clear();
     }
 
+    // Optional cap — when set, pushing beyond it drops the OLDEST
+    // undo entries (the stack stays bounded; snapshots can be fat).
+    void setMaxEntries(size_t n) { m_maxEntries = n; }
+
     size_t undoSize() const { return m_undoStack.size(); }
     size_t redoSize() const { return m_redoStack.size(); }
 
 private:
     std::deque<UndoEntry> m_undoStack;
     std::deque<UndoEntry> m_redoStack;
+    size_t m_maxEntries = 0;   // 0 = unbounded
+
+    void trimOldest() {
+        while (m_maxEntries > 0 && m_undoStack.size() > m_maxEntries)
+            m_undoStack.pop_front();
+    }
 };
 
 } // namespace undo

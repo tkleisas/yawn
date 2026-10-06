@@ -120,10 +120,19 @@ bool FwTextInput::onMouseDown(MouseEvent& e) {
     if (!m_enabled) return false;
     if (e.button != MouseButton::Left) return false;
     beginEdit();
-    // Place cursor at end for now — click-to-position requires text
-    // metrics per-character-width which we don't need for the current
-    // search-field use case.
-    m_cursor = static_cast<int>(m_text.size());
+    // Click-to-position: the text starts at bounds.x + padX, scrolled
+    // by the painter-maintained scrollPx; the shared TextMetrics
+    // hit-test (same helper the Lua editor's click uses) maps the
+    // widget-local x onto a UTF-8 codepoint offset.
+    if (auto* tm = UIContext::global().textMetrics) {
+        const float fs    = theme().metrics.fontSize;
+        const float padX  = theme().metrics.baseUnit;
+        const float textX = e.lx - padX + m_scrollPx;
+        m_cursor = std::clamp(tm->byteOffsetAtX(m_text, fs, textX),
+                              0, static_cast<int>(m_text.size()));
+    } else {
+        m_cursor = static_cast<int>(m_text.size());
+    }
     return true;
 }
 

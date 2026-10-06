@@ -674,6 +674,17 @@ bool App::init() {
     };
     m_liveConsole.init(&m_liveCode, &m_project, &m_audioEngine);
     m_liveConsole.setPianoMonitor(&m_midiMonitor);   // notation keyboard capture
+    // Clipboard bridge: the live-code editor is SDL-free; route its
+    // copy/cut/paste through the OS clipboard.
+    m_liveConsole.onClipboardOut = [this](const std::string& t) {
+        SDL_SetClipboardText(t.c_str());
+    };
+    m_liveConsole.onClipboardIn = [this]() {
+        char* c = SDL_GetClipboardText();
+        std::string t = c ? c : "";
+        SDL_free(c);
+        return t;
+    };
     // yawn.set_visual: bare shader names resolve against the example
     // roots; the visual clip gets tempoSync (beat-locked iTime).
     m_liveCode.setVisualLiveHook([this](int track, int scene,

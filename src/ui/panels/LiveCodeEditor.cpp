@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -138,7 +139,6 @@ float tokenRunWidth(const fw2::TextMetrics& met, float fontSize,
 }
 
 } // namespace
-
 // ─── Input ───────────────────────────────────────────────────────────
 
 bool LiveCodeEditor::keyDown(fw2::Key key, bool ctrl, bool shift) {
@@ -151,58 +151,150 @@ bool LiveCodeEditor::keyDown(fw2::Key key, bool ctrl, bool shift) {
         else       onEvaluate(m_k.text());
         return true;
     }
+    if (ctrl) {
+        switch (key) {
+            case Key::Z: m_k.undo(); clearErrorLine(); return true;
+            case Key::Y: m_k.redo(); clearErrorLine(); return true;
+            case Key::A: m_k.selectAll();              return true;
+            case Key::End:      m_k.moveBufferEnd(); clearErrorLine(); return true;
+            case Key::Home:     m_k.moveBufferStart(); clearErrorLine(); return true;
+            case Key::C: {
+                const std::string t = m_k.copySelection();
+                if (!t.empty() && onClipboardCopy) onClipboardCopy(t);
+                return true;
+            }
+            case Key::X: {
+                const std::string t = m_k.cutSelection();
+                if (!t.empty() && onClipboardCopy) onClipboardCopy(t);
+                clearErrorLine();                       return true;
+            }
+            case Key::V: {
+                if (onClipboardPaste) {
+                    const std::string t = onClipboardPaste();
+                    if (!t.empty()) { m_k.pasteText(t); clearErrorLine(); }
+                }
+                return true;
+            }
+            default: break;
+        }
+    }
     switch (key) {
-        case Key::Left:      m_k.moveLeft();    return true;
-        case Key::Right:     m_k.moveRight();   return true;
+        case Key::Left:
+            if (shift) m_k.moveLeftExtend(); else m_k.moveLeft();
+            clearErrorLine();                             return true;
+        case Key::Right:
+            if (shift) m_k.moveRightExtend(); else m_k.moveRight();
+            clearErrorLine();                             return true;
         case Key::Up:
             if (m_k.completionOpen()) { m_k.selectPrev(); return true; }
-            m_k.moveUp();                             return true;
+            if (shift) m_k.moveUpExtend(); else m_k.moveUp();
+            clearErrorLine();                             return true;
         case Key::Down:
             if (m_k.completionOpen()) { m_k.selectNext(); return true; }
-            m_k.moveDown();                           return true;
-        case Key::Home:      m_k.moveHome();    return true;
-        case Key::End:       m_k.moveEnd();     return true;
-        case Key::Backspace: m_k.backspace();   return true;
-        case Key::Delete:    m_k.deleteChar();  return true;
+            if (shift) m_k.moveDownExtend(); else m_k.moveDown();
+            clearErrorLine();                             return true;
+        case Key::Home:
+            if (shift) m_k.moveHomeExtend(); else m_k.moveHome();
+            clearErrorLine();                             return true;
+        case Key::End:
+            if (shift) m_k.moveEndExtend(); else m_k.moveEnd();
+            clearErrorLine();                             return true;
+        case Key::PageUp:   m_k.movePageUp(m_visibleLines); clearErrorLine(); return true;
+        case Key::PageDown: m_k.movePageDown(m_visibleLines); clearErrorLine(); return true;
+        case Key::Backspace: m_k.backspace(); clearErrorLine(); return true;
+        case Key::Delete:    m_k.deleteChar(); clearErrorLine(); return true;
         case Key::Enter:
             if (m_k.completionOpen() && m_k.acceptCompletion()) return true;
-            m_k.splitLine();                          return true;
+            m_k.splitLine(); clearErrorLine();            return true;
         case Key::Tab:
             if (m_k.completionOpen() && m_k.acceptCompletion()) return true;
-            m_k.insertText("    ");                   return true;
+            m_k.insertText("    "); clearErrorLine();     return true;
         case Key::Escape:
             if (m_k.completionOpen()) { m_k.closeCompletion(); return true; }
             return false;   // console closes itself
-        default: return false;
+        default: break;
     }
+    // Printable keys are CONSUMED here but inserted via the host's
+    // TEXT_INPUT path (when SDL text input is active both events fire
+    // for one press). Without the consume, Space/letters fall through
+    // to the app's global shortcuts while typing in the buffer —
+    // space toggled the transport mid-sentence.
+    using U = int;
+    const U k = static_cast<U>(key);
+    if (key == Key::Space ||
+        (k >= U(Key::A) && k <= U(Key::Z)) ||
+        (k >= U(Key::Num0) && k <= U(Key::Num9)))
+        return true;
+    return false;
 }
 
 
 void LiveCodeEditor::click(float lx, float ly, float lineH, float fontSize,
-                           const fw2::TextMetrics& met, const Rect& contentRect) {
+                           const fw2::TextMetrics& met,
+                           const fw::Rect& contentRect, bool extending) {
     if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
+    hitCaret(lx, ly, lineH, fontSize, met, contentRect, extending);
+    clearErrorLine();
+}
+
+void LiveCodeEditor::dragStart(float lx, float ly, float lineH,
+                               float fontSize, const fw2::TextMetrics& met,
+                               const fw::Rect& contentRect) {
+    if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
+    hitCaret(lx, ly, lineH, fontSize, met, contentRect, /*extending*/false);
+    m_k.dragSelectStart(m_k.caretLine(), m_k.caretCol());
+    clearErrorLine();
+}
+
+void LiveCodeEditor::dragTo(float lx, float ly, float lineH, float fontSize,
+                            const fw2::TextMetrics& met,
+                            const fw::Rect& contentRect) {
+    if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
+    hitCaret(lx, ly, lineH, fontSize, met, contentRect, /*extending*/true);
+}
+
+void LiveCodeEditor::hitCaret(float lx, float ly, float lineH,
+                              float fontSize, const fw2::TextMetrics& met,
+                              const fw::Rect& contentRect, bool extending) {
     const float gutterW = 34.0f;
     const float x0 = contentRect.x + gutterW;
     const int first = static_cast<int>(m_k.scrollY() / lineH);
     int line = first + static_cast<int>((ly - contentRect.y) / lineH);
     line = std::clamp(line, 0, static_cast<int>(m_k.lines().size()) - 1);
     const std::string& text = m_k.lines()[line];
-    float x = lx - x0;
-    int col = 0;
-    while (col < static_cast<int>(text.size())) {
-        int next = col + 1;
-        while (next < static_cast<int>(text.size()) &&
-               (static_cast<unsigned char>(text[next]) & 0xC0) == 0x80)
-            ++next;
-        const float cw = met.textWidth(text.substr(col, next - col), fontSize);
-        if (x < cw * 0.5f) break;
-        x -= cw;
-        col = next;
-    }
-    m_k.setCaret(line, col);
+    // Account for horizontal scroll: the buffer is drawn shifted left.
+    const int col = met.byteOffsetAtX(text, fontSize, lx - x0 + m_k.scrollX());
+    m_k.setCaret(line, col, extending);
 }
 
 // ─── Painting ────────────────────────────────────────────────────────
+
+// Re-tokenize the dirty suffix. Tokens live per line; the long-comment
+// state after line L is cached so restarting at the first dirty line
+// continues with the correct comment context. `dirtyFrom` <= 0 means
+// the whole buffer is stale (load / undo / first paint).
+void LiveCodeEditor::retokenize(const std::vector<std::string>& lines) {
+    const int n = static_cast<int>(lines.size());
+    const int dirty = std::clamp(m_k.dirtyFromLine(), 0, n);
+    const int from = (static_cast<int>(m_toks.size()) != n ||
+                      m_commentAfter.size() != static_cast<size_t>(n))
+                         ? 0 : dirty;
+    bool longComment = false;
+    if (from > 0 && from < static_cast<int>(m_commentAfter.size()))
+        longComment = m_commentAfter[static_cast<size_t>(from) - 1];
+    m_toks.resize(static_cast<size_t>(n));
+    m_commentAfter.resize(static_cast<size_t>(n));
+    for (int i = from; i < n; ++i) {
+        std::vector<Tok> tk;
+        tokenizeLine(lines[i], tk, longComment);
+        m_toks[static_cast<size_t>(i)].resize(tk.size());
+        for (size_t j = 0; j < tk.size(); ++j)
+            m_toks[static_cast<size_t>(i)][j] =
+                static_cast<unsigned char>(tk[j]);
+        m_commentAfter[static_cast<size_t>(i)] = longComment;
+    }
+    m_k.clearDirty();
+}
 
 void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     ::yawn::ui::Renderer2D& r2 = *ctx.renderer;
@@ -219,7 +311,8 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     const float x0 = r.x + gutterW;
     const float areaH = r.h;
 
-    // Keep the caret vertically in view (kernel owns the scroll).
+    // Keep the caret vertically AND horizontally in view (kernel owns
+    // both scrolls).
     {
         const float caretY = static_cast<float>(m_k.caretLine()) * lineH;
         float sy = m_k.scrollY();
@@ -227,8 +320,21 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
         if (caretY + lineH > sy + areaH)
             sy = caretY + lineH - areaH;
         m_k.setScrollY(std::max(0.0f, sy));
+
+        // Horizontal: caret x (buffer width from the caret's line
+        // prefix) vs the view width.
+        const std::string& cl = lines[m_k.caretLine()];
+        const float caretX = tm.textWidth(cl.substr(
+            0, std::min<size_t>(m_k.caretCol(), cl.size())), fontSize);
+        const float viewW = r.w - gutterW - 6.0f;   // small right margin
+        float sx = m_k.scrollX();
+        if (caretX - sx > viewW)      sx = caretX - viewW;
+        if (caretX - 12.0f < sx)      sx = std::max(0.0f, caretX - 12.0f);
+        const float maxSx = std::max(0.0f, tm.textWidth(cl, fontSize) - viewW);
+        m_k.setScrollX(std::clamp(sx, 0.0f, maxSx));
     }
     const float scrollY = m_k.scrollY();
+    const float scrollX = m_k.scrollX();
     const int first = static_cast<int>(scrollY / lineH);
     const int visible = static_cast<int>(areaH / lineH) + 1;
     m_visibleLines = visible;
@@ -258,12 +364,19 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
         (void)blockIdx;
     }
 
-    std::vector<std::vector<Tok>> toks(lines.size());
-    bool longComment = false;
-    for (size_t i = 0; i < lines.size(); ++i)
-        tokenizeLine(lines[i], toks[i], longComment);
+    // Cached per-line tokens (dirty-suffix re-tokenize).
+    retokenize(lines);
 
     const int end = std::min<int>(lines.size(), first + visible);
+
+    // Error line tint (eval feedback).
+    const int errLine = m_errorLine;
+    if (errLine >= first && errLine < end)
+        r2.drawRect(r.x + gutterW,
+                    r.y + static_cast<float>(errLine) * lineH - scrollY,
+                    r.w - gutterW, lineH, {200, 60, 50, 42});
+
+    r2.pushClip(r.x, r.y, r.w, r.h);
     for (int i = std::max(0, first); i < end; ++i) {
         const float y = r.y + static_cast<float>(i) * lineH - scrollY;
         const std::string& line = lines[i];
@@ -274,31 +387,52 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
         tm.drawText(r2, num, r.x + gutterW - nw - 6.0f, y, fontSize,
                     pal.textDim);
 
-        const auto& tk = toks[i];
-        float x = x0;
+        const auto& tk = m_toks[static_cast<size_t>(i)];
+        // Selection highlight (under the glyphs). Per-line span:
+        // start at the anchor edge (or the line start for middle
+        // lines), end at the caret edge (or the line end).
+        if (m_k.hasSelection()) {
+            const auto [b, e] = m_k.selectionRange();
+            if (i >= b.first && i <= e.first) {
+                const bool same = (b.first == e.first);
+                if (same ? (i == b.first) : (i > b.first && i < e.first ||
+                                             i == b.first || i == e.first)) {
+                    const size_t s0 = (i == b.first)
+                                         ? static_cast<size_t>(b.second) : 0;
+                    const size_t s1 = (i == e.first)
+                                         ? static_cast<size_t>(e.second)
+                                         : line.size();
+                    if (s1 > s0) {
+                        const float sx0 =
+                            x0 - scrollX + tm.textWidth(
+                                line.substr(0, s0), fontSize);
+                        const float sw = tm.textWidth(
+                            line.substr(s0, s1 - s0), fontSize);
+                        r2.drawRect(sx0, y, sw, lineH,
+                                    pal.accent.withAlpha(56));
+                    } else if (s1 == s0 && b.first != e.first && line.empty()) {
+                        // selected empty line inside a block selection
+                        r2.drawRect(x0 - scrollX, y, 3.0f, lineH,
+                                    pal.accent.withAlpha(56));
+                    }
+                }
+            }
+        }
+        float x = x0 - scrollX;
         size_t j = 0;
         while (j < line.size()) {
             size_t k = j;
             while (k < line.size() && tk[k] == tk[j]) ++k;
             const std::string chunk = line.substr(j, k - j);
-            if (tk[j] != Tok::Normal)
-                tm.drawText(r2, chunk, x, y, fontSize, tokColor(tk[j], pal));
+            const Color c = static_cast<Tok>(tk[j]) == Tok::Normal
+                                ? pal.textPrimary
+                                : tokColor(static_cast<Tok>(tk[j]), pal);
+            tm.drawText(r2, chunk, x, y, fontSize, c);
             x += tm.textWidth(chunk, fontSize);
             j = k;
         }
-        x = x0;
-        j = 0;
-        while (j < line.size()) {
-            size_t k = j;
-            while (k < line.size() && tk[k] == tk[j]) ++k;
-            if (tk[j] == Tok::Normal) {
-                const std::string chunk = line.substr(j, k - j);
-                tm.drawText(r2, chunk, x, y, fontSize, pal.textPrimary);
-            }
-            x += tm.textWidth(line.substr(j, k - j), fontSize);
-            j = k;
-        }
     }
+    r2.popClip();
 
     // Caret.
     {
@@ -309,7 +443,8 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
                 line.substr(0, std::min<size_t>(m_k.caretCol(), line.size())),
                 fontSize);
             const float cy = r.y + static_cast<float>(cl) * lineH - scrollY;
-            r2.drawRect(x0 + cw, cy + 1.0f, 1.5f, lineH - 2.0f, pal.accent);
+            r2.drawRect(x0 + cw - scrollX, cy + 1.0f, 1.5f, lineH - 2.0f,
+                        pal.accent);
         }
     }
 
@@ -325,7 +460,8 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
         if (py + boxH > r.y + r.h)
             py = r.y + static_cast<float>(m_k.caretLine()) * lineH
                  - scrollY - boxH - 2.0f;
-        const float px = x0 + tm.textWidth(m_k.completionPrefix(), fontSize);
+        const float px = x0 - scrollX
+                       + tm.textWidth(m_k.completionPrefix(), fontSize);
         r2.drawRect(px, py, boxW, boxH, pal.elevated.withAlpha(244));
         r2.drawRectOutline(px, py, boxW, boxH, pal.border);
         for (int n = 0; n < rows; ++n) {

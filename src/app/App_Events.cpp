@@ -96,6 +96,12 @@ static yawn::ui::fw2::Key sdlKeyToFw2(SDL_Keycode k) {
         case SDLK_BACKSPACE:  return Key::Backspace;
         case SDLK_DELETE:     return Key::Delete;
         case SDLK_INSERT:     return Key::Insert;
+        case SDLK_A:          return Key::A;
+        case SDLK_C:          return Key::C;
+        case SDLK_V:          return Key::V;
+        case SDLK_X:          return Key::X;
+        case SDLK_Y:          return Key::Y;
+        case SDLK_Z:          return Key::Z;
         default:              return Key::None;
     }
 }

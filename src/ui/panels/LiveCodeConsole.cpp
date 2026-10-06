@@ -113,7 +113,42 @@ Zone zoneAt(const Rect& panel, float lx, float ly, int tab) {
 
 LiveCodeConsole::LiveCodeConsole() {
     m_editor.onEvaluate = [this](const std::string& code) {
-        if (m_mgr) m_mgr->runScriptSource(code);
+        if (!m_mgr) return;
+        const bool ok = m_mgr->runScriptSource(code);
+        if (ok) { m_editor.setErrorLine(-1); return; }
+        // Eval failed: highlight the offending buffer line. Lua errors
+        // name the chunk with the leading '=' stripped: load errors
+        // read "editor:12: ...", runtime errors read
+        // '[string "=editor"]:12: ...' — parse either.
+        int line0 = -1;
+        const auto& ring = m_mgr->console();
+        for (auto it = ring.rbegin(); it != ring.rend(); ++it) {
+            if (it->severity != 2) continue;
+            const std::string& t = it->text;
+            const size_t marker = t.find("editor");
+            if (marker == std::string::npos) continue;
+            const size_t colon = t.find(':', marker);
+            if (colon == std::string::npos || colon != marker + 6) break;
+            try {
+                line0 = std::stoi(t.substr(colon + 1)) - 1;
+            } catch (...) { line0 = -1; }
+            break;
+        }
+        m_editor.setErrorLine(line0);
+    };
+    // Clipboard bridging: the editor is SDL-free, the console bridges
+    // to the app's callbacks; an internal fallback keeps X→V working
+    // in tests / without OS clipboard.
+    m_editor.onClipboardCopy = [this](const std::string& t) {
+        m_clipFallback = t;
+        if (onClipboardOut) onClipboardOut(t);
+    };
+    m_editor.onClipboardPaste = [this]() {
+        if (onClipboardIn) {
+            const std::string t = onClipboardIn();
+            if (!t.empty()) return t;
+        }
+        return m_clipFallback;
     };
 }
 
@@ -160,6 +195,7 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
     entry.onMouseUp   = [this](fw2::MouseEvent& e) {
         m_dragBarTab = -1;
         m_resizing   = false;
+        m_dragSelecting = false;
         return m_panel.contains(e.x, e.y);
     };
     entry.onMouseMove = [this](fw2::MouseMoveEvent& e) {
@@ -169,6 +205,19 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
         }
         if (m_resizing) {
             resizeTo(e.x, e.y);
+            return true;
+        }
+        if (m_dragSelecting && m_tab == 2 && m_lastLineH > 0.0f) {
+            // Extend the selection while the button is held — the
+            // capture flag routes moves from anywhere over the panel.
+            const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
+            const float areaH = m_panel.h - kPad - areaY;
+            const float ly = std::clamp(e.y - m_panel.y - areaY,
+                                        0.0f, areaH - 1.0f);
+            const float lx = e.x - m_panel.x;
+            m_editor.dragTo(lx, ly, m_lastLineH,
+                            fw2::theme().metrics.fontSizeSmall,
+                            *m_lastMet, fw::Rect{0.0f, 0.0f, m_panel.w, areaH});
             return true;
         }
         if (!m_panel.contains(e.x, e.y)) return false;
@@ -260,15 +309,22 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
                 return true;
             }
             if (m_tab == 2 && m_lastLineH > 0.0f) {
-                // Click inside the editor area → caret placement.
+                // Click inside the editor area → caret placement. ly2
+                // is CONTENT-LOCAL (editor subtracts contentRect.y =
+                // 0 below) — passing content.y = areaY as well made
+                // the editor subtract the header twice and the caret
+                // landed ~5 lines above the click.
                 const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
                 const float areaH = panel.h - kPad - areaY;
                 const float ly2 = ly - areaY;
                 if (ly2 >= 0.0f && ly2 < areaH) {
-                    const Rect content{0.0f, areaY, panel.w, areaH};
-                    m_editor.click(lx, ly2, m_lastLineH,
-                                   fw2::theme().metrics.fontSizeSmall,
-                                   *m_lastMet, content);
+                    const Rect content{0.0f, 0.0f, panel.w, areaH};
+                    // Anchor AT the press point: sweeping now
+                    // drag-selects; plain click collapses to a caret.
+                    m_editor.dragStart(lx, ly2, m_lastLineH,
+                                       fw2::theme().metrics.fontSizeSmall,
+                                       *m_lastMet, content);
+                    m_dragSelecting = true;
                 }
             }
             break;
@@ -543,7 +599,7 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     if (m_lastLineH > 0.0f) {
         const float contentH =
             barHeight(tabContentLines(m_tab), m_lastLineH);
-        const Rect content{panel.x, areaY, panel.w, areaH};
+        const Rect content{0.0f, areaY, panel.w, areaH};
         drawScrollbar(ctx, panel, content, contentH);
     }
 
@@ -565,7 +621,9 @@ Rect LiveCodeConsole::drawScrollbar(fw2::UIContext& ctx, const Rect& panel,
                                     const Rect& content, float contentH) {
     Renderer2D& r = *ctx.renderer;
     const auto& pal = fw2::theme().palette;
-    Rect track{panel.x + panel.w - 8.0f, content.y, 4.0f, content.h};
+    // `content` is PANEL-LOCAL; drawing happens in screen space.
+    const float trackY = panel.y + content.y;
+    Rect track{panel.x + panel.w - 8.0f, trackY, 4.0f, content.h};
     if (contentH <= content.h || content.h <= 0.0f) return track;
     const float viewH = contentH - content.h;
     const float scroll = std::clamp(
@@ -582,7 +640,8 @@ Rect LiveCodeConsole::drawScrollbar(fw2::UIContext& ctx, const Rect& panel,
 void LiveCodeConsole::dragMaybeStart(const Rect& panel, float lx, float ly) {
     // Start a drag when the gesture lands in the scrollbar track (the
     // area is queried via the same geometry drawScrollbar used — the
-    // cached content height makes the thumb math repeatable).
+    // cached content height makes the thumb math repeatable). All
+    // coordinates PANEL-LOCAL — matching drawScrollbar's local model.
     if (ly < kHeaderH + 2.0f + kTabH + 4.0f) return;
     const float barX = panel.w - 10.0f;
     if (lx < barX || lx > barX + 8.0f) return;
@@ -593,9 +652,13 @@ void LiveCodeConsole::dragMaybeStart(const Rect& panel, float lx, float ly) {
     const float contentH = barHeight(tabContentLines(m_tab), m_lastLineH);
     if (contentH <= content.h) return;
     const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
-    const float thumbY =
-        (contentH > content.h ? (scroll / (contentH - content.h)) : 0.0f) *
-        (content.h - thumbH);
+    // Thumb top in the SAME local space as `ly`: content.y was the
+    // missing term — grabbing the thumb previously jumped the view by
+    // content.y (the "scrollbar doesn't track" bug).
+    const float thumbY = content.y +
+        (contentH > content.h
+             ? (scroll / (contentH - content.h)) * (content.h - thumbH)
+             : 0.0f);
     m_dragBarTab = m_tab;
     if (ly < thumbY || ly > thumbY + thumbH) {
         m_dragOffset = thumbH * 0.5f;   // click on track: center thumb
