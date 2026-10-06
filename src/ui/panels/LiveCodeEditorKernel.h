@@ -67,7 +67,7 @@ public:
     int caretLine() const { return m_line; }
     int caretCol()  const { return m_col; }   // UTF-8 byte offset
 
-    void setScrollY(float y) { m_scrollY = y; }
+    void setScrollY(float y) { m_scrollY = std::max(0.0f, y); }
     float scrollY() const    { return m_scrollY; }
 
     // Horizontal scroll (pixels). The wrapper keeps the caret visible

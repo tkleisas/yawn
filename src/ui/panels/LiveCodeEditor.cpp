@@ -270,7 +270,7 @@ void LiveCodeEditor::dragTo(float lx, float ly, float lineH, float fontSize,
     m_k.setScrollY(std::clamp(sy, 0.0f, maxScroll));
 
     // Horizontal: symmetric — sweep past either edge slides the line.
-    const float gutterW = 34.0f;
+    const float gutterW = gutterWidth(met, fontSize);
     const int cl = m_k.caretLine();
     const std::string& cline = m_k.lines()[cl];
     const float maxSx = std::max(
@@ -288,7 +288,7 @@ void LiveCodeEditor::doubleClick(float lx, float ly, float lineH,
                                  float fontSize, const fw2::TextMetrics& met,
                                  const fw::Rect& contentRect) {
     if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
-    const float gutterW = 34.0f;
+    const float gutterW = gutterWidth(met, fontSize);
     const int first = static_cast<int>(m_k.scrollY() / lineH);
     int line = first + static_cast<int>((ly - contentRect.y) / lineH);
     line = std::clamp(line, 0, static_cast<int>(m_k.lines().size()) - 1);
@@ -301,7 +301,8 @@ void LiveCodeEditor::doubleClick(float lx, float ly, float lineH,
 
 void LiveCodeEditor::hitCaret(float lx, float ly, float lineH,
                               float fontSize, const fw2::TextMetrics& met,
-                              const fw::Rect& contentRect, bool extending) {    const float gutterW = 34.0f;
+                              const fw::Rect& contentRect, bool extending) {
+    const float gutterW = gutterWidth(met, fontSize);
     const float x0 = contentRect.x + gutterW;
     const int first = static_cast<int>(m_k.scrollY() / lineH);
     int line = first + static_cast<int>((ly - contentRect.y) / lineH);
@@ -310,6 +311,19 @@ void LiveCodeEditor::hitCaret(float lx, float ly, float lineH,
     // Account for horizontal scroll: the buffer is drawn shifted left.
     const int col = met.byteOffsetAtX(text, fontSize, lx - x0 + m_k.scrollX());
     m_k.setCaret(line, col, extending);
+}
+
+float LiveCodeEditor::gutterWidth(const fw2::TextMetrics& tm,
+                                  float fontSize) const {
+    // Measured from the digit count of the current line count, so long
+    // scripts (5+ digits) and font zooms don't clip the numbers; the
+    // 34px floor keeps the old look for small buffers. 18px = right
+    // margin (6) + room for the block indicators on the left.
+    int digits = 1;
+    for (int n = static_cast<int>(m_k.lines().size()); n >= 10; n /= 10)
+        ++digits;
+    const std::string sample(static_cast<size_t>(std::max(digits, 5)), '9');
+    return std::max(34.0f, tm.textWidth(sample, fontSize) + 18.0f);
 }
 
 // ─── Painting ────────────────────────────────────────────────────────
@@ -352,7 +366,7 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     if (lineH <= 0.0f) return;
 
     const auto& lines = m_k.lines();
-    const float gutterW = 34.0f;
+    const float gutterW = gutterWidth(tm, fontSize);
     const float x0 = r.x + gutterW;
     const float areaH = r.h;
 
@@ -445,7 +459,7 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
         const float ty = y - lineH * 0.15f;
         const std::string& line = lines[i];
 
-        char num[8];
+        char num[16];
         std::snprintf(num, sizeof(num), "%d", i + 1);
         const float nw = tm.textWidth(num, fontSize);
         tm.drawText(r2, num, r.x + gutterW - nw - 6.0f, ty, fontSize,

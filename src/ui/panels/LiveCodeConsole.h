@@ -96,9 +96,23 @@ private:
     void loadEditorBuffer();
 
     // Cached from the last paint (click hit-testing needs text metrics;
-    // the overlay handlers don't carry UIContext).
+    // the overlay handlers don't carry UIContext). m_lastLineH is the
+    // UNSCALED row height (Console/Code tabs); m_lastEditLineH applies
+    // the Edit-tab font zoom — mixing them up made hit-testing land on
+    // the wrong line at any scale != 1.
     float m_lastLineH = 0.0f;
+    float m_lastEditLineH = 0.0f;
     const fw2::TextMetrics* m_lastMet = nullptr;
+
+    // Last drag-select pointer position (panel-local, content-relative
+    // Y, NOT clamped): tick() re-feeds it to dragTo so autoscroll keeps
+    // going while the pointer is held still past the editor's edge.
+    float m_lastDragLx = 0.0f;
+    float m_lastDragLy = 0.0f;
+
+    // Visible editor height for a given panel height: the content area
+    // minus the piano strip when it is shown (same rule as paintBody).
+    float editorViewH(float panelH) const;
 
     // Scrollbar drag state (editor scrollbar + console/code list bars).
     int   m_dragBarTab = -1;      // tab whose scrollbar is being dragged

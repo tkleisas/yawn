@@ -175,6 +175,12 @@ void LiveCodeConsole::toggle(fw2::UIContext& ctx) {
 void LiveCodeConsole::close() {
     m_handle.remove();
     m_scroll = 0.0f;
+    // A mouseup can be lost when the console closes mid-gesture — drop
+    // any stale drag state so the next open starts clean.
+    m_dragSelecting = false;
+    m_dragBarTab = -1;
+    m_resizing = false;
+    m_editor.endDrag();
 }
 
 void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
@@ -225,18 +231,21 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
             resizeTo(e.x, e.y);
             return true;
         }
-        if (m_dragSelecting && m_tab == 2 && m_lastLineH > 0.0f) {
+        if (m_dragSelecting && m_tab == 2 && m_lastEditLineH > 0.0f) {
             // Extend the selection while the button is held — the
             // capture flag routes moves from anywhere over the panel.
+            // ly is NOT clamped: dragTo edge-scrolls on the overshoot,
+            // and clamping killed that (autoscroll never fired).
             const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
-            const float areaH = m_panel.h - kPad - areaY;
-            const float ly = std::clamp(e.y - m_panel.y - areaY,
-                                        0.0f, areaH - 1.0f);
+            const float editH = editorViewH(m_panel.h);
+            const float ly = e.y - m_panel.y - areaY;
             const float lx = e.x - m_panel.x;
-            m_editor.dragTo(lx, ly, m_lastLineH,
+            m_lastDragLx = lx;
+            m_lastDragLy = ly;
+            m_editor.dragTo(lx, ly, m_lastEditLineH,
                             fw2::theme().metrics.fontSizeSmall
                                 * m_editorFontScale,
-                            *m_lastMet, fw::Rect{0.0f, 0.0f, m_panel.w, areaH});
+                            *m_lastMet, fw::Rect{0.0f, 0.0f, m_panel.w, editH});
             return true;
         }
         if (!m_panel.contains(e.x, e.y)) return false;
@@ -244,7 +253,9 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
     };
     entry.onScroll = [this](fw2::ScrollEvent& e) {
         if (!m_panel.contains(e.x, e.y)) return false;
-        const float lineH = m_lastLineH > 0.0f ? m_lastLineH : 14.0f;
+        const float lineH = (m_tab == 2)
+            ? (m_lastEditLineH > 0.0f ? m_lastEditLineH : 14.0f)
+            : (m_lastLineH > 0.0f ? m_lastLineH : 14.0f);
         if (m_tab == 2) {
             auto& k = m_editor.kernel();
             k.setScrollY(k.scrollY() - e.dy * 3.0f * lineH);
@@ -321,6 +332,9 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
             break;
         case Zone::None:
             dragMaybeStart(panel, lx, ly);
+            if (m_dragBarTab >= 0) break;   // scrollbar grabbed — the
+                                            // press must not also move
+                                            // the editor caret
             if (m_tab == 2 && m_pianoRect.w > 0.0f &&
                 ly >= m_pianoRect.y - panel.y &&
                 ly < m_pianoRect.y - panel.y + m_pianoRect.h) {
@@ -333,30 +347,32 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
                               });
                 return true;
             }
-            if (m_tab == 2 && m_lastLineH > 0.0f) {
+            if (m_tab == 2 && m_lastEditLineH > 0.0f) {
                 // Click inside the editor area → caret placement. ly2
                 // is CONTENT-LOCAL (editor subtracts contentRect.y =
                 // 0 below) — passing content.y = areaY as well made
                 // the editor subtract the header twice and the caret
                 // landed ~5 lines above the click.
                 const float areaY = kHeaderH + 2.0f + kTabH + 4.0f;
-                const float areaH = panel.h - kPad - areaY;
+                const float editH = editorViewH(panel.h);
                 const float ly2 = ly - areaY;
-                if (ly2 >= 0.0f && ly2 < areaH) {
-                    const Rect content{0.0f, 0.0f, panel.w, areaH};
+                if (ly2 >= 0.0f && ly2 < editH) {
+                    const Rect content{0.0f, 0.0f, panel.w, editH};
                     const float fs = fw2::theme().metrics.fontSizeSmall
                                    * m_editorFontScale;
                     if (e.clickCount >= 2) {
                         // Double-click: word (or whitespace run) select.
-                        m_editor.doubleClick(lx, ly2, m_lastLineH, fs,
+                        m_editor.doubleClick(lx, ly2, m_lastEditLineH, fs,
                                              *m_lastMet, content);
                         m_dragSelecting = false;
                     } else {
                         // Anchor AT the press point: sweeping now
                         // drag-selects; plain click collapses to a
                         // caret.
-                        m_editor.dragStart(lx, ly2, m_lastLineH, fs,
+                        m_editor.dragStart(lx, ly2, m_lastEditLineH, fs,
                                            *m_lastMet, content);
+                        m_lastDragLx = lx;
+                        m_lastDragLy = ly2;
                         m_dragSelecting = true;
                     }
                 }
@@ -368,10 +384,31 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
 
 void LiveCodeConsole::tick() {
     if (!isOpen() || !m_mgr || !m_project || !m_engine) return;
-    if (m_tab == 2) { m_piano.pollMidi(); return; }
+    if (m_tab == 2) {
+        // Autoscroll: the mouse only sends moves while it travels, so a
+        // drag held STILL past the editor's edge would stop scrolling.
+        // Re-feed the last pointer position every frame — dragTo's
+        // edge-sweep advances the scroll by the overshoot.
+        if (m_dragSelecting && m_lastEditLineH > 0.0f && m_lastMet)
+            m_editor.dragTo(m_lastDragLx, m_lastDragLy, m_lastEditLineH,
+                            fw2::theme().metrics.fontSizeSmall
+                                * m_editorFontScale,
+                            *m_lastMet,
+                            fw::Rect{0.0f, 0.0f, m_panel.w,
+                                     editorViewH(m_panel.h)});
+        m_piano.pollMidi();
+        return;
+    }
     if (m_tab != 1) return;
     m_codeLensAge += 1.0 / 60.0;
     if (m_codeLensAge >= 1.0 || m_codeLensDirty) refreshCodeLens();
+}
+
+float LiveCodeConsole::editorViewH(float panelH) const {
+    const float areaH = panelH - kPad - (kHeaderH + 2.0f + kTabH + 4.0f);
+    if (areaH > fw::LivePianoStrip::height() + 60.0f)
+        return areaH - fw::LivePianoStrip::height();
+    return areaH;
 }
 
 void LiveCodeConsole::refreshCodeLens() {
@@ -501,16 +538,23 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     const auto& met = theme().metrics;
     const float lineH = ctx.textMetrics->lineHeight(met.fontSizeSmall);
     m_lastLineH = lineH;
+    m_lastEditLineH =
+        ctx.textMetrics->lineHeight(met.fontSizeSmall * m_editorFontScale);
     m_lastMet = ctx.textMetrics;
 
     // Normalize scroll against the real content height every frame —
     // the wheel path can overshoot the visible area (the scrollbar
-    // thumb then drew past the panel bounds).
+    // thumb then drew past the panel bounds). The Edit tab measures
+    // with its ZOOMED row height and its real viewport (the piano
+    // strip eats the bottom 78px) — the unscaled full-area model
+    // clamped maxScroll short and the last lines were unreachable.
     {
+        const float lh = (m_tab == 2) ? m_lastEditLineH : lineH;
         const float contentH =
-            barHeight(tabContentLines(m_tab), lineH);
-        const float areaH =
-            panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f);
+            barHeight(tabContentLines(m_tab), lh);
+        const float areaH = (m_tab == 2)
+            ? editorViewH(panel.h)
+            : panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f);
         const float maxScroll = std::max(0.0f, contentH - areaH);
         if (m_tab == 2)
             m_editor.kernel().setScrollY(
@@ -599,10 +643,9 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
     } else if (m_tab == 2) {
         // Editor + the notation keyboard strip at the bottom (hidden
         // when the console is too short to spare the space).
-        float editH = areaH;
+        const float editH = editorViewH(panel.h);
         m_pianoRect = Rect{};
-        if (areaH > fw::LivePianoStrip::height() + 60.0f) {
-            editH = areaH - fw::LivePianoStrip::height();
+        if (editH < areaH) {
             m_pianoRect = Rect{panel.x, areaY + editH,
                                panel.w, fw::LivePianoStrip::height()};
             m_piano.paint(ctx, m_pianoRect);
@@ -629,11 +672,15 @@ void LiveCodeConsole::paintBody(fw2::UIContext& ctx, const Rect& panel) {
 
     r.popClip();
 
-    // Scrollbar (outside the content clip so it never hides).
+    // Scrollbar (outside the content clip so it never hides). Same
+    // per-tab geometry as the clamp above: zoomed rows + the editor
+    // viewport on the Edit tab.
     if (m_lastLineH > 0.0f) {
+        const float lh = (m_tab == 2) ? m_lastEditLineH : m_lastLineH;
         const float contentH =
-            barHeight(tabContentLines(m_tab), m_lastLineH);
-        const Rect content{0.0f, areaY, panel.w, areaH};
+            barHeight(tabContentLines(m_tab), lh);
+        const float viewH = (m_tab == 2) ? editorViewH(panel.h) : areaH;
+        const Rect content{0.0f, areaY, panel.w, viewH};
         drawScrollbar(ctx, panel, content, contentH);
     }
 
@@ -682,8 +729,13 @@ void LiveCodeConsole::dragMaybeStart(const Rect& panel, float lx, float ly) {
     const float scroll = (m_tab == 2) ? m_editor.kernel().scrollY()
                                       : m_scroll;
     const Rect content{0.0f, kHeaderH + 2.0f + kTabH + 4.0f,
-                       panel.w, panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f)};
-    const float contentH = barHeight(tabContentLines(m_tab), m_lastLineH);
+                       panel.w,
+                       (m_tab == 2)
+                           ? editorViewH(panel.h)
+                           : panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f)};
+    const float contentH = barHeight(
+        tabContentLines(m_tab),
+        (m_tab == 2) ? m_lastEditLineH : m_lastLineH);
     if (contentH <= content.h) return;
     const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
     // Thumb top in the SAME local space as `ly`: content.y was the
@@ -720,8 +772,13 @@ void LiveCodeConsole::resizeTo(float winX, float winY) {
 void LiveCodeConsole::dragMove(const Rect& panel, float ly) {
     if (m_dragBarTab < 0 || m_lastLineH <= 0.0f) return;
     const Rect content{0.0f, kHeaderH + 2.0f + kTabH + 4.0f,
-                       panel.w, panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f)};
-    const float contentH = barHeight(tabContentLines(m_tab), m_lastLineH);
+                       panel.w,
+                       (m_tab == 2)
+                           ? editorViewH(panel.h)
+                           : panel.h - kPad - (kHeaderH + 2.0f + kTabH + 4.0f)};
+    const float contentH = barHeight(
+        tabContentLines(m_tab),
+        (m_tab == 2) ? m_lastEditLineH : m_lastLineH);
     if (contentH <= content.h) return;
     const float thumbH = std::max(content.h * (content.h / contentH), 24.0f);
     const float viewH = contentH - content.h;

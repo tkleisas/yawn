@@ -108,6 +108,11 @@ private:
     // Re-tokenize the dirty suffix (state-carrying long comments).
     void retokenize(const std::vector<std::string>& lines);
 
+    // Line-number gutter width: measured from the digit count of the
+    // current line count (min 5 digits' room) so long scripts and font
+    // zooms don't clip the numbers. Shared by paint + all hit-tests.
+    float gutterWidth(const fw2::TextMetrics& tm, float fontSize) const;
+
     LiveCodeEditorKernel m_k;
     int m_visibleLines = 20;      // set by paint; kept for hit-testing
     int m_errorLine = -1;         // eval-error row highlight (0-based)
