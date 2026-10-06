@@ -256,13 +256,31 @@ static void pushPatternClip(lua_State* L, const livecode::PatternClip& pc) {
 
 // yawn.midi("A1_16 B1_16 D#3_8") -> clip spec {beats, notes}
 // Sequential notation: each note starts where the previous one ends.
-static int l_midi(lua_State* L) {
-    const char* s = luaL_checkstring(L, 1);
+// The body lives in a helper: the error path must longjmp (lua_error)
+// with NO live C++ objects on the stack — destructors are skipped by
+// the longjmp and ASan flagged the leaked `err` string. On failure the
+// message is pushed as a Lua string (GC-owned) and false returned.
+static bool midiClipOrErr(lua_State* L, const char* s) {
     livecode::PatternClip pc;
     std::string err;
-    if (!livecode::parseMelodicPhrase(s ? s : "", pc, err))
-        return luaL_error(L, "yawn.midi: %s", err.c_str());
+    if (!livecode::parseMelodicPhrase(s ? s : "", pc, err)) {
+        lua_pushfstring(L, "yawn.midi: %s", err.c_str());
+        return false;
+    }
     pushPatternClip(L, pc);
+    return true;
+}
+
+static int l_midi(lua_State* L) {
+    const char* s = luaL_checkstring(L, 1);
+    if (!midiClipOrErr(L, s)) {
+        // Recreate luaL_error's "chunk:line: " prefix, then raise —
+        // this frame holds only PODs, so the longjmp unwinds nothing.
+        luaL_where(L, 1);
+        lua_insert(L, -2);
+        lua_concat(L, 2);
+        return lua_error(L);
+    }
     return 1;
 }
 
@@ -270,8 +288,9 @@ static int l_midi(lua_State* L) {
 //   -> clip spec on the GM drum channel (9). One character per 16th step:
 //   X accent, x normal, o soft, g ghost, . or - rest. Lanes may differ in
 //   length; each loops over the clip (length = longest lane or `beats`).
-static int l_drums(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
+// Helper split for the same reason as midiClipOrErr: lua_error must
+// longjmp with no live C++ objects (lanes/pc/err) on the stack.
+static bool drumClipOrErr(lua_State* L) {
     std::map<std::string, std::string> lanes;
     double forceBeats = 0.0;
     lua_getfield(L, 1, "beats");
@@ -292,9 +311,22 @@ static int l_drums(lua_State* L) {
 
     livecode::PatternClip pc;
     std::string err;
-    if (!livecode::parseDrumGrid(lanes, forceBeats, pc, err))
-        return luaL_error(L, "yawn.drums: %s", err.c_str());
+    if (!livecode::parseDrumGrid(lanes, forceBeats, pc, err)) {
+        lua_pushfstring(L, "yawn.drums: %s", err.c_str());
+        return false;
+    }
     pushPatternClip(L, pc);
+    return true;
+}
+
+static int l_drums(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    if (!drumClipOrErr(L)) {
+        luaL_where(L, 1);
+        lua_insert(L, -2);
+        lua_concat(L, 2);
+        return lua_error(L);
+    }
     return 1;
 }
 
