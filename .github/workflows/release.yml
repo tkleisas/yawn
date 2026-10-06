@@ -21,6 +21,7 @@ jobs:
             platform: windows
             build-type: Release
             archive-ext: zip
+            build-jobs: 4
           # Pinned (not ubuntu-latest) — and on Linux, pinned twice over:
           #   1. The VM image stays floating (the ubuntu-22.04 *image* is
           #      being deprecated); the Linux job instead runs in an
@@ -32,11 +33,16 @@ jobs:
           #   2. jammy ships CMake 3.22; the project needs 3.24+
           #      (WHOLE_ARCHIVE generator expression), so Kitware's apt
           #      repo is wired in below.
+          # build-jobs 2, not unbounded --parallel: the biggest TUs
+          # (ONNX/Eigen C++20) peak at multiple GB each and full
+          # parallelism OOM'd the 16 GB runner mid-Build (step died
+          # with conclusion: null) — same fix as ci.yml's linux leg.
           - os: ubuntu-24.04
             platform: linux
             build-type: Release
             container-image: ubuntu:22.04
             archive-ext: tar.gz
+            build-jobs: 2
 
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container-image || '' }}
@@ -216,7 +222,7 @@ jobs:
         env:
           PKG_CONFIG_PATH: ${{ runner.os == 'Linux' && '/opt/ffmpeg/lib/pkgconfig' || '' }}
       - name: Build
-        run: cmake --build build --config ${{ matrix.build-type }} --parallel
+        run: cmake --build build --config ${{ matrix.build-type }} --parallel ${{ matrix.build-jobs }}
 
       - name: Test
         working-directory: build
