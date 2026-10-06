@@ -415,12 +415,19 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     r2.pushClip(r.x, r.y, r.w, r.h);
     for (int i = std::max(0, first); i < end; ++i) {
         const float y = r.y + static_cast<float>(i) * lineH - scrollY;
+        // v1 Font::drawText renders glyphs ~0.15 line-height BELOW the
+        // y param (the stbtt baseline offset every other widget shims
+        // away with its centering math). Compensate here so the glyphs
+        // visually CENTER in the row band the hit-test uses — without
+        // this, big font zooms push the ink past the band's midpoint
+        // and word-selection clicks must aim above the word.
+        const float ty = y - lineH * 0.15f;
         const std::string& line = lines[i];
 
         char num[8];
         std::snprintf(num, sizeof(num), "%d", i + 1);
         const float nw = tm.textWidth(num, fontSize);
-        tm.drawText(r2, num, r.x + gutterW - nw - 6.0f, y, fontSize,
+        tm.drawText(r2, num, r.x + gutterW - nw - 6.0f, ty, fontSize,
                     pal.textDim);
 
         const auto& tk = m_toks[static_cast<size_t>(i)];
@@ -463,7 +470,7 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
             const Color c = static_cast<Tok>(tk[j]) == Tok::Normal
                                 ? pal.textPrimary
                                 : tokColor(static_cast<Tok>(tk[j]), pal);
-            tm.drawText(r2, chunk, x, y, fontSize, c);
+            tm.drawText(r2, chunk, x, ty, fontSize, c);
             x += tm.textWidth(chunk, fontSize);
             j = k;
         }
@@ -505,7 +512,8 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
             if (sel)
                 r2.drawRect(px + 1.0f, py + 3.0f + n * rowH, boxW - 2.0f,
                             rowH, pal.accent.withAlpha(40));
-            tm.drawText(r2, items[n], px + 6.0f, py + 3.0f + n * rowH,
+            tm.drawText(r2, items[n], px + 6.0f,
+                        py + 3.0f + n * rowH - rowH * 0.15f,
                         fontSize, sel ? pal.accent : pal.textPrimary);
         }
     }
