@@ -209,8 +209,11 @@ void LiveCodeConsole::pushOverlay(fw2::UIContext& ctx) {
     };
     entry.onMouseUp   = [this](fw2::MouseEvent& e) {
         m_dragBarTab = -1;
-        m_resizing   = false;
-        m_dragSelecting = false;
+        if (m_dragSelecting) {
+            m_dragSelecting = false;
+            m_editor.endDrag();   // resume caret-following
+        }
+        m_resizing = false;
         return m_panel.contains(e.x, e.y);
     };
     entry.onMouseMove = [this](fw2::MouseMoveEvent& e) {

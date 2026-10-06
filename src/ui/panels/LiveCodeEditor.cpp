@@ -242,7 +242,12 @@ void LiveCodeEditor::dragStart(float lx, float ly, float lineH,
     if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
     hitCaret(lx, ly, lineH, fontSize, met, contentRect, /*extending*/false);
     m_k.dragSelectStart(m_k.caretLine(), m_k.caretCol());
+    m_dragActive = true;
     clearErrorLine();
+}
+
+void LiveCodeEditor::endDrag() {
+    m_dragActive = false;
 }
 
 void LiveCodeEditor::dragTo(float lx, float ly, float lineH, float fontSize,
@@ -250,9 +255,11 @@ void LiveCodeEditor::dragTo(float lx, float ly, float lineH, float fontSize,
                             const fw::Rect& contentRect) {
     if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
     hitCaret(lx, ly, lineH, fontSize, met, contentRect, /*extending*/true);
-    // Sweep auto-scroll: past the view's edges, scroll by the
+    // Sweep edge-scroll: past the view's edges, scroll by the
     // overshoot so rows beyond the visible band stay reachable (the
-    // moves arrive per-frame; the caret-follow handles the rest).
+    // moves arrive per-frame; the caret-follow is gated OFF during
+    // the drag — it would otherwise chase the caret row by row and
+    // fight the sweep).
     const float maxScroll = std::max(
         0.0f, static_cast<float>(m_k.lines().size()) * lineH - contentRect.h);
     float sy = m_k.scrollY();
@@ -261,6 +268,20 @@ void LiveCodeEditor::dragTo(float lx, float ly, float lineH, float fontSize,
     else if (ly > contentRect.y + contentRect.h)
         sy += (ly - contentRect.y - contentRect.h);
     m_k.setScrollY(std::clamp(sy, 0.0f, maxScroll));
+
+    // Horizontal: symmetric — sweep past either edge slides the line.
+    const float gutterW = 34.0f;
+    const int cl = m_k.caretLine();
+    const std::string& cline = m_k.lines()[cl];
+    const float maxSx = std::max(
+        0.0f, met.textWidth(cline, fontSize) - contentRect.w);
+    float sx = m_k.scrollX();
+    const float textLeft = contentRect.x + gutterW;
+    if (lx < textLeft)
+        sx -= (textLeft - lx);
+    else if (lx > contentRect.x + contentRect.w)
+        sx += (lx - contentRect.x - contentRect.w);
+    m_k.setScrollX(std::clamp(sx, 0.0f, maxSx));
 }
 
 void LiveCodeEditor::doubleClick(float lx, float ly, float lineH,
@@ -345,8 +366,8 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
         const int cl = m_k.caretLine();
         const int cc = m_k.caretCol();
         const bool caretMoved =
-            m_lastFollowLine < 0 || cl != m_lastFollowLine ||
-            cc != m_lastFollowCol;
+            (m_lastFollowLine < 0 || cl != m_lastFollowLine ||
+             cc != m_lastFollowCol) && !m_dragActive;
         if (caretMoved) {
             m_lastFollowLine = cl;
             m_lastFollowCol  = cc;

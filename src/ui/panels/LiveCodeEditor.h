@@ -74,6 +74,10 @@ public:
                      const fw2::TextMetrics& met,
                      const ::yawn::ui::fw::Rect& contentRect);
 
+    // Ends a drag-select sweep (mouseup). Clears the drag-active gate
+    // so caret-following resumes.
+    void endDrag();
+
     // Painting (caller provides the content rect and clips).
     void paint(fw2::UIContext& ctx, const ::yawn::ui::fw::Rect& r);
 
@@ -108,6 +112,7 @@ private:
     int m_visibleLines = 20;      // set by paint; kept for hit-testing
     int m_errorLine = -1;         // eval-error row highlight (0-based)
     float m_fontScale = 1.0f;     // buffer zoom (A-/A+ buttons)
+    bool  m_dragActive = false;   // sweep in progress: caret-follow gated off
     // Caret-follow bookkeeping: keep-in-view only runs when the caret
     // MOVED (scrollbar drags must not be re-centered by paint).
     int m_lastFollowLine = -1, m_lastFollowCol = -1;
