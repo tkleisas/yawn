@@ -146,7 +146,9 @@ void App::handleKeyEvent(const SDL_Event& event) {
     {
         ui::fw2::KeyEvent ke{};
         ke.key       = sdlKeyToFw2(event.key.key);
-        ke.modifiers = sdlModsToFw2(SDL_GetModState());
+        // The EVENT's mod field (not SDL_GetModState): the global
+        // state misses synthetic/injected events and races real ones.
+        ke.modifiers = sdlModsToFw2(event.key.mod);
         ke.isRepeat  = event.key.repeat;
         if (ke.key != ui::fw2::Key::None &&
             m_fw2LayerStack.dispatchKey(ke)) return;
@@ -994,6 +996,7 @@ void App::processEvents() {
                     me.x = mx; me.y = my;
                     me.button = sdlBtnToFw2(btn);
                     me.modifiers = sdlModsToFw2(SDL_GetModState());
+                    me.clickCount = event.button.clicks;   // 2 = double-click (word select)
                     me.timestampMs = SDL_GetTicks();
                     if (m_fw2LayerStack.dispatchMouseDown(me)) break;
                 }

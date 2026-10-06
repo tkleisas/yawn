@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -251,12 +250,37 @@ void LiveCodeEditor::dragTo(float lx, float ly, float lineH, float fontSize,
                             const fw::Rect& contentRect) {
     if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
     hitCaret(lx, ly, lineH, fontSize, met, contentRect, /*extending*/true);
+    // Sweep auto-scroll: past the view's edges, scroll by the
+    // overshoot so rows beyond the visible band stay reachable (the
+    // moves arrive per-frame; the caret-follow handles the rest).
+    const float maxScroll = std::max(
+        0.0f, static_cast<float>(m_k.lines().size()) * lineH - contentRect.h);
+    float sy = m_k.scrollY();
+    if (ly < contentRect.y)
+        sy -= (contentRect.y - ly);
+    else if (ly > contentRect.y + contentRect.h)
+        sy += (ly - contentRect.y - contentRect.h);
+    m_k.setScrollY(std::clamp(sy, 0.0f, maxScroll));
+}
+
+void LiveCodeEditor::doubleClick(float lx, float ly, float lineH,
+                                 float fontSize, const fw2::TextMetrics& met,
+                                 const fw::Rect& contentRect) {
+    if (lineH <= 0.0f || contentRect.w <= 0.0f) return;
+    const float gutterW = 34.0f;
+    const int first = static_cast<int>(m_k.scrollY() / lineH);
+    int line = first + static_cast<int>((ly - contentRect.y) / lineH);
+    line = std::clamp(line, 0, static_cast<int>(m_k.lines().size()) - 1);
+    const std::string& text = m_k.lines()[line];
+    const int col = met.byteOffsetAtX(text, fontSize,
+                                      lx - (contentRect.x + gutterW) + m_k.scrollX());
+    m_k.selectWordAt(line, col);
+    clearErrorLine();
 }
 
 void LiveCodeEditor::hitCaret(float lx, float ly, float lineH,
                               float fontSize, const fw2::TextMetrics& met,
-                              const fw::Rect& contentRect, bool extending) {
-    const float gutterW = 34.0f;
+                              const fw::Rect& contentRect, bool extending) {    const float gutterW = 34.0f;
     const float x0 = contentRect.x + gutterW;
     const int first = static_cast<int>(m_k.scrollY() / lineH);
     int line = first + static_cast<int>((ly - contentRect.y) / lineH);
@@ -311,27 +335,39 @@ void LiveCodeEditor::paint(fw2::UIContext& ctx, const Rect& r) {
     const float x0 = r.x + gutterW;
     const float areaH = r.h;
 
-    // Keep the caret vertically AND horizontally in view (kernel owns
-    // both scrolls).
+    // Keep the caret in view — but ONLY when the caret moved since the
+    // last paint. The scrollbar drag mutates scrollY directly; a
+    // per-frame re-clamp to the caret's line yanked the view back the
+    // moment the drag crossed the caret's edge (drag 100-200px, then
+    // "it stops"). Caret moves (typing, navigation, clicks, sweep
+    // drags) still follow; pure scroll changes never re-center.
     {
-        const float caretY = static_cast<float>(m_k.caretLine()) * lineH;
-        float sy = m_k.scrollY();
-        if (caretY < sy) sy = caretY;
-        if (caretY + lineH > sy + areaH)
-            sy = caretY + lineH - areaH;
-        m_k.setScrollY(std::max(0.0f, sy));
+        const int cl = m_k.caretLine();
+        const int cc = m_k.caretCol();
+        const bool caretMoved =
+            m_lastFollowLine < 0 || cl != m_lastFollowLine ||
+            cc != m_lastFollowCol;
+        if (caretMoved) {
+            m_lastFollowLine = cl;
+            m_lastFollowCol  = cc;
+            const float caretY = static_cast<float>(cl) * lineH;
+            float sy = m_k.scrollY();
+            if (caretY < sy) sy = caretY;
+            if (caretY + lineH > sy + areaH)
+                sy = caretY + lineH - areaH;
+            m_k.setScrollY(std::max(0.0f, sy));
 
-        // Horizontal: caret x (buffer width from the caret's line
-        // prefix) vs the view width.
-        const std::string& cl = lines[m_k.caretLine()];
-        const float caretX = tm.textWidth(cl.substr(
-            0, std::min<size_t>(m_k.caretCol(), cl.size())), fontSize);
-        const float viewW = r.w - gutterW - 6.0f;   // small right margin
-        float sx = m_k.scrollX();
-        if (caretX - sx > viewW)      sx = caretX - viewW;
-        if (caretX - 12.0f < sx)      sx = std::max(0.0f, caretX - 12.0f);
-        const float maxSx = std::max(0.0f, tm.textWidth(cl, fontSize) - viewW);
-        m_k.setScrollX(std::clamp(sx, 0.0f, maxSx));
+            // Horizontal: caret x vs the view width.
+            const std::string& line = lines[cl];
+            const float caretX = tm.textWidth(line.substr(
+                0, std::min<size_t>(cc, line.size())), fontSize);
+            const float viewW = r.w - gutterW - 6.0f;   // small right margin
+            float sx = m_k.scrollX();
+            if (caretX - sx > viewW) sx = caretX - viewW;
+            if (caretX - 12.0f < sx) sx = std::max(0.0f, caretX - 12.0f);
+            const float maxSx = std::max(0.0f, tm.textWidth(line, fontSize) - viewW);
+            m_k.setScrollX(std::clamp(sx, 0.0f, maxSx));
+        }
     }
     const float scrollY = m_k.scrollY();
     const float scrollX = m_k.scrollX();

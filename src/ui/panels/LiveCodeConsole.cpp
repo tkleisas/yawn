@@ -319,12 +319,20 @@ bool LiveCodeConsole::handleMouseDown(fw2::MouseEvent& e, const Rect& panel) {
                 const float ly2 = ly - areaY;
                 if (ly2 >= 0.0f && ly2 < areaH) {
                     const Rect content{0.0f, 0.0f, panel.w, areaH};
-                    // Anchor AT the press point: sweeping now
-                    // drag-selects; plain click collapses to a caret.
-                    m_editor.dragStart(lx, ly2, m_lastLineH,
-                                       fw2::theme().metrics.fontSizeSmall,
-                                       *m_lastMet, content);
-                    m_dragSelecting = true;
+                    const float fs = fw2::theme().metrics.fontSizeSmall;
+                    if (e.clickCount >= 2) {
+                        // Double-click: word (or whitespace run) select.
+                        m_editor.doubleClick(lx, ly2, m_lastLineH, fs,
+                                             *m_lastMet, content);
+                        m_dragSelecting = false;
+                    } else {
+                        // Anchor AT the press point: sweeping now
+                        // drag-selects; plain click collapses to a
+                        // caret.
+                        m_editor.dragStart(lx, ly2, m_lastLineH, fs,
+                                           *m_lastMet, content);
+                        m_dragSelecting = true;
+                    }
                 }
             }
             break;

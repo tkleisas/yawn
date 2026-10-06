@@ -68,6 +68,12 @@ public:
                 const fw2::TextMetrics& met,
                 const ::yawn::ui::fw::Rect& contentRect);
 
+    // Double-click: select the word (or whitespace run) under the
+    // press. Same coordinate contract as click().
+    void doubleClick(float lx, float ly, float lineH, float fontSize,
+                     const fw2::TextMetrics& met,
+                     const ::yawn::ui::fw::Rect& contentRect);
+
     // Painting (caller provides the content rect and clips).
     void paint(fw2::UIContext& ctx, const ::yawn::ui::fw::Rect& r);
 
@@ -97,6 +103,9 @@ private:
     LiveCodeEditorKernel m_k;
     int m_visibleLines = 20;      // set by paint; kept for hit-testing
     int m_errorLine = -1;         // eval-error row highlight (0-based)
+    // Caret-follow bookkeeping: keep-in-view only runs when the caret
+    // MOVED (scrollbar drags must not be re-centered by paint).
+    int m_lastFollowLine = -1, m_lastFollowCol = -1;
 
     // Per-line token cache + the long-comment state AFTER each line
     // (so re-tokenizing from any line restarts with the right state).

@@ -366,6 +366,34 @@ public:
         setCaret(line, col, /*extending*/true);
     }
 
+    // Double-click word select: [A-Za-z0-9_#.]+ run containing `col`
+    // (dotted names complete/select as a whole, matching the
+    // completion prefix). Falls back to the whole line on no word.
+    void selectWordAt(int line, int col) {
+        line = std::clamp(line, 0, static_cast<int>(m_lines.size()) - 1);
+        const std::string& text = m_lines[line];
+        col = std::clamp(col, 0, static_cast<int>(text.size()));
+        auto isWord = [](unsigned char c) {
+            return std::isalnum(c) || c == '_' || c == '#' || c == '.';
+        };
+        int lo = col;
+        while (lo > 0 && isWord(static_cast<unsigned char>(text[lo - 1]))) --lo;
+        int hi = col;
+        while (hi < static_cast<int>(text.size()) &&
+               isWord(static_cast<unsigned char>(text[hi]))) ++hi;
+        if (lo == hi) {          // whitespace click → select the run
+            while (lo > 0 && std::isspace(static_cast<unsigned char>(text[lo - 1])))
+                --lo;
+            while (hi < static_cast<int>(text.size()) &&
+                   std::isspace(static_cast<unsigned char>(text[hi]))) ++hi;
+        }
+        if (lo == hi) { m_line = line; m_col = col; m_goalCol = col;
+                        clearSelection(); closeCompletion(); return; }
+        m_line = line; m_col = hi; m_goalCol = hi;
+        m_anchorLine = line; m_anchorCol = lo;
+        closeCompletion();
+    }
+
     // ─── Region/block evaluation (Ctrl+Shift+Enter) ──────────────────
     // A block is a maximal run of non-blank lines ("paragraphs" — blank
     // lines are the region separators, matching the demo-script style).

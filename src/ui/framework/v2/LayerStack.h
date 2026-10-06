@@ -224,6 +224,11 @@ public:
     // console scrollbars / any future splitter drags rely on this.
     std::uint64_t capturedEntryId() const { return m_capturedEntry; }
 
+    // Debug: live Overlay entries (excludes Modal/Tooltip/Toast).
+    size_t overlayCount() const {
+        return m_layers[static_cast<int>(OverlayLayer::Overlay)].size();
+    }
+
     // ─── Per-frame paint ──────────────────────────────────────────
     // Paint all layers in enum order (Modal first, Toast last). Call
     // AFTER the main widget tree has painted. `viewport` is the full

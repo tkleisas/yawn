@@ -129,13 +129,29 @@ std::string App::executeUiCommand(const std::string& line) {
 
     if (verb == "key") {
         if (args.size() < 2) return "ERR usage: key <name>";
-        const SDL_Keycode kc = SDL_GetKeyFromName(args[1].c_str());
-        if (kc == SDLK_UNKNOWN) return "ERR unknown key: " + args[1];
+        // Optional modifier prefixes ("ctrl+c", "shift+Left",
+        // "ctrl+shift+s") — for driving the editor's clipboard/undo
+        // bindings from the harness, since synthetic X modifier state
+        // doesn't survive Wayland.
+        SDL_Keymod mod = SDL_KMOD_NONE;
+        std::string nameArg = args[1];
+        for (;;) {
+            const size_t plus = nameArg.find('+');
+            if (plus == std::string::npos) break;
+            const std::string m = nameArg.substr(0, plus);
+            if      (m == "ctrl" || m == "control") mod |= SDL_KMOD_CTRL;
+            else if (m == "shift")                  mod |= SDL_KMOD_SHIFT;
+            else if (m == "alt")                    mod |= SDL_KMOD_ALT;
+            else break;
+            nameArg = nameArg.substr(plus + 1);
+        }
+        const SDL_Keycode kc = SDL_GetKeyFromName(nameArg.c_str());
+        if (kc == SDLK_UNKNOWN) return "ERR unknown key: " + nameArg;
         SDL_Event ev{};
         ev.type = SDL_EVENT_KEY_DOWN;
         ev.key.windowID = SDL_GetWindowID(m_mainWindow.getHandle());
         ev.key.key = kc;
-        ev.key.mod = SDL_KMOD_NONE;
+        ev.key.mod = mod;
         ev.key.down = true;
         ev.key.repeat = false;
         SDL_PushEvent(&ev);

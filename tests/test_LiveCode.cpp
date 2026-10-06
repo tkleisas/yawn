@@ -1680,6 +1680,23 @@ TEST(LiveCodeEditorKernelTest, PlainClickCollapsesDragSelection) {
     EXPECT_EQ(k.caretCol(), 4);
 }
 
+TEST(LiveCodeEditorKernelTest, DoubleClickWordSelect) {
+    K k;
+    k.setText("local song = { bpm = yawn.get_bpm() }");
+    k.selectWordAt(0, 10);                  // inside "song"
+    EXPECT_TRUE(k.hasSelection());
+    EXPECT_EQ(k.selectedText(), "song");
+    k.selectWordAt(0, 27);                  // dotted name: yawn.get_bpm
+    EXPECT_EQ(k.selectedText(), "yawn.get_bpm");
+    k.selectWordAt(0, 26);                  // the '.' itself is a word char
+    EXPECT_EQ(k.selectedText(), "yawn.get_bpm");
+    k.selectWordAt(0, 6);                   // whitespace between "=" tokens
+    const std::string ws = k.selectedText();
+    EXPECT_EQ(ws, ws.substr(ws.find_first_not_of(' ')));   // all spaces
+    k.selectWordAt(0, 2);                   // "local"
+    EXPECT_EQ(k.selectedText(), "local");
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Template-preserving round-trip (phase 9 — patchSongSource)
 // ─────────────────────────────────────────────────────────────────────────
