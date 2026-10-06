@@ -90,6 +90,14 @@ void App::update() {
         SDL_StartTextInput(m_mainWindow.getHandle());
     }
 
+    // Same reconciliation for the live-code console's Edit tab: tab
+    // switches, the Code-tab search field and menu "Show Console" all
+    // bypass the one-shot `~` handler, so re-check each frame.
+    if (m_liveConsole.wantsKeys() &&
+        !SDL_TextInputActive(m_mainWindow.getHandle())) {
+        SDL_StartTextInput(m_mainWindow.getHandle());
+    }
+
     // Debounced settings flush — save ~0.75 s after the last change so a
     // velocity drag doesn't write the settings file every frame.
     if (m_settingsDirty && ++m_settingsDirtyAge > 45) {

@@ -72,6 +72,14 @@ void LayerStack::removeById(OverlayLayer layer, std::uint64_t id,
     if (fireDismiss && victim.onDismiss) victim.onDismiss();
 }
 
+void LayerStack::setBounds(OverlayHandle& h, const Rect& bounds) {
+    if (!h.active()) return;
+    auto& vec = m_layers[static_cast<int>(h.layer())];
+    for (auto& e : vec) {
+        if (e.id == h.id()) { e.bounds = bounds; return; }
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Paint
 // ───────────────────────────────────────────────────────────────────

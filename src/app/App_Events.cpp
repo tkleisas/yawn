@@ -727,6 +727,15 @@ void App::handleKeyEvent(const SDL_Event& event) {
         // Live-code console drop-down (`~`, Quake-style)
         case SDLK_GRAVE:
             m_liveConsole.toggle(m_fw2Context);
+            // Letters reach the editor only as TEXT_INPUT events; SDL
+            // won't emit them unless text input is active. Space/
+            // Backspace ride the plain KEYDOWN path, which is why they
+            // "worked" while letters didn't.
+            if (m_liveConsole.isOpen() && m_liveConsole.wantsKeys())
+                SDL_StartTextInput(m_mainWindow.getHandle());
+            else if (!m_liveConsole.isOpen() &&
+                     SDL_TextInputActive(m_mainWindow.getHandle()))
+                SDL_StopTextInput(m_mainWindow.getHandle());
             break;
 
         // Enter launches/stops selected clip

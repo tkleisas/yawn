@@ -175,6 +175,7 @@ public:
     bool          active() const { return m_owner && m_id != 0; }
     OverlayLayer  layer()  const { return m_layer; }
     std::uint64_t id()     const { return m_id; }
+    LayerStack*   stack()  const { return m_owner; }
 
     // Needed for the friend-less remove() path: LayerStack::remove
     // clears the handle after internal cleanup.
@@ -209,6 +210,14 @@ public:
     // handle. Safe to call with an already-dismissed or default-
     // constructed handle.
     void remove(OverlayHandle& h);
+
+    // Keep an entry's hit-test bounds in sync with live geometry.
+    // Overlays that resize themselves in place (the live-code console
+    // resize grip) must call this — the entry's bounds is only
+    // snapshotted at push() time, and dispatchMouseDown hit-tests
+    // against that stale snapshot, which would make the grown panel's
+    // edges unreachable. No-op on an inactive handle.
+    void setBounds(OverlayHandle& h, const Rect& bounds);
 
     // Drag-capture state (set when a captureMouseWhileDown entry
     // consumes a mouse-down; cleared on the next mouse-up). The

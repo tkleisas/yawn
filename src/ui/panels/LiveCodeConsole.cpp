@@ -613,6 +613,11 @@ void LiveCodeConsole::resizeTo(float winX, float winY) {
     m_panelW = std::clamp(winX - m_panel.x, 340.0f, m_lastViewportW - 32.0f);
     m_panelH = std::clamp(winY - m_panel.y, 220.0f, m_lastViewportH - 16.0f);
     m_panel = Rect{m_panel.x, m_panel.y, m_panelW, m_panelH};
+    // The entry's hit-test bounds is a push()-time snapshot; without
+    // this sync the grip (and every panel edge outside the ORIGINAL
+    // size) becomes unreachable after the first manual resize.
+    if (m_handle.active() && m_handle.stack())
+        m_handle.stack()->setBounds(m_handle, m_panel);
 }
 
 void LiveCodeConsole::dragMove(const Rect& panel, float ly) {
