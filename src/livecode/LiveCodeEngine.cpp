@@ -561,7 +561,10 @@ static int l_render(lua_State* L) {
         if (lua_isnumber(L, -1)) target.track = static_cast<int>(lua_tonumber(L, -1));
         lua_pop(L, 1);
         lua_getfield(L, -1, "scene");
-        if (lua_isnumber(L, -1)) target.scene = static_cast<int>(lua_tonumber(L, -1));
+        // 1-based in Lua (like yawn.set_clip / launch_scene) — the App
+        // delivery hooks address slots 0-based.
+        if (lua_isnumber(L, -1))
+            target.scene = static_cast<int>(lua_tonumber(L, -1)) - 1;
         lua_pop(L, 1);
         lua_getfield(L, -1, "pad");
         if (lua_isnumber(L, -1)) target.pad = static_cast<int>(lua_tonumber(L, -1));

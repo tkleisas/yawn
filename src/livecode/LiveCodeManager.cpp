@@ -33,8 +33,10 @@ static const char* kTemplateScript =
 "-- and receive the target beat / bar — pass it to yawn.note's at_beat\n"
 "-- for sample-accurate placement.\n"
 "\n"
-"-- yawn.state survives reloads:\n"
-"yawn.state = yawn.state or { counter = 0 }\n"
+"-- yawn.state survives reloads. NOTE: it is pre-seeded as an (empty,\n"
+"-- truthy) table, so fall back per FIELD — the table-level idiom\n"
+"-- `yawn.state = yawn.state or {...}` never fires:\n"
+"yawn.state.counter = yawn.state.counter or 0\n"
 "\n"
 "-- Log a line each bar:\n"
 "improv.on_bar(function(bar)\n"
@@ -66,8 +68,10 @@ void LiveCodeManager::init(audio::AudioEngine* engine, Project* project) {
     m_project = project;
 
     // Prerender worker pool — delivery/report hooks are wired by App
-    // after init via prerenderManager().
+    // after init via prerenderManager(). Workers start here: enqueue is
+    // otherwise a silent no-op (§4.2 — N=2 workers).
     m_prerenderMgmt = std::make_unique<PrerenderManager>();
+    m_prerenderMgmt->init(2);
     m_prerenderMgmt->report = [this](const std::string& msg) {
         const int sev = (msg.find("failed") != std::string::npos ||
                          msg.find("cancelled") != std::string::npos) ? 1 : 0;

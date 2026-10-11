@@ -125,6 +125,7 @@ self-contained releases are built, and the stem-separation model) are in
 | Doc | What's in it |
 |---|---|
 | [docs/manual.md](docs/manual.md) | **The user manual** — concepts, tour, how-tos, reference |
+| [docs/tutorial-live-coding.md](docs/tutorial-live-coding.md) | **The live-coding tutorial** — 8 lessons from first note to sample forging; every snippet ships test-verified |
 | [docs/features.md](docs/features.md) | The full, exhaustive feature list |
 | [docs/building.md](docs/building.md) | Prerequisites, build flags, releases, the stem model |
 | [docs/controls.md](docs/controls.md) | Keyboard + mouse controls reference |
