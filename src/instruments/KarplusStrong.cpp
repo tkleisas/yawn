@@ -71,10 +71,18 @@ void KarplusStrong::process(float* buffer, int numFrames, int numChannels,
                 v.excitePos++;
             }
 
-            // Read from delay line (with linear interpolation for fractional delay)
+            // Read from delay line (with linear interpolation for
+            // fractional delay). fmod handles delay lengths larger than
+            // the buffer itself (very low pitches, bend extremes) — a
+            // single `+= kMaxDelay` correction did not, letting a negative
+            // index reach the delay line below.
             float readPosF = static_cast<float>(v.writePos) - v.delayLenF;
-            if (readPosF < 0.0f) readPosF += kMaxDelay;
-            int idx0 = static_cast<int>(readPosF) % kMaxDelay;
+            if (std::isfinite(readPosF))
+                readPosF = std::fmod(readPosF, static_cast<float>(kMaxDelay));
+            else
+                readPosF = static_cast<float>(v.writePos);   // NaN/infinite
+            if (readPosF < 0.0f) readPosF += static_cast<float>(kMaxDelay);
+            int idx0 = static_cast<int>(readPosF);
             int idx1 = (idx0 + 1) % kMaxDelay;
             float frac = readPosF - std::floor(readPosF);
             float delayed = v.delayLine[idx0] * (1.0f - frac) + v.delayLine[idx1] * frac;

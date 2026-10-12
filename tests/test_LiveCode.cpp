@@ -1207,6 +1207,90 @@ TEST_F(LiveCodeManagerTest, SetNotesRoundTrip) {
     EXPECT_GT(slot2->midiClip->lengthBeats(), 0.0);
 }
 
+// set_notes consumes the clip-spec form directly — yawn.midi /
+// yawn.drums return {beats, notes}, so a pattern is one readable line.
+TEST_F(LiveCodeManagerTest, SetNotesConsumesClipSpecs) {
+    // yawn.drums{...} → its beats (16 grid steps = 4 beats) become the
+    // length, 8 GM-channel hits on the kick lane.
+    writeScript(
+        "yawn.set_notes(0, 1, yawn.drums{ BD = 'x-x-x-x-x-x-x-x-' })\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    auto* slot = m_project.getSlot(0, 0);
+    ASSERT_NE(slot->midiClip, nullptr);
+    EXPECT_DOUBLE_EQ(slot->midiClip->lengthBeats(), 4.0);
+    ASSERT_EQ(slot->midiClip->noteCount(), 8);
+    EXPECT_EQ(slot->midiClip->note(0).channel, 9);
+    EXPECT_EQ(slot->midiClip->note(0).pitch, 36);    // BD → GM kick
+
+    // yawn.midi(...) same: length = the phrase's exact sum.
+    writeScript(
+        "yawn.set_notes(0, 1, yawn.midi('C2_8 C2_8 D#2_8*2 G2_4'))\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    EXPECT_DOUBLE_EQ(m_project.getSlot(0, 0)->midiClip->lengthBeats(), 3.0);
+    EXPECT_EQ(m_project.getSlot(0, 0)->midiClip->noteCount(), 4);
+
+    // opts.beats still overrides the spec's length.
+    writeScript(
+        "yawn.set_notes(0, 1, yawn.midi('C3_4'), { beats = 8 })\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    EXPECT_DOUBLE_EQ(m_project.getSlot(0, 0)->midiClip->lengthBeats(), 8.0);
+}
+
+// yawn.note takes note names ("C2") for human-readable patterns; bad
+// names fail the run naming the token (same contract as yawn.midi).
+TEST_F(LiveCodeManagerTest, NoteAcceptsPitchNames) {
+    std::vector<audio::AudioCommand> sent;
+    m_mgr.setCommandSender([&sent](const audio::AudioCommand& cmd) {
+        sent.push_back(cmd);
+    });
+
+    writeScript("yawn.note(0, 'C2', 100, 0, 0)\n"
+                "yawn.note(0, 'F#2', 90, 0, 0)\n"
+                "yawn.note(0, 'Bb3', 80, 0, 0)\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    ASSERT_EQ(sent.size(), 3u);
+    const int want[] = { 36, 42, 58 };   // C2, F#2, Bb3 (60 = C4)
+    for (int i = 0; i < 3; ++i) {
+        auto on = std::get_if<audio::SendMidiToTrackMsg>(&sent[i]);
+        ASSERT_NE(on, nullptr);
+        EXPECT_EQ(on->note, want[i]) << "pitch name " << i;
+    }
+
+    // Bad names fail the run, naming the offending token.
+    writeScript("yawn.note(0, 'H4', 100, 0, 0)\n");
+    EXPECT_FALSE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    bool sawPitchError = false;
+    for (const auto& l : m_mgr.console())
+        if (l.text.find("bad pitch 'H4'") != std::string::npos)
+            sawPitchError = true;
+    EXPECT_TRUE(sawPitchError);
+}
+
+// yawn.render's notes accept the clip-spec form too (yawn.midi /
+// yawn.drums), not just plain tuples.
+TEST_F(LiveCodeManagerTest, RenderNotesAcceptSpecForm) {
+    auto* pm = m_mgr.prerenderManager();
+    ASSERT_NE(pm, nullptr);
+    pm->init(1);
+    bool delivered = false;
+    pm->deliverSampler = [&](std::shared_ptr<audio::AudioBuffer> buf,
+                             const std::string&, int) {
+        delivered = (buf != nullptr);
+        return true;
+    };
+    writeScript(
+        "yawn.render{ device = 'subsynth', params = {},\n"
+        "              notes = yawn.midi('C2_8@1.0'),\n"
+        "              beats = 0.5, tail = 0.5,\n"
+        "              target = { kind = 'sampler', track = 0 } }\n");
+    ASSERT_TRUE(m_mgr.runScript(m_mgr.defaultScriptPath()));
+    for (int i = 0; i < 200 && !delivered; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        m_mgr.update();
+    }
+    EXPECT_TRUE(delivered);
+}
+
 TEST_F(LiveCodeManagerTest, BufferHandleRoundTripViaFile) {
     // Build a small wav, load it through the handle API from a script,
     // save it back, and compare frame counts.

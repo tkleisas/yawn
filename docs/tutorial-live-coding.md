@@ -31,10 +31,10 @@ everything you need is explained as it appears.*
 | **Velocities differ by API** | `yawn.note` takes MIDI velocity **0..127**. Clip notes (`yawn.set_notes`, `song` clips, `yawn.render`) take **0.0..1.0**. |
 | **Two layers, one file** | `song` is the declarative project (the DAW converges to it). `improv` is the performer (callbacks fired on the musical grid). Until Lesson 5, you'll mostly live in the second. |
 
-Also worth knowing up front: the **audio thread never runs your code**. Lua
-runs on the UI thread; sounds and edits are handed to the audio engine
-through the same paths the UI itself uses. You cannot crash the audio
-stream from a script — the worst a bad line can do is print an error.
+Also worth knowing up front:
+
+- the **audio thread never runs your code**. Lua runs on the UI thread; sounds and edits are handed to the audio engine through the same paths the UI itself uses. You cannot crash the audio stream from a script — the worst a bad line can do is print an error.
+- **pitches can be typed by hand.** `yawn.note` takes a number (0..127) *or* a note name — `"C2"`, `"F#2"`, `"Bb3"` — where MIDI 60 = C4, matching YAWN everywhere else. And long patterns write better as text: `yawn.midi("C2_8 C2_8 G2_4")` and `yawn.drums{ BD = "x-o-" }` turn readable strings into notes (Lesson 4). Everything in the device catalog — instruments, effects, every parameter — lives in the appendix table at the end of this document.
 
 ## Lesson 1 — first sound
 
@@ -61,7 +61,7 @@ song = {
 yawn.set_playing(true)            -- improv callbacks ride transport time
 
 improv.every(1, function(beat)    -- every beat, from now on
-    yawn.note(0, 36, 127, 0.3, 0, beat)   -- track 1 (0-based), C2, loudest
+    yawn.note(0, "C2", 127, 0.3, 0, beat)  -- track 1 (0-based), C2, loudest
 end)
 
 -- @assert tracks:2
@@ -73,16 +73,17 @@ You should hear a kick drum on every beat. What just happened, line by line:
 
 - **`song`** declared one track. A fresh project starts with two default
   tracks; `uid = 1` *adopts* the first one (renames it "Kick", flips it to a
-  MIDI track because you asked for `type = "midi"`, and attaches a **Sub
-  Synth** from the device factory). Track indices don't move: the adopted
-  track is still track 0.
+  MIDI track because you asked for `type = "midi"`, and attaches a
+  **SubSynth** (`subsynth`) from the device factory). Track indices don't
+  move: the adopted track is still track 0.
 - **`yawn.set_playing(true)`** starts the transport. The improv layer is
   transport-anchored — no play, no callbacks.
 - **`improv.every(1, fn)`** — every 1 beat, first fire one beat from now
   (`every(0.5, …)` would be eighths, `every(0.25, …)` sixteenths).
 - **`yawn.note(track, pitch, vel, dur, ch, at_beat)`** — the payload
-  primitive. Here: track 1 (0-based), MIDI 36 (C2), velocity 127, gate
-  0.3 beats, channel 0, *on* transport beat `beat`.
+  primitive. Here: track 1 (0-based), pitch `"C2"` (a note name — a MIDI
+  number works identically), velocity 127, gate 0.3 beats, channel 0, *on*
+  transport beat `beat`.
 
 That last argument is the important one. The scheduler fires callbacks
 **slightly before their target moment** (lookahead — more in Lesson 2) and
@@ -93,10 +94,12 @@ a beat, feed that beat to the note.**
 
 Try this now, with the transport still playing:
 
-1. Change `36` to `43` — Run again (Ctrl+L, or Ctrl+Enter in the Edit tab
-   to run the editor buffer). Each run replaces the previous *generation*
-   at the next bar boundary, so the change lands musically, mid-groove,
-   with no silence.
+1. Change `"C2"` to `"G2"` — Run again (Ctrl+L, or Ctrl+Enter in the Edit
+   tab to run the editor buffer). Each run replaces the previous
+   *generation* at the next bar boundary, so the change lands musically,
+   mid-groove, with no silence. A mistyped name is an immediate console
+   error naming the token (`bad pitch 'Hc4'…`) — nothing plays, nothing
+   silently dies.
 2. Change the rhythm: `improv.every(1, …)` → `improv.every(0.25, …)`.
 3. Watch the console: each run logs `live code: generation N running`. The
    generation number in the `~` console header tells you which layer is
@@ -153,18 +156,19 @@ song = {
 -- Kick: where THIS groove lives is a decision, not a tick — plan it per bar.
 improv.on_bar(function(bar)
     local b = (bar - 1) * 4                 -- bar 1 spans beats 0..4
-    yawn.note(0, 36, 127, 0.3, 0, b)        -- downbeat, loud
-    yawn.note(0, 36, 102, 0.15, 0, b + 2.5) -- pickup off the grid
+    yawn.note(0, "C2", 127, 0.3, 0, b)      -- downbeat, loud
+    yawn.note(0, "C2", 102, 0.15, 0, b + 2.5) -- pickup off the grid
 end)
 
 -- Hats: nobody formats a hat on a spreadsheet — let the grid carry it.
 improv.every(0.5, function(beat)
     local open = (beat % 2 == 0.5)          -- every second eighth opens
-    yawn.note(1, open and 46 or 42, open and 92 or 56, 0.05, 0, beat)
+    yawn.note(1, open and "A#2" or "F#2", open and 92 or 56, 0.05, 0, beat)
 end)
 
--- Bass: root movement once per bar; notes dropped at exact beats.
-local roots = { 33, 36, 41, 43 }            -- A, C, F, G (low)
+-- Bass: the code transposes, so the roots are numbers here (A1, C2, F2, G2)
+-- and +7 stacks a fifth on top. Note names are sugar, not variables.
+local roots = { 33, 36, 41, 43 }
 improv.on_bar(function(bar)
     local root = roots[((bar - 1) % #roots) + 1]
     local b = (bar - 1) * 4
@@ -174,13 +178,13 @@ end)
 
 -- One-shots: a fill lands exactly once, at 12.5 beats in:
 improv.after(12.5, function(beat)
-    yawn.note(1, 46, 80, 0.06, 0, beat)
+    yawn.note(1, "A#2", 80, 0.06, 0, beat)
     yawn.log("fill landed on beat " .. beat)
 end)
 
 -- And an absolute appointment: bar 3, sub-beat 1.5:
 improv.at(3, 1.5, function(beat)
-    yawn.note(0, 36, 70, 0.1, 0, beat)      -- a ghost kick
+    yawn.note(0, "C2", 70, 0.1, 0, beat)    -- a ghost kick
 end)
 
 yawn.set_playing(true)
@@ -250,13 +254,13 @@ yawn.state.density = yawn.state.density or 0.5
 improv.lookahead(0.15)
 
 improv.every(1, function(beat)              -- the kick keeps the time
-    yawn.note(0, 36, 127, 0.3, 0, beat)
+    yawn.note(0, "C2", 127, 0.3, 0, beat)
 end)
 
 improv.every(0.5, function(beat)            -- the hats take the weather
     local open = (beat % 2 == 0.5)
     if open or math.random() < yawn.state.density then
-        yawn.note(1, open and 46 or 42,
+        yawn.note(1, open and "A#2" or "F#2",
                   open and 95 or math.floor(50 + 40 * math.random()),
                   0.05, 0, beat)
     end
@@ -346,13 +350,12 @@ song = {
     },
 }
 
--- set_notes is the live-authoring tool: here, a scene-2 bass variant
--- written out as plain note tuples, without touching scene 1.
--- (Fresh pads on a new Drum Rack are empty until you load samples into
--- them — drag some from the browser now, or forge them in Lesson 6.
--- The grid keeps firing at the pads once they're loaded.)
-yawn.set_notes(1, 2, { { 0, 0.5, 33, 0.9 }, { 1, 0.5, 40, 0.7 },
-                       { 2, 0.5, 45, 0.85 }, { 3, 0.5, 36, 0.65 } })
+-- set_notes is the live-authoring tool — and it eats clip specs whole:
+-- here, a scene-2 bass variation written as ONE readable line, without
+-- touching scene 1. (Fresh pads on a new Drum Rack are empty until you
+-- load samples into them — drag some from the browser now, or forge them
+-- in Lesson 6. The grid keeps firing at the pads once they're loaded.)
+yawn.set_notes(1, 2, yawn.midi("A1_8@0.9 C2_8@0.7 F2_8@0.85 C2_8@0.65"))
 
 yawn.launch_scene(1)     -- the whole scene, quantized to the downbeat
 
@@ -378,19 +381,21 @@ Clips have a full authoring API beyond the notation:
 
 ```lua
 yawn.set_notes(track, scene, notes, [opts])  -- install/replace a clip's
-                                             -- notes: {start, dur, pitch,
-                                             -- vel(0..1), [ch]} tuples,
-                                             -- positional or named
+                                             -- content: {start, dur, pitch,
+                                             -- vel(0..1), [ch]} tuples
+                                             -- (positional or named),
+                                             -- OR a yawn.midi("...") /
+                                             -- yawn.drums{...} spec
 yawn.get_notes(track, scene)   -> normalized note table (or nil)
 yawn.new_midi_clip(track, scene, [beats=4])  -- empty clip
 yawn.clear_notes(track, scene)               -- empty it, keep the length
 yawn.launch_clip(track, scene, { quantize = "none"|"beat"|"bar" })
 ```
 
-`set_notes` defaults a clip's length to whatever's in the slot (or 4
-beats); in the `song` layer you set `beats` explicitly per clip. To
-override the default from code, pass an options table — for instance
-`yawn.set_notes(0, 1, notes, { beats = 4 })`.
+`set_notes` derives its length from the spec's `beats` when one is given,
+else keeps whatever's in the slot (or 4 beats); an options table
+overrides everything — for instance `yawn.set_notes(0, 1, notes, { beats
+= 4 })`.
 
 The notation also has hardware support: the `~` console's Edit tab has a
 **notation keyboard** strip (one octave of piano keys, `_N` length
@@ -521,7 +526,7 @@ local jobKick = yawn.render{
     device = "subsynth",                 -- any Factory instrument id
     params = { ["Osc1 Level"] = 1.0, ["Sub Level"] = 0.5,
                ["Filter Env"] = 0.9, ["Amp Decay"] = 0.4 },
-    notes  = { { 0.0, 0.4, 36, 1.0 } },  -- one note: the pitch shapes it
+    notes  = yawn.midi("C2_16*2@1"),     -- the input notes, typed
     beats  = 1.0,                        -- rendered length (at 116 BPM)
     tail   = 1.5,                        -- +release tail on top
     target = { kind = "drumrack", track = 0, pad = 60, name = "logo kick" },
@@ -529,7 +534,7 @@ local jobKick = yawn.render{
 
 local jobZap = yawn.render{
     device = "karplus", params = { Damping = 0.2 },
-    notes  = { { 0.0, 0.3, 60, 0.9 } },
+    notes  = yawn.midi("C4_8@0.9"),
     beats  = 0.5, tail = 1.0,
     target = { kind = "sampler", track = 1, name = "zap" },
 }
@@ -641,7 +646,7 @@ yawn.load_sample(1, HAT, "sampler")        -- the tick, playable live
 
 improv.every(0.5, function(beat)           -- ghost ticks over the pad
     if math.random() < 0.6 then
-        yawn.note(1, 60, 100, 0.05, 0, beat)
+        yawn.note(1, "C4", 100, 0.05, 0, beat)
     end
 end)
 
@@ -733,3 +738,114 @@ and scheduling model; [visual.md](visual.md) takes shaders and ghosts
 from here. The notations keyboard, the code lens and Ctrl+Enter are worth
 fingering: the tool chain — *console to run, run to console* — is the
 muscle this whole feature exercises.
+
+## Appendix A — the device catalog
+
+Everything the `song` layer's `instrument = { id = … }` / `fx = { … }`
+declarations and `yawn.render{ device = … }` accept, with every parameter
+name. Code uses the **id** (backticks below); the menus and details panel
+show the display name; **param names** are matched case-insensitively and
+can be given by *index* instead (the list order below). A wrong name
+prints a warning listing the exact valid set — this table is the same
+information, offline.
+
+**Instruments** (`instrument = { id = …, params = { … } }`):
+
+| id | Display name | Parameters |
+|---|---|---|
+| `subsynth` | SubSynth | Osc1 Wave, Osc1 Level, Osc2 Wave, Osc2 Level, Osc2 Detune, Osc2 Octave, Sub Level, Noise Level, Filter Cutoff, Filter Reso, Filter Type, Filter Env, Amp Attack, Amp Decay, Amp Sustain, Amp Release, Filt Attack, Filt Decay, Filt Sustain, Filt Release, LFO Rate, LFO Depth, Volume |
+| `fmsynth` | FM Synth | Algorithm, Feedback, Op1 Level, Op1 Ratio, Op1 Attack, Op1 Release, Op2 Level, Op2 Ratio, Op2 Attack, Op2 Release, Op3 Level, Op3 Ratio, Op3 Attack, Op3 Release, Op4 Level, Op4 Ratio, Op4 Attack, Op4 Release, Volume |
+| `sampler` | Sampler | Root Note, Attack, Decay, Sustain, Release, Filter Cut, Filter Reso, Volume, Loop Start, Loop End, Reverse, Sample Gain |
+| `drumrack` | Drum Rack | Volume, Pad Volume, Pad Pan, Pad Pitch, Choke, Attack, Decay, Start, End |
+| `drumsynth` | Drum Synth | Tune, Atk, Dec, Sine, White, Pink, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, OS 2x |
+| `drumslop` | DrumSlop | Slice Count, Slice Mode, Orig BPM, Base Note, Swing, Volume, Pad Vol, Pad Pan, Pad Pitch, Pad Rev, Pad Cutoff, Pad Reso, Pad Atk, Pad Dec, Pad Sus, Pad Rel |
+| `karplus` | Karplus-Strong | Exciter, Damping, Brightness, Decay, Body, Stretch, Attack, Volume |
+| `wavetable` | Wavetable Synth | Table, Position, Filter Cut, Filter Res, Filter Env, Amp Atk, Amp Dec, Amp Sus, Amp Rel, Filt Atk, Filt Dec, Filt Sus, Filt Rel, LFO Rate, LFO Amt, Sub Level, Unison Det, Volume |
+| `granular` | Granular Synth | Position, Grain Size, Density, Spread, Pitch, Spray, Shape, Scan, Filter Cut, Filter Reso, Attack, Release, Stereo Width, Reverse, Jitter, Volume, Sidechain In |
+| `vocoder` | Vocoder | Bands, Carrier Type, Mod Source, Bandwidth, Env Attack, Env Release, Formant Shift, HF Tilt, Unvoiced, Dry Carrier, Amp Attack, Amp Release, Output Filter, Volume, Freeze, Detune, Talkbox |
+| `multisampler` | Multisampler | Amp Attack, Amp Decay, Amp Sustain, Amp Release, Filter Cut, Filter Reso, Filt Env Amt, Filt Attack, Filt Decay, Filt Sustain, Filt Release, Glide, Vel Crossfade, Volume |
+| `instrack` | Instrument Rack | Volume, Chain Vol, Chain Pan, Key Low, Key High, Vel Low, Vel High |
+| `stringmachine` | String Machine | 16' Level, 8' Level, 4' Level, Detune, Attack, Release, Brightness, Ens Depth, Ens Rate, Ens On, Volume |
+| `drawbarorgan` | Drawbar Organ | 16', 5 1/3, 8', 4', 2 2/3, 2', 1 3/5, 1 1/3, 1', Perc, Harm, Decay, Loud, Click, Vibrato, Chorus, Volume |
+| `electricpiano` | Electric Piano | Mode, Bell, Hardness, Hammer, Attack, Decay, Release, Trem Rate, Trem Depth, Volume |
+
+Useful enums read as floats: `subsynth`'s `Osc1 Wave` is 0 sine, 1 triangle,
+2 saw, 3 square, 4 noise, and its `Filter Type` is 0 low-pass, 1
+band-pass, 2 high-pass (the `filter` effect's own `Type` uses the same
+0/1/2 vocabulary).
+
+**Audio effects** (`fx = { { id = …, params = { … } }, … }` or
+`yawn.render{ fx = { … } }`):
+
+| id | Display name | Parameters |
+|---|---|---|
+| `reverb` | Reverb | Room Size, Damping, Wet/Dry, Pre-Delay, Width |
+| `plate` | Plate Reverb | Pre-Delay, Decay, Damping, Diffusion, Width, Wet/Dry |
+| `delay` | Delay | Time, Feedback, Wet/Dry, Ping-Pong, Filter, Tempo Sync |
+| `eq` | EQ | Low Freq, Low Gain, Mid Freq, Mid Gain, Mid Q, High Freq, High Gain |
+| `compressor` | Compressor | Threshold, Ratio, Attack, Release, Makeup Gain, Knee |
+| `limiter` | Limiter | Ceiling, Release, Lookahead |
+| `filter` | Filter | Cutoff, Resonance, Type |
+| `chorus` | Chorus | Rate, Depth, Wet/Dry, Voices |
+| `phaser` | Phaser | Rate, Depth, Feedback, Stages, Center, Stereo, Mix |
+| `wah` | Wah | Mode, Pedal, Bottom, Top, Q, Sensitivity, Response, Mix |
+| `rotary` | Rotary | Speed, Accel, Drive, X-Over, H Slow, H Fast, D Slow, D Fast, Mic Wd, Mix, OS 2x |
+| `autopanner` | Auto Panner | Rate, Sync, Division, Depth, Waveform, Phase, Mix |
+| `distortion` | Distortion | Drive, Tone, Wet/Dry, Type, OS 2x |
+| `bitcrusher` | Bitcrusher | Bits, Sample Rate, Pre Filter, Dither, Mix, OS 2x |
+| `beatrepeat` | Beat Repeat | Interval, Repeat, Gate, Chance, Pitch, Mix |
+| `bufferrepeat` | Buffer Repeat | Size, Repeats, Chance, Mix |
+| `resampler` | Resampler | Rate, Window, Mix |
+| `clockdrift` | Clock Drift | Depth, Rate, Jitter, Mix |
+| `cderror` | CD Error | Rate, Size, Severity, Mix |
+| `noisegate` | Noise Gate | Thresh, Hyst, Atk, Hold, Rel, Look, Range, SC, Duck, Mix |
+| `pingpongdelay` | Ping-Pong Delay | Time L, Time R, FB, Cross, Width, Filter, Sync, Mix |
+| `envfollower` | Envelope Follower | Src, Mode, Sens, Atk, Rel, Type, Cut, Depth, Range, Q, Mix |
+| `splineeq` | Spline EQ | On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q, On, Type, Freq, Gain, Q |
+| `neuralamp` | Neural Amp | In, Out, Mix, Gate, Bass, Mid, Treble, Norm |
+| `convreverb` | Conv Reverb | PreDly, LoCut, HiCut, IR Gain, Mix |
+| `tape` | Tape Emulation | Saturation, Wow, Flutter, Hiss, Tone, Wet/Dry, OS 2x |
+| `amp` | Amp Simulator | Gain, Bass, Mid, Treble, Presence, Output, Type, Cabinet, OS 2x |
+| `oscilloscope` | Oscilloscope | Time, Gain, Freeze |
+| `spectrum` | Spectrum | Smooth, Gain, Freeze |
+| `tuner` | Tuner | Gain, A4 Ref |
+
+(The `splineeq` rows repeat — one band per group. VST3 plugins are their
+own id family and not listed here.)
+
+## Appendix B — writing pitches by name
+
+`yawn.note` takes `"C2"`-style names or plain numbers, and the notation
+keywords use the same scale: **`[A-G]`**, optional **`#`** (sharp) or
+**`b`** (flat), then an octave number, with **MIDI 60 = C4** — so MIDI 0
+is `C-1`, and `A1` is 33 while `F#2` is 42. When your code *transposes*
+(a root note moving by semitones, an octave jump), keep the base as a
+number and add — arithmetic doesn't work on note-name strings:
+
+```lua
+yawn.note(0, "C2", 127, 0.3, 0, beat)   -- names: don't do root + var
+yawn.note(0, 36 + var % 12, 127, ... )   -- numbers: transposable
+```
+
+The `yawn.drums` lanes map onto the GM drum set (channel 9); the same
+pitches are just note names in `yawn.note`:
+
+| Lane names | GM note | Name |
+|---|---|---|
+| `kick` / `bd` | 36 | C2 |
+| `rim` / `rs` | 37 | C#2 |
+| `snare` / `sn` | 38 | D2 |
+| `clap` / `cp` | 39 | D#2 |
+| `hihat` / `hh` / `ch` (closed) | 42 | F#2 |
+| `openhh` / `oh` | 46 | A#2 |
+| `floortom` / `ft` | 43 | G2 |
+| `lowtom` / `lt` | 45 | A2 |
+| `tommid` / `tom` / `tm` | 48 | C3 |
+| `hightom` / `ht` | 50 | D3 |
+| `crash` / `cr` / `cymbal` | 49 | C#3 |
+| `ride` / `rd` | 51 | D#3 |
+
+Step characters (`X` 0.88 / `x` 0.76 / `o` 0.6 / `g` 0.31) and their
+per-step positions work identically whether the grid feeds a fresh
+Drum Rack (Pads are keyed by GM note), a drum synth, or anything that
+answers notes on channel 9.

@@ -137,8 +137,13 @@ static int l_improv_late_policy(lua_State* L) {
 // ── yawn.set_notes — MIDI clip authoring (phase 4) ───────────────────────
 
 // yawn.set_notes(track, scene, notes, [opts])
-//   notes: array of {start, dur, pitch, vel(0..1), [ch]} (positional or named)
-//   opts:  { beats = <length> }  (default: existing clip's length, else 4)
+//   notes: a note array ({start, dur, pitch, vel(0..1), [ch]} tuples,
+//          positional or named), OR a clip spec {beats, notes} — the
+//          exact shape yawn.midi(...)/yawn.drums{...} return, so a
+//          pattern can be authored as one readable line:
+//          yawn.set_notes(0, 1, yawn.drums{BD = "x-x-"})
+//   opts:  { beats = <length> }  (default: spec's beats, else the
+//          existing clip's length, else 4)
 // Replaces the slot's MIDI clip atomically (App::setMidiClipLive path).
 static int l_set_notes(lua_State* L) {
     auto* mgr = getManager(L);
@@ -154,6 +159,20 @@ static int l_set_notes(lua_State* L) {
         lua_pop(L, 1);
     }
 
+    // Spec form? (a table with a 'notes' array member — from
+    // yawn.midi / yawn.drums). Otherwise the table IS the note array.
+    int notesIdx = 3;
+    double specBeats = 0.0;
+    if (lua_getfield(L, 3, "notes") == LUA_TTABLE) {
+        notesIdx = lua_gettop(L);
+        lua_getfield(L, 3, "beats");
+        if (lua_isnumber(L, -1)) specBeats = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    } else {
+        lua_pop(L, 1);   // nil — plain note array
+    }
+    if (beats <= 0.0) beats = specBeats;
+
     auto* eng = mgr->audioEngine();
     auto* proj = mgr->project();
     if (!eng || !proj || track < 0 || track >= proj->numTracks()) return 0;
@@ -167,8 +186,10 @@ static int l_set_notes(lua_State* L) {
     }
 
     std::vector<yawn::livecode::SongNote> notes;
-    if (!yawn::livecode::parseNotesInto(L, 3, notes))
+    if (!yawn::livecode::parseNotesInto(L, notesIdx, notes))
         return 0;
+    if (notesIdx != 3)
+        lua_pop(L, 1);   // the spec's 'notes' field, when we descended
 
     auto clip = std::make_unique<midi::MidiClip>(std::max(beats, 0.25));
     for (const auto& n : notes) {
@@ -514,25 +535,26 @@ static int l_render(lua_State* L) {
 
     lua_getfield(L, specIdx, "notes");
     if (lua_istable(L, -1)) {
-        lua_pushnil(L);
-        while (lua_next(L, -2) != 0) {
-            if (lua_istable(L, -1)) {
-                audio::PrerenderNote n;
-                lua_rawgeti(L, -1, 1); n.beat = lua_tonumber(L, -1); lua_pop(L, 1);
-                lua_rawgeti(L, -1, 2); n.durBeats = lua_tonumber(L, -1); lua_pop(L, 1);
-                lua_rawgeti(L, -1, 3); n.pitch = static_cast<int>(lua_tonumber(L, -1)); lua_pop(L, 1);
-                lua_rawgeti(L, -1, 4);
-                n.vel = lua_isnil(L, -1) ? 0.8f : static_cast<float>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
-                lua_rawgeti(L, -1, 5);
-                n.channel = lua_isnil(L, -1) ? 0 : static_cast<int>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
-                spec.notes.push_back(n);
-            }
-            lua_pop(L, 1);
-        }
+        // Accept the clip-spec form ({beats, notes} — what yawn.midi /
+        // yawn.drums return) as well as a plain note array. Notes go
+        // through the shared parser so positional tuples and the
+        // notation's named {start, dur, pitch, vel, ch} tuples both work.
+        bool descended = lua_getfield(L, -1, "notes") == LUA_TTABLE;
+        const int arr = descended ? lua_gettop(L)
+                                  : (lua_pop(L, 1), lua_gettop(L));
+        std::vector<livecode::SongNote> parsed;
+        if (!livecode::parseNotesInto(L, arr, parsed))
+            warnings.push_back("render: notes ignored (malformed note "
+                               "array — expected {beat, dur, pitch, vel, "
+                               "ch} tuples or a yawn.midi/yawn.drums "
+                               "spec)");
+        for (const auto& n : parsed)
+            spec.notes.push_back(audio::PrerenderNote{
+                n.start, n.dur, static_cast<int>(n.pitch),
+                static_cast<float>(n.vel), n.ch});
+        if (descended) lua_pop(L, 1);
     }
-    lua_pop(L, 1);
+    lua_pop(L, 1);                     // the notes field value
 
     lua_getfield(L, specIdx, "beats");
     if (lua_isnumber(L, -1)) spec.lengthBeats = lua_tonumber(L, -1);
@@ -695,7 +717,27 @@ static int l_toast(lua_State* L) {
     return 0;
 }
 
+// Pitch-name parsing helper — mirrors midiClipOrErr's longjmp discipline:
+// the std::string error dies IN THIS FRAME; the caller lua_errors after
+// it returned, with only Lua-stack values live.
+static bool pitchNameOrError(lua_State* L, int idx, int& outMidi) {
+    const char* s = luaL_checkstring(L, idx);
+    int m = 0;
+    std::string err;
+    if (livecode::parsePitch(s ? s : "", m, err)) {
+        outMidi = m;
+        return true;
+    }
+    lua_pushfstring(L, "yawn.note: bad pitch '%s' (%s — e.g. \"C4\", "
+                    "\"F#2\"; numbers 0..127 also work)",
+                    s ? s : "?", err.c_str());
+    return false;
+}
+
 // yawn.note(track, pitch, [vel=127], [durBeats=0], [channel=0], [atBeat=0])
+// pitch: a MIDI number (0..127) or a note name ("C2", "F#2", "Bb3" —
+// MIDI 60 = C4, the yawn.midi convention). Bad names fail the run
+// naming the token (same error contract as yawn.midi parsing).
 // atBeat > 0 → note-on (and note-off at atBeat+dur when dur > 0) are parked
 // in the audio thread's pending queue and land sample-accurately on that
 // transport beat (docs/live-coding.md §3.2). atBeat <= 0 fires now.
@@ -704,7 +746,19 @@ static int l_note(lua_State* L) {
     if (!mgr) return 0;
 
     int track = static_cast<int>(luaL_checkinteger(L, 1));
-    int pitch = static_cast<int>(luaL_checkinteger(L, 2));
+    int pitch;
+    if (lua_isnumber(L, 2)) {
+        pitch = static_cast<int>(luaL_checkinteger(L, 2));
+    } else {
+        if (!pitchNameOrError(L, 2, pitch)) {
+            // Recreate luaL_error's "chunk:line: " prefix, then raise —
+            // no C++ locals are live across this longjmp.
+            luaL_where(L, 1);
+            lua_insert(L, -2);
+            lua_concat(L, 2);
+            return lua_error(L);
+        }
+    }
     int vel   = static_cast<int>(luaL_optinteger(L, 3, 127));
     double dur = luaL_optnumber(L, 4, 0.0);
     int ch    = static_cast<int>(luaL_optinteger(L, 5, 0));

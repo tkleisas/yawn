@@ -184,6 +184,16 @@ bool parseDurationAt(const std::string& s, size_t& i, DurInfo& out,
 
 } // namespace
 
+bool parsePitch(const std::string& src, int& outMidi, std::string& err) {
+    size_t i = 0;
+    if (!parsePitchAt(src, i, outMidi, err)) return false;
+    if (i != src.size()) {
+        err = "'" + src.substr(i) + "' is not part of a pitch";
+        return false;
+    }
+    return true;
+}
+
 bool parseMelodicPhrase(const std::string& src, PatternClip& out,
                         std::string& err) {
     out = PatternClip{};

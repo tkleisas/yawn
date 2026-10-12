@@ -486,6 +486,8 @@ yawn.state                                   -- persistent-across-reload table
 
 ── notes & midi (improv)
 yawn.note(track, pitch, vel, dur_beats, ch, at_beat)   -- schedule or fire
+                                              --   pitch: number 0..127 OR
+                                              --   a note name ("C2", "F#2")
 yawn.note_off(track, pitch, ch, at_beat)               -- explicit release
 yawn.set_notes(track, scene, table, opts)              -- author a MIDI clip
 yawn.clear_notes(track, scene)                         -- empty the clip
@@ -943,6 +945,8 @@ Text notations for musical patterns, parsed by `src/livecode/PatternParse`
 into the standard clip-spec table (`{beats, notes}`) that the declarative
 song layer, `yawn.set_notes` and the prerender specs all consume
 directly — so `clips = { [1] = yawn.midi("...") }` just works.
+`yawn.note` also takes `"C2"`-style named pitches (resolved by the same
+Pitch parser, 60 = C4).
 
 **Melodic** — sequential; each note starts where the previous one ends.
 Pitch is `[A-G][#|b]?<octave>` (MIDI 60 = C4, matching the rest of YAWN):

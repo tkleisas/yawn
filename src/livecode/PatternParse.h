@@ -49,5 +49,11 @@ bool parseMelodicPhrase(const std::string& src, PatternClip& out,
 bool parseDrumGrid(const std::map<std::string, std::string>& lanes,
                    double forceBeats, PatternClip& out, std::string& err);
 
+// Parse a single pitch name ("C2", "F#2", "Bb3") → MIDI (60 = C4, same
+// convention as the phrases above). The whole string must be one pitch —
+// trailing characters fail. Reused by yawn.note's pitch argument so a
+// human can write notes by name.
+bool parsePitch(const std::string& src, int& outMidi, std::string& err);
+
 } // namespace livecode
 } // namespace yawn
