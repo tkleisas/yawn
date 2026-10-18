@@ -1,3 +1,4 @@
+#include "util/DroppedFilePath.h"
 // App_Events.cpp — SDL event pump: keyboard handling + the main
 // processEvents() dispatch (mouse/keyboard/drag-drop/window events),
 // plus the SDL→fw2 key/button/modifier translation helpers.
@@ -1496,8 +1497,12 @@ void App::processEvents() {
                 }
                 break;
 
+            case SDL_EVENT_DROP_TEXT:
             case SDL_EVENT_DROP_FILE: {
-                const char* file = event.drop.data;
+                const std::string textFile = event.type == SDL_EVENT_DROP_TEXT
+                    ? droppedFilePath(event.drop.data ? event.drop.data : "") : "";
+                const char* file = event.type == SDL_EVENT_DROP_TEXT
+                    ? (textFile.empty() ? nullptr : textFile.c_str()) : event.drop.data;
                 if (file) {
                     // Resolve the drop position. SDL_EVENT_DROP_FILE reports
                     // (0,0) on some platforms (notably Linux), which would
