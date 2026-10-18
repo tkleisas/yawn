@@ -1,5 +1,5 @@
 # build_yawn.ps1 — Build YAWN (Debug or Release)
-# Usage: .\build_yawn.ps1 [-Config Release|Debug] [-Clean] [-Test]
+# Usage: .\build_yawn.ps1 [-Config Release|Debug] [-Clean] [-Test] [-Run]
 #
 # Optional deps (auto-detected if available):
 #   - FFmpeg + libav*  → video clip import/playback
@@ -17,6 +17,7 @@ param(
     [string]$Config = "Release",
     [switch]$Clean,
     [switch]$Test,
+    [switch]$Run,
     [string]$ExtraArgs = ""
 )
 
@@ -62,5 +63,12 @@ if ($Test) {
     Write-Host "=== Running tests ===" -ForegroundColor Cyan
     Push-Location $BuildDir
     ctest --output-on-failure -C $Config --parallel
+    $testExitCode = $LASTEXITCODE
     Pop-Location
+    if ($testExitCode -ne 0) { throw "Tests failed" }
+}
+
+if ($Run) {
+    $AppDir = Join-Path $BuildDir "bin\$Config"
+    Start-Process -FilePath (Join-Path $AppDir "YAWN.exe") -WorkingDirectory $AppDir
 }
