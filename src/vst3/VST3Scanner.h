@@ -41,14 +41,15 @@ public:
 
     // ── v2 resumable scan ──
     //
-    // Cache format (v2):
-    //   { "version": 2, "scanComplete": bool,
+    // Cache format (v3; also reads v2):
+    //   { "version": 3, "scanComplete": bool,
     //     "modules": { "<path>": {"status": "ok"|"failed",
     //                             "plugins": [...] }, ... } }
     //
-    // loadCache() accepts both v2 and the legacy v1 array format.
+    // loadCache() accepts v2 and the legacy v1 array format. Failed v2
+    // entries are retried once to recover from the Windows quoting bug.
     // scanComplete() is true when every module on the system has an
-    // entry — the app then skips scanning entirely.
+    // entry at the last scan. Re-enumerate on startup to discover new modules.
     bool scanComplete() const { return m_scanComplete; }
 
     // Per-module scan function (seam for tests): returns true and

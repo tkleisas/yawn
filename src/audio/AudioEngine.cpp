@@ -1,3 +1,6 @@
+#ifdef YAWN_HAS_VST3
+#include "vst3/VST3Transport.h"
+#endif
 #include "audio/AudioEngine.h"
 #include "util/AudioThread.h"
 #include "util/Logger.h"
@@ -829,6 +832,11 @@ void AudioEngine::processAudio(const float* input, float* output, unsigned long 
             }
         }
     }
+
+#ifdef YAWN_HAS_VST3
+    vst3::TransportScope pluginTransport(m_transport, m_pluginContinuousSamples);
+    m_pluginContinuousSamples += static_cast<int64_t>(numFrames);
+#endif
 
     int nc = m_config.outputChannels;
     int nf = static_cast<int>(numFrames);

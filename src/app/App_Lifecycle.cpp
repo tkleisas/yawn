@@ -1723,7 +1723,10 @@ bool App::init() {
     std::string vst3CachePath = (util::AppSettings::settingsPath().parent_path()
                                   / "vst3_cache.json").string();
     m_vst3Scanner->loadCache(vst3CachePath);
-    if (!m_vst3Scanner->scanComplete()) {
+    {
+        // Re-enumerate module paths on startup even for a complete cache:
+        // plugins installed since the previous launch need discovery too.
+        // scanWith skips all cached modules, including previous failures.
         // Scan out-of-process: each module is enumerated by the
         // yawn_vst3_host subprocess, so a crashy plugin only fails
         // its own cache entry instead of taking down the app at
