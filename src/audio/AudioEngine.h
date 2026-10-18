@@ -687,6 +687,7 @@ private:
     util::RtRetireList m_retireList;
 
     Transport m_transport;
+    int64_t m_pluginContinuousSamples = 0; // audio-thread clock, also advances while stopped
     ClipEngine m_clipEngine;
     MidiClipEngine m_midiClipEngine;
     ArrangementPlayback m_arrPlayback;

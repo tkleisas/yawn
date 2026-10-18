@@ -1,6 +1,7 @@
 #ifdef YAWN_HAS_VST3
 
 #include "vst3/VST3Instrument.h"
+#include "vst3/VST3Transport.h"
 #include "pluginterfaces/vst/vsttypes.h"
 #include "util/Logger.h"
 #include <cstring>
@@ -93,16 +94,7 @@ void VST3Instrument::process(float* buffer, int numFrames, int numChannels,
     // persistent queues (no allocation after warmup — see header).
     m_instance->drainParameterChanges(m_inParamChanges);
 
-    // Minimal process context — many JUCE plugins (e.g. Dexed) dereference
-    // processContext without checking null. Provide a stable default so they
-    // don't segfault in processBlock.
-    Steinberg::Vst::ProcessContext processContext{};
-    processContext.sampleRate = m_sampleRate;
-    processContext.tempo = 120.0;
-    processContext.timeSigNumerator = 4;
-    processContext.timeSigDenominator = 4;
-    processContext.state = Steinberg::Vst::ProcessContext::kTempoValid
-                         | Steinberg::Vst::ProcessContext::kTimeSigValid;
+    auto processContext = vst3::processContext(m_sampleRate);
 
     // Setup ProcessData. outputParameterChanges must be non-null — DPF-based
     // plugins assert and segfault if it isn't.
@@ -151,12 +143,15 @@ void VST3Instrument::process(float* buffer, int numFrames, int numChannels,
 
 void VST3Instrument::convertMidiToEventList(const midi::MidiBuffer& midi,
                                               Steinberg::Vst::EventList& eventList) {
+    const auto context = vst3::processContext(m_sampleRate);
     for (int i = 0; i < midi.count(); ++i) {
         const auto& msg = midi[i];
         Steinberg::Vst::Event e = {};
         e.busIndex = 0;
         e.sampleOffset = msg.frameOffset;
-        e.ppqPosition = 0;
+        e.ppqPosition = context.projectTimeMusic +
+            (context.state & Steinberg::Vst::ProcessContext::kPlaying
+                ? msg.frameOffset * context.tempo / (60.0 * context.sampleRate) : 0.0);
         e.flags = Steinberg::Vst::Event::kIsLive;
 
         switch (msg.type) {

@@ -1,6 +1,7 @@
 #ifdef YAWN_HAS_VST3
 
 #include "vst3/VST3Effect.h"
+#include "vst3/VST3Transport.h"
 #include "pluginterfaces/vst/vsttypes.h"
 #include "util/Logger.h"
 #include <cstring>
@@ -105,15 +106,7 @@ void VST3Effect::process(float* buffer, int numFrames, int numChannels) {
     // persistent queues (no allocation after warmup — see header).
     m_instance->drainParameterChanges(m_inParamChanges);
 
-    // Minimal process context — JUCE plugins dereference processContext
-    // without checking null. Provide a stable default.
-    Steinberg::Vst::ProcessContext processContext{};
-    processContext.sampleRate = m_sampleRate;
-    processContext.tempo = 120.0;
-    processContext.timeSigNumerator = 4;
-    processContext.timeSigDenominator = 4;
-    processContext.state = Steinberg::Vst::ProcessContext::kTempoValid
-                         | Steinberg::Vst::ProcessContext::kTimeSigValid;
+    auto processContext = vst3::processContext(m_sampleRate);
 
     // Setup ProcessData. outputParameterChanges must be non-null — DPF-based
     // plugins assert and segfault if it isn't.

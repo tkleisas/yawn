@@ -159,6 +159,66 @@ TEST(VST3Scanner, V2ResumeSkipsAlreadyScannedModules) {
     std::filesystem::remove(cache);
 }
 
+#ifdef _WIN32
+TEST(VST3Scanner, SubprocessScanHandlesSpacesInExecutableAndModulePaths) {
+    using namespace yawn::vst3;
+    if (VST3::Hosting::Module::getModulePaths().empty())
+        GTEST_SKIP() << "No installed VST3 module paths to enumerate";
+    const auto folder = std::filesystem::temp_directory_path() / "yawn scan host test";
+    std::filesystem::create_directories(folder);
+    const auto host = folder / "scan host.cmd";
+    const auto cache = folder / "cache.json";
+    {
+        std::ofstream file(host);
+        file << "@echo off\n"
+             << R"(echo [{"name":"Test plugin","classID":"test-id","isInstrument":true}])"
+             << "\n";
+    }
+    VST3Scanner scanner;
+    EXPECT_TRUE(scanner.scanOutOfProcess(cache.string(), host.string()));
+    EXPECT_FALSE(scanner.plugins().empty());
+    for (const auto& plugin : scanner.plugins()) EXPECT_EQ(plugin.name, "Test plugin");
+    std::filesystem::remove(cache);
+    std::filesystem::remove(host);
+    std::filesystem::remove(folder);
+}
+#endif
+
+TEST(VST3Scanner, OldFailedCacheEntriesAreRetriedOnceAfterLauncherFix) {
+    using namespace yawn::vst3;
+    const auto cache = tempCache("yawn_test_scan_migration.json");
+    {
+        std::ofstream file(cache);
+        file << R"({"version":2,"scanComplete":true,"modules":{"broken.vst3":{"status":"failed","plugins":[]}}})";
+    }
+    VST3Scanner scanner;
+    ASSERT_TRUE(scanner.loadCache(cache.string()));
+    EXPECT_FALSE(scanner.scanComplete());
+    ASSERT_TRUE(scanner.saveCache(cache.string()));
+    nlohmann::json saved;
+    { std::ifstream file(cache); file >> saved; }
+    EXPECT_EQ(saved["version"], 3);
+    EXPECT_TRUE(saved["modules"].empty());
+    std::filesystem::remove(cache);
+}
+
+TEST(VST3Scanner, CompletedCacheStillDiscoversNewModules) {
+    using namespace yawn::vst3;
+    auto cache = tempCache("yawn_test_new_modules.json");
+    {
+        std::ofstream file(cache);
+        file << R"({"version":2,"scanComplete":true,"modules":{}})";
+    }
+    VST3Scanner scanner;
+    ASSERT_TRUE(scanner.loadCache(cache.string()));
+    FakeScan fake;
+    EXPECT_TRUE(scanner.scanWith(cache.string(), fake.fn()));
+    const auto currentModules = VST3::Hosting::Module::getModulePaths();
+    EXPECT_EQ(fake.called.size(), currentModules.size());
+    EXPECT_EQ(scanner.plugins().size(), currentModules.size());
+    std::filesystem::remove(cache);
+}
+
 TEST(VST3Scanner, V2FailedEntriesAreNotRetried) {
     using namespace yawn::vst3;
     auto cache = tempCache("yawn_test_v2_c.json");

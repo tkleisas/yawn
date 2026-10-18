@@ -54,7 +54,10 @@ VST3PluginInfo pluginFromJson(const nlohmann::json& jp) {
 bool runCapture(const std::string& cmdline, std::string& out) {
     out.clear();
 #ifdef _WIN32
-    FILE* pipe = _popen(cmdline.c_str(), "rt");
+    // cmd.exe removes the outer quotes around /c commands. Preserve both
+    // the quoted executable and module path when either contains spaces.
+    const std::string shellCommand = "\"" + cmdline + "\"";
+    FILE* pipe = _popen(shellCommand.c_str(), "rt");
 #else
     FILE* pipe = popen(cmdline.c_str(), "r");
 #endif
@@ -150,8 +153,6 @@ void VST3Scanner::rebuildFromEntries() {
 // ── v2 resumable scan ─────────────────────────────────────────────
 
 bool VST3Scanner::scanWith(const std::string& cachePath, ModuleScanFn fn) {
-    if (m_scanComplete) return true;
-
     const auto modulePaths = VST3::Hosting::Module::getModulePaths();
 
     // Prune cache entries for modules that no longer exist on disk.
@@ -258,7 +259,7 @@ std::string VST3Scanner::hostExePath() {
 
 bool VST3Scanner::saveCache(const std::string& path) const {
     nlohmann::json j;
-    j["version"] = 2;
+    j["version"] = 3;
     j["scanComplete"] = m_scanComplete;
     nlohmann::json modules = nlohmann::json::object();
     for (const auto& [modulePath, entry] : m_entries) {
@@ -310,6 +311,13 @@ bool VST3Scanner::loadCache(const std::string& path) {
             for (const auto& [modulePath, me] : j["modules"].items()) {
                 ModuleEntry entry;
                 entry.status = me.value("status", "ok");
+                // v2 could permanently mark every plugin failed because of
+                // cmd.exe quoting. Retry those entries once with the fixed
+                // launcher; v3 failures remain terminal for crash isolation.
+                if (j.value("version", 2) < 3 && entry.status == "failed") {
+                    m_scanComplete = false;
+                    continue;
+                }
                 if (me.contains("plugins") && me["plugins"].is_array())
                     for (const auto& jp : me["plugins"])
                         entry.plugins.push_back(pluginFromJson(jp));
