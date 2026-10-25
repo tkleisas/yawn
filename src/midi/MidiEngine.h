@@ -102,6 +102,14 @@ public:
     void setMonitorBuffer(MidiMonitorBuffer* buf) { m_monitor = buf; }
     MidiMonitorBuffer* monitorBuffer() const { return m_monitor; }
 
+    // ---- External (network) input ----
+
+    // Thread-safe handoff from a non-RtMidi producer (e.g. RTP-MIDI).
+    // The audio thread drains this in process().
+    bool pushExternalMidi(const MidiMessage& message) {
+        return m_externalInput.push(message);
+    }
+
     // ---- Audio-thread processing ----
 
     // Call once per audio buffer: collects all MIDI input and routes to per-track buffers
@@ -159,6 +167,9 @@ private:
 
     // Scratch buffer for merging all port input
     MidiBuffer m_mergeBuffer;
+
+    // Network (RTP-MIDI) input ring: receiver thread → audio thread
+    MidiRingBuffer m_externalInput;
 
     // MPE configuration
     MpeConfig m_mpeConfig;

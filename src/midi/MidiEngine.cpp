@@ -3,6 +3,10 @@
 namespace yawn {
 namespace midi {
 
+namespace {
+constexpr uint8_t kExternalMidiPortIndex = 250;
+}
+
 void MidiEngine::init() {
     refreshPorts();
     for (auto& buf : m_trackBuffers) buf.clear();
@@ -60,6 +64,21 @@ void MidiEngine::process(int /*numFrames*/) {
     // Snapshot the published port count once — the UI may be
     // appending a new port concurrently (see MidiEngine.h).
     m_mergeBuffer.clear();
+
+    // Drain network input first so it participates in MIDI Learn,
+    // routing and the monitor exactly like a hardware port.
+    {
+        MidiMessage external;
+        while (m_externalInput.pop(external)) {
+            if (!m_mergeBuffer.addMessage(external)) break;
+            if (m_monitor && m_monitor->enabled()) {
+                m_monitor->push(makeMonitorEntry(
+                    external, kExternalMidiPortIndex,
+                    m_monitor->elapsedMs()));
+            }
+        }
+    }
+
     const int nPorts = m_inputPortCount.load(std::memory_order_acquire);
     for (int p = 0; p < nPorts; ++p) {
         auto& port = m_inputPorts[p];

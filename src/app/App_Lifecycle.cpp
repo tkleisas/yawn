@@ -1,6 +1,8 @@
 // App_Lifecycle.cpp — init() (SDL/GL/audio/MIDI/panel wiring), run()
 // and shutdown(). Split out of App.cpp.
 #include "app/App.h"
+
+#include <cstdlib>
 #include "Version.h"
 #include "visual/LiveInputEnum.h"
 #include "visual/FfmpegShim.h"
@@ -814,6 +816,23 @@ bool App::init() {
         m_midiEngine.openOutputPort(i);
     m_audioEngine.setMidiEngine(&m_midiEngine);
     m_midiEngine.setMonitorBuffer(&m_midiMonitor);
+
+    // Sessionless RTP-MIDI input (Volna / other network controllers).
+    // Port can be overridden with YAWN_RTP_MIDI_PORT.
+    {
+        int rtpPort = 5004;
+        if (const char* env = std::getenv("YAWN_RTP_MIDI_PORT")) {
+            const int parsed = std::atoi(env);
+            if (parsed > 0 && parsed <= 65535) rtpPort = parsed;
+        }
+        m_rtpMidiReceiver.start(rtpPort, [this](const midi::MidiMessage& msg) {
+            m_midiEngine.pushExternalMidi(msg);
+        });
+        if (!m_rtpMidiReceiver.running()) {
+            LOG_WARN("MIDI", "RTP-MIDI receiver failed: %s",
+                     m_rtpMidiReceiver.lastError().c_str());
+        }
+    }
     // Controller-claimed ports bypass MidiEngine — route them into the
     // same monitor buffer so the MIDI Monitor panel shows Push / Move /
     // etc. activity just like any other input. Port-index base 100
@@ -1910,6 +1929,7 @@ void App::run() {
 }
 
 void App::shutdown() {
+    m_rtpMidiReceiver.stop();
     // Stop live code + controller scripts
     m_liveCode.shutdown();
     m_controllerManager.shutdown();

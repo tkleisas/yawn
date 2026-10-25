@@ -446,6 +446,7 @@ set(YAWN_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiPitch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/LFO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/RtpMidiReceiver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiMapping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiMonitorBuffer.cpp
     # Automation engine (implementation split from header)

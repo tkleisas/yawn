@@ -43,6 +43,7 @@ int runAppProbeShader(int, char*[], int);
 #include "audio/Clip.h"
 #include "app/Project.h"
 #include "midi/MidiEngine.h"
+#include "midi/RtpMidiReceiver.h"
 #include "midi/MidiMapping.h"
 #include "util/FileIO.h"
 #include "util/AppSettings.h"
@@ -460,6 +461,7 @@ private:
 
     audio::AudioEngine m_audioEngine;
     midi::MidiEngine m_midiEngine;
+    midi::RtpMidiReceiver m_rtpMidiReceiver;
     midi::MidiMonitorBuffer m_midiMonitor;
     midi::MidiLearnManager m_midiLearnManager;
     Project m_project;
