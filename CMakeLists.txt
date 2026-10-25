@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.24)
 # Reads the latest 'vX.Y.Z' tag so the project version always matches
 # the most recent release. Falls back to the hard-coded default when
 # git isn't available or no tags exist (e.g. tarball builds).
-set(YAWN_VERSION_DEFAULT "0.85.4")
+set(YAWN_VERSION_DEFAULT "0.89.4")
 set(YAWN_VERSION "${YAWN_VERSION_DEFAULT}")
 execute_process(
     COMMAND git describe --tags --abbrev=0
