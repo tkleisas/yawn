@@ -85,7 +85,7 @@ for build flags that gate some of these, see [building.md](building.md).
 - **FM Synth** — 4-operator FM synthesizer with 8 algorithm presets, 19 parameters
 - **Sampler** — Sample playback with pitch tracking, linear interpolation, ADSR envelope
 - **Karplus-Strong** — Physical modelling string synth with 4 exciter types, damping, body resonance, string stretch
-- **Wavetable Synth** — 5 algorithmic wavetable types with position morphing, SVF filter, LFO modulation, sub oscillator, unison
+- **Wavetable Synth** — 5 algorithmic wavetable types plus a Custom slot for VWaveEditor `.vwt` tables; position morphing, SVF filter, LFO modulation, sub oscillator, unison. Custom tables import from the device display (**Load .vwt...**) and persist in projects and presets
 - **Granular Synth** — Sample-based granular synthesis with 4 window shapes, position/spread/spray, scan, pitch jitter, stereo width
 - **Vocoder** — Band-based vocoder with 4 carrier types (Saw/Square/Pulse/Noise), 4–32 bands, envelope followers, formant shift
 - **String Machine** — Solina-style ensemble strings (1974 ARP reference): 9-saw stack per voice (3 detuned saws × 16′/8′/4′ octaves), shared paraphonic LP filter (200–8000 Hz log Brightness), 3-tap BBD chorus with stereo spread (the chorus IS the sound), 16-voice polyphony, slow attack/release envelope. The whole reason "Synthstrings" exists in every preset bank since 1980.

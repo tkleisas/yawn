@@ -639,6 +639,7 @@ private:
     // Same SDL-callback userdata stash trick for .nam loading
     // on the NeuralAmp device's "Load Model…" button.
     effects::NeuralAmp*         m_pendingNamEffect    = nullptr;
+    instruments::WavetableSynth* m_pendingWavetableSynth = nullptr;
     // Target slot for the pending "Set Video…" file dialog.
     int m_pendingVideoTrack = -1;
     int m_pendingVideoScene = -1;

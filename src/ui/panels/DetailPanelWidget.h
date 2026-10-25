@@ -347,6 +347,12 @@ public:
         m_onLoadNamModel = std::move(cb);
     }
 
+    using LoadWavetableCallback =
+        std::function<void(instruments::WavetableSynth*)>;
+    void setOnLoadWavetable(LoadWavetableCallback cb) {
+        m_onLoadWavetable = std::move(cb);
+    }
+
     void setTrackIndex(int idx) { m_autoTrackIndex = idx; }
 
     // Per-track latency from the effect chain (samples + sample rate
@@ -2015,6 +2021,7 @@ private:
     SetSidechainSourceCallback  m_setSidechainSource;
     LoadConvIRCallback          m_onLoadConvIR;
     LoadNamModelCallback        m_onLoadNamModel;
+    LoadWavetableCallback       m_onLoadWavetable;
 
     // Drag-to-reorder state
     bool  m_dragReorderActive = false;

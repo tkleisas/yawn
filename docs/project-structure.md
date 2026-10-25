@@ -87,7 +87,7 @@ yawn/
 │   │   ├── DrumSlop.h          # Loop slicer drum machine (16 pads)
 │   │   ├── DrumSynth.h/.cpp    # Fully-synthesised 8-piece kit (sample-free,
 │   │   │                       #  GM-mapped, per-drum tune/decay/vol/pan, choke)
-│   │   ├── WavetableSynth.h    # 5 wavetable types with morphing
+│   │   ├── WavetableSynth.h    # 5 built-in + custom .vwt tables, morphing
 │   │   ├── GranularSynth.h     # Sample-based granular synthesis
 │   │   ├── KarplusStrong.h     # Physical modelling string synth
 │   │   ├── Vocoder.h           # Band-based vocoder

@@ -1525,6 +1525,37 @@ bool App::init() {
             /*allow_many*/ false);
     });
 
+    m_detailPanel->setOnLoadWavetable(
+        [this](instruments::WavetableSynth* synth) {
+            if (!synth) return;
+            m_pendingWavetableSynth = synth;
+            static SDL_DialogFileFilter filter{"VWave wavetables", "vwt"};
+            SDL_ShowOpenFileDialog(
+                [](void* ud, const char* const* filelist, int) {
+                    auto* self = static_cast<App*>(ud);
+                    auto* target = self->m_pendingWavetableSynth;
+                    self->m_pendingWavetableSynth = nullptr;
+                    if (!target || !filelist || !filelist[0]) return;
+                    std::string error;
+                    if (!target->loadCustomWavetable(filelist[0], &error)) {
+                        self->m_toastManager.show(
+                            "Wavetable load failed: " + error, 5.0f,
+                            ui::ToastManager::Severity::Warn);
+                        return;
+                    }
+                    const std::string name =
+                        std::filesystem::path(filelist[0]).stem().string();
+                    self->m_detailPanel->clear();
+                    self->m_toastManager.show(
+                        "Loaded wavetable " + name, 3.0f,
+                        ui::ToastManager::Severity::Info);
+                    LOG_INFO("Wavetable", "Loaded custom wavetable '%s'",
+                             filelist[0]);
+                },
+                this, m_mainWindow.getHandle(), &filter, 1, nullptr,
+                /*allow_many*/ false);
+        });
+
     // Per-pad fx context menu — surfaced from a right-click on a
     // DrumRack pad. Lists every audio effect we can build (mirrors
     // the track effect chain "Add Effect" submenu) plus, when the

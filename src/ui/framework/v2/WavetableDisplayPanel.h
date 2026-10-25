@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace yawn {
@@ -32,14 +33,20 @@ public:
 
     void setPosition(float pos) { m_position = std::clamp(pos, 0.0f, 1.0f); }
     void setTableName(const char* name) { m_tableName = name ? name : ""; }
+    void setOnLoadRequest(std::function<void()> cb) {
+        m_onLoadRequest = std::move(cb);
+    }
 
     Size onMeasure(Constraints c, UIContext&) override {
-        return c.constrain({c.maxW, 80.0f});
+        return c.constrain({c.maxW, 102.0f});
     }
 
     void onLayout(Rect bounds, UIContext& ctx) override {
         Widget::onLayout(bounds, ctx);
-        m_waveRect = {bounds.x + 2, bounds.y + 12, bounds.w - 4, bounds.h - 14};
+        m_waveRect = {bounds.x + 2, bounds.y + 12, bounds.w - 4,
+                      bounds.h - 38};
+        m_loadRect = {bounds.x + 4, bounds.y + bounds.h - 22,
+                      bounds.w - 8, 18};
     }
 
 #ifdef YAWN_TEST_BUILD
@@ -101,14 +108,50 @@ public:
             const float ty = m_waveRect.y + m_waveRect.h * 0.5f - 4;
             tm->drawText(r, msg, tx, ty, lblFs, Color{80, 80, 100, 180});
         }
+
+        r.drawRect(m_loadRect.x, m_loadRect.y, m_loadRect.w, m_loadRect.h,
+                   m_loadHover ? Color{55, 55, 70, 255}
+                               : Color{40, 40, 50, 255});
+        r.drawRectOutline(m_loadRect.x, m_loadRect.y, m_loadRect.w,
+                          m_loadRect.h, Color{90, 90, 110, 255});
+        if (tm) {
+            const char* label = "Load .vwt...";
+            const float fs = 7.0f * (48.0f / 26.0f);
+            const float tw = tm->textWidth(label, fs);
+            tm->drawText(r, label,
+                         m_loadRect.x + (m_loadRect.w - tw) * 0.5f,
+                         m_loadRect.y + (m_loadRect.h - fs) * 0.5f - 1.0f,
+                         fs, Color{220, 220, 230, 255});
+        }
+    }
+
+    bool onMouseDown(MouseEvent& e) override {
+        if (e.button != MouseButton::Left) return false;
+        if (e.x >= m_loadRect.x && e.x < m_loadRect.x + m_loadRect.w &&
+            e.y >= m_loadRect.y && e.y < m_loadRect.y + m_loadRect.h) {
+            if (m_onLoadRequest) m_onLoadRequest();
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseMove(MouseMoveEvent& e) override {
+        m_loadHover = e.x >= m_loadRect.x &&
+                      e.x < m_loadRect.x + m_loadRect.w &&
+                      e.y >= m_loadRect.y &&
+                      e.y < m_loadRect.y + m_loadRect.h;
+        return false;
     }
 #endif
 
 private:
     Rect m_waveRect{};
+    Rect m_loadRect{};
     const float* m_waveData = nullptr;
     int m_waveSize = 0;
     float m_position = 0.0f;
+    bool m_loadHover = false;
+    std::function<void()> m_onLoadRequest;
     std::string m_tableName;
 };
 

@@ -38,6 +38,8 @@ public:
     static constexpr int kFrameSize   = 256;     // samples per waveform frame
     static constexpr int kMaxFrames   = 16;      // max frames per wavetable
     static constexpr int kNumTables   = 5;       // number of built-in wavetables
+    static constexpr int kCustomTable = 5;       // slot after built-ins
+    static constexpr int kTableSlots  = kNumTables + 1;
 
     // Cutoff stored normalized 0..1, log-mapped to 20..20000 Hz.
     static float cutoffNormToHz(float x) { return effects::logNormToHz(x, 20.0f, 20000.0f); }
@@ -77,24 +79,40 @@ public:
                  const midi::MidiBuffer& midi) override;
 
     // Wavetable data accessors for UI display
-    int currentTable() const { return std::clamp(static_cast<int>(m_params[kTable]), 0, kNumTables - 1); }
+    int currentTable() const { return std::clamp(static_cast<int>(m_params[kTable]), 0, kTableSlots - 1); }
     int frameCount(int table) const {
-        if (table < 0 || table >= kNumTables) return 0;
+        if (table < 0 || table >= kTableSlots) return 0;
         return m_tableFrameCounts[table];
     }
     int frameSize() const { return kFrameSize; }
     const float* frameData(int table, int frame) const {
-        if (!m_tableData || table < 0 || table >= kNumTables) return nullptr;
+        if (!m_tableData || table < 0 || table >= kTableSlots) return nullptr;
         if (frame < 0 || frame >= m_tableFrameCounts[table]) return nullptr;
         return m_tableData->tables[table][frame];
     }
 
+    // Import a VWaveEditor .vwt v1/v2 wavetable. Frames are resampled to
+    // kFrameSize and stored in the Custom slot, which is selected on success.
+    bool loadCustomWavetable(const std::string& path,
+                             std::string* error = nullptr);
+    bool saveCustomWavetable(const std::string& path,
+                             std::string* error = nullptr) const;
+    bool hasCustomWavetable() const {
+        return m_tableFrameCounts[kCustomTable] > 0;
+    }
+
+    nlohmann::json saveExtraState(
+        const std::filesystem::path& assetDir) const override;
+    void loadExtraState(const nlohmann::json& state,
+                        const std::filesystem::path& assetDir) override;
+
     int parameterCount() const override { return kParamCount; }
 
     const InstrumentParameterInfo& parameterInfo(int index) const override {
-        static constexpr const char* kTableLabels[] = {"Basic", "Saw", "Sqr", "Pulse", "Noise"};
+        static constexpr const char* kTableLabels[] = {
+            "Basic", "PWM", "Formant", "Harmonic", "Digital", "Custom"};
         static const InstrumentParameterInfo infos[] = {
-            {"Table",       0.0f,  4.0f,   0.0f,  "",   false, false, WidgetHint::StepSelector, kTableLabels, 5},
+            {"Table",       0.0f,  5.0f,   0.0f,  "",   false, false, WidgetHint::StepSelector, kTableLabels, 6},
             {"Position",    0.0f,  1.0f,   0.0f,  "",   false},
             // Cutoff default 0.799 ≈ 5 kHz in 20..20000
             {"Filter Cut",  0.0f, 1.0f, 0.799f, "", false, false,
@@ -145,7 +163,7 @@ private:
 
     // Wavetable storage (heap-allocated to avoid stack overflow)
     struct TableData {
-        float tables[kNumTables][kMaxFrames][kFrameSize] = {};
+        float tables[kTableSlots][kMaxFrames][kFrameSize] = {};
     };
 
     void generateWavetables();
@@ -157,7 +175,7 @@ private:
     void applyDefaults();
 
     std::unique_ptr<TableData> m_tableData;
-    int   m_tableFrameCounts[kNumTables] = {};
+    int   m_tableFrameCounts[kTableSlots] = {};
 
     Voice m_voices[kMaxVoices];
     int64_t m_voiceCounter = 0;

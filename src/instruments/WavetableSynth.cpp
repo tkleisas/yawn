@@ -1,5 +1,15 @@
 #include "WavetableSynth.h"
+
+#include <nlohmann/json.hpp>
+
+#include "util/Logger.h"
+
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <string>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -32,6 +42,17 @@ void WavetableSynth::reset() {
 }
 
 void WavetableSynth::generateWavetables() {
+    int existingCustomCount = m_tableFrameCounts[kCustomTable];
+    std::vector<float> existingCustom;
+    if (m_tableData && existingCustomCount > 0) {
+        existingCustomCount = std::min(existingCustomCount, kMaxFrames);
+        existingCustom.resize(
+            static_cast<size_t>(existingCustomCount) * kFrameSize);
+        for (int frame = 0; frame < existingCustomCount; ++frame)
+            std::copy_n(m_tableData->tables[kCustomTable][frame], kFrameSize,
+                        existingCustom.data() +
+                            static_cast<size_t>(frame) * kFrameSize);
+    }
     m_tableData = std::make_unique<TableData>();
     auto& T = m_tableData->tables;
     // Table 0: Basic — Sine → Triangle → Saw → Square → Pulse
@@ -88,9 +109,245 @@ void WavetableSynth::generateWavetables() {
             T[4][f][s] = std::round(raw * levels) / levels;
         }
     }
+
+    m_tableFrameCounts[kCustomTable] = existingCustomCount;
+    for (int frame = 0; frame < existingCustomCount; ++frame)
+        std::copy_n(existingCustom.data() +
+                        static_cast<size_t>(frame) * kFrameSize,
+                    kFrameSize, T[kCustomTable][frame]);
+}
+
+namespace {
+
+int base64Value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+bool decodeBase64(const std::string& text, std::vector<uint8_t>& out) {
+    out.clear();
+    if (text.size() % 4 != 0) return false;
+    out.reserve((text.size() / 4) * 3);
+    for (size_t i = 0; i < text.size(); i += 4) {
+        const int a = base64Value(text[i]);
+        const int b = base64Value(text[i + 1]);
+        const int c = text[i + 2] == '=' ? -2 : base64Value(text[i + 2]);
+        const int d = text[i + 3] == '=' ? -2 : base64Value(text[i + 3]);
+        if (a < 0 || b < 0 || c == -1 || d == -1) return false;
+        if (c == -2 && d != -2) return false;
+        const uint32_t value = (static_cast<uint32_t>(a) << 18) |
+                               (static_cast<uint32_t>(b) << 12) |
+                               ((c == -2 ? 0 : static_cast<uint32_t>(c)) << 6) |
+                               (d == -2 ? 0 : static_cast<uint32_t>(d));
+        out.push_back(static_cast<uint8_t>((value >> 16) & 0xff));
+        if (c != -2) out.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
+        if (d != -2) out.push_back(static_cast<uint8_t>(value & 0xff));
+    }
+    return true;
+}
+
+float readFloat(const std::vector<uint8_t>& bytes, size_t offset) {
+    float value = 0.0f;
+    std::memcpy(&value, bytes.data() + offset, sizeof(float));
+    return value;
+}
+
+std::string encodeBase64(const uint8_t* data, size_t size) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((size + 2) / 3) * 4);
+    size_t i = 0;
+    while (i + 2 < size) {
+        const uint32_t value = (static_cast<uint32_t>(data[i]) << 16) |
+                               (static_cast<uint32_t>(data[i + 1]) << 8) |
+                               static_cast<uint32_t>(data[i + 2]);
+        out.push_back(alphabet[(value >> 18) & 0x3f]);
+        out.push_back(alphabet[(value >> 12) & 0x3f]);
+        out.push_back(alphabet[(value >> 6) & 0x3f]);
+        out.push_back(alphabet[value & 0x3f]);
+        i += 3;
+    }
+    if (i < size) {
+        uint32_t value = static_cast<uint32_t>(data[i]) << 16;
+        if (i + 1 < size) value |= static_cast<uint32_t>(data[i + 1]) << 8;
+        out.push_back(alphabet[(value >> 18) & 0x3f]);
+        out.push_back(alphabet[(value >> 12) & 0x3f]);
+        out.push_back(i + 1 < size ? alphabet[(value >> 6) & 0x3f] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+} // namespace
+
+bool WavetableSynth::loadCustomWavetable(const std::string& path,
+                                         std::string* error) {
+    if (error) error->clear();
+    try {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            if (error) *error = "cannot open wavetable file";
+            return false;
+        }
+        nlohmann::json root;
+        in >> root;
+        if (root.value("format", std::string{}) != "vwave-wavetable") {
+            if (error) *error = "not a VWaveEditor wavetable";
+            return false;
+        }
+        const int version = root.value("version", 0);
+        if (version != 1 && version != 2) {
+            if (error) *error = "unsupported wavetable version";
+            return false;
+        }
+        const int frameSize = root.value("frameSize", 0);
+        const int frameCount = root.value("frameCount", 0);
+        if (frameSize <= 0 || frameCount <= 0) {
+            if (error) *error = "invalid wavetable dimensions";
+            return false;
+        }
+        std::vector<uint8_t> bytes;
+        if (!decodeBase64(root.value("data", std::string{}), bytes)) {
+            if (error) *error = "invalid wavetable data";
+            return false;
+        }
+        const size_t expected = static_cast<size_t>(frameSize) *
+                                static_cast<size_t>(frameCount) *
+                                sizeof(float);
+        if (bytes.size() != expected) {
+            if (error) *error = "wavetable data size mismatch";
+            return false;
+        }
+        if (!m_tableData) generateWavetables();
+        int destinationCount = std::min(frameCount, kMaxFrames);
+        if (destinationCount <= 0) {
+            if (error) *error = "wavetable has no frames";
+            return false;
+        }
+        for (auto& frame : m_tableData->tables[kCustomTable])
+            std::fill(std::begin(frame), std::end(frame), 0.0f);
+        for (int destination = 0; destination < destinationCount;
+             ++destination) {
+            const int source = destinationCount == 1
+                                   ? 0
+                                   : static_cast<int>(std::llround(
+                                         static_cast<double>(destination) *
+                                         static_cast<double>(frameCount - 1) /
+                                         static_cast<double>(destinationCount -
+                                                             1)));
+            const size_t sourceBase =
+                static_cast<size_t>(source) * static_cast<size_t>(frameSize) *
+                sizeof(float);
+            for (int i = 0; i < kFrameSize; ++i) {
+                const double position =
+                    static_cast<double>(i) * static_cast<double>(frameSize) /
+                    static_cast<double>(kFrameSize);
+                const int index0 =
+                    std::clamp(static_cast<int>(std::floor(position)), 0,
+                               frameSize - 1);
+                const int index1 = (index0 + 1) % frameSize;
+                const double mix = position - std::floor(position);
+                const float a = readFloat(bytes, sourceBase +
+                                                    static_cast<size_t>(index0) *
+                                                        sizeof(float));
+                const float b = readFloat(bytes, sourceBase +
+                                                    static_cast<size_t>(index1) *
+                                                        sizeof(float));
+                m_tableData->tables[kCustomTable][destination][i] =
+                    static_cast<float>(a + (b - a) * mix);
+            }
+        }
+        m_tableFrameCounts[kCustomTable] = destinationCount;
+        m_params[kTable] = static_cast<float>(kCustomTable);
+        return true;
+    } catch (const std::exception& e) {
+        if (error) *error = std::string("cannot load wavetable: ") + e.what();
+        return false;
+    }
+}
+
+bool WavetableSynth::saveCustomWavetable(const std::string& path,
+                                         std::string* error) const {
+    if (error) error->clear();
+    if (!hasCustomWavetable() || !m_tableData) {
+        if (error) *error = "no custom wavetable loaded";
+        return false;
+    }
+    try {
+        const int frameCount = m_tableFrameCounts[kCustomTable];
+        std::vector<float> samples(static_cast<size_t>(frameCount) *
+                                   kFrameSize);
+        for (int frame = 0; frame < frameCount; ++frame)
+            std::copy_n(m_tableData->tables[kCustomTable][frame], kFrameSize,
+                        samples.data() + static_cast<size_t>(frame) * kFrameSize);
+        nlohmann::json root;
+        root["format"] = "vwave-wavetable";
+        root["version"] = 2;
+        root["frameSize"] = kFrameSize;
+        root["frameCount"] = frameCount;
+        root["sampleRate"] = static_cast<int>(m_sampleRate);
+        root["name"] = "Custom";
+        root["rootNote"] = 60.0;
+        root["morphMode"] = "linear";
+        root["interpolation"] = "linear";
+        nlohmann::json positions = nlohmann::json::array();
+        for (int frame = 0; frame < frameCount; ++frame)
+            positions.push_back(frameCount > 1
+                                    ? static_cast<double>(frame) /
+                                          static_cast<double>(frameCount - 1)
+                                    : 0.0);
+        root["keyframePositions"] = std::move(positions);
+        root["data"] = encodeBase64(
+            reinterpret_cast<const uint8_t*>(samples.data()),
+            samples.size() * sizeof(float));
+        std::ofstream out(path, std::ios::binary);
+        if (!out) {
+            if (error) *error = "cannot create wavetable file";
+            return false;
+        }
+        out << root.dump(2);
+        return out.good();
+    } catch (const std::exception& e) {
+        if (error) *error = std::string("cannot save wavetable: ") + e.what();
+        return false;
+    }
+}
+
+nlohmann::json WavetableSynth::saveExtraState(
+    const std::filesystem::path& assetDir) const {
+    if (!hasCustomWavetable() || assetDir.empty()) return {};
+    std::error_code ec;
+    std::filesystem::create_directories(assetDir, ec);
+    const std::filesystem::path path = assetDir / "wavetable.vwt";
+    std::string error;
+    if (!saveCustomWavetable(path.string(), &error)) return {};
+    nlohmann::json state;
+    state["customWavetable"] = "wavetable.vwt";
+    return state;
+}
+
+void WavetableSynth::loadExtraState(const nlohmann::json& state,
+                                    const std::filesystem::path& assetDir) {
+    if (!state.contains("customWavetable") ||
+        !state["customWavetable"].is_string() || assetDir.empty())
+        return;
+    const std::filesystem::path path =
+        assetDir / state["customWavetable"].get<std::string>();
+    std::string error;
+    if (!loadCustomWavetable(path.string(), &error)) {
+        LOG_WARN("Wavetable", "Custom wavetable restore failed: %s",
+                 error.c_str());
+    }
 }
 
 float WavetableSynth::readWavetable(int table, int numFrames, double phase, float position) const {
+    if (!m_tableData || table < 0 || table >= kTableSlots || numFrames <= 0)
+        return 0.0f;
     float framePos = position * (numFrames - 1);
     int frame0 = static_cast<int>(framePos);
     int frame1 = std::min(frame0 + 1, numFrames - 1);
@@ -178,7 +435,7 @@ void WavetableSynth::process(float* buffer, int numFrames, int numChannels,
             m_pitchBend = midi::Convert::pb32toFloat(msg.value);
     }
 
-    int tableIdx = std::clamp(static_cast<int>(m_params[kTable]), 0, kNumTables - 1);
+    int tableIdx = std::clamp(static_cast<int>(m_params[kTable]), 0, kTableSlots - 1);
     float position = m_params[kPosition];
     float cutoff = cutoffNormToHz(m_params[kFilterCutoff]);
     float reso = m_params[kFilterResonance];

@@ -1,12 +1,17 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <vector>
 
 #include "app/Project.h"
 #include "audio/AudioEngine.h"
 #include "util/ProjectSerializer.h"
 #include "util/Factory.h"
+#include "instruments/WavetableSynth.h"
 
 using namespace yawn;
 using json = nlohmann::json;
@@ -21,6 +26,62 @@ static fs::path testProjectDir(const std::string& suffix = "default") {
 static void cleanupTestProject(const std::string& suffix = "default") {
     auto p = testProjectDir(suffix);
     if (fs::exists(p)) fs::remove_all(p);
+}
+
+
+static std::string testBase64(const uint8_t* data, size_t size) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    size_t i = 0;
+    while (i + 2 < size) {
+        const uint32_t value = (static_cast<uint32_t>(data[i]) << 16) |
+                               (static_cast<uint32_t>(data[i + 1]) << 8) |
+                               static_cast<uint32_t>(data[i + 2]);
+        out.push_back(alphabet[(value >> 18) & 0x3f]);
+        out.push_back(alphabet[(value >> 12) & 0x3f]);
+        out.push_back(alphabet[(value >> 6) & 0x3f]);
+        out.push_back(alphabet[value & 0x3f]);
+        i += 3;
+    }
+    if (i < size) {
+        uint32_t value = static_cast<uint32_t>(data[i]) << 16;
+        if (i + 1 < size) value |= static_cast<uint32_t>(data[i + 1]) << 8;
+        out.push_back(alphabet[(value >> 18) & 0x3f]);
+        out.push_back(alphabet[(value >> 12) & 0x3f]);
+        out.push_back(i + 1 < size ? alphabet[(value >> 6) & 0x3f] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+static fs::path writeTestWavetable(const fs::path& path) {
+    constexpr int frameSize = 256;
+    std::vector<float> samples(frameSize * 2);
+    for (int frame = 0; frame < 2; ++frame) {
+        for (int i = 0; i < frameSize; ++i) {
+            const double phase = 2.0 * 3.14159265358979323846 * i / frameSize;
+            samples[static_cast<size_t>(frame) * frameSize + i] =
+                static_cast<float>((0.3 + 0.1 * frame) * std::sin(phase));
+        }
+    }
+    nlohmann::json root;
+    root["format"] = "vwave-wavetable";
+    root["version"] = 2;
+    root["frameSize"] = frameSize;
+    root["frameCount"] = 2;
+    root["sampleRate"] = 48000;
+    root["name"] = "project-test";
+    root["rootNote"] = 60.0;
+    root["morphMode"] = "linear";
+    root["interpolation"] = "linear";
+    root["keyframePositions"] = {0.0, 1.0};
+    root["data"] = testBase64(
+        reinterpret_cast<const uint8_t*>(samples.data()),
+        samples.size() * sizeof(float));
+    std::ofstream out(path, std::ios::binary);
+    out << root.dump(2);
+    return path;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +447,37 @@ TEST_F(ProjectSerializerTest, RoundTripInstrumentAndEffects) {
     EXPECT_STREQ(fx->id(), "reverb");
     EXPECT_NEAR(fx->getParameter(0), 0.9f, 0.001f);
     EXPECT_NEAR(fx->mix(), 0.4f, 0.001f);
+}
+
+TEST_F(ProjectSerializerTest, RoundTripCustomWavetableInstrument) {
+    const fs::path tablePath = projDir() / "custom-source.vwt";
+    fs::create_directories(projDir());
+    writeTestWavetable(tablePath);
+
+    Project project;
+    project.init(1, 1);
+    audio::AudioEngine engine;
+    auto synth = createInstrument("wavetable");
+    ASSERT_NE(synth, nullptr);
+    synth->init(44100.0, 256);
+    engine.setInstrument(0, std::move(synth));
+    auto* wt = static_cast<instruments::WavetableSynth*>(engine.instrument(0));
+    ASSERT_NE(wt, nullptr);
+    std::string error;
+    ASSERT_TRUE(wt->loadCustomWavetable(tablePath.string(), &error)) << error;
+
+    ASSERT_TRUE(ProjectSerializer::saveToFolder(projDir(), project, engine));
+    Project project2;
+    audio::AudioEngine engine2;
+    ASSERT_TRUE(ProjectSerializer::loadFromFolder(projDir(), project2, engine2));
+    auto* loaded = static_cast<instruments::WavetableSynth*>(
+        engine2.instrument(0));
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_TRUE(loaded->hasCustomWavetable());
+    EXPECT_EQ(loaded->frameCount(instruments::WavetableSynth::kCustomTable),
+              2);
+    EXPECT_EQ(loaded->currentTable(),
+              instruments::WavetableSynth::kCustomTable);
 }
 
 TEST_F(ProjectSerializerTest, RoundTripMixerState) {

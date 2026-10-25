@@ -311,7 +311,7 @@ right-click MIDI Learn, and preset save/load from the device header.
 | Drum Synth | Fully synthesized 8-piece GM-mapped kit (no samples needed) |
 | DrumSlop | Loop slicer drum machine, 16 pads |
 | Karplus-Strong | Physical-model plucked string |
-| Wavetable Synth | 5 wavetable types, morph, unison, sub osc |
+| Wavetable Synth | 5 wavetable types + custom `.vwt` import, morph, unison, sub osc |
 | Granular Synth | Sample-based granular cloud engine |
 | Vocoder | 4–32 band vocoder, 4 carrier types |
 | String Machine | Solina-style ensemble strings (the 1974 sound) |

@@ -49,7 +49,7 @@ The [full feature list lives in **docs/features.md**](docs/features.md) — the 
 - **Audio engine** — Lock-free real-time PortAudio thread (ASIO/WASAPI/ALSA), zero audio-thread allocations, quantized clip launching, follow actions, WSOLA + Phase Vocoder time-stretch, transient detection
 - **64-track mixer** — Volume/pan/mute/solo + metering, 8 send/return buses, master, 3-point effect insert, sidechain + modulation routing
 - **23 audio effects** — Reverb, Delay, Ping-Pong, EQ, Spline EQ, Compressor, Limiter, Filter, Chorus, Phaser, Wah, Rotary, Distortion, Bitcrusher, Noise Gate, Envelope Follower, **Convolution Reverb** (38 bundled IRs), **Neural Amp Modeler** (4 bundled `.nam` captures), Tape, Amp Sim, Tuner, Oscilloscope, Spectrum Analyzer
-- **15 instruments** — Subtractive, FM, Sampler, Karplus-Strong, Wavetable, Granular, Vocoder, String Machine, Drawbar Organ, Electric Piano, Multisampler, Instrument Rack, Drum Rack, DrumSlop, Drum Synth
+- **15 instruments** — Subtractive, FM, Sampler, Karplus-Strong, Wavetable (custom `.vwt` import), Granular, Vocoder, String Machine, Drawbar Organ, Electric Piano, Multisampler, Instrument Rack, Drum Rack, DrumSlop, Drum Synth
 - **Auto-Sampler** — Build a Multisampler from any MIDI source (incl. WASAPI loopback on Windows — no VB-CABLE)
 - **MIDI** — 16-bit velocity / 32-bit CC internals, MPE, 8 MIDI effects, MIDI Learn, MIDI monitor, ~2,600-loop factory library
 - **Stem separation (Demucs v4)** & **Audio→MIDI (Basic Pitch)** — ONNX-Runtime audio analysis; the stem model ships bundled in releases

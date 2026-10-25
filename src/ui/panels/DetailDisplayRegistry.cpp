@@ -69,6 +69,7 @@ struct DisplayRegistryAccess {
     static auto& onAutoSampleRequested(DetailPanelWidget& p)  { return p.m_onAutoSampleRequested; }
     static auto& onLoadConvIR(DetailPanelWidget& p)           { return p.m_onLoadConvIR; }
     static auto& onLoadNamModel(DetailPanelWidget& p)         { return p.m_onLoadNamModel; }
+    static auto& onLoadWavetable(DetailPanelWidget& p)        { return p.m_onLoadWavetable; }
     static auto& onLfoTargetMenu(DetailPanelWidget& p)        { return p.m_onLfoTargetMenu; }
     static auto& setSidechainSourceCb(DetailPanelWidget& p)   { return p.m_setSidechainSource; }
     static auto& trackNamesProvider(DetailPanelWidget& p)     { return p.m_trackNamesProvider; }
@@ -216,9 +217,16 @@ DeviceDisplaySetup buildDrumSlop(const DisplayBuildArgs&, instruments::Instrumen
     return out;
 }
 
-DeviceDisplaySetup buildWavetable(const DisplayBuildArgs&, instruments::Instrument* inst) {
+DeviceDisplaySetup buildWavetable(const DisplayBuildArgs& args,
+                                  instruments::Instrument* inst) {
     DeviceDisplaySetup out;
     auto* wtPanel = new WavetableDisplayPanel();
+    auto loadWavetable = Access::onLoadWavetable(args.panel);
+    wtPanel->setOnLoadRequest([loadWavetable, inst]() {
+        if (!loadWavetable) return;
+        auto* wt = dynamic_cast<instruments::WavetableSynth*>(inst);
+        if (wt) loadWavetable(wt);
+    });
     out.config.display = wtPanel;
     out.config.displayWidth = 130;
     out.config.sections = {
@@ -229,7 +237,7 @@ DeviceDisplaySetup buildWavetable(const DisplayBuildArgs&, instruments::Instrume
         {"",         {13, 17}},
     };
     static const char* tableNames[] = {
-        "Basic", "PWM", "Formant", "Harmonic", "Digital"
+        "Basic", "PWM", "Formant", "Harmonic", "Digital", "Custom"
     };
     out.updater = [wtPanel, inst]() {
         auto* wt = dynamic_cast<instruments::WavetableSynth*>(inst);
@@ -254,7 +262,7 @@ DeviceDisplaySetup buildWavetable(const DisplayBuildArgs&, instruments::Instrume
             }
         }
         wtPanel->setPosition(pos);
-        if (table >= 0 && table < 5)
+        if (table >= 0 && table < 6)
             wtPanel->setTableName(tableNames[table]);
     };
     return out;

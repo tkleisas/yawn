@@ -342,6 +342,22 @@ json serializeInstrument(const instruments::Instrument& inst,
         j["pads"] = pads;
     }
 
+    // Wavetable: save a custom imported VWaveEditor table as an asset.
+    if (std::string(inst.id()) == "wavetable") {
+        auto& wt = static_cast<const instruments::WavetableSynth&>(inst);
+        if (wt.hasCustomWavetable()) {
+            std::string filename =
+                "wavetable_" + std::to_string(sampleCounter++) + ".vwt";
+            fs::path tablePath = samplesDir / filename;
+            std::string error;
+            if (wt.saveCustomWavetable(tablePath.string(), &error))
+                j["customWavetableFile"] = "samples/" + filename;
+            else
+                LOG_WARN("Project", "Wavetable write failed: %s",
+                         error.c_str());
+        }
+    }
+
     // DrumSlop: save loop sample + per-pad settings
     if (std::string(inst.id()) == "drumslop") {
         auto& ds = static_cast<const instruments::DrumSlop&>(inst);
@@ -456,6 +472,17 @@ std::unique_ptr<instruments::Instrument> deserializeInstrument(
         inst->setCurrentPresetName(j["preset"].get<std::string>());
     if (j.contains("params"))
         deserializeParams(*inst, j["params"]);
+
+    if (id == "wavetable" && j.contains("customWavetableFile")) {
+        auto& wt = static_cast<instruments::WavetableSynth&>(*inst);
+        const fs::path tablePath =
+            projectDir / j["customWavetableFile"].get<std::string>();
+        std::string error;
+        if (!wt.loadCustomWavetable(tablePath.string(), &error)) {
+            LOG_WARN("Project", "Custom wavetable not found: %s",
+                     error.c_str());
+        }
+    }
 
     // Sampler: load sample from file
     if (id == "sampler" && j.contains("sampleFile")) {
