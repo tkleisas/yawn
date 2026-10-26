@@ -158,6 +158,7 @@ private:
         Oscillator osc1, osc2, subOsc;
         Envelope ampEnv, filtEnv;
         float filterLow = 0.0f, filterBand = 0.0f;
+        float perNoteBendSemitones = 0.0f;
     };
 
     void noteOn(uint8_t note, uint16_t vel16, uint8_t ch);

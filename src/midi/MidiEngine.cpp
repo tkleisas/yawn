@@ -11,6 +11,9 @@ void MidiEngine::init() {
     refreshPorts();
     for (auto& buf : m_trackBuffers) buf.clear();
     m_mergeBuffer.clear();
+    m_externalMpeConfig = MpeConfig{};
+    m_externalMpeConfig.enableLowerZone(15, 48.0f);
+    m_externalMpeState.reset();
 }
 
 MidiEngine::~MidiEngine() {
@@ -28,6 +31,7 @@ void MidiEngine::shutdown() {
         if (p) p->close();
     }
     m_outputPorts.clear();
+    m_externalMpeState.reset();
 }
 
 void MidiEngine::refreshPorts() {
@@ -68,14 +72,22 @@ void MidiEngine::process(int /*numFrames*/) {
     // Drain network input first so it participates in MIDI Learn,
     // routing and the monitor exactly like a hardware port.
     {
-        MidiMessage external;
-        while (m_externalInput.pop(external)) {
-            if (!m_mergeBuffer.addMessage(external)) break;
+        MidiBuffer external;
+        MidiMessage message;
+        while (m_externalInput.pop(message)) {
+            external.addMessage(message);
             if (m_monitor && m_monitor->enabled()) {
                 m_monitor->push(makeMonitorEntry(
-                    external, kExternalMidiPortIndex,
+                    message, kExternalMidiPortIndex,
                     m_monitor->elapsedMs()));
             }
+        }
+        if (!external.empty()) {
+            if (m_externalMpeEnabled.load(std::memory_order_acquire)) {
+                translateMpe(external, m_externalMpeConfig,
+                             m_externalMpeState);
+            }
+            m_mergeBuffer.merge(external);
         }
     }
 
@@ -254,6 +266,36 @@ void MidiEngine::resolveAndSend(const automation::AutomationTarget& target, floa
     case TargetType::VisualParam:
         break;
     }
+}
+
+void MidiEngine::translateMpe(MidiBuffer& buffer, const MpeConfig& config,
+                              MpeExpressionState& state) {
+    int out = 0;
+    for (int i = 0; i < buffer.count(); ++i) {
+        MidiMessage message = buffer[i];
+        const bool member =
+            config.lowerZone.isMemberChannel(message.channel) ||
+            config.upperZone.isMemberChannel(message.channel);
+        if (member) {
+            if (message.isNoteOn()) {
+                state.activeNote[message.channel] = message.note;
+            } else if (message.isNoteOff()) {
+                if (state.activeNote[message.channel] == message.note) {
+                    state.activeNote[message.channel] = -1;
+                }
+            } else if (message.type == MidiMessage::Type::PitchBend) {
+                const int note = state.activeNote[message.channel];
+                if (note < 0) {
+                    continue;
+                }
+                message = MidiMessage::perNotePitchBend(
+                    message.channel, static_cast<uint8_t>(note),
+                    message.value, message.frameOffset);
+            }
+        }
+        buffer[out++] = message;
+    }
+    buffer.setCount(out);
 }
 
 } // namespace midi

@@ -44,6 +44,12 @@ void SubtractiveSynth::process(float* buffer, int numFrames, int numChannels,
         }
         else if (msg.type == midi::MidiMessage::Type::PitchBend)
             m_pitchBend = midi::Convert::pb32toFloat(msg.value);
+        else if (msg.type == midi::MidiMessage::Type::PerNotePitchBend) {
+            const float bend = midi::Convert::pb32toFloat(msg.value) * 48.0f;
+            for (auto& v : m_voices)
+                if (v.active && v.note == msg.note && v.channel == msg.channel)
+                    v.perNoteBendSemitones = bend;
+        }
     }
 
     // Render voices
@@ -52,7 +58,8 @@ void SubtractiveSynth::process(float* buffer, int numFrames, int numChannels,
         if (!voice.active) continue;
 
         float baseFreq = noteToFreq(voice.note) *
-            std::pow(2.0f, m_pitchBend * 2.0f / 12.0f);
+            std::pow(2.0f, (m_pitchBend * 2.0f +
+                            voice.perNoteBendSemitones) / 12.0f);
 
         voice.osc1.setWaveform((Oscillator::Waveform)(int)m_osc1Wave);
         voice.osc1.setFrequency(baseFreq);
@@ -128,6 +135,7 @@ void SubtractiveSynth::noteOn(uint8_t note, uint16_t vel16, uint8_t ch) {
     v.startOrder = m_voiceCounter++;
     v.osc1.reset(); v.osc2.reset(); v.subOsc.reset();
     v.filterLow = v.filterBand = 0.0f;
+    v.perNoteBendSemitones = 0.0f;
     v.ampEnv.setADSR(m_ampA, m_ampD, m_ampS, m_ampR);
     v.filtEnv.setADSR(m_filtA, m_filtD, m_filtS, m_filtR);
     v.ampEnv.gate(true);

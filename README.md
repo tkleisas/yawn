@@ -51,7 +51,7 @@ The [full feature list lives in **docs/features.md**](docs/features.md) — the 
 - **23 audio effects** — Reverb, Delay, Ping-Pong, EQ, Spline EQ, Compressor, Limiter, Filter, Chorus, Phaser, Wah, Rotary, Distortion, Bitcrusher, Noise Gate, Envelope Follower, **Convolution Reverb** (38 bundled IRs), **Neural Amp Modeler** (4 bundled `.nam` captures), Tape, Amp Sim, Tuner, Oscilloscope, Spectrum Analyzer
 - **15 instruments** — Subtractive, FM, Sampler, Karplus-Strong, Wavetable (custom `.vwt` import), Granular, Vocoder, String Machine, Drawbar Organ, Electric Piano, Multisampler, Instrument Rack, Drum Rack, DrumSlop, Drum Synth
 - **Auto-Sampler** — Build a Multisampler from any MIDI source (incl. WASAPI loopback on Windows — no VB-CABLE)
-- **MIDI** — 16-bit velocity / 32-bit CC internals, MPE, 8 MIDI effects, MIDI Learn, MIDI monitor, ~2,600-loop factory library, **sessionless RTP-MIDI input** (UDP 5004, Volna controller integration; override with `YAWN_RTP_MIDI_PORT`)
+- **MIDI** — 16-bit velocity / 32-bit CC internals, MPE, per-note pitch bend, 8 MIDI effects, MIDI Learn, MIDI monitor, ~2,600-loop factory library, **sessionless RTP-MIDI input** (UDP 5004, Volna controller integration; member-channel MPE bends become per-note bend; override with `YAWN_RTP_MIDI_PORT`)
 - **Stem separation (Demucs v4)** & **Audio→MIDI (Basic Pitch)** — ONNX-Runtime audio analysis; the stem model ships bundled in releases
 - **VST3 hosting** — Process-isolated plugin editors (Windows HWND + Linux X11 embed), parameter sync, state persistence
 - **Session + Arrangement views** — Clip grid with scenes & follow actions; linear timeline with automation lanes, loop range, waveform display

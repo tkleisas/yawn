@@ -16,6 +16,7 @@
 #include "instruments/GranularSynth.h"
 #include "instruments/Vocoder.h"
 #include "instruments/Multisampler.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -2438,4 +2439,103 @@ TEST(ElectricPiano, ParameterClampingAndDefaults) {
     ep.setParameter(-1, 0.5f);
     ep.setParameter(ElectricPiano::kNumParams + 5, 0.5f);
     EXPECT_EQ(ep.getParameter(-1), 0.0f);
+}
+
+
+// ========================= Per-note pitch bend =========================
+
+static int countZeroCrossings(Instrument& synth, MidiBuffer& midi, int blocks) {
+    float buffer[kBlockSize * kChannels];
+    int crossings = 0;
+    float previous = 0.0f;
+    bool havePrevious = false;
+    for (int b = 0; b < blocks; ++b) {
+        std::fill(buffer, buffer + kBlockSize * kChannels, 0.0f);
+        synth.process(buffer, kBlockSize, kChannels, midi);
+        midi.clear();
+        for (int i = 0; i < kBlockSize; ++i) {
+            const float value = buffer[i * kChannels];
+            if (havePrevious &&
+                ((previous < 0.0f && value >= 0.0f) ||
+                 (previous > 0.0f && value <= 0.0f))) {
+                ++crossings;
+            }
+            previous = value;
+            havePrevious = true;
+        }
+    }
+    return crossings;
+}
+
+TEST(PerNotePitchBend, WavetableSynthRaisesPitchByAnOctave) {
+    WavetableSynth synth;
+    synth.init(kSampleRate, kBlockSize);
+    synth.setParameter(WavetableSynth::kTable, 0);
+    synth.setParameter(WavetableSynth::kPosition, 0.0f);
+    synth.setParameter(WavetableSynth::kFilterCutoff, 1.0f);
+    synth.setParameter(WavetableSynth::kFilterResonance, 0.0f);
+    synth.setParameter(WavetableSynth::kFilterEnvAmount, 0.0f);
+    synth.setParameter(WavetableSynth::kAmpAttack, 0.001f);
+    synth.setParameter(WavetableSynth::kAmpDecay, 0.001f);
+    synth.setParameter(WavetableSynth::kAmpSustain, 1.0f);
+    synth.setParameter(WavetableSynth::kAmpRelease, 0.1f);
+    synth.setParameter(WavetableSynth::kLFOAmount, 0.0f);
+    synth.setParameter(WavetableSynth::kSubLevel, 0.0f);
+    synth.setParameter(WavetableSynth::kUnisonDetune, 0.0f);
+    synth.setParameter(WavetableSynth::kVolume, 1.0f);
+
+    MidiBuffer warmup = makeNoteOn(69);
+    countZeroCrossings(synth, warmup, 8);
+
+    MidiBuffer empty;
+    const int baseCrossings = countZeroCrossings(synth, empty, 120);
+
+    MidiBuffer bend;
+    bend.addMessage(MidiMessage::perNotePitchBend(
+        0, 69, Convert::floatToPb32(0.25f))); // 0.25 * 48 = +12 semitones
+    countZeroCrossings(synth, bend, 8);
+    const int bentCrossings = countZeroCrossings(synth, empty, 120);
+
+    ASSERT_GT(baseCrossings, 100);
+    const double ratio =
+        static_cast<double>(bentCrossings) / static_cast<double>(baseCrossings);
+    EXPECT_GT(ratio, 1.7);
+    EXPECT_LT(ratio, 2.3);
+}
+
+TEST(PerNotePitchBend, SubtractiveSynthRaisesPitchByAnOctave) {
+    SubtractiveSynth synth;
+    synth.init(kSampleRate, kBlockSize);
+    synth.setParameter(SubtractiveSynth::kOsc1Wave, 0.0f);
+    synth.setParameter(SubtractiveSynth::kOsc1Level, 1.0f);
+    synth.setParameter(SubtractiveSynth::kOsc2Level, 0.0f);
+    synth.setParameter(SubtractiveSynth::kSubLevel, 0.0f);
+    synth.setParameter(SubtractiveSynth::kNoiseLevel, 0.0f);
+    synth.setParameter(SubtractiveSynth::kFilterCutoff, 1.0f);
+    synth.setParameter(SubtractiveSynth::kFilterResonance, 0.0f);
+    synth.setParameter(SubtractiveSynth::kFilterEnvAmount, 0.0f);
+    synth.setParameter(SubtractiveSynth::kAmpAttack, 0.001f);
+    synth.setParameter(SubtractiveSynth::kAmpDecay, 0.001f);
+    synth.setParameter(SubtractiveSynth::kAmpSustain, 1.0f);
+    synth.setParameter(SubtractiveSynth::kAmpRelease, 0.1f);
+    synth.setParameter(SubtractiveSynth::kLFODepth, 0.0f);
+    synth.setParameter(SubtractiveSynth::kVolume, 1.0f);
+
+    MidiBuffer warmup = makeNoteOn(69);
+    countZeroCrossings(synth, warmup, 8);
+
+    MidiBuffer empty;
+    const int baseCrossings = countZeroCrossings(synth, empty, 120);
+
+    MidiBuffer bend;
+    bend.addMessage(MidiMessage::perNotePitchBend(
+        0, 69, Convert::floatToPb32(0.25f))); // +12 semitones
+    countZeroCrossings(synth, bend, 8);
+    const int bentCrossings = countZeroCrossings(synth, empty, 120);
+
+    ASSERT_GT(baseCrossings, 100);
+    const double ratio =
+        static_cast<double>(bentCrossings) / static_cast<double>(baseCrossings);
+    EXPECT_GT(ratio, 1.7);
+    EXPECT_LT(ratio, 2.3);
 }

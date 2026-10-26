@@ -97,6 +97,28 @@ public:
     MpeConfig& mpeConfig() { return m_mpeConfig; }
     const MpeConfig& mpeConfig() const { return m_mpeConfig; }
 
+    // MPE expression state used for network input (RTP-MIDI). The receiver
+    // sends MIDI 1.0 MPE; we turn member-channel bends into per-note bends
+    // so the instruments can apply them per voice.
+    struct MpeExpressionState {
+        std::array<int16_t, 16> activeNote;
+
+        MpeExpressionState() { activeNote.fill(-1); }
+        void reset() { activeNote.fill(-1); }
+    };
+
+    void setExternalMpeEnabled(bool enabled) {
+        m_externalMpeEnabled.store(enabled, std::memory_order_release);
+    }
+    bool externalMpeEnabled() const {
+        return m_externalMpeEnabled.load(std::memory_order_acquire);
+    }
+
+    // Public for tests: translate member-channel pitch bend into
+    // per-note pitch bend in-place.
+    static void translateMpe(MidiBuffer& buffer, const MpeConfig& config,
+                             MpeExpressionState& state);
+
     // ---- Monitor ----
 
     void setMonitorBuffer(MidiMonitorBuffer* buf) { m_monitor = buf; }
@@ -173,6 +195,11 @@ private:
 
     // MPE configuration
     MpeConfig m_mpeConfig;
+
+    // Network MIDI MPE translation
+    MpeConfig m_externalMpeConfig;
+    MpeExpressionState m_externalMpeState;
+    std::atomic<bool> m_externalMpeEnabled{false};
 
     // Monitor (optional, owned externally)
     MidiMonitorBuffer* m_monitor = nullptr;

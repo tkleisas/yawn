@@ -377,6 +377,7 @@ void WavetableSynth::noteOn(uint8_t note, uint16_t vel16, uint8_t ch) {
     v.startOrder = m_voiceCounter++;
     v.phase = v.phase2 = v.subPhase = 0.0;
     v.filterLow = v.filterBand = 0.0f;
+    v.perNoteBendSemitones = 0.0f;
 
     v.ampEnv.setADSR(m_params[kAmpAttack], m_params[kAmpDecay],
                      m_params[kAmpSustain], m_params[kAmpRelease]);
@@ -433,6 +434,12 @@ void WavetableSynth::process(float* buffer, int numFrames, int numChannels,
         }
         else if (msg.type == midi::MidiMessage::Type::PitchBend)
             m_pitchBend = midi::Convert::pb32toFloat(msg.value);
+        else if (msg.type == midi::MidiMessage::Type::PerNotePitchBend) {
+            const float bend = midi::Convert::pb32toFloat(msg.value) * 48.0f;
+            for (auto& v : m_voices)
+                if (v.active && v.note == msg.note && v.channel == msg.channel)
+                    v.perNoteBendSemitones = bend;
+        }
     }
 
     int tableIdx = std::clamp(static_cast<int>(m_params[kTable]), 0, kTableSlots - 1);
@@ -453,7 +460,8 @@ void WavetableSynth::process(float* buffer, int numFrames, int numChannels,
         if (!v.active) continue;
 
         float baseFreq = noteToFreq(v.note) *
-            std::pow(2.0f, m_pitchBend * 2.0f / 12.0f);
+            std::pow(2.0f, (m_pitchBend * 2.0f + v.perNoteBendSemitones) /
+                                12.0f);
         double phaseInc = baseFreq / m_sampleRate;
 
         // Unison: second oscillator detuned

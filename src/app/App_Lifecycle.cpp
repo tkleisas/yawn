@@ -828,6 +828,10 @@ bool App::init() {
         m_rtpMidiReceiver.start(rtpPort, [this](const midi::MidiMessage& msg) {
             m_midiEngine.pushExternalMidi(msg);
         });
+        m_midiEngine.setExternalMpeEnabled(true);
+        m_midiEngine.mpeConfig().enableLowerZone(15, 48.0f);
+        LOG_INFO("MIDI",
+                 "RTP-MIDI MPE translation enabled (lower zone, 15 members, 48 st)");
         if (!m_rtpMidiReceiver.running()) {
             LOG_WARN("MIDI", "RTP-MIDI receiver failed: %s",
                      m_rtpMidiReceiver.lastError().c_str());

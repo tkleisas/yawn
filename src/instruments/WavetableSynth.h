@@ -158,6 +158,7 @@ private:
         int64_t startOrder = 0;
         double phase = 0.0, phase2 = 0.0, subPhase = 0.0;
         float filterLow = 0.0f, filterBand = 0.0f;
+        float perNoteBendSemitones = 0.0f;
         Envelope ampEnv, filtEnv;
     };
 

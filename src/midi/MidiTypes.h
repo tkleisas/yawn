@@ -282,7 +282,12 @@ struct MpeZone {
     // Returns true if the given channel is a member of this zone
     bool isMemberChannel(uint8_t ch) const {
         if (!enabled || memberChannelCount == 0) return false;
-        uint8_t firstMember = masterChannel + 1;
+        if (masterChannel == 15) {
+            const uint8_t firstMember =
+                static_cast<uint8_t>(15 - memberChannelCount);
+            return ch >= firstMember && ch < 15;
+        }
+        const uint8_t firstMember = static_cast<uint8_t>(masterChannel + 1);
         return ch >= firstMember && ch < firstMember + memberChannelCount;
     }
 
@@ -324,6 +329,10 @@ static constexpr int kMaxMidiMessagesPerBuffer = 1024;
 class MidiBuffer {
 public:
     void clear() { m_count = 0; }
+
+    void setCount(int count) {
+        m_count = std::clamp(count, 0, kMaxMidiMessagesPerBuffer);
+    }
 
     bool addMessage(const MidiMessage& msg) {
         if (m_count >= kMaxMidiMessagesPerBuffer) return false;
