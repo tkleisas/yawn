@@ -70,18 +70,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
                          vec3(12.9898, 78.233, 37.719)) * 43758.5453
                      + seed * 0.6180339);
 
-    // parchment ↔ lapis ground; ink ↔ gold strokes.
-    vec3 paper = mix(clamp(avg * 0.75 + lum * 0.45 + 0.18, 0.0, 1.0),
-                     vec3(0.910, 0.840, 0.650), 0.3 + 0.7 * (1.0 - palette));
-    vec3 ground = mix(vec3(0.16, 0.10, 0.06) * (0.5 + 0.5 * lum),
-                      vec3(0.030, 0.045, 0.110), palette);
-    vec3 inkCol = mix(vec3(0.06, 0.045, 0.035), paper,
-                      smoothstep(0.0, 1.0, 1.0 - palette) * 0.0);
-    inkCol = mix(vec3(0.060, 0.045, 0.035),
-                 vec3(0.880, 0.660, 0.250), palette);
+    // palette 0 = parchment + dark ink (a grimoire page);
+    // palette 1 = lapis + gold (a devotional plate).
+    float pm = smoothstep(0.15, 0.85, palette);
+    vec3 paper = mix(clamp(avg * 0.85 + lum * 0.5 + 0.30, 0.0, 1.0),
+                     vec3(0.910, 0.870, 0.790), 0.35 + 0.65 * (1.0 - pm));
+    vec3 lapis = mix(avg * 0.16 + vec3(0.012, 0.014, 0.028),
+                     vec3(0.030, 0.045, 0.110), pm);
+    vec3 ground = mix(paper, lapis, pm);
+    vec3 inkCol = mix(vec3(0.055, 0.045, 0.038),
+                      vec3(0.880, 0.660, 0.250), pm);
+    // The seal is vermilion on both grounds (a touch of the picture's
+    // warmth in parchment mode).
     vec3 accent = mix(vec3(0.560, 0.130, 0.090),
-                      clamp(mix(s2, s4, 0.5) * 1.4 + 0.06, 0.0, 1.0),
-                      1.0 - palette);
+                      clamp(mix(s2, s4, 0.5) * 1.2 + 0.10, 0.0, 1.0),
+                      0.35 * (1.0 - pm));
 
     vec3 col = ground;
     // paper grain + vignette
@@ -94,19 +97,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     float redMask = 0.0;
 
     if (radial < 0.5) {
-        // ── grid of sigils ──
+        // ── grid of sigils: a centred square of n×n square cells ──
         float n = floor(cells + 0.5);
-        vec2 gp = (p + vec2(0.5 * 0.888, 0.5)) * vec2(0.888 / (n * 0.5), 1.0)
-                * n * 0.5;   // cell space across the frame
+        float cs = 0.90 / n;                    // square cell size (y units)
+        vec2 gp = (p + vec2(0.5 * n * cs, 0.5 * n * cs)) / cs;
         vec2 cell = floor(gp);
         vec2 q = fract(gp) - 0.5;
         if (cell.x >= 0.0 && cell.y >= 0.0 && cell.x < n && cell.y < n) {
             float h = hash21(cell + vec2(hh * 37.0, seed * 13.0));
             float d = glyph(q, h);
-            strokes = 1.0 - smoothstep(0.010, 0.010 + aa * 2.0, d);
-            // tiny carved dot at the glyph foot
+            float th = 0.020 + aa * 2.0;
+            strokes = 1.0 - smoothstep(th * 0.6, th, d);
+            // carved dot at the glyph foot
             strokes = max(strokes,
-                1.0 - smoothstep(0.008, 0.008 + aa * 2.0,
+                1.0 - smoothstep(0.012, 0.012 + aa * 2.0,
                                  length(q - vec2(0.30, -0.30))));
         }
     } else {
@@ -121,7 +125,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         vec2 q = vec2(dot(p - c, t), dot(p - c, vec2(cos(a0), sin(a0))))
                / 0.13;
         float h = hash11(ai * 3.7 + hh * 11.0 + seed * 5.0);
-        strokes = 1.0 - smoothstep(0.030, 0.030 + aa * 2.0,
+        float thRad = 0.045 + aa * 2.0;
+        strokes = 1.0 - smoothstep(thRad * 0.6, thRad,
                                    glyph(q * 0.9, h));
         // seal rings
         strokes = max(strokes,
@@ -131,12 +136,12 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             1.0 - smoothstep(0.0020, 0.0020 + aa * 1.5,
                              abs(length(p) - 0.46)));
         // vermilion heart with a carved mark
-        float heart = 1.0 - smoothstep(0.11, 0.115, length(p));
-        redMask = heart * (1.0 - smoothstep(0.02, 0.03,
-                 glyph(p / 0.11, hh * 9.1)));
+        float heart = 1.0 - smoothstep(0.125, 0.130, length(p));
+        float carve = 1.0 - smoothstep(0.018, 0.026,
+                                       glyph(p / 0.13, hh * 9.1));
+        redMask = heart * (1.0 - carve);   // red disc, incised strokes
     }
 
-    col = mix(col, paper, 0.16 * (1.0 - palette));   // paper lift
     col = mix(col, inkCol, strokes * ink * (0.85 + 0.35 * k));
     col += inkCol * strokes * glow * 0.25 * (0.6 + 0.8 * k);
     col = mix(col, accent, redMask * 0.95);
