@@ -684,7 +684,7 @@ static int l_launch_clip(lua_State* L) {
 //          request flushes — after the song layer creates the tracks —
 //          so re-runs against existing projects stay targeted).
 // 4th arg may also be a table: { name = "…", image = "seed.png",
-// model = "earth.glb", params = { zoom = 0.8, palette = 1 } } — `image`
+// model = "earth.glb", scene = "ring.lua", params = { … } } — `image`
 // names the seed picture for the clip's iChannel2 (bare names resolve
 // against the bundled examples dirs) and `model` names a bundled glTF
 // to render as iChannel2 instead; `params` presets @range values.
@@ -713,6 +713,9 @@ static int l_set_visual(lua_State* L) {
         lua_pop(L, 1);
         lua_getfield(L, 4, "model");
         if (lua_isstring(L, -1)) { const char* s = lua_tostring(L, -1); if (s) req.modelPath = s; }
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "scene");
+        if (lua_isstring(L, -1)) { const char* s = lua_tostring(L, -1); if (s) req.scenePath = s; }
         lua_pop(L, 1);
         lua_getfield(L, 4, "params");
         if (lua_istable(L, -1)) {

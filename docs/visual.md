@@ -687,7 +687,7 @@ distances.
 
 ## Bundled shader pack
 
-`assets/shaders/examples/` — 39 original MIT-licensed shaders covering
+`assets/shaders/examples/` — 47 original MIT-licensed shaders covering
 plasma, palette sweeps, flow noise, rings, spectrum/waveform visualisers,
 spirals, chequerboards, voronoi, tunnels, fractal circles, triangular
 grids, FBM clouds, kaleidoscopes, pulse grids, auroras, radial EQ bars,
@@ -714,7 +714,12 @@ pagoda temples, drifting mist bands, lanterns flaring on kicks, a moon
 disc with an enso ring, brush-wash sky and distant birds; deterministic
 skyline from picture + seed), a deterministic endless-zoom lattice
 (`37_infinite_zoom.frag` — the seed picture repeated forever in
-log-polar space, N-fold folded, as an alpha overlay), an Oxygène-homage
+log-polar space, N-fold folded, as an alpha overlay), a visionary set
+(`40_sri_yantra.frag` sacred diagram; `41_black_sun.frag` eclipse;
+`42_sigil_seal.frag` grid/radial sigils; `43_cymatics.frag` Chladni
+sand; `44_rorschach.frag` inkblot; `45_starfield.frag`; `46_ghost_fireflies.frag`
+visualising the improv layer's upcoming notes; `47_gargantua.frag` an
+Interstellar-style lensed black hole), an Oxygène-homage
 pair (`38_oxygen_skull.frag` / `39_oxygen_globe.frag` — a rotating glTF
 skull in an ember-lit void under a rotating Earth whose seeded fissures
 open onto the skull; the globe's `morph` knob crossfades 100% skull ↔
@@ -738,6 +743,26 @@ yawn_visual_probe \
 
 (`35_temple_mist.frag` is a full landscape background — use it instead of
 the mandala when the scene wants depth rather than iconography.)
+
+### Performance recipes
+
+Two workflows that combine the family with live sources (both are pure
+UI — no new shaders needed):
+
+**Living thangka (video seed).** Drag a video (or an image) onto a
+visual clip and pick a family shader on it — `iChannel2` is the same
+slot for images, videos and models, so `32_mandala_seed`,
+`34_eye_field` and `39_oxygen_globe` all re-skin from the footage. Stack
+`33_thangka_frame` above it and set the track blend to Add; the
+portrait dissolves into the wheel as it plays. Bar-sync the video from
+its right-click menu so the faces land on the beat.
+
+**Degraded transmission (camera feedback).** Right-click a visual clip
+→ **Live Input ▸** your camera, then chain per-track post passes:
+`datamosh → infinite_zoom (echo 0.8) → vhs → bloom`. The feedback pass
+re-zooms the live image into its own decayed copy; `datamosh` and `vhs`
+supply the wear. Put `36_ink_brush` above at low opacity for the
+sumi-e frame.
 
 `assets/shaders/default.frag` — the startup demo; uses A–E knobs as
 palette speed, hue offset, audio-splash strength, kick-flash strength,
@@ -846,6 +871,9 @@ yawn_visual_probe \
   layer's `iChannel2` through the engine's `M3DRenderer` — the layer
   shader's `modelPos*` / `modelRot*` / `modelSpin*` / `modelScale`
   defaults (and `--set` overrides) drive the pose exactly like the app.
+- `--ghost p,v,t[,track]` (repeatable) populates `iGhost0..7` /
+  `iGhostCount` so ghost-reactive shaders (46) can be previewed without
+  a running improv layer.
 - `iChannel0`/`iChannel1` are silent/blank dummies, so FFT-bar and text
   shaders render black by design. `iChannel2` keeps the engine's raw
   texel orientation (Shadertoy convention — image shaders flip v

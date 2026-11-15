@@ -54,6 +54,7 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -101,6 +102,9 @@ struct Options {
     double bpm = 120.0;
     std::vector<std::pair<std::string, float>> params;
     float knobs[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    // Upcoming improv fires for shaders that read iGhost0..7:
+    // each entry is {pitch/127, velocity, beatsUntil, track}.
+    std::vector<std::array<float, 4>> ghosts;
 };
 
 void usage() {
@@ -111,6 +115,7 @@ void usage() {
         "  --blend <mode>        normal|add|multiply|screen (last --layer)\n"
         "  --opacity <0..1>      layer opacity (last --layer)\n"
         "  --model <glb>         render a glTF model into the last layer's iChannel2\n"
+        "  --ghost p,v,t[,tr]    add an upcoming improv fire (iGhost0..7)\n"
         "  --post <frag>         append a post-FX pass (samples iPrev)\n"
         "  --image <path>        seed picture for iChannel2\n"
         "  --out <dir>           output directory (default probe_frames)\n"
@@ -144,6 +149,17 @@ bool parseArgs(int argc, char** argv, Options& o) {
             }
             if (a == "--blend") o.layers.back().blend = v;
             else o.layers.back().opacity = std::clamp(std::atof(v), 0.0, 1.0);
+            ++i;
+        } else if (a == "--ghost") {
+            const char* v = need(i);
+            if (!v) { std::fprintf(stderr, "--ghost needs p,v,t,tr\n"); return false; }
+            std::array<float, 4> g{0, 0, 0, 0};
+            int n = std::sscanf(v, "%f,%f,%f,%f", &g[0], &g[1], &g[2], &g[3]);
+            if (n < 3) {
+                std::fprintf(stderr, "--ghost expects pitch,vel,beats[,track]\n");
+                return false;
+            }
+            o.ghosts.push_back(g);
             ++i;
         } else if (a == "--model") {
             const char* v = need(i);
@@ -393,9 +409,15 @@ void bindUniforms(GLuint prog, int frame, double t, double dt,
     set1f(prog, "iAudioMid", a.mid);
     set1f(prog, "iAudioHigh", a.high);
     set1f(prog, "iKick", a.kick);
-    set1f(prog, "iGhostCount", 0.0f);
-    for (int g = 0; g < 8; ++g)
-        set4f(prog, ("iGhost" + std::to_string(g)).c_str(), 0, 0, 0, 0);
+    const int ghostCount = static_cast<int>(
+        std::min<size_t>(o.ghosts.size(), 8));
+    set1f(prog, "iGhostCount", static_cast<float>(ghostCount));
+    for (int g = 0; g < 8; ++g) {
+        const float* v = g < ghostCount ? o.ghosts[g].data() : nullptr;
+        set4f(prog, ("iGhost" + std::to_string(g)).c_str(),
+              v ? v[0] : 0.0f, v ? v[1] : 0.0f,
+              v ? v[2] : 0.0f, v ? v[3] : 0.0f);
+    }
     set1f(prog, "iTextWidth", 0.0f);
     set1f(prog, "iTextTexWidth", 2048.0f);
     for (int k = 0; k < 8; ++k) {

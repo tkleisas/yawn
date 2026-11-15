@@ -730,6 +730,23 @@ bool App::init() {
                 return false;
             }
         }
+        std::filesystem::path sceneFile;
+        if (!req.scenePath.empty()) {
+            sceneFile = req.scenePath;
+            if (!std::filesystem::exists(sceneFile, ec)) {
+                sceneFile = std::filesystem::path("assets/examples/scripts")
+                          / req.scenePath;
+                if (!std::filesystem::exists(sceneFile, ec))
+                    sceneFile = std::filesystem::path(
+                                    "build/bin/assets/examples/scripts")
+                              / req.scenePath;
+            }
+            if (!std::filesystem::exists(sceneFile, ec)) {
+                LOG_WARN("LiveCode", "set_visual: scene script '%s' not found",
+                         req.scenePath.c_str());
+                return false;
+            }
+        }
         std::filesystem::path image;
         if (!req.imagePath.empty()) {
             image = req.imagePath;
@@ -757,6 +774,9 @@ bool App::init() {
         }
         if (!model.empty()) {
             vc->modelPath = model.string();
+        }
+        if (!sceneFile.empty()) {
+            vc->scenePath = sceneFile.string();
         }
         vc->source.paramValues = req.params;
         m_project.setVisualClip(track, scene, std::move(vc));

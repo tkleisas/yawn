@@ -27,6 +27,7 @@ uniform float sky;     // @range 0..1 default=0.70 void wash
 uniform float palette; // @range 0..1 default=0.40 warm oxblood → deep space
 uniform float kick;    // @range 0..1 default=0.45 audio response
 uniform float seed;    // @range 0..1 default=0.0  alternate take
+uniform float overlay; // @range 0..1 default=0.0  1 = alpha overlay (ring mode)
 
 const float PI = 3.141592653589793;
 const float TAU = 6.283185307179586;
@@ -96,14 +97,22 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
                       smoothstep(-0.2, 0.4, p.y) * (0.4 + 0.6 * palette));
     skullCol += rimCol * rim * (0.5 + 0.6 * k);
 
-    col = mix(col, skullCol, alpha);
+    // Opaque look (background + skull) for the solo scene; overlay mode
+    // outputs only the model + rim so a scene-script ring can composite
+    // over another layer (e.g. the Oxygène globe).
+    vec3 composed = mix(col, skullCol, alpha);
 
     // A soft ground shadow / glow under the skull to seat it in the void.
-    col *= 1.0 - 0.35 * smoothstep(0.55, 0.0, r) * (1.0 - alpha) * 0.25;
+    composed *= 1.0 - 0.35 * smoothstep(0.55, 0.0, r) * (1.0 - alpha) * 0.25;
 
     // Paper grain + vignette.
-    col += (hash21(fragCoord + seed * 13.0) - 0.5) * 0.018;
-    col *= 1.0 - smoothstep(0.55, 1.15, r) * 0.55;
+    composed += (hash21(fragCoord + seed * 13.0) - 0.5) * 0.018;
+    composed *= 1.0 - smoothstep(0.55, 1.15, r) * 0.55;
 
-    fragColor = vec4(col, 1.0);
+    float modelA = clamp(alpha + rim * 0.5, 0.0, 1.0);
+    float a = mix(1.0, modelA, overlay);
+    vec3 straight = mix(composed, skullCol, overlay);
+    straight += rimCol * rim * 0.35 * overlay;
+
+    fragColor = vec4(straight * a, a);
 }

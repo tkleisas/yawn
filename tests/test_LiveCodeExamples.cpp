@@ -87,6 +87,7 @@ protected:
                 vc->name = req.name.empty() ? req.shaderPath : req.name;
                 vc->imagePath = req.imagePath;
                 vc->modelPath = req.modelPath;
+                vc->scenePath = req.scenePath;
                 vc->tempoSync = true;
                 m_project.setVisualClip(track, scene, std::move(vc));
                 return true;
@@ -397,6 +398,44 @@ TEST_F(LiveCodeExampleTest, OxygenGlobeMorphScene) {
         std::filesystem::path(YAWN_BUNDLED_MODELS_DIR) / "skull.glb"));
     EXPECT_TRUE(std::filesystem::exists(
         std::filesystem::path(YAWN_BUNDLED_MODELS_DIR) / "earth.glb"));
+
+    m_engine->pumpInputForTest(nullptr, 512);
+    EXPECT_TRUE(m_engine->transport().isPlaying());
+
+    for (const auto& w : consoleOfSeverity(1))
+        GTEST_MESSAGE_(w.c_str(), ::testing::TestPartResult::kNonFatalFailure);
+    for (const auto& e : consoleOfSeverity(2))
+        GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
+}
+
+// 08 — Oxygène grows a skull ring: globe under an overlay orbit driven
+// by the bundled scene script, self-starting.
+TEST_F(LiveCodeExampleTest, SkullRingScene) {
+    const std::string src = std::string(YAWN_BUNDLED_LIVECODE_DIR) +
+                            "/08_skull_ring.lua";
+    ASSERT_TRUE(runDemo(src)) << "run failed";
+
+    EXPECT_EQ(m_project.numTracks(), 4);
+    auto* globe = m_project.getSlot(2, 0);
+    ASSERT_NE(globe, nullptr);
+    ASSERT_NE(globe->visualClip, nullptr);
+    EXPECT_EQ(globe->visualClip->source.shaderPath, "39_oxygen_globe.frag");
+    EXPECT_EQ(globe->visualClip->modelPath, "earth.glb");
+
+    auto* orbit = m_project.getSlot(3, 0);
+    ASSERT_NE(orbit, nullptr);
+    ASSERT_NE(orbit->visualClip, nullptr);
+    EXPECT_EQ(orbit->visualClip->source.shaderPath, "38_oxygen_skull.frag");
+    EXPECT_EQ(orbit->visualClip->modelPath, "skull.glb");
+    EXPECT_EQ(orbit->visualClip->scenePath, "skull_ring.lua");
+
+    bool overlay = false;
+    for (const auto& [k, v] : orbit->visualClip->source.paramValues)
+        if (k == "overlay") { overlay = true; EXPECT_FLOAT_EQ(v, 1.0f); }
+    EXPECT_TRUE(overlay) << "overlay preset missing";
+
+    EXPECT_TRUE(std::filesystem::exists(
+        std::filesystem::path(YAWN_BUNDLED_SCRIPTS_DIR) / "skull_ring.lua"));
 
     m_engine->pumpInputForTest(nullptr, 512);
     EXPECT_TRUE(m_engine->transport().isPlaying());

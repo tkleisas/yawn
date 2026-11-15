@@ -54,6 +54,24 @@ protected:
 
 } // namespace
 
+TEST_F(SceneScriptTest, BundledSkullRingEmitsCarousel) {
+    M3DSceneScript script;
+    const std::string path =
+        std::string(YAWN_BUNDLED_SCRIPTS_DIR) + "/skull_ring.lua";
+    ASSERT_TRUE(script.load(path)) << script.error();
+    in.time = 1.0f;
+    in.beat = 4.0f;
+    in.kick = 0.5f;
+    std::vector<M3DInstance> out;
+    ASSERT_TRUE(script.tick(in, out)) << script.error();
+    ASSERT_EQ(out.size(), 13u);          // 12 orbiting + 1 centre
+    const float ringR = std::hypot(out[0].position[0], out[0].position[2]);
+    EXPECT_GT(ringR, 1.0f);              // ring is out on the carousel
+    EXPECT_LT(std::hypot(out[12].position[0], out[12].position[2]), 0.01f);
+    EXPECT_GT(out[0].scale, 0.0f);
+    EXPECT_GT(out[12].scale, out[0].scale);   // centre skull is larger
+}
+
 TEST_F(SceneScriptTest, SingleInstanceShorthandWithDefaults) {
     M3DSceneScript s;
     ASSERT_TRUE(s.load(writeScript(
