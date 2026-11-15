@@ -714,6 +714,22 @@ bool App::init() {
                 full = std::filesystem::path(
                           "build/bin/assets/shaders/examples") / req.shaderPath;
         }
+        std::filesystem::path model;
+        if (!req.modelPath.empty()) {
+            model = req.modelPath;
+            if (!std::filesystem::exists(model, ec)) {
+                model = std::filesystem::path("assets/examples/3d")
+                      / req.modelPath;
+                if (!std::filesystem::exists(model, ec))
+                    model = std::filesystem::path(
+                                "build/bin/assets/examples/3d") / req.modelPath;
+            }
+            if (!std::filesystem::exists(model, ec)) {
+                LOG_WARN("LiveCode", "set_visual: model '%s' not found",
+                         req.modelPath.c_str());
+                return false;
+            }
+        }
         std::filesystem::path image;
         if (!req.imagePath.empty()) {
             image = req.imagePath;
@@ -738,6 +754,9 @@ bool App::init() {
         if (!image.empty()) {
             vc->imagePath = image.string();
             vc->thumbnailPath = image.string();   // image is its own thumb
+        }
+        if (!model.empty()) {
+            vc->modelPath = model.string();
         }
         vc->source.paramValues = req.params;
         m_project.setVisualClip(track, scene, std::move(vc));

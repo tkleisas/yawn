@@ -294,7 +294,7 @@ for build flags that gate some of these, see [building.md](building.md).
 - **Lockstep self-start** — `yawn.launch_scene(n)` initializes everything first, then seeks to the downbeat and starts the transport with the clips firing on the first block — no one-bar silence after Run
 - **Content-driven track typing** — Track types follow their content (MIDI clips → Midi, audio clips → Audio, visual → Visual); the arrangement recorder, record-arm gates and code lens all agree with what the tracks actually hold
 - **Freeze take** — The improv layer is performance-only by design; the **Freeze** button (any `~` console tab) serializes every `yawn.note` since the last freeze into a normalized MIDI clip and drops it on a new sidecar `Take N` track in scene 1 — undeclared tracks are invisible to the song reconciler, so the take survives re-runs and save/load
-- **Visual-family patching from code** — `yawn.set_visual(track, scene, shader, { name = …, image = …, params = { … } })` installs a visual clip with a seed picture for `iChannel2` (bare image names resolve against the bundled examples dir) and preset `@range` values; `assets/examples/livecode/06_seed_panel.lua` patches the whole seed-picture family with one call per layer
+- **Visual-family patching from code** — `yawn.set_visual(track, scene, shader, { name = …, image = …, model = …, params = { … } })` installs a visual clip with a seed picture or a glTF model for `iChannel2` (bare names resolve against the bundled example dirs) and preset `@range` values; track may be a name. `06_seed_panel.lua` patches the whole seed-picture family, `07_oxygen_globe.lua` the Oxygène model pair
 - **Improv ghosts in shaders** — Upcoming improv fires publish through a lock-free bus into `iGhostCount` / `iGhost0..7` (pitch, velocity, beats-until-fire, track) and `iBeatBarFrac` in every layer/composite/post-FX program, so visuals can pre-glow what's about to fire (bundled example: `31_ghost_accent.frag`)
 - **Programmatic sample forging** — `yawn.new_buffer{frames, channels, fill|data}` builds buffers from scratch; `buffer_gain / normalize / fade / mix / reverse / slice / concat / repeat / mixdown / fft / ifft / polyblep` shape them; `load_sample` delivers into Sampler/Granular/Vocoder/DrumSlop/DrumRack pads or the library — the demo `05_sample_synth.lua` synthesizes its entire kit from math
 - **Pattern notations** — `yawn.midi("A1_16B1_16D#3_8")` types melodic phrases (pitch+octave, `_N` durations, `*N` multipliers, `@vel`, chords, rests) and `yawn.drums{BD="x---x---x---x---", …}` types step-grid drum patterns (`X/x/o/g` velocities on the GM drum set) — both return clip specs the song layer and `set_notes` consume directly
@@ -329,7 +329,7 @@ for build flags that gate some of these, see [building.md](building.md).
 - **A–H knob + shader-param automation** — Per-track arrangement lanes and per-clip envelopes for visual parameters. Dropdown picks either one of the eight generic knobs or any `@range` uniform the clip's shader declares. Envelope editor in the browser panel's Clip tab; breakpoints loop with `clip.lengthBeats` (editable via the Clip Length submenu: 1/2/4/8/16/32 bars). Precedence: arrangement lane overrides clip envelope — LFO still composes on top. Audio-thread automation engine already dispatched visual-knob targets through a lock-free bus; new `TargetType::VisualParam` round-trips a uniform name for shader-param lanes.
 - **Follow actions for visual session clips** — The same per-slot follow-action data audio/MIDI clips use (Stop / PlayAgain / Next / Previous / First / Last / Random / Any with barCount + chanceA probability split) now fires for visual clips too. Session-view only; main-thread polling.
 - **Per-track stop gesture** — Clicking an active visual clip stops it (mirrors audio/MIDI). Transport stop clears every visual layer in lockstep with audio's `scheduleStop` so "Stop" means Stop everywhere.
-- **Bundled shader pack** — 36 original MIT-licensed shaders (`assets/shaders/examples/`) covering plasma, palette sweeps, flow noise, concentric rings, spectrum/waveform visualisers, spirals, chequerboards, voronoi, tunnels, fractal circles, kaleidoscopes, aurora bands, radial EQ bars, chromatic aberration, beat strobes, kick flashes, text-overlay variants, an audio-reactive 3D example (`25_model_audio_glow.frag`), the hypnotic spiral, text crawl, disco ball, 4D hypercube morph, the live-coding ghost accent clock (`31_ghost_accent.frag`), the seed-picture mandala (`32_mandala_seed.frag`) with its thangka frame (`33_thangka_frame.frag`), eye garland (`34_eye_field.frag`), ink-wash landscape (`35_temple_mist.frag`) and sumi-e ink overlay (`36_ink_brush.frag`), and the seed-picture mandala (`32_mandala_seed.frag`) — all using the `@range` convention. Plus `model_passthrough.frag` with the full model-transform uniform set as the default for model-only clips.
+- **Bundled shader pack** — 39 original MIT-licensed shaders (`assets/shaders/examples/`) covering plasma, palette sweeps, flow noise, concentric rings, spectrum/waveform visualisers, spirals, chequerboards, voronoi, tunnels, fractal circles, kaleidoscopes, aurora bands, radial EQ bars, chromatic aberration, beat strobes, kick flashes, text-overlay variants, an audio-reactive 3D example (`25_model_audio_glow.frag`), the hypnotic spiral, text crawl, disco ball, 4D hypercube morph, the live-coding ghost accent clock (`31_ghost_accent.frag`), the seed-picture mandala (`32_mandala_seed.frag`) with its thangka frame (`33_thangka_frame.frag`), eye garland (`34_eye_field.frag`), ink-wash landscape (`35_temple_mist.frag`) sumi-e ink overlay (`36_ink_brush.frag`), an endless-zoom lattice (`37_infinite_zoom.frag`), and the Oxygène-homage pair (`38_oxygen_skull.frag` / `39_oxygen_globe.frag`: rotating glTF skull under a rotating Earth, crossfaded by one `morph` knob), and the seed-picture mandala (`32_mandala_seed.frag`) — all using the `@range` convention. Plus `model_passthrough.frag` with the full model-transform uniform set as the default for model-only clips.
 - **Project portability** — Transcoded media lives in `<project>.yawn/media/`, shaders in `<project>.yawn/shaders/`, models in `<project>.yawn/models/`, scene scripts in `<project>.yawn/scripts/`. Moving the project folder carries everything with it.
 
 > See [visual.md](visual.md) for the full shader-authoring guide, uniform reference, video / live / 3D / Lua / automation details, and file layout.
@@ -356,16 +356,19 @@ device works on first install. Attribution + license details live in
   amp captures from `pelennor2170/NAM_models` (GPL v3) with the original
   capturers' names preserved in filenames. Neural Amp's file dialog opens here
   by default
-- **36 visual shaders** — `assets/shaders/examples/` — original MIT-licensed
+- **39 visual shaders** — `assets/shaders/examples/` — original MIT-licensed
   Shadertoy-style shaders covering plasma, palette sweeps, audio-reactive
   spectrum bars, kaleidoscopes, etc.
-- **2 glTF 2.0 sample models** — `assets/examples/3d/Duck.glb`, `Fox.glb` —
-  CC-BY 4.0, from the Khronos sample-asset repository
-- **6 live-coding proof-of-concept songs** — `assets/examples/livecode/` —
+- **5 glTF 2.0 models** — `assets/examples/3d/` — Khronos sample assets
+  (`Duck.glb` SCEA license, `Fox.glb` CC-BY 4.0) plus Poly Pizza royalty-free
+  models (`skull.glb` CC0 by Kay Lousberg; `earth.glb` and `antlers.glb`
+  CC-BY 3.0 by Poly by Google); attribution in NOTICES.md
+- **7 live-coding proof-of-concept songs** — `assets/examples/livecode/` —
   a declarative techno sketch, a pure improv performer layer, the two-layer
   convention demo, an offline sample-forge script, a from-math sample
-  workstation, and the seed-panel demo (the 32–36 visual family on four
-  visual tracks from one seed picture, with per-clip param presets); all
+  workstation, the seed-panel demo (the 32–36 visual family on five
+  visual tracks from one seed picture, with per-clip param presets), and
+  the Oxygène homage (a morphing model-clip Earth/skull pair); all
   executed headlessly by the test suite so they ship verified
 - **Demucs v4 stem model** — bundled in official release downloads (`models/`
   beside the binary); not in the source tree. Source builds download it on

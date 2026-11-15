@@ -685,6 +685,12 @@ target_link_libraries(yawn_visual_probe PRIVATE
     SDL3::SDL3
     glad
 )
+# 3D look iteration: --model renders a glTF into the layer's iChannel2
+# through the engine's M3DRenderer.
+if(YAWN_HAS_MODEL3D)
+    target_sources(yawn_visual_probe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/gltf/M3DRenderer.cpp)
+endif()
 
 # ONNX features (Basic Pitch audio-to-MIDI + Demucs stem separation) —
 # link each feature's static lib under its own flag, then wire the shared

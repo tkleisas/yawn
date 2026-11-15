@@ -86,6 +86,7 @@ protected:
                 vc->source.paramValues = req.params;
                 vc->name = req.name.empty() ? req.shaderPath : req.name;
                 vc->imagePath = req.imagePath;
+                vc->modelPath = req.modelPath;
                 vc->tempoSync = true;
                 m_project.setVisualClip(track, scene, std::move(vc));
                 return true;
@@ -320,11 +321,12 @@ TEST_F(LiveCodeExampleTest, SeedPanelPatchesVisualFamily) {
                             "/06_seed_panel.lua";
     ASSERT_TRUE(runDemo(src)) << "run failed";
 
-    EXPECT_EQ(m_project.numTracks(), 6);
-    const char* wantShaders[4] = {
+    EXPECT_EQ(m_project.numTracks(), 7);
+    const char* wantShaders[5] = {
         "32_mandala_seed.frag", "33_thangka_frame.frag",
-        "34_eye_field.frag", "36_ink_brush.frag" };
-    for (int t = 2; t < 6; ++t) {
+        "37_infinite_zoom.frag", "34_eye_field.frag",
+        "36_ink_brush.frag" };
+    for (int t = 2; t < 7; ++t) {
         EXPECT_EQ(m_project.track(t).type, Track::Type::Visual) << t;
         auto* slot = m_project.getSlot(t, 0);
         ASSERT_NE(slot, nullptr) << "track " << t;
@@ -356,6 +358,49 @@ TEST_F(LiveCodeExampleTest, SeedPanelPatchesVisualFamily) {
     EXPECT_TRUE(m_engine->transport().isPlaying());
 
     // No warnings or errors from the whole run.
+    for (const auto& w : consoleOfSeverity(1))
+        GTEST_MESSAGE_(w.c_str(), ::testing::TestPartResult::kNonFatalFailure);
+    for (const auto& e : consoleOfSeverity(2))
+        GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
+}
+
+// 07 — Oxygène homage: two model clips (skull under globe) with the
+// morph/autoMix presets, self-starting.
+TEST_F(LiveCodeExampleTest, OxygenGlobeMorphScene) {
+    const std::string src = std::string(YAWN_BUNDLED_LIVECODE_DIR) +
+                            "/07_oxygen_globe.lua";
+    ASSERT_TRUE(runDemo(src)) << "run failed";
+
+    EXPECT_EQ(m_project.numTracks(), 4);
+    const char* wantShaders[2] = {
+        "38_oxygen_skull.frag", "39_oxygen_globe.frag" };
+    const char* wantModels[2] = { "skull.glb", "earth.glb" };
+    for (int t = 2; t < 4; ++t) {
+        EXPECT_EQ(m_project.track(t).type, Track::Type::Visual) << t;
+        auto* slot = m_project.getSlot(t, 0);
+        ASSERT_NE(slot, nullptr) << "track " << t;
+        ASSERT_NE(slot->visualClip, nullptr) << "track " << t;
+        EXPECT_EQ(slot->visualClip->source.shaderPath, wantShaders[t - 2]);
+        EXPECT_EQ(slot->visualClip->modelPath, wantModels[t - 2]);
+    }
+
+    bool morph = false, autoMix = false;
+    for (const auto& [k, v] :
+         m_project.getSlot(3, 0)->visualClip->source.paramValues) {
+        if (k == "morph") { morph = true; EXPECT_FLOAT_EQ(v, 1.0f); }
+        if (k == "autoMix") { autoMix = true; EXPECT_NEAR(v, 0.28f, 1e-6); }
+    }
+    EXPECT_TRUE(morph) << "morph preset missing";
+    EXPECT_TRUE(autoMix) << "autoMix preset missing";
+
+    EXPECT_TRUE(std::filesystem::exists(
+        std::filesystem::path(YAWN_BUNDLED_MODELS_DIR) / "skull.glb"));
+    EXPECT_TRUE(std::filesystem::exists(
+        std::filesystem::path(YAWN_BUNDLED_MODELS_DIR) / "earth.glb"));
+
+    m_engine->pumpInputForTest(nullptr, 512);
+    EXPECT_TRUE(m_engine->transport().isPlaying());
+
     for (const auto& w : consoleOfSeverity(1))
         GTEST_MESSAGE_(w.c_str(), ::testing::TestPartResult::kNonFatalFailure);
     for (const auto& e : consoleOfSeverity(2))

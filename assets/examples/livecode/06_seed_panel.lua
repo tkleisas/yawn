@@ -2,10 +2,11 @@
 -- 06 · Seed Panel — the seed-picture visual family, pre-patched
 -- (shaders 32–36; see docs/visual.md → bundled shader pack).
 --
--- Four visual layers hang off ONE seed picture (seed_emblem.png), so
+-- Five visual layers hang off ONE seed picture (seed_emblem.png), so
 -- palette and structure stay coherent:
 --   Mandala → 32_mandala_seed.frag   the icon (gold lotus-wheel)
 --   Frame   → 33_thangka_frame.frag  brocade + vermilion border
+--   Zoom    → 37_infinite_zoom.frag  endless seed tunnel (alpha overlay)
 --   Eyes    → 34_eye_field.frag      watching-eye garland
 --   Ink     → 36_ink_brush.frag      enso + vermilion chop
 -- A slow groove drives the reactivity: the kick blooms the mandala's
@@ -34,6 +35,7 @@ song = {
           clips = { [1] = yawn.midi("A1_1 C2_1 F1_1 G1_1") } },
         { name = "Mandala", type = "visual" },
         { name = "Frame", type = "visual" },
+        { name = "Zoom", type = "visual", volume = 0.55 },
         { name = "Eyes", type = "visual", volume = 0.95 },
         { name = "Ink", type = "visual", volume = 0.90 },
     },
@@ -41,22 +43,28 @@ song = {
 
 -- One seed for the whole family. Bare image names resolve against the
 -- bundled examples dir (assets/examples/livecode); clip params preset
--- the shaders' @range knobs.
+-- the shaders' @range knobs. Layers target tracks BY NAME, so re-runs
+-- stay correct even when the project already has other tracks.
 local seed = "seed_emblem.png"
-yawn.set_visual(2, 1, "32_mandala_seed.frag", {
+yawn.set_visual("Mandala", 1, "32_mandala_seed.frag", {
     name = "mandala", image = seed,
     params = { palette = 1.0, zoom = 0.78, segments = 12,
                petals = 12, rings = 3 },
 })
-yawn.set_visual(3, 1, "33_thangka_frame.frag", {
+yawn.set_visual("Frame", 1, "33_thangka_frame.frag", {
     name = "thangka", image = seed,
     params = { palette = 1.0, band = 0.10 },
 })
-yawn.set_visual(4, 1, "34_eye_field.frag", {
+yawn.set_visual("Zoom", 1, "37_infinite_zoom.frag", {
+    name = "zoom", image = seed,
+    params = { palette = 1.0, folds = 8, speed = 0.25,
+               scales = 3.0, glow = 0.70 },
+})
+yawn.set_visual("Eyes", 1, "34_eye_field.frag", {
     name = "eyes", image = seed,
     params = { palette = 1.0, eyes = 9, rings = 2 },
 })
-yawn.set_visual(5, 1, "36_ink_brush.frag", {
+yawn.set_visual("Ink", 1, "36_ink_brush.frag", {
     name = "ink", image = seed,
     params = { palette = 1.0, enso = 0.34, splatter = 0.35 },
 })

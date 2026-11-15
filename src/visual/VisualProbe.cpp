@@ -45,6 +45,8 @@
 
 #include "visual/ShaderTestKernel.h"
 #include "visual/ShaderParamParse.h"
+#include "visual/gltf/M3DRenderer.h"
+#include "visual/gltf/M3DModel.h"
 
 #include <glad/gl.h>
 
@@ -59,6 +61,8 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,6 +85,7 @@ struct LayerSpec {
     std::string shader;
     std::string blend = "normal";
     float opacity = 1.0f;
+    std::string modelPath;   // optional glTF model rendered into iChannel2
 };
 
 struct Options {
@@ -105,6 +110,7 @@ void usage() {
         "  --layer <frag>        add a layer pass\n"
         "  --blend <mode>        normal|add|multiply|screen (last --layer)\n"
         "  --opacity <0..1>      layer opacity (last --layer)\n"
+        "  --model <glb>         render a glTF model into the last layer's iChannel2\n"
         "  --post <frag>         append a post-FX pass (samples iPrev)\n"
         "  --image <path>        seed picture for iChannel2\n"
         "  --out <dir>           output directory (default probe_frames)\n"
@@ -138,6 +144,14 @@ bool parseArgs(int argc, char** argv, Options& o) {
             }
             if (a == "--blend") o.layers.back().blend = v;
             else o.layers.back().opacity = std::clamp(std::atof(v), 0.0, 1.0);
+            ++i;
+        } else if (a == "--model") {
+            const char* v = need(i);
+            if (!v || o.layers.empty()) {
+                std::fprintf(stderr, "--model needs a preceding --layer and a path\n");
+                return false;
+            }
+            o.layers.back().modelPath = v;
             ++i;
         } else if (a == "--post") {
             const char* v = need(i);
@@ -415,6 +429,24 @@ void bindUniforms(GLuint prog, int frame, double t, double dt,
     bindTex(GL_TEXTURE5, feedbackTex);
 }
 
+// Effective @range values for a program: shader defaults overlaid with
+// --set overrides. Model transform uniforms are consumed by the probe's
+// M3DRenderer exactly as the visual engine consumes them.
+std::map<std::string, float> effectiveParams(
+        const std::vector<yawn::visual::ParsedParam>& defaults,
+        const Options& o) {
+    std::map<std::string, float> m;
+    for (const auto& d : defaults) m[d.name] = d.defaultValue;
+    for (const auto& [name, value] : o.params) m[name] = value;
+    return m;
+}
+
+float paramOr(const std::map<std::string, float>& m, const char* name,
+              float fallback) {
+    const auto it = m.find(name);
+    return it == m.end() ? fallback : it->second;
+}
+
 std::vector<unsigned char> readPixels(GLuint fbo, int w, int h) {
     std::vector<unsigned char> px(static_cast<size_t>(w) * h * 4);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
@@ -535,6 +567,35 @@ int main(int argc, char** argv) {
         postDefaults.push_back(yawn::visual::parseShaderParams(src));
     }
 
+    // ── Per-layer model renderers (iChannel2) ──────────────────────
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    struct LayerModel {
+        yawn::visual::M3DModel model;
+        std::unique_ptr<yawn::visual::M3DRenderer> renderer;
+    };
+    std::vector<std::unique_ptr<LayerModel>> layerModels(opt.layers.size());
+    for (size_t li = 0; li < opt.layers.size(); ++li) {
+        const std::string& path = opt.layers[li].modelPath;
+        if (path.empty()) continue;
+        auto lm = std::make_unique<LayerModel>();
+        if (!lm->model.load(path)) {
+            std::fprintf(stderr, "%s: %s\n", path.c_str(),
+                         lm->model.error().c_str());
+            return 1;
+        }
+        const int meshCount = lm->model.meshCount();
+        lm->renderer = std::make_unique<yawn::visual::M3DRenderer>();
+        if (!lm->renderer->init()) {
+            std::fprintf(stderr, "%s: renderer init failed\n", path.c_str());
+            return 1;
+        }
+        lm->renderer->setModel(lm->model);
+        layerModels[li] = std::move(lm);
+        std::fprintf(stderr, "(layer %zu: model %s, %d mesh(es))\n",
+                     li, path.c_str(), meshCount);
+    }
+#endif
+
     // ── Render targets ─────────────────────────────────────────────
     const int w = opt.width, h = opt.height;
     struct LayerRT {
@@ -573,6 +634,39 @@ int main(int argc, char** argv) {
         // Layers (each with its own previous-frame feedback).
         std::vector<float> acc(static_cast<size_t>(w) * h * 4, 0.0f);
         for (size_t li = 0; li < layerProgs.size(); ++li) {
+            // A model layer renders its glTF into iChannel2 first, using
+            // this shader's model transform uniforms (same names the
+            // engine reads: modelPos*, modelRot*, modelSpin*, modelScale).
+            GLuint ch2Tex = seedTarget.tex;
+            int ch2W = seedW, ch2H = seedH;
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+            if (layerModels[li]) {
+                const auto vals = effectiveParams(layerDefaults[li], opt);
+                yawn::visual::M3DInstance inst;
+                inst.position[0] = paramOr(vals, "modelPosX", 0.0f);
+                inst.position[1] = paramOr(vals, "modelPosY", 0.0f);
+                inst.position[2] = paramOr(vals, "modelPosZ", 0.0f);
+                inst.rotationDeg[0] = paramOr(vals, "modelRotX", 0.0f) +
+                                      paramOr(vals, "modelSpinX", 0.0f) * t;
+                inst.rotationDeg[1] = paramOr(vals, "modelRotY", 0.0f) +
+                                      paramOr(vals, "modelSpinY", 0.0f) * t;
+                inst.rotationDeg[2] = paramOr(vals, "modelRotZ", 0.0f) +
+                                      paramOr(vals, "modelSpinZ", 0.0f) * t;
+                inst.scale = paramOr(vals, "modelScale", 1.0f);
+                auto* r = layerModels[li]->renderer.get();
+                r->beginFrame(static_cast<float>(t));
+                r->drawInstance(inst);
+                r->endFrame();
+                // The renderer leaves its VAO/depth/cull state bound;
+                // restore what the fullscreen layer pass needs.
+                glBindVertexArray(vao);
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+                ch2Tex = r->colorTexture();
+                ch2W = yawn::visual::M3DRenderer::kWidth;
+                ch2H = yawn::visual::M3DRenderer::kHeight;
+            }
+#endif
             Target& rt = layerRT[li].work;
             glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
             glViewport(0, 0, w, h);
@@ -580,7 +674,7 @@ int main(int argc, char** argv) {
             glClear(GL_COLOR_BUFFER_BIT);
             bindUniforms(layerProgs[li], f, t, dt, opt, audio,
                          layerDefaults[li],
-                         seedTarget.tex, seedW, seedH,
+                         ch2Tex, ch2W, ch2H,
                          audioTex, textTex, blackTex,
                          blackTex, layerRT[li].prev.tex);
             glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -638,6 +732,13 @@ int main(int argc, char** argv) {
         std::printf("wrote %s  (t=%.3fs  beat=%.2f)\n",
                     path.c_str(), t, audio.beat);
     }
+
+    // GL objects must die while the context is still current (M3DRenderer
+    // destructors call GL).
+#if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
+    for (auto& lm : layerModels)
+        if (lm && lm->renderer) lm->renderer->clear();
+#endif
 
     shadertest::shutdownContext();
     return 0;

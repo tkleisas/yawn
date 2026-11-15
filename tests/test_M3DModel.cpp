@@ -21,6 +21,17 @@ std::string bundledFox() {
 }
 }
 
+TEST(M3DModelTest, BundledOxygeneModelsLoad) {
+    for (const char* name : { "skull.glb", "earth.glb", "antlers.glb" }) {
+        M3DModel model;
+        const std::string path =
+            std::string(YAWN_BUNDLED_MODELS_DIR) + "/" + name;
+        ASSERT_TRUE(model.load(path)) << name << ": " << model.error();
+        EXPECT_TRUE(model.isValid()) << name;
+        EXPECT_GE(model.meshCount(), 1) << name;
+    }
+}
+
 TEST(M3DModelTest, LoadsBox01) {
     M3DModel model;
     ASSERT_TRUE(model.load(sampleBox01())) << model.error();

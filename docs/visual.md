@@ -282,6 +282,14 @@ Bundled effects (`assets/shaders/post/`):
 - **Bloom** — thresholded 5×5 box blur added over the source (`threshold`, `intensity`, `radius`)
 - **Pixelate** — grid-snapped sampling (`cellSize`)
 - **Kaleidoscope** — N-fold radial mirror (`segments`, `rotate`)
+- **Infinite Zoom** — recursive feedback zoom of the running composite:
+  samples the previous frame's chain output (`iFeedback`) scaled and
+  rotated, keeps the brighter of (current, zoomed echo), with a radial
+  RGB split and edge fade (`speed`, `spin`, `echo`, `chroma`, `fold`,
+  `kick`). Chain `rotate → scale → infinite_zoom → bloom` for the
+  classic tunnel; works per-track too, so different layers can zoom at
+  different speeds/directions. Not deterministic by design (it
+  accumulates).
 - **Chromatic Split** — radial RGB offset, audio-reactive (`shift`, `reactive`)
 - **Vignette** — smoothstep edge darkening (`strength`, `softness`)
 - **Invert** — `1 - color` with amount (`amount`)
@@ -679,7 +687,7 @@ distances.
 
 ## Bundled shader pack
 
-`assets/shaders/examples/` — 36 original MIT-licensed shaders covering
+`assets/shaders/examples/` — 39 original MIT-licensed shaders covering
 plasma, palette sweeps, flow noise, rings, spectrum/waveform visualisers,
 spirals, chequerboards, voronoi, tunnels, fractal circles, triangular
 grids, FBM clouds, kaleidoscopes, pulse grids, auroras, radial EQ bars,
@@ -704,7 +712,13 @@ blinking on kicks; premultiplied alpha overlay), and an ink-wash
 landscape (`35_temple_mist.frag` — layered ridgelines with tiered
 pagoda temples, drifting mist bands, lanterns flaring on kicks, a moon
 disc with an enso ring, brush-wash sky and distant birds; deterministic
-skyline from picture + seed), and a sumi-e ink overlay
+skyline from picture + seed), a deterministic endless-zoom lattice
+(`37_infinite_zoom.frag` — the seed picture repeated forever in
+log-polar space, N-fold folded, as an alpha overlay), an Oxygène-homage
+pair (`38_oxygen_skull.frag` / `39_oxygen_globe.frag` — a rotating glTF
+skull in an ember-lit void under a rotating Earth whose seeded fissures
+open onto the skull; the globe's `morph` knob crossfades 100% skull ↔
+100% Earth, `autoMix` makes it breathe on its own), and a sumi-e ink overlay
 (`36_ink_brush.frag` — rough enso with dry-brush hairs and ink pooling,
 calligraphic arc flicks, splatter that blooms on kicks, and a vermilion
 seal with a carved 王 glyph; premultiplied alpha). All use the `@range`
@@ -828,6 +842,10 @@ yawn_visual_probe \
   kick envelope — so a frame at time *t* is the same frame every run.
 - `--image` accepts anything `stb_image` reads; without one, a built-in
   procedural seed (gradient + rings + colour blocks) is used.
+- `--model <glb>` (after a `--layer`) renders a glTF 2.0 model into that
+  layer's `iChannel2` through the engine's `M3DRenderer` — the layer
+  shader's `modelPos*` / `modelRot*` / `modelSpin*` / `modelScale`
+  defaults (and `--set` overrides) drive the pose exactly like the app.
 - `iChannel0`/`iChannel1` are silent/blank dummies, so FFT-bar and text
   shaders render black by design. `iChannel2` keeps the engine's raw
   texel orientation (Shadertoy convention — image shaders flip v

@@ -223,6 +223,8 @@ public:
         std::string shaderPath;
         std::string name;
         std::string imagePath;
+        std::string modelPath;   // glTF (.glb/.gltf) rendered as iChannel2
+        std::string trackName;   // when set, resolve track by name at flush
         std::vector<std::pair<std::string, float>> params;
     };
     void requestSetVisual(int track, int scene1, VisualSetRequest req);

@@ -121,6 +121,35 @@ The four-stem separation model (`Separate Stems`, gated on
 
 ---
 
+## 3D Models (glTF)
+
+Bundled glTF 2.0 models used by visual clips and the example scenes
+(`assets/examples/3d/`). Files are copied unmodified.
+
+### Khronos glTF-Sample-Assets
+
+- **`Duck.glb`** — © 2006, Sony. SCEA Shared Source License, Version 1.0
+  (text: https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/LICENSES/SCEA.txt).
+- **`Fox.glb`** — © 2014, tomkranis; © 2017, @AsoboStudio and @scurest.
+  Creative Commons Attribution 4.0 International (CC-BY 4.0).
+- **Source:** https://github.com/KhronosGroup/glTF-Sample-Assets
+  (`Models/Duck`, `Models/Fox`).
+
+### Poly Pizza (poly.pizza)
+
+- **`skull.glb`** — "Skull" by **Kay Lousberg**. CC0 1.0 Universal
+  (Public Domain Dedication). https://poly.pizza/m/7clFQGz5jH
+- **`earth.glb`** — "Earth" by **Poly by Google**. Creative Commons
+  Attribution 3.0 (CC-BY 3.0). https://poly.pizza/m/58PjkXNdpPb
+- **`antlers.glb`** — "Antlers" by **Poly by Google**. Creative Commons
+  Attribution 3.0 (CC-BY 3.0). https://poly.pizza/m/9oH6TjelO-W
+
+The Oxygène homage example (`assets/examples/livecode/07_oxygen_globe.lua`)
+composes `skull.glb` and `earth.glb`; `antlers.glb` is bundled as an
+optional horned-skull kit with `skull.glb`.
+
+---
+
 ## Source-Code Dependencies
 
 Code dependencies are vendored by CMake's FetchContent and live

@@ -398,12 +398,23 @@ void LiveCodeManager::flushPendingDeliveries() {
     }
     m_pendingSetClips.clear();
     for (const auto& p : m_pendingSetVisuals) {
+        // Name-based requests resolve here — after the song apply that
+        // creates the visual tracks (the script body runs before it).
+        int track = p.track;
+        if (track < 0 && !p.req.trackName.empty()) {
+            if (m_project) track = m_project->findTrackByName(p.req.trackName);
+            if (track < 0) {
+                pushConsole(1, "visual: set_visual failed (no track named '" +
+                               p.req.trackName + "')");
+                continue;
+            }
+        }
         bool ok = false;
         if (m_setVisualLive)
-            ok = m_setVisualLive(p.track, p.scene1 - 1, p.req);
+            ok = m_setVisualLive(track, p.scene1 - 1, p.req);
         if (!ok)
             pushConsole(1, "visual: set_visual failed (track " +
-                           std::to_string(p.track + 1) + " scene " +
+                           std::to_string(track + 1) + " scene " +
                            std::to_string(p.scene1) + " shader '" +
                            p.req.shaderPath + "')");
     }
