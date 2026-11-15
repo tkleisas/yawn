@@ -1,6 +1,7 @@
 #include "ui/Renderer.h"
 #include "ui/GlCaps.h"
 #include "util/Logger.h"
+#include <cstddef>
 #include <cstring>
 #include <cmath>
 

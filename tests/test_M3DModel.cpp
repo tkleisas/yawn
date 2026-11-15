@@ -184,7 +184,9 @@ namespace {
 std::string base64(const std::vector<uint8_t>& d) {
     static const char* T =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string o; int val = 0, bits = -6;
+    std::string o;
+    uint32_t val = 0;
+    int bits = -6;
     for (uint8_t c : d) {
         val = (val << 8) + c; bits += 8;
         while (bits >= 0) { o += T[(val >> bits) & 0x3F]; bits -= 6; }

@@ -55,7 +55,8 @@ inline std::vector<uint8_t> base64Decode(const std::string& encoded) {
     };
     std::vector<uint8_t> result;
     result.reserve(encoded.size() * 3 / 4);
-    int val = 0, bits = -8;
+    uint32_t val = 0;
+    int bits = -8;
     for (auto c : encoded) {
         if (table[(unsigned char)c] == -1) break;
         val = (val << 6) + table[(unsigned char)c];

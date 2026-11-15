@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
