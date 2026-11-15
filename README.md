@@ -146,7 +146,7 @@ self-contained releases are built, and the stem-separation model) are in
 | Role | Entity | Responsibilities |
 |---|---|---|
 | **Project Manager** | Tasos Kleisas | Vision, QA, yelling "it still doesn't work", changing requirements mid-sentence, clicking things really fast to find bugs, discovering that resonance + fast cutoff sweep = pain |
-| **Chief Engineer** | Claude (Anthropic) | Writing code, rewriting code, explaining why the code was wrong, rewriting it again, apologizing, "I see the issue!", writing commit messages longer than the actual fix |
+| **Chief Engineer** | Claude Code (Anthropic) → Kimi K3 → opencode (DeepSeek V4.1 Flash) | Writing code, rewriting code, explaining why the code was wrong, rewriting it again, apologizing, "I see the issue!", writing commit messages longer than the actual fix. Three models in, same confidence |
 
 ```
 while (true) {
