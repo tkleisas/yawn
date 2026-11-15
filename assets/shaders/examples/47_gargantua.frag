@@ -11,7 +11,7 @@
 // MIT License.
 
 uniform float disk;    // @range 0..1  default=0.90 accretion brightness
-uniform float incl;    // @range 0.0..0.5 default=0.10 camera elevation
+uniform float incl;    // @range 0.0..0.5 default=0.22 camera elevation
 uniform float tilt;    // @range -30..30 default=-6 disk tilt (degrees)
 uniform float spin;    // @range -3..3  default=1.0  orbital speed
 uniform float photon;  // @range 0..1  default=0.85 photon-ring glow
@@ -27,8 +27,8 @@ const float TAU = 6.283185307179586;
 // World units: the shadow's angular radius is rs / camera distance.
 const float kBlackHoleR = 0.40;     // Schwarzschild radius
 const float kCamDist   = 4.6;
-const float kDiskInner = 1.05;      // ISCO-ish
-const float kDiskOuter = 2.60;
+const float kDiskInner = 1.12;      // ISCO-ish
+const float kDiskOuter = 1.95;
 
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -69,20 +69,20 @@ vec3 diskEmission(vec3 hit, vec3 rayDir, float t, float k) {
     float ang = atan(hit.z, hit.x);
     // Fine concentric striations (lensed many radii overlap) + a slower
     // orbital ripple.
-    float fine = 0.72 + 0.28 * sin(rr * 23.0 - t * spin * 2.2 + ang * 3.0);
-    float slow = 0.75 + 0.25 * sin(ang * 5.0 + rr * 9.0 - t * spin);
-    float tex = mix(0.6, 1.0, vnoise(vec2(rr * 8.0, ang * 2.0 + t * 0.1)));
+    float fine = 0.80 + 0.20 * sin(rr * 23.0 - t * spin * 2.2 + ang * 3.0);
+    float slow = 0.85 + 0.15 * sin(ang * 5.0 + rr * 9.0 - t * spin);
+    float tex = mix(0.78, 1.0, vnoise(vec2(rr * 8.0, ang * 2.0 + t * 0.1)));
 
     // Temperature: white-hot inner edge, amber outward.
     float heat = smoothstep(kDiskOuter, kDiskInner, rr);
-    vec3 hot  = mix(vec3(1.00, 0.93, 0.82), vec3(1.0, 0.99, 0.97), 0.5);
-    vec3 warm = mix(vec3(1.00, 0.42, 0.10), vec3(1.00, 0.72, 0.30), palette);
-    vec3 col = mix(warm, hot, pow(heat, 1.4));
+    vec3 hot  = vec3(1.0, 0.985, 0.96);
+    vec3 warm = mix(vec3(1.00, 0.34, 0.06), vec3(1.00, 0.62, 0.18), palette);
+    vec3 col = mix(warm, hot, pow(heat, 2.2));
 
     // Doppler beaming: the side rotating toward the camera is brighter.
     vec3 vdir = normalize(vec3(hit.z, 0.0, -hit.x));   // orbital direction
     float mu = dot(normalize(rayDir), vdir);           // toward the camera
-    float beam = clamp(1.0 + 0.85 * mu, 0.18, 2.4);
+    float beam = clamp(1.0 + 1.25 * mu, 0.10, 3.2);
 
     // Brightness profile: a hot rim at the inner edge, falling off out.
     float profile = smoothstep(kDiskInner, kDiskInner * 1.25, rr)
@@ -90,7 +90,7 @@ vec3 diskEmission(vec3 hit, vec3 rayDir, float t, float k) {
     profile *= 0.55 + 0.45 * heat;
 
     float bright = disk * (0.55 + 0.75 * k) * fine * slow * tex
-                 * profile * beam * 1.7;
+                 * profile * beam * 4.2;
     return col * bright;
 }
 
@@ -145,6 +145,17 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         vel += acc * dt;
         pos += vel * dt;
 
+        // Volumetric disk: soft emission while the ray skims the plane.
+        {
+            float yy = abs(pos.y);
+            float rr = length(pos.xz);
+            if (yy < 0.055 && rr >= kDiskInner && rr <= kDiskOuter) {
+                col += diskEmission(pos, normalize(vel), iTime, k)
+                     * (1.0 - yy / 0.055) * dt * 2.2
+                     * (1.0 - clamp(dot(col, vec3(0.33)), 0.0, 0.85));
+            }
+        }
+
         // Did the step cross the disk plane (y = 0)?
         if (prevPos.y * pos.y < 0.0) {
             float f = prevPos.y / (prevPos.y - pos.y);
@@ -153,7 +164,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             if (rr >= kDiskInner && rr <= kDiskOuter) {
                 // Two crossings (front/back) plus lensed repeats accumulate.
                 col += diskEmission(hit, normalize(vel), iTime, k)
-                     * (1.0 - clamp(dot(col, vec3(0.33)), 0.0, 0.85));
+                     * (1.0 - clamp(dot(col, vec3(0.33)), 0.0, 0.90));
             }
         }
         prevY = pos.y;
@@ -177,8 +188,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     col += mix(vec3(1.0, 0.80, 0.55), vec3(0.55, 0.72, 1.0), palette * 0.4)
          * exp(-abs(bImpact - bCrit) * 5.0) * photon * 0.06;
 
+    // Warm inner glow hugging the shadow (cheap in-shader bloom stand-in).
+    col += mix(vec3(1.0, 0.88, 0.70), vec3(1.0, 0.55, 0.22), 0.45)
+         * exp(-max(bImpact - bCrit, 0.0) * 10.0)
+         * 0.055 * (0.7 + 0.6 * k) * (1.0 - captured);
+
     // Filmic tonemap keeps the disk white-hot without clipping to a blob.
-    col = vec3(1.0) - exp(-col * 1.6);
+    col = vec3(1.0) - exp(-col * 2.8);
     col += (hash21(fragCoord + seed * 5.0) - 0.5) * 0.012;
     col *= 1.0 - smoothstep(0.55, 1.25, length(p)) * 0.35;
 
