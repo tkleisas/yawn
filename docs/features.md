@@ -79,9 +79,10 @@ for build flags that gate some of these, see [building.md](building.md).
 
 ## Integrated Instruments
 
-*15 hand-crafted instruments. The AI built FM synthesis before learning that Op2 → Op1 with feedback is the entire DX7 e-piano. Then it built a 2-op e-piano on purpose. The PM keeps adding "just one more".*
+*16 hand-crafted instruments. The AI built FM synthesis before learning that Op2 → Op1 with feedback is the entire DX7 e-piano. Then it built a 2-op e-piano on purpose. The PM keeps adding "just one more".*
 
 - **Subtractive Synth** — 2-oscillator analog-style synth with SVF filter, 23 parameters, 16-voice polyphony
+- **Polivoks 1982** — Duophonic two-VCO Polivoks emulation: five waveforms, K140UD12-style 4x-oversampled SVF (LP/BP/self-oscillation), looping filter and amp ADSRs, four-shape LFO, 8 factory programs, custom editor with live display
 - **FM Synth** — 4-operator FM synthesizer with 8 algorithm presets, 19 parameters
 - **Sampler** — Sample playback with pitch tracking, linear interpolation, ADSR envelope
 - **Karplus-Strong** — Physical modelling string synth with 4 exciter types, damping, body resonance, string stretch

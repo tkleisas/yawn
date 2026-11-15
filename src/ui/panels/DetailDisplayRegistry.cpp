@@ -24,6 +24,7 @@
 #include "instruments/StringMachine.h"
 #include "instruments/DrawbarOrgan.h"
 #include "instruments/ElectricPiano.h"
+#include "instruments/PolivoksSynth.h"
 #include "effects/SplineEQ.h"
 #include "effects/ConvolutionReverb.h"
 #include "effects/NeuralAmp.h"
@@ -46,6 +47,7 @@
 #include "ui/framework/v2/NeuralAmpDisplayPanel.h"
 #include "ui/framework/v2/FilterDisplayWidget.h"
 #include "ui/framework/v2/LFODisplayWidget.h"
+#include "ui/framework/v2/PolivoksPanel.h"
 
 #include <cmath>
 
@@ -109,6 +111,16 @@ DeviceDisplaySetup buildFMSynth(const DisplayBuildArgs&, instruments::Instrument
         algoW->setFeedback(inst->getParameter(1));
         algoW->setOpLevels(inst->getParameter(2), inst->getParameter(6),
                            inst->getParameter(10), inst->getParameter(14));
+    };
+    return out;
+}
+
+DeviceDisplaySetup buildPolivoks(const DisplayBuildArgs&, instruments::Instrument* inst) {
+    DeviceDisplaySetup out;
+    auto* panel = new PolivoksPanel(inst);
+    out.customBody = panel;
+    out.updater = [panel, inst]() {
+        if (inst) panel->updateFromParams(*inst);
     };
     return out;
 }
@@ -819,6 +831,7 @@ struct InstrumentRow { const char* name; InstrumentDisplayBuilder build; };
 constexpr InstrumentRow kInstrumentRows[] = {
     {"FM Synth",          buildFMSynth},
     {"Subtractive Synth", buildSubSynth},
+    {"Polivoks 1982",     buildPolivoks},
     {"Sampler",           buildSampler},
     {"DrumSlop",          buildDrumSlop},
     {"Wavetable Synth",   buildWavetable},

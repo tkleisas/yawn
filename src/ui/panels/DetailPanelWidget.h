@@ -1792,6 +1792,34 @@ private:
             ref.chainIndex};
         auto setup = builder(args, inst);
 
+        if (setup.customBody) {
+            // Full-body instrument editor (Polivoks 1982 and future
+            // custom instrument panels).
+            auto* body = setup.customBody;
+            body->setOnParamChange([ref](int idx, float v) {
+                DeviceRef r = ref; r.setParam(idx, v);
+            });
+            // The custom instrument editor uses two rows of controls plus
+            // its display; make sure the detail panel opens tall enough on
+            // first use. The user can still drag the handle afterwards.
+            if (panelHeight() < 230.0f) setPanelHeight(230.0f);
+            dw->setCustomBody(body);
+            configureDeviceWidget(dw, ref);
+            for (int p = 0; p < inst->parameterCount(); ++p)
+                body->updateParamValue(p, ref.getParam(p));
+            if (setup.updater)
+                m_displayUpdaters.push_back(std::move(setup.updater));
+            return true;
+        }
+        if (setup.customPanel) {
+            dw->setCustomPanel(setup.customPanel,
+                               setup.customPanelHeight, setup.customPanelMinW);
+            configureDeviceWidget(dw, ref);
+            if (setup.updater)
+                m_displayUpdaters.push_back(std::move(setup.updater));
+            return true;
+        }
+
         // Build param descriptors
         int count = inst->parameterCount();
         std::vector<GroupedKnobBody::ParamDesc> params(count);

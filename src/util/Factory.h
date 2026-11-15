@@ -21,6 +21,7 @@
 #include "instruments/StringMachine.h"
 #include "instruments/DrawbarOrgan.h"
 #include "instruments/ElectricPiano.h"
+#include "instruments/PolivoksSynth.h"
 
 #include "effects/AudioEffect.h"
 #include "effects/Reverb.h"
@@ -203,6 +204,8 @@ instrumentDescriptors() {
             [] { return std::make_unique<instruments::DrawbarOrgan>(); }},
         {"Electric Piano",    "electricpiano","Electric Piano",      nullptr,
             [] { return std::make_unique<instruments::ElectricPiano>(); }},
+        {"Polivoks 1982",     "polivoks",     "Polivoks 1982",       nullptr,
+            [] { return std::make_unique<instruments::PolivoksSynth>(); }},
     };
     return table;
 }

@@ -79,6 +79,7 @@ yawn/
 │   │   ├── Envelope.h          # ADSR envelope generator
 │   │   ├── Oscillator.h        # polyBLEP oscillator (5 waveforms)
 │   │   ├── SubtractiveSynth.h  # 2-osc analog synth + SVF filter
+│   │   ├── PolivoksSynth.h/.cpp # Duophonic Polivoks 1982 (2 VCOs, K140UD12 SVF, looping ADSRs)
 │   │   ├── FMSynth.h           # 4-operator FM synth (8 algorithms)
 │   │   ├── Sampler.h           # Sample playback with pitch tracking
 │   │   ├── Multisampler.h      # Multi-zone sample player
