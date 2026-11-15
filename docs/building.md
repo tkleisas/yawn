@@ -113,6 +113,9 @@ build\bin\Release\YAWN.exe
 ./build/bin/YAWN
 ```
 
+On a Wayland session YAWN prefers SDL’s native Wayland driver. To force the
+X11/XWayland backend instead, launch it with `SDL_VIDEODRIVER=x11 ./build/bin/YAWN`.
+
 ## Run Tests
 
 ```bash

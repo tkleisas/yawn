@@ -67,7 +67,10 @@ def main() -> int:
     if "--port" in args:
         port = int(args[args.index("--port") + 1])
 
-    env = dict(os.environ, YAWN_CMD=str(port))
+    # The smoke test runs under xvfb-run; force SDL's X11 driver so a
+    # Wayland session on the developer machine does not pull the app away
+    # from the virtual X display.
+    env = dict(os.environ, YAWN_CMD=str(port), SDL_VIDEODRIVER="x11")
     proc = subprocess.Popen([binary], env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

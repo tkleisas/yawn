@@ -28,6 +28,7 @@
 #include "visual/VisualEngine.h"
 #include "util/Logger.h"
 #include "presets/PresetGenerator.h"
+#include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -428,6 +429,21 @@ int main(int argc, char* argv[]) {
     initCrashHandler();
 
     LOG_INFO("App", "Starting Y.A.W.N — Yet Another Audio Workstation New");
+
+#if defined(__linux__)
+    // On a Wayland session SDL may still pick its X11 backend when both
+    // DISPLAY and WAYLAND_DISPLAY are set. Under XWayland some window
+    // managers never deliver the MapNotify that SDL_ShowWindow blocks on,
+    // leaving the app running but permanently invisible. Prefer the native
+    // Wayland driver whenever a Wayland socket is present; users who need
+    // X11 can set SDL_VIDEODRIVER=x11 explicitly.
+    if (std::getenv("SDL_VIDEODRIVER") == nullptr &&
+        std::getenv("WAYLAND_DISPLAY") != nullptr) {
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
+        LOG_INFO("App", "Wayland session detected; preferring the Wayland video driver "
+                        "(set SDL_VIDEODRIVER=x11 to override)");
+    }
+#endif
 
 #ifdef _WIN32
     return runAppSEH();
