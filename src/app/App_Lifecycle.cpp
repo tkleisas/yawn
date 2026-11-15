@@ -695,25 +695,51 @@ bool App::init() {
         m_settingsDirty = true;
     };
     // yawn.set_visual: bare shader names resolve against the example
-    // roots; the visual clip gets tempoSync (beat-locked iTime).
-    m_liveCode.setVisualLiveHook([this](int track, int scene,
-                                        const std::string& shaderPath,
-                                        const std::string& name) {
+    // roots; bare image names against the bundled live-code examples
+    // (the seed-picture family lives there). The visual clip gets
+    // tempoSync (beat-locked iTime).
+    m_liveCode.setVisualLiveHook(
+        [this](int track, int scene,
+               const livecode::LiveCodeManager::VisualSetRequest& req) {
         if (track < 0 || track >= m_project.numTracks() ||
-            scene < 0 || scene >= m_project.numScenes() || shaderPath.empty())
+            scene < 0 || scene >= m_project.numScenes() ||
+            req.shaderPath.empty())
             return false;
-        std::filesystem::path full(shaderPath);
+        std::filesystem::path full(req.shaderPath);
         std::error_code ec;
         if (!std::filesystem::exists(full, ec)) {
-            full = std::filesystem::path("assets/shaders/examples") / shaderPath;
+            full = std::filesystem::path("assets/shaders/examples")
+                 / req.shaderPath;
             if (!std::filesystem::exists(full, ec))
-                full = std::filesystem::path("build/bin/assets/shaders/examples")
-                       / shaderPath;
+                full = std::filesystem::path(
+                          "build/bin/assets/shaders/examples") / req.shaderPath;
+        }
+        std::filesystem::path image;
+        if (!req.imagePath.empty()) {
+            image = req.imagePath;
+            if (!std::filesystem::exists(image, ec)) {
+                image = std::filesystem::path("assets/examples/livecode")
+                      / req.imagePath;
+                if (!std::filesystem::exists(image, ec))
+                    image = std::filesystem::path(
+                                "build/bin/assets/examples/livecode")
+                          / req.imagePath;
+            }
+            if (!std::filesystem::exists(image, ec)) {
+                LOG_WARN("LiveCode", "set_visual: seed image '%s' not found",
+                         req.imagePath.c_str());
+                return false;
+            }
         }
         auto vc = std::make_unique<visual::VisualClip>();
         vc->source.shaderPath = full.string();
-        vc->name = name.empty() ? full.stem().string() : name;
+        vc->name = req.name.empty() ? full.stem().string() : req.name;
         vc->tempoSync = true;
+        if (!image.empty()) {
+            vc->imagePath = image.string();
+            vc->thumbnailPath = image.string();   // image is its own thumb
+        }
+        vc->source.paramValues = req.params;
         m_project.setVisualClip(track, scene, std::move(vc));
         syncTracksToEngine();
         markDirty();

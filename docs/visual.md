@@ -679,7 +679,7 @@ distances.
 
 ## Bundled shader pack
 
-`assets/shaders/examples/` — 31 original MIT-licensed shaders covering
+`assets/shaders/examples/` — 36 original MIT-licensed shaders covering
 plasma, palette sweeps, flow noise, rings, spectrum/waveform visualisers,
 spirals, chequerboards, voronoi, tunnels, fractal circles, triangular
 grids, FBM clouds, kaleidoscopes, pulse grids, auroras, radial EQ bars,
@@ -687,10 +687,43 @@ RGB-split, beat strobes, kick flashes, the text shaders (marquee, kick
 pulse, glitch, debug), the audio-reactive 3D example
 (`25_model_audio_glow.frag`), the 60's hypnotic spiral
 (`27_hypno_spiral.frag`), text crawl (`28`), the raymarched disco ball
-(`29`), the 4D hypercube morph (`30`), and the live-coding ghost accent
+(`29`), the 4D hypercube morph (`30`), the live-coding ghost accent
 clock (`31_ghost_accent.frag` — pre-glowing diamonds for upcoming
-improv fires; see `docs/live-coding.md`). All use the `@range` annotation
-convention so they play nicely with the knob UI out of the box.
+improv fires; see `docs/live-coding.md`), and the seed-picture mandala
+(`32_mandala_seed.frag` — devotional radial ornament generated from the
+clip's image on `iChannel2`: the picture supplies the palette and
+continuous generative parameters while the geometry is a mirrored N-fold
+lotus-wheel; deterministic per picture + knobs; `zoom` fits it inside
+frames), and its companion thangka frame (`33_thangka_frame.frag` — a
+premultiplied-alpha ornament layer: brocade border, gold piping, a
+lotus-bead motif band, inset corner gems and an inward halo; composite
+with the normal blend over the mandala), and its watching-eye garland
+(`34_eye_field.frag` — almond eyes on counter-rotating lattices, each
+iris sampled from the seed picture, gold-rimmed on parchment sclera,
+blinking on kicks; premultiplied alpha overlay), and an ink-wash
+landscape (`35_temple_mist.frag` — layered ridgelines with tiered
+pagoda temples, drifting mist bands, lanterns flaring on kicks, a moon
+disc with an enso ring, brush-wash sky and distant birds; deterministic
+skyline from picture + seed), and a sumi-e ink overlay
+(`36_ink_brush.frag` — rough enso with dry-brush hairs and ink pooling,
+calligraphic arc flicks, splatter that blooms on kicks, and a vermilion
+seal with a carved 王 glyph; premultiplied alpha). All use the `@range`
+annotation convention so they play nicely with the knob UI out of the box.
+
+The seed-picture family composes into one panel (image on `iChannel2`):
+
+```bash
+yawn_visual_probe \
+    --layer assets/shaders/examples/32_mandala_seed.frag --set zoom=0.78 \
+    --layer assets/shaders/examples/33_thangka_frame.frag \
+    --layer assets/shaders/examples/34_eye_field.frag \
+    --layer assets/shaders/examples/36_ink_brush.frag --blend multiply \
+    --post assets/shaders/post/bloom.frag \
+    --image seed.jpg --out /tmp/panel --frames 60 --bpm 137
+```
+
+(`35_temple_mist.frag` is a full landscape background — use it instead of
+the mandala when the scene wants depth rather than iconography.)
 
 `assets/shaders/default.frag` — the startup demo; uses A–E knobs as
 palette speed, hue offset, audio-splash strength, kick-flash strength,
@@ -760,3 +793,46 @@ the ghost uniforms (`iGhostCount`, `iGhost0..7`, `iBeatBarFrac`) and
 the knob uniforms compile through. For interactive one-off checks,
 `YAWN --probe-shader <path>` compiles a shader through the app's real
 engine setup and reports to the log.
+
+### Look iteration harness (`yawn_visual_probe`)
+
+Shader *looks* iterate faster without launching the app:
+`yawn_visual_probe` renders fragments offscreen at the engine's 640×360
+through the same production compile path (`ShaderTestKernel`), binds a
+seed picture to `iChannel2`, applies each shader's `@range` defaults
+(plus `--set` overrides), and writes PNG frames:
+
+```bash
+# single shader, seed picture, 8 frames
+yawn_visual_probe --shader assets/shaders/examples/14_kaleidoscope.frag \
+    --image seed.jpg --out /tmp/frames --frames 8 --fps 30
+
+# a layered recipe + post chain
+yawn_visual_probe \
+    --layer assets/shaders/examples/mandala_seed.frag \
+    --layer assets/shaders/examples/thangka_frame.frag \
+        --blend add --opacity 0.8 \
+    --post assets/shaders/post/bloom.frag \
+    --post assets/shaders/post/chroma.frag \
+    --image seed.jpg --frames 6 \
+    --set segments=0.6 --knobA 0.3 --bpm 137
+```
+
+- Layers composite with the engine's four blend modes
+  (`normal|add|multiply|screen`, α = opacity × source alpha) and each
+  layer keeps its own previous-frame `iFeedback`.
+- Post passes chain through `iPrev` (the running image) and see the
+  chain's previous frame as `iFeedback`.
+- Time/audio uniforms are deterministic functions of
+  `--start`/`--fps`/`--bpm` — the "audio" is a reproducible fake with a
+  kick envelope — so a frame at time *t* is the same frame every run.
+- `--image` accepts anything `stb_image` reads; without one, a built-in
+  procedural seed (gradient + rings + colour blocks) is used.
+- `iChannel0`/`iChannel1` are silent/blank dummies, so FFT-bar and text
+  shaders render black by design. `iChannel2` keeps the engine's raw
+  texel orientation (Shadertoy convention — image shaders flip v
+  themselves, like `image_fit.frag`).
+
+`@range` parsing is shared with the engine via
+`src/visual/ShaderParamParse.h`, so the harness starts from exactly the
+defaults a freshly launched clip would.

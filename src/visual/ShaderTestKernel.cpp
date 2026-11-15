@@ -164,6 +164,13 @@ static bool YAWN_kernel_trace() {
 
 bool compileFragment(const std::string& name, const std::string& userSrc,
                      std::string& errOut) {
+    const unsigned prog = compileProgram(name, userSrc, errOut);
+    if (prog) glDeleteProgram(prog);
+    return prog != 0;
+}
+
+unsigned compileProgram(const std::string& name, const std::string& userSrc,
+                        std::string& errOut) {
     const std::string full = buildUserSource(userSrc);
 
     auto compileOne = [](GLenum type, const char* stageSrc,
@@ -232,6 +239,7 @@ bool compileFragment(const std::string& name, const std::string& userSrc,
     const bool vsOk = (vs != 0);
     const bool fsOk = (fs != 0);
     bool ok = vsOk && fsOk;
+    unsigned linked = 0;
     if (ok) {
         GLuint prog = glCreateProgram();
         glAttachShader(prog, vs);
@@ -249,12 +257,14 @@ bool compileFragment(const std::string& name, const std::string& userSrc,
             glGetProgramInfoLog(prog, len, nullptr, log.data());
             errOut += std::string("link failed:\n") + log.data();
             ok = false;
+        } else {
+            linked = prog;
         }
-        glDeleteProgram(prog);
+        if (!ok) glDeleteProgram(prog);
     }
     if (vs) glDeleteShader(vs);
     if (fs) glDeleteShader(fs);
-    return ok;
+    return linked;
 }
 
 } // namespace shadertest

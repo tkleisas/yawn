@@ -378,9 +378,8 @@ void LiveCodeManager::requestSetClip(int track, int scene1, uint64_t handle,
 }
 
 void LiveCodeManager::requestSetVisual(int track, int scene1,
-                                       const std::string& shaderPath,
-                                       const std::string& name) {
-    m_pendingSetVisuals.push_back({track, scene1, shaderPath, name});
+                                       VisualSetRequest req) {
+    m_pendingSetVisuals.push_back({track, scene1, std::move(req)});
 }
 
 void LiveCodeManager::flushPendingDeliveries() {
@@ -401,12 +400,12 @@ void LiveCodeManager::flushPendingDeliveries() {
     for (const auto& p : m_pendingSetVisuals) {
         bool ok = false;
         if (m_setVisualLive)
-            ok = m_setVisualLive(p.track, p.scene1 - 1, p.shaderPath, p.name);
+            ok = m_setVisualLive(p.track, p.scene1 - 1, p.req);
         if (!ok)
             pushConsole(1, "visual: set_visual failed (track " +
                            std::to_string(p.track + 1) + " scene " +
                            std::to_string(p.scene1) + " shader '" +
-                           p.shaderPath + "')");
+                           p.req.shaderPath + "')");
     }
     m_pendingSetVisuals.clear();
 }

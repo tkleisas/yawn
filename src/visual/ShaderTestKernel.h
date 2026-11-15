@@ -41,6 +41,11 @@ std::string buildUserSource(const std::string& userSrc);
 bool compileFragment(const std::string& name, const std::string& userSrc,
                      std::string& errOut);
 
+// Same compile path, but returns the linked program (0 on failure) so
+// look-iteration tools can actually draw with it. Caller deletes it.
+unsigned compileProgram(const std::string& name, const std::string& userSrc,
+                        std::string& errOut);
+
 // Shutdown (context + SDL teardown).
 void shutdownContext();
 

@@ -215,12 +215,19 @@ public:
         m_setClipLive = std::move(fn);
     }
     // yawn.set_visual: a shader file lands in a session slot as a
-    // visual clip (App hook = Project setVisualClip + sync; the path
-    // may be bare — the host resolves it against the shader roots).
-    void requestSetVisual(int track, int scene1, const std::string& shaderPath,
-                          const std::string& name);
-    void setVisualLiveHook(std::function<bool(int, int, const std::string&,
-                        const std::string&)> fn) {
+    // visual clip (App hook = Project setVisualClip + sync; the paths
+    // may be bare — the host resolves shaders against the shader roots
+    // and images against the bundled examples dir). `params` presets
+    // the clip's @range values (name → value).
+    struct VisualSetRequest {
+        std::string shaderPath;
+        std::string name;
+        std::string imagePath;
+        std::vector<std::pair<std::string, float>> params;
+    };
+    void requestSetVisual(int track, int scene1, VisualSetRequest req);
+    void setVisualLiveHook(
+        std::function<bool(int, int, const VisualSetRequest&)> fn) {
         m_setVisualLive = std::move(fn);
     }
     // Drains queued sample loads + clip sets (after the song apply; also
@@ -337,12 +344,10 @@ private:
     struct PendingSetVisual {
         int track = 0;
         int scene1 = 0;
-        std::string shaderPath;
-        std::string name;
+        VisualSetRequest req;
     };
     std::vector<PendingSetVisual> m_pendingSetVisuals;
-    std::function<bool(int, int, const std::string&, const std::string&)>
-        m_setVisualLive;
+    std::function<bool(int, int, const VisualSetRequest&)> m_setVisualLive;
     std::function<bool(int, int, std::shared_ptr<audio::AudioBuffer>,
                        const std::string&)>
         m_setClipLive;

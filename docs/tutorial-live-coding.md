@@ -677,7 +677,11 @@ doing both, which is exactly what Lesson 6's kick job could also do.)
 
 If the visual engine is more your stage: `yawn.set_visual(track, scene,
 "31_ghost_accent.frag", "ghost accents")` puts one of YAWN's bundled
-shaders on a visual track as a clip — and the improv layer's upcoming
+shaders on a visual track as a clip. The 4th argument can also be an
+options table — `{ name = …, image = "seed.png", params = { palette = 1 } }`
+— where `image` is the seed picture for the shader's `iChannel2` (bare
+names resolve against `assets/examples/livecode`) and `params` presets
+the shader's `@range` knobs; see `06_seed_panel.lua` — and the improv layer's upcoming
 fires are published to shaders as ghost uniforms (`iGhost0..7`,
 `iBeatBarFrac`), which is how the ghost-accent shader pre-glows notes just
 before they sound. See [visual.md](visual.md); see example

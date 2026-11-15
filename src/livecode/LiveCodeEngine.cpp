@@ -680,14 +680,47 @@ static int l_launch_clip(lua_State* L) {
 
 // yawn.set_visual(track, scene, shaderPath, [name]) — place a shader in
 // a session slot as a visual clip (deferred like set_clip).
+// 4th arg may also be a table: { name = "…", image = "seed.png",
+// params = { zoom = 0.8, palette = 1 } } — `image` names the seed
+// picture for the clip's iChannel2 (bare names resolve against the
+// bundled examples dir); `params` presets the clip's @range values.
+// An image can also be given as the 5th positional arg when the 4th is
+// a name.
 static int l_set_visual(lua_State* L) {
     auto* mgr = getManager(L);
     if (!mgr) return 0;
     const int track = static_cast<int>(luaL_checkinteger(L, 1));
     const int scene1 = static_cast<int>(luaL_checkinteger(L, 2));
     const char* path = luaL_checkstring(L, 3);
-    const char* name = luaL_optstring(L, 4, "");
-    mgr->requestSetVisual(track, scene1, path ? path : "", name ? name : "");
+    LiveCodeManager::VisualSetRequest req;
+    req.shaderPath = path ? path : "";
+    if (lua_gettop(L) >= 4 && lua_istable(L, 4)) {
+        lua_getfield(L, 4, "name");
+        if (lua_isstring(L, -1)) { const char* s = lua_tostring(L, -1); if (s) req.name = s; }
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "image");
+        if (lua_isstring(L, -1)) { const char* s = lua_tostring(L, -1); if (s) req.imagePath = s; }
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "params");
+        if (lua_istable(L, -1)) {
+            lua_pushnil(L);
+            while (lua_next(L, -2) != 0) {
+                if (lua_isstring(L, -2) && lua_isnumber(L, -1)) {
+                    const char* k = lua_tostring(L, -2);
+                    if (k) req.params.emplace_back(
+                        k, static_cast<float>(lua_tonumber(L, -1)));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    } else {
+        const char* n = luaL_optstring(L, 4, "");
+        if (n) req.name = n;
+        const char* img = luaL_optstring(L, 5, "");
+        if (img) req.imagePath = img;
+    }
+    mgr->requestSetVisual(track, scene1, std::move(req));
     return 0;
 }
 

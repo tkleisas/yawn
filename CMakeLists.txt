@@ -609,6 +609,9 @@ list(REMOVE_ITEM YAWN_SOURCES ${YAWN_CORE_SOURCES})
 # Remove standalone editor host (it's its own executable)
 list(FILTER YAWN_SOURCES EXCLUDE REGEX "VST3EditorHost\\.cpp$")
 
+# Remove the visual look-iteration harness (it's its own executable)
+list(FILTER YAWN_SOURCES EXCLUDE REGEX "VisualProbe\\.cpp$")
+
 add_executable(${PROJECT_NAME} ${YAWN_SOURCES})
 
 yawn_set_warnings(${PROJECT_NAME})
@@ -661,6 +664,26 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     SDL3::SDL3
     glad
     lua54
+)
+
+# ── Visual look-iteration harness ─────────────────────────────────────
+# Renders shaders/layer recipes/post chains to PNG frames through the
+# PRODUCTION compile path with a seed image on iChannel2 — the tool we
+# use to tune the visual shader family without launching the app.
+# Dev tool; not part of the release bundle.
+add_executable(yawn_visual_probe
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/VisualProbe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/visual/ShaderTestKernel.cpp
+)
+yawn_set_warnings(yawn_visual_probe)
+target_include_directories(yawn_visual_probe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${stb_SOURCE_DIR}
+)
+target_link_libraries(yawn_visual_probe PRIVATE
+    yawn_core
+    SDL3::SDL3
+    glad
 )
 
 # ONNX features (Basic Pitch audio-to-MIDI + Demucs stem separation) —

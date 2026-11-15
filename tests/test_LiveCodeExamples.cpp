@@ -9,6 +9,7 @@
 #include "livecode/LiveCodeManager.h"
 #include "audio/AudioEngine.h"
 #include "app/Project.h"
+#include "visual/VisualClip.h"
 
 #include <chrono>
 #include <filesystem>
@@ -71,6 +72,25 @@ protected:
             m_project.setClip(track, scene, std::move(clip));
             return true;
         });
+        // yawn.set_visual hook (the App resolves paths and installs a
+        // visual clip; the headless twin stores the request's fields as
+        // given, which is what the seed-panel test asserts on).
+        m_mgr.setVisualLiveHook(
+            [this](int track, int scene,
+                   const LiveCodeManager::VisualSetRequest& req) {
+                if (track < 0 || track >= m_project.numTracks() ||
+                    scene < 0 || scene >= m_project.numScenes() ||
+                    req.shaderPath.empty()) return false;
+                auto vc = std::make_unique<visual::VisualClip>();
+                vc->source.shaderPath = req.shaderPath;
+                vc->source.paramValues = req.params;
+                vc->name = req.name.empty() ? req.shaderPath : req.name;
+                vc->imagePath = req.imagePath;
+                vc->tempoSync = true;
+                m_project.setVisualClip(track, scene, std::move(vc));
+                return true;
+            });
+        m_mgr.setLaunchVisualHook([](int, int, const std::string&) {});
     }
     void TearDown() override {
         m_mgr.shutdown();
@@ -289,6 +309,55 @@ TEST_F(LiveCodeExampleTest, SampleSynthLabForge) {
     EXPECT_TRUE(m_engine->transport().isPlaying());
     for (const auto& e : consoleOfSeverity(2))
         GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
+    for (const auto& e : consoleOfSeverity(2))
+        GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
+}
+
+// 06 — seed panel: the family lands on four visual tracks, all sharing
+// one seed picture, with the preset params carried through.
+TEST_F(LiveCodeExampleTest, SeedPanelPatchesVisualFamily) {
+    const std::string src = std::string(YAWN_BUNDLED_LIVECODE_DIR) +
+                            "/06_seed_panel.lua";
+    ASSERT_TRUE(runDemo(src)) << "run failed";
+
+    EXPECT_EQ(m_project.numTracks(), 6);
+    const char* wantShaders[4] = {
+        "32_mandala_seed.frag", "33_thangka_frame.frag",
+        "34_eye_field.frag", "36_ink_brush.frag" };
+    for (int t = 2; t < 6; ++t) {
+        EXPECT_EQ(m_project.track(t).type, Track::Type::Visual) << t;
+        auto* slot = m_project.getSlot(t, 0);
+        ASSERT_NE(slot, nullptr) << "track " << t;
+        ASSERT_NE(slot->visualClip, nullptr) << "track " << t;
+        EXPECT_EQ(slot->visualClip->imagePath, "seed_emblem.png") << t;
+        EXPECT_EQ(slot->visualClip->source.shaderPath, wantShaders[t - 2]);
+        bool palette = false;
+        for (const auto& [k, v] : slot->visualClip->source.paramValues) {
+            if (k == "palette") { palette = true; EXPECT_FLOAT_EQ(v, 1.0f); }
+        }
+        EXPECT_TRUE(palette) << "palette preset missing on track " << t;
+    }
+    // The mandala's artistic presets made it through too.
+    bool zoom = false, segments = false;
+    for (const auto& [k, v] :
+         m_project.getSlot(2, 0)->visualClip->source.paramValues) {
+        if (k == "zoom") { zoom = true; EXPECT_FLOAT_EQ(v, 0.78f); }
+        if (k == "segments") { segments = true; EXPECT_FLOAT_EQ(v, 12.0f); }
+    }
+    EXPECT_TRUE(zoom);
+    EXPECT_TRUE(segments);
+
+    // The seed asset ships beside the script.
+    EXPECT_TRUE(std::filesystem::exists(
+        std::filesystem::path(YAWN_BUNDLED_LIVECODE_DIR) / "seed_emblem.png"));
+
+    // Self-start: the scene launches sound + panel on the downbeat.
+    m_engine->pumpInputForTest(nullptr, 512);
+    EXPECT_TRUE(m_engine->transport().isPlaying());
+
+    // No warnings or errors from the whole run.
+    for (const auto& w : consoleOfSeverity(1))
+        GTEST_MESSAGE_(w.c_str(), ::testing::TestPartResult::kNonFatalFailure);
     for (const auto& e : consoleOfSeverity(2))
         GTEST_MESSAGE_(e.c_str(), ::testing::TestPartResult::kNonFatalFailure);
 }

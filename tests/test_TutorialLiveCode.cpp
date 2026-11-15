@@ -182,7 +182,7 @@ public:
         // visual clip; the headless twin accepts (a shader never compiles
         // here — no GL context in this harness).
         m_mgr.setVisualLiveHook(
-            [](int, int, const std::string&, const std::string&) {
+            [](int, int, const livecode::LiveCodeManager::VisualSetRequest&) {
                 return true;
             });
         // Prerender delivery — App::init binds every kind to the real
