@@ -3,6 +3,8 @@
 #include "effects/EffectChain.h"
 #include "effects/Biquad.h"
 #include "effects/Reverb.h"
+#include "effects/PlateReverb.h"
+#include "effects/Utility.h"
 #include "effects/Delay.h"
 #include "effects/EQ.h"
 #include "effects/Compressor.h"
@@ -1690,3 +1692,177 @@ TEST(NeuralAmp, NoNamBuildKeepsPathForRoundTrip) {
 }
 
 #endif // YAWN_HAS_NAM
+
+// ─── Reverb level regression ────────────────────────────────────────────────
+// A reverb must not amplify the dry input. The Freeverb tank needs an
+// input normalisation gain; without it the parallel comb bank (8 × high-Q
+// feedback combs) can multiply the signal many times over even at low
+// wet settings.
+TEST(Reverb, LowWetDoesNotBlowUpLevel) {
+    Reverb rev;
+    rev.init(kSampleRate, kBlockSize);
+    rev.reset();
+    rev.setParameter(Reverb::kWetDry, 0.1f);
+    rev.setParameter(Reverb::kPreDelay, 0.0f);
+    rev.setParameter(Reverb::kRoomSize, 0.7f);
+
+    const int blocks = 80;
+    std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+    double inEnergy = 0.0, outEnergy = 0.0;
+    for (int b = 0; b < blocks; ++b) {
+        fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        for (int i = 0; i < kBlockSize; ++i)
+            inEnergy += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        rev.process(buf.data(), kBlockSize, 2);
+        if (b >= blocks / 2) {
+            for (int i = 0; i < kBlockSize; ++i)
+                outEnergy += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+    }
+    const double ratio = std::sqrt(outEnergy / std::max(1e-12, inEnergy));
+    std::printf("[reverb gain] wet=0.1 output/input RMS ratio = %.3f\n", ratio);
+    EXPECT_LT(ratio, 1.6) << "reverb is amplifying even at 10% wet";
+}
+
+TEST(PlateReverb, LowWetDoesNotBlowUpLevel) {
+    PlateReverb rev;
+    rev.init(kSampleRate, kBlockSize);
+    rev.reset();
+    rev.setParameter(PlateReverb::kWetDry, 0.1f);
+    rev.setParameter(PlateReverb::kPreDelay, 0.0f);
+
+    const int blocks = 80;
+    std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+    double inEnergy = 0.0, outEnergy = 0.0;
+    for (int b = 0; b < blocks; ++b) {
+        fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        for (int i = 0; i < kBlockSize; ++i)
+            inEnergy += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        rev.process(buf.data(), kBlockSize, 2);
+        if (b >= blocks / 2) {
+            for (int i = 0; i < kBlockSize; ++i)
+                outEnergy += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+    }
+    const double ratio = std::sqrt(outEnergy / std::max(1e-12, inEnergy));
+    std::printf("[plate gain] wet=0.1 output/input RMS ratio = %.3f\n", ratio);
+    EXPECT_LT(ratio, 1.6);
+}
+
+// ─── Utility ────────────────────────────────────────────────────────────────
+TEST(Utility, UnityAtDefaults) {
+    Utility u;
+    u.init(kSampleRate, kBlockSize);
+    std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.25f, kSampleRate);
+    const auto original = buf;
+    u.process(buf.data(), kBlockSize, 2);
+    for (size_t i = 0; i < buf.size(); ++i)
+        EXPECT_NEAR(buf[i], original[i], 1e-5f);
+}
+
+TEST(Utility, GainTrimInDecibels) {
+    auto measure = [](float db) {
+        Utility u;
+        u.init(kSampleRate, kBlockSize);
+        u.setParameter(Utility::kGainDb, db);
+        std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+        double inE = 0.0, outE = 0.0;
+        for (int b = 0; b < 20; ++b) {
+            fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.25f, kSampleRate);
+            if (b == 19)
+                for (int i = 0; i < kBlockSize; ++i)
+                    inE += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+            u.process(buf.data(), kBlockSize, 2);
+            if (b == 19)
+                for (int i = 0; i < kBlockSize; ++i)
+                    outE += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+        return std::sqrt(outE / std::max(1e-12, inE));
+    };
+    EXPECT_NEAR(measure(6.0f), 1.9953, 0.01);
+    EXPECT_NEAR(measure(-12.0f), 0.2512, 0.005);
+}
+
+TEST(Utility, MonoFoldAndPhaseInvert) {
+    Utility u;
+    u.init(kSampleRate, kBlockSize);
+    u.setParameter(Utility::kMono, 1.0f);
+    std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+    for (int i = 0; i < kBlockSize; ++i) {
+        buf[size_t(i) * 2] = 0.5f;
+        buf[size_t(i) * 2 + 1] = 0.25f;
+    }
+    u.process(buf.data(), kBlockSize, 2);
+    EXPECT_NEAR(buf[0], 0.375f, 1e-4f);
+    EXPECT_NEAR(buf[1], 0.375f, 1e-4f);
+
+    Utility p;
+    p.init(kSampleRate, kBlockSize);
+    p.setParameter(Utility::kPhaseInvert, 1.0f);
+    fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.25f, kSampleRate);
+    const auto original = buf;
+    p.process(buf.data(), kBlockSize, 2);
+    EXPECT_NEAR(buf[0], -original[0], 1e-4f);
+    EXPECT_NEAR(buf[1], -original[1], 1e-4f);
+}
+
+TEST(Reverb, FullWetRemainsAudibleAndBounded) {
+    Reverb rev;
+    rev.init(kSampleRate, kBlockSize);
+    rev.reset();
+    rev.setParameter(Reverb::kWetDry, 1.0f);
+    rev.setParameter(Reverb::kRoomSize, 1.0f);
+    rev.setParameter(Reverb::kDamping, 0.3f);
+    rev.setParameter(Reverb::kPreDelay, 0.0f);
+
+    const int blocks = 120;
+    std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+    double inE = 0.0, outE = 0.0;
+    for (int b = 0; b < blocks; ++b) {
+        fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        if (b >= blocks / 2) {
+            for (int i = 0; i < kBlockSize; ++i)
+                inE += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+        rev.process(buf.data(), kBlockSize, 2);
+        if (b >= blocks / 2) {
+            for (int i = 0; i < kBlockSize; ++i)
+                outE += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+    }
+    const double ratio = std::sqrt(outE / std::max(1e-12, inE));
+    std::printf("[reverb gain] wet=1.0 room=1.0 output/input RMS ratio = %.3f\n",
+                ratio);
+    EXPECT_GT(ratio, 0.20) << "full wet should still produce a reverb tail";
+    EXPECT_LT(ratio, 2.5) << "full wet reverb is amplifying too much";
+}
+
+TEST(PlateReverb, FullWetRemainsBounded) {
+    PlateReverb rev;
+    rev.init(kSampleRate, kBlockSize);
+    rev.reset();
+    rev.setParameter(PlateReverb::kWetDry, 1.0f);
+    rev.setParameter(PlateReverb::kDecay, 1.0f);
+    rev.setParameter(PlateReverb::kPreDelay, 0.0f);
+
+    const int blocks = 120;
+    std::vector<float> buf(static_cast<size_t>(kBlockSize) * 2);
+    double inE = 0.0, outE = 0.0;
+    for (int b = 0; b < blocks; ++b) {
+        fillSine(buf.data(), kBlockSize, 2, 440.0f, 0.5f, kSampleRate);
+        if (b >= blocks / 2) {
+            for (int i = 0; i < kBlockSize; ++i)
+                inE += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+        rev.process(buf.data(), kBlockSize, 2);
+        if (b >= blocks / 2) {
+            for (int i = 0; i < kBlockSize; ++i)
+                outE += double(buf[size_t(i) * 2]) * buf[size_t(i) * 2];
+        }
+    }
+    const double ratio = std::sqrt(outE / std::max(1e-12, inE));
+    std::printf("[plate gain] wet=1.0 decay=1.0 output/input RMS ratio = %.3f\n",
+                ratio);
+    EXPECT_LT(ratio, 2.5);
+}

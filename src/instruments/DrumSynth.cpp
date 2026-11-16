@@ -138,6 +138,7 @@ void DrumSynth::renderKick(DrumVoice& v, float* outL, float* outR, int n) {
     const float whiteAmt = m_params[pKickWhite];
     const float pinkAmt  = m_params[pKickPink];
     const float drv      = m_params[pKickDrive];
+    const float bodyAmt  = m_params[pBody];
 
     const float sr       = static_cast<float>(m_sampleRate);
     const float atkInc   = 1.0f / std::max(1.0f, atkMs * 0.001f * sr);
@@ -167,24 +168,30 @@ void DrumSynth::renderKick(DrumVoice& v, float* outL, float* outR, int n) {
         // faster than the body — the first ~5 ms gives the kick its
         // initial transient (phases[1]).
         if (v.justTriggered) {
-            v.phases[0] = 1.0f;
-            v.phases[1] = 1.0f;
+            v.phases[0] = 1.0f;   // pitch sweep
+            v.phases[1] = 1.0f;   // white click envelope
             v.justTriggered = false;
         } else {
             v.phases[0] *= pitchCoef;
-            v.phases[1] *= 0.9985f;
+            v.phases[1] *= 0.996f; // tighter beater click (~5 ms)
         }
         const float pitchMul = 1.0f + 2.0f * static_cast<float>(v.phases[0]);
         const double freq = baseHz * pitchMul;
         v.phase0 += freq / m_sampleRate;
         if (v.phase0 >= 1.0) v.phase0 -= 1.0;
 
-        const float sine = std::sin(static_cast<float>(v.phase0) * 6.2831853f);
+        const float ph = static_cast<float>(v.phase0) * 6.2831853f;
+        const float sine = std::sin(ph);
+        // Body = second and third harmonics at the fundamental. Small
+        // speakers reproduce these where the 45-60 Hz fundamental is
+        // inaudible, which is what makes the kick read as "full".
+        const float body = bodyAmt * (0.38f * std::sin(ph * 2.0f)
+                                    + 0.14f * std::sin(ph * 3.0f));
         const float white = (randFloat() - 0.5f) * 2.0f
                            * static_cast<float>(v.phases[1]);
         const float pink  = pinkNoise() * 2.0f;
 
-        float out = sineAmt  * sine
+        float out = sineAmt  * (sine + body)
                   + whiteAmt * white
                   + pinkAmt  * pink * v.ampLevel;   // pink rides amp env
         out *= v.ampLevel * v.velocity;
@@ -201,6 +208,7 @@ void DrumSynth::renderSnare(DrumVoice& v, float* outL, float* outR, int n) {
     const float atkMs  = m_params[pSnareAttack];
     const float decMs  = m_params[pSnareDecay];
     const float drv    = m_params[pSnareDrive];
+    const float bodyAmt = m_params[pBody];
 
     const float sr       = static_cast<float>(m_sampleRate);
     const float atkInc   = 1.0f / std::max(1.0f, atkMs * 0.001f * sr);
@@ -233,16 +241,26 @@ void DrumSynth::renderSnare(DrumVoice& v, float* outL, float* outR, int n) {
         }
         // Body: triangle at baseHz with fast pitch decay (~25 ms)
         if (v.justTriggered) {
-            v.phases[0] = 1.0f;
+            v.phases[0] = 1.0f;   // body pitch drop
+            v.phases[1] = 0.0;    // sub oscillator phase
+            v.phases[2] = 1.0f;   // transient click
             v.justTriggered = false;
         } else {
-            v.phases[0] *= 0.9982f;
+            v.phases[0] *= 0.9984f;
+            v.phases[2] *= 0.988f;
         }
         const double freq = baseHz * (1.0f + static_cast<float>(v.phases[0]) * 0.5f);
         v.phase0 += freq / m_sampleRate;
         if (v.phase0 >= 1.0) v.phase0 -= 1.0;
+        v.phases[1] += (baseHz * 0.5) / m_sampleRate;
+        if (v.phases[1] >= 1.0) v.phases[1] -= 1.0;
         const float t = static_cast<float>(v.phase0);
-        const float body = (t < 0.5f ? 4.0f * t - 1.0f : 3.0f - 4.0f * t);
+        const float tri = (t < 0.5f ? 4.0f * t - 1.0f : 3.0f - 4.0f * t);
+        const float sub = std::sin(static_cast<float>(v.phases[1]) * 6.2831853f);
+        const float body = 0.42f * tri + bodyAmt * (0.22f * sub
+                          + 0.10f * std::sin(t * 12.5663706f));
+        const float click = (randFloat() - 0.5f) * 2.0f
+                          * static_cast<float>(v.phases[2]);
 
         // Noise through bandpass — DF-II Transposed:
         //   y[n] = b0*x[n] + z1[n-1]
@@ -253,7 +271,8 @@ void DrumSynth::renderSnare(DrumVoice& v, float* outL, float* outR, int n) {
         v.bpZ1 = -a1 * y + v.bpZ2;
         v.bpZ2 = -b0 * x - a2 * y;
 
-        float out = 0.35f * body * static_cast<float>(v.phases[0]) + 0.65f * y;
+        float out = body * (0.65f + 0.35f * static_cast<float>(v.phases[0]))
+                  + 0.58f * y + 0.20f * click;
         out *= v.ampLevel * v.velocity;
         out = drive(out, drv);
 
@@ -342,6 +361,7 @@ void DrumSynth::renderTom(DrumVoice& v, float* outL, float* outR, int n,
     const float atkMs  = m_params[pBase + 1];
     const float decMs  = m_params[pBase + 2];
     const float drv    = m_params[pBase + 3];
+    const float bodyAmt = m_params[pBody];
 
     const float sr      = static_cast<float>(m_sampleRate);
     const float atkInc  = 1.0f / std::max(1.0f, atkMs * 0.001f * sr);
@@ -360,19 +380,28 @@ void DrumSynth::renderTom(DrumVoice& v, float* outL, float* outR, int n,
             if (v.ampLevel < 0.0001f) { v.active = false; return; }
         }
         if (v.justTriggered) {
-            v.phases[0] = 1.0f;
+            v.phases[0] = 1.0f;   // pitch drop
+            v.phases[1] = 0.0;    // sub phase
+            v.phases[2] = 1.0f;   // stick transient
             v.justTriggered = false;
         } else {
             v.phases[0] *= pitchCoef;
+            v.phases[2] *= 0.985f;
         }
         const double freq = baseHz * (1.0f + static_cast<float>(v.phases[0]) * 0.4f);
         v.phase0 += freq / m_sampleRate;
         if (v.phase0 >= 1.0) v.phase0 -= 1.0;
+        v.phases[1] += (baseHz * 0.5) / m_sampleRate;
+        if (v.phases[1] >= 1.0) v.phases[1] -= 1.0;
 
-        const float sine = std::sin(static_cast<float>(v.phase0) * 6.2831853f);
-        // Subtle noise body so it doesn't sound like a pure sine.
-        const float thump = (randFloat() - 0.5f) * 0.10f;
-        float out = (sine + thump) * v.ampLevel * v.velocity;
+        const float ph = static_cast<float>(v.phase0) * 6.2831853f;
+        const float sine = std::sin(ph);
+        const float sub = std::sin(static_cast<float>(v.phases[1]) * 6.2831853f);
+        const float thump = (randFloat() - 0.5f) * 0.14f;
+        float out = (sine + bodyAmt * (0.28f * std::sin(ph * 2.0f)
+                                     + 0.18f * sub)
+                     + thump * static_cast<float>(v.phases[2]))
+                  * v.ampLevel * v.velocity;
         out = drive(out, drv);
         outL[i] += out * pL;
         outR[i] += out * pR;

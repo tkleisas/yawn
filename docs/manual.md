@@ -319,10 +319,10 @@ right-click MIDI Learn, and preset save/load from the device header.
 | Electric Piano | Rhodes / Wurli / Suitcase (auto-phaser) modes |
 | Instrument Rack | Up to 8 layered chains (any instrument + per-chain FX) |
 
-### 9.2 Audio effects (23 + utilities)
+### 9.2 Audio effects (24 + utilities)
 
 Reverb, Convolution Reverb (38 bundled IRs), Delay, Ping-Pong Delay, EQ, Spline EQ
-(drag-node graphical EQ), Compressor, Limiter, Noise Gate, Filter, Chorus, Phaser,
+(drag-node graphical EQ), **Utility** (gain/pan/mono/phase trim), Compressor, Limiter, Noise Gate, Filter, Chorus, Phaser,
 Wah, Rotary (Leslie), Auto Panner, Envelope Follower (auto-wah + modulation source),
 Distortion, Bitcrusher, Tape Emulation, Amp Simulator, Neural Amp (`.nam` amp captures,
 4 bundled), Beat Repeat, Buffer Repeat, Resampler, Clock Drift, CD Error — plus

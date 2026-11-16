@@ -82,7 +82,8 @@ public:
         pTambTune,  pTambAttack,  pTambDecay,  pTambDrive,
         // Global
         pOversample,   // 2× oversampling toggle — anti-aliases the per-drum drives
-        kParamCount  // 7 + 7×4 + 1 = 36
+        pBody,         // low-mid body amount for kick / snare / toms
+        kParamCount  // 7 + 7×4 + 2 = 37
     };
 
     const char* name() const override { return "Drum Synth"; }
@@ -103,50 +104,51 @@ public:
         // keep the knob abstract and document at the param-info layer.
         static const InstrumentParameterInfo info[kParamCount] = {
             // ── Kick ──
-            {"Tune",   0.0f, 1.0f, 0.30f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 50.0f, 1.0f, "ms",false},
-            {"Dec",    20.0f, 1500.0f, 350.0f, "ms",false},
-            {"Sine",   0.0f, 1.0f, 0.90f, "",  false, false, WidgetHint::DentedKnob},
-            {"White",  0.0f, 1.0f, 0.25f, "",  false, false, WidgetHint::DentedKnob},
-            {"Pink",   0.0f, 1.0f, 0.20f, "",  false, false, WidgetHint::DentedKnob},
-            {"Drive",  0.0f, 1.0f, 0.20f, "",  false, false, WidgetHint::DentedKnob},
+            {"Kick Tune",   0.0f, 1.0f, 0.36f, "",  false, false, WidgetHint::DentedKnob},
+            {"Kick Atk",    1.0f, 50.0f, 1.0f, "ms",false},
+            {"Kick Dec",    20.0f, 1500.0f, 500.0f, "ms",false},
+            {"Kick Sine",   0.0f, 1.0f, 0.90f, "",  false, false, WidgetHint::DentedKnob},
+            {"Kick White",  0.0f, 1.0f, 0.25f, "",  false, false, WidgetHint::DentedKnob},
+            {"Kick Pink",   0.0f, 1.0f, 0.20f, "",  false, false, WidgetHint::DentedKnob},
+            {"Kick Drive",  0.0f, 1.0f, 0.20f, "",  false, false, WidgetHint::DentedKnob},
             // ── Snare ──
-            {"Tune",   0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    20.0f, 800.0f, 180.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.30f, "",  false, false, WidgetHint::DentedKnob},
+            {"Snare Tune",  0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
+            {"Snare Atk",   1.0f, 30.0f, 1.0f, "ms",false},
+            {"Snare Dec",   20.0f, 800.0f, 220.0f, "ms",false},
+            {"Snare Drive", 0.0f, 1.0f, 0.30f, "",  false, false, WidgetHint::DentedKnob},
             // ── Clap ──
-            {"Tune",   0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    20.0f, 800.0f, 220.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            {"Clap Tune",   0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
+            {"Clap Atk",    1.0f, 30.0f, 1.0f, "ms",false},
+            {"Clap Dec",    20.0f, 800.0f, 220.0f, "ms",false},
+            {"Clap Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
             // ── Tom1 ──
-            {"Tune",   0.0f, 1.0f, 0.30f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    50.0f, 1500.0f, 500.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            {"Tom1 Tune",   0.0f, 1.0f, 0.30f, "",  false, false, WidgetHint::DentedKnob},
+            {"Tom1 Atk",    1.0f, 30.0f, 1.0f, "ms",false},
+            {"Tom1 Dec",    50.0f, 1500.0f, 500.0f, "ms",false},
+            {"Tom1 Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
             // ── ClosedHH ──
-            {"Tune",   0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    10.0f, 200.0f, 60.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            {"CHH Tune",    0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
+            {"CHH Atk",     1.0f, 30.0f, 1.0f, "ms",false},
+            {"CHH Dec",     10.0f, 200.0f, 60.0f, "ms",false},
+            {"CHH Drive",   0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
             // ── OpenHH ──
-            {"Tune",   0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    50.0f, 1500.0f, 350.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            {"OHH Tune",    0.0f, 1.0f, 0.50f, "",  false, false, WidgetHint::DentedKnob},
+            {"OHH Atk",     1.0f, 30.0f, 1.0f, "ms",false},
+            {"OHH Dec",     50.0f, 1500.0f, 350.0f, "ms",false},
+            {"OHH Drive",   0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
             // ── Tom2 ──
-            {"Tune",   0.0f, 1.0f, 0.55f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    50.0f, 1500.0f, 400.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            {"Tom2 Tune",   0.0f, 1.0f, 0.55f, "",  false, false, WidgetHint::DentedKnob},
+            {"Tom2 Atk",    1.0f, 30.0f, 1.0f, "ms",false},
+            {"Tom2 Dec",    50.0f, 1500.0f, 400.0f, "ms",false},
+            {"Tom2 Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
             // ── Tambourine ──
-            {"Tune",   0.0f, 1.0f, 0.60f, "",  false, false, WidgetHint::DentedKnob},
-            {"Atk",    1.0f, 30.0f, 1.0f, "ms",false},
-            {"Dec",    20.0f, 600.0f, 150.0f, "ms",false},
-            {"Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
+            {"Tamb Tune",   0.0f, 1.0f, 0.60f, "",  false, false, WidgetHint::DentedKnob},
+            {"Tamb Atk",    1.0f, 30.0f, 1.0f, "ms",false},
+            {"Tamb Dec",    20.0f, 600.0f, 150.0f, "ms",false},
+            {"Tamb Drive",  0.0f, 1.0f, 0.10f, "",  false, false, WidgetHint::DentedKnob},
             // ── Global ──
             {"OS 2x",  0.0f, 1.0f, 1.0f, "",   true,  false, WidgetHint::Toggle},
+            {"Body",   0.0f, 1.0f, 0.55f, "",  false, false, WidgetHint::DentedKnob},
         };
         return info[std::clamp(index, 0, kParamCount - 1)];
     }

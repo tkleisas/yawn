@@ -62,6 +62,7 @@
 #include "presets/PresetGenerator.h"
 #include "presets/MidiLoopManager.h"
 #include "presets/DrumPatterns.h"
+#include "presets/DrumKits.h"
 #include "presets/MelodicPatterns.h"
 #include <glad/gl.h>
 #include <SDL3/SDL.h>
@@ -1018,6 +1019,7 @@ bool App::init() {
         // that don't already exist) before the scan indexes them.
         DrumPatterns::seedFactoryLoops();
         MelodicPatterns::seedFactoryLoops();
+        DrumKits::seedFactoryKits();
 
         // Initial data load
         m_browserPanel->filesTab().refreshTree();

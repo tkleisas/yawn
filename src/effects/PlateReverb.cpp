@@ -182,6 +182,11 @@ void PlateReverb::process(float* buffer, int numFrames, int numChannels) {
     const int pdSize = int(m_preDelayBuf.size());
     const float wA = 0.5f + 0.5f * m_width, wB = 0.5f - 0.5f * m_width;
 
+    // The figure-8 tank can build up several times unity at long decay;
+    // trim the input so even full-wet/high-decay settings stay bounded
+    // (the tap-sum trim alone only covers the direct tap sum).
+    constexpr float kTankInputGain = 0.17f;
+
     int tapIdx[14];
     for (int i = 0; i < 14; ++i)
         tapIdx[i] = int(kTapSec[i] * float(m_sampleRate) + 0.5f);
@@ -192,7 +197,8 @@ void PlateReverb::process(float* buffer, int numFrames, int numChannels) {
                                           : inL;
 
         // Predelay + input bandwidth pole
-        m_preDelayBuf[size_t(m_preDelayPos)] = (inL + inR) * 0.5f;
+        m_preDelayBuf[size_t(m_preDelayPos)] =
+            (inL + inR) * 0.5f * kTankInputGain;
         int rd = m_preDelayPos - pd;
         if (rd < 0) rd += pdSize;
         m_lpIn += bw * (m_preDelayBuf[size_t(rd)] - m_lpIn);

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <set>
 #include "instruments/Envelope.h"
 #include "instruments/Oscillator.h"
 #include "instruments/SubtractiveSynth.h"
@@ -8,6 +9,7 @@
 #include "instruments/DrumRack.h"
 #include "instruments/DrumSlop.h"
 #include "instruments/DrumSynth.h"
+#include "presets/DevicePresetHelpers.h"
 #include "instruments/StringMachine.h"
 #include "instruments/DrawbarOrgan.h"
 #include "instruments/ElectricPiano.h"
@@ -1770,6 +1772,36 @@ TEST(DrumSynth, KickProducesAudibleOutput) {
     EXPECT_GT(rms(buffer, kBlockSize * kChannels), 1e-3f);
 }
 
+TEST(DrumSynth, BodyAddsLowMidWeightToKick) {
+    // Body adds 2nd/3rd harmonics to the kick (and low-mid support to
+    // snare/toms). The fundamental of a 45-60 Hz kick is inaudible on
+    // small speakers, so this harmonic content is what makes it read
+    // as a full kick rather than a click.
+    auto renderKick = [](float body) {
+        DrumSynth ds;
+        ds.init(kSampleRate, kBlockSize);
+        ds.setParameter(DrumSynth::pBody, body);
+        double energy = 0.0;
+        float buf[kBlockSize * kChannels];
+        std::memset(buf, 0, sizeof(buf));
+        ds.process(buf, kBlockSize, kChannels, makeDrumNote(36));
+        for (int i = 0; i < kBlockSize * kChannels; ++i)
+            energy += double(buf[i]) * buf[i];
+        for (int b = 0; b < 80; ++b) {
+            std::memset(buf, 0, sizeof(buf));
+            ds.process(buf, kBlockSize, kChannels, makeEmpty());
+            for (int i = 0; i < kBlockSize * kChannels; ++i)
+                energy += double(buf[i]) * buf[i];
+        }
+        return energy;
+    };
+    EXPECT_GT(renderKick(1.0f), renderKick(0.0f) * 1.05);
+    // The parameter is exposed at the end of the list (after OS 2x).
+    DrumSynth ds;
+    EXPECT_EQ(DrumSynth::kParamCount, 37);
+    EXPECT_EQ(std::string(ds.parameterInfo(DrumSynth::pBody).name), "Body");
+}
+
 TEST(DrumSynth, EachSlotProducesOutput) {
     // Fire every drum from a fresh instance and check non-zero RMS.
     // Catches "I added a slot but forgot to wire its render switch
@@ -1891,14 +1923,14 @@ TEST(DrumSynth, RetriggerResetsEnvelope) {
     ds.init(kSampleRate, kBlockSize);
 
     // Fire kick, then run silent blocks until the envelope is well
-    // below its peak. Default kick decay τ = 350 ms; we wait
-    // ~3 time-constants (≈1 s, ~170 blocks of 256 @ 44.1 kHz) so the
+    // below its peak. Default kick decay τ = 500 ms; we wait
+    // ~3 time-constants (≈1.5 s, ~260 blocks of 256 @ 44.1 kHz) so the
     // tail is ~5 % of peak — gives a clean ratio against the
     // re-triggered block.
     float buf[kBlockSize * kChannels];
     std::memset(buf, 0, sizeof(buf));
     ds.process(buf, kBlockSize, kChannels, makeDrumNote(36));
-    for (int i = 0; i < 170; ++i) {
+    for (int i = 0; i < 260; ++i) {
         std::memset(buf, 0, sizeof(buf));
         ds.process(buf, kBlockSize, kChannels, makeEmpty());
     }
@@ -2538,4 +2570,30 @@ TEST(PerNotePitchBend, SubtractiveSynthRaisesPitchByAnOctave) {
         static_cast<double>(bentCrossings) / static_cast<double>(baseCrossings);
     EXPECT_GT(ratio, 1.7);
     EXPECT_LT(ratio, 2.3);
+}
+
+TEST(DrumSynth, PresetParameterNamesAreUniqueAndRoundTrip) {
+    // Name-keyed device presets/projects require unique parameter names.
+    // DrumSynth historically exposed "Tune"/"Dec"/... seven times each,
+    // which collapsed every drum to the last value on save/load.
+    DrumSynth ds;
+    ds.init(kSampleRate, kBlockSize);
+    std::set<std::string> names;
+    for (int i = 0; i < ds.parameterCount(); ++i)
+        names.insert(ds.parameterInfo(i).name);
+    EXPECT_EQ(static_cast<int>(names.size()), ds.parameterCount());
+
+    ds.setParameter(DrumSynth::pKickTune, 0.11f);
+    ds.setParameter(DrumSynth::pSnareTune, 0.77f);
+    ds.setParameter(DrumSynth::pTom2Decay, 1234.0f);
+    ds.setParameter(DrumSynth::pBody, 0.33f);
+
+    const yawn::json params = yawn::serializeDeviceParams(ds);
+    DrumSynth back;
+    back.init(kSampleRate, kBlockSize);
+    yawn::deserializeDeviceParams(back, params);
+    EXPECT_FLOAT_EQ(back.getParameter(DrumSynth::pKickTune), 0.11f);
+    EXPECT_FLOAT_EQ(back.getParameter(DrumSynth::pSnareTune), 0.77f);
+    EXPECT_FLOAT_EQ(back.getParameter(DrumSynth::pTom2Decay), 1234.0f);
+    EXPECT_FLOAT_EQ(back.getParameter(DrumSynth::pBody), 0.33f);
 }

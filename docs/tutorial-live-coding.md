@@ -761,7 +761,7 @@ information, offline.
 | `fmsynth` | FM Synth | Algorithm, Feedback, Op1 Level, Op1 Ratio, Op1 Attack, Op1 Release, Op2 Level, Op2 Ratio, Op2 Attack, Op2 Release, Op3 Level, Op3 Ratio, Op3 Attack, Op3 Release, Op4 Level, Op4 Ratio, Op4 Attack, Op4 Release, Volume |
 | `sampler` | Sampler | Root Note, Attack, Decay, Sustain, Release, Filter Cut, Filter Reso, Volume, Loop Start, Loop End, Reverse, Sample Gain |
 | `drumrack` | Drum Rack | Volume, Pad Volume, Pad Pan, Pad Pitch, Choke, Attack, Decay, Start, End |
-| `drumsynth` | Drum Synth | Tune, Atk, Dec, Sine, White, Pink, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, Tune, Atk, Dec, Drive, OS 2x |
+| `drumsynth` | Drum Synth | Kick Tune, Kick Atk, Kick Dec, Kick Sine, Kick White, Kick Pink, Kick Drive, Snare Tune, Snare Atk, Snare Dec, Snare Drive, Clap Tune, Clap Atk, Clap Dec, Clap Drive, Tom1 Tune, Tom1 Atk, Tom1 Dec, Tom1 Drive, CHH Tune, CHH Atk, CHH Dec, CHH Drive, OHH Tune, OHH Atk, OHH Dec, OHH Drive, Tom2 Tune, Tom2 Atk, Tom2 Dec, Tom2 Drive, Tamb Tune, Tamb Atk, Tamb Dec, Tamb Drive, OS 2x, Body |
 | `drumslop` | DrumSlop | Slice Count, Slice Mode, Orig BPM, Base Note, Swing, Volume, Pad Vol, Pad Pan, Pad Pitch, Pad Rev, Pad Cutoff, Pad Reso, Pad Atk, Pad Dec, Pad Sus, Pad Rel |
 | `karplus` | Karplus-Strong | Exciter, Damping, Brightness, Decay, Body, Stretch, Attack, Volume |
 | `wavetable` | Wavetable Synth | Table, Position, Filter Cut, Filter Res, Filter Env, Amp Atk, Amp Dec, Amp Sus, Amp Rel, Filt Atk, Filt Dec, Filt Sus, Filt Rel, LFO Rate, LFO Amt, Sub Level, Unison Det, Volume |
@@ -786,6 +786,7 @@ band-pass, 2 high-pass (the `filter` effect's own `Type` uses the same
 | `reverb` | Reverb | Room Size, Damping, Wet/Dry, Pre-Delay, Width |
 | `plate` | Plate Reverb | Pre-Delay, Decay, Damping, Diffusion, Width, Wet/Dry |
 | `delay` | Delay | Time, Feedback, Wet/Dry, Ping-Pong, Filter, Tempo Sync |
+| `utility` | Utility | Gain, Pan, Mono, Invert |
 | `eq` | EQ | Low Freq, Low Gain, Mid Freq, Mid Gain, Mid Q, High Freq, High Gain |
 | `compressor` | Compressor | Threshold, Ratio, Attack, Release, Makeup Gain, Knee |
 | `limiter` | Limiter | Ceiling, Release, Lookahead |

@@ -28,6 +28,7 @@
 #include "effects/PlateReverb.h"
 #include "effects/Delay.h"
 #include "effects/EQ.h"
+#include "effects/Utility.h"
 #include "effects/Compressor.h"
 #include "effects/Limiter.h"
 #include "effects/Filter.h"
@@ -110,6 +111,8 @@ audioEffectDescriptors() {
             [] { return std::make_unique<effects::PlateReverb>(); }},
         {"Delay",             "delay",        "Delay",               nullptr,
             [] { return std::make_unique<effects::Delay>(); }},
+        {"Utility",           "utility",      "Utility",             nullptr,
+            [] { return std::make_unique<effects::Utility>(); }},
         {"EQ",                "eq",           "EQ",                  nullptr,
             [] { return std::make_unique<effects::EQ>(); }},
         {"Compressor",        "compressor",   "Compressor",          nullptr,

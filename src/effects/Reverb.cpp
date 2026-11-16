@@ -48,6 +48,12 @@ void Reverb::process(float* buffer, int numFrames, int numChannels) {
     int pdSamples = static_cast<int>(m_params[kPreDelay] * 0.001f * m_sampleRate);
     if (pdSamples >= m_preDelayLen) pdSamples = m_preDelayLen - 1;
 
+    // Freeverb-style input normalisation. The eight parallel comb filters
+    // have high DC gain (1/(1-feedback) each), so feeding them at unity
+    // makes even a 10% wet mix several times louder than the dry signal.
+    // The classic Freeverb fixed gain keeps the tank at a sane level.
+    constexpr float kTankInputGain = 0.02f;
+
     // ── Silence gate ────────────────────────────────────────────────
     // The tank costs ~26 divides' worth of index math + 60-70 flops
     // per sample even when completely silent. Track input silence
@@ -87,11 +93,12 @@ void Reverb::process(float* buffer, int numFrames, int numChannels) {
         float delayed = m_preDelayBuf[rdIdx];
         if (++m_preDelayPos >= m_preDelayLen) m_preDelayPos = 0;
 
-        // Parallel comb filters
+        // Parallel comb filters (input-normalised; see kTankInputGain)
+        const float tankIn = delayed * kTankInputGain;
         float outL = 0.0f, outR = 0.0f;
         for (int c = 0; c < 8; ++c) {
-            outL += m_combL[c].process(delayed, m_roomSize, m_damp1, m_damp2);
-            outR += m_combR[c].process(delayed, m_roomSize, m_damp1, m_damp2);
+            outL += m_combL[c].process(tankIn, m_roomSize, m_damp1, m_damp2);
+            outR += m_combR[c].process(tankIn, m_roomSize, m_damp1, m_damp2);
         }
 
         // Series allpass filters
