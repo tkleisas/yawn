@@ -997,6 +997,8 @@ void serializeVisualClipFields(const visual::VisualClip& vc, json& j) {
     j["colorIndex"]  = vc.colorIndex;
     j["lengthBeats"] = vc.lengthBeats;
     j["audioSource"] = vc.audioSource;
+    if (std::abs(vc.audioReactivity - 1.0f) > 0.001f)
+        j["audioReactivity"] = vc.audioReactivity;
 
     // Source pass — the per-clip generator. Empty path means the clip
     // has no source shader (relies on video / model / live alone).
@@ -1045,6 +1047,7 @@ std::unique_ptr<visual::VisualClip> deserializeVisualClipFields(const json& val)
     vc->colorIndex  = val.value("colorIndex", 0);
     vc->lengthBeats = val.value("lengthBeats", 4.0);
     vc->audioSource = val.value("audioSource", -1);
+    vc->audioReactivity = val.value("audioReactivity", 1.0f);
 
     // Source pass. New format is a single "source" object holding
     // shaderPath + sparse params. We still accept the prior shapes

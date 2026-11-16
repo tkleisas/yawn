@@ -1,9 +1,10 @@
 # Generative Songs — design
 
-Status: P0–P2 landed — Lua host, microtuning, CLI, full theory
-(maqams/ragas/just intonation/TET24), 10 styles, both blend modes,
-GeneratorPanel with lane→track commit (session scenes, follow actions,
-undo), MIDI Learn targets, presets, and a user guide. Next: P3
+Status: P0–P2 + visual generation landed — Lua host, microtuning, CLI,
+full theory (maqams/ragas/just intonation/TET24), 10 styles, both blend
+modes, GeneratorPanel with lane→track commit (session scenes, follow
+actions, undo), MIDI Learn targets, presets, a user guide, and
+style-aware visual planning committed as VisualClips. Next: P3
 (virtual MIDI output, SMF cents export, arrangement markers).
 
 This document is the agreed design for YAWN's generative song/pattern
@@ -192,6 +193,39 @@ cents tables directly.
 - Tests: serializer round-trip + a `MidiClipEngine` test asserting the
   bend/channel pairing; audio-frequency tests via the YIN `Tuner` in P1.
 
+## Visual generation (P2.5)
+
+The same deterministic generator plans a shader clip per section:
+
+- `assets/generator/visuals.lua` emits one visual per audio lane
+  (drums / bass / chords / lead) per section, choosing from
+  style-derived themes (`sacred`, `cosmic`, `ink`, `abstract`) and
+  role-specific pools; intro/outro favour calmer shaders.
+- The host supplies a **shader catalog** (bundled + project `.frag`
+  files) with each shader's `@range` params. Lua sets values inside
+  those ranges; names like `spin`/`drift` track section energy,
+  `glow`/`kick` track intensity, `seed` is seeded randomness, and
+  `palette` follows the theme.
+- Seed-picture shaders (mandala / eye field / temple mist / ink brush /
+  infinite zoom) get `seed_emblem.png` as their `iChannel2` source.
+- The GeneratorPanel exposes a **Visuals** toggle, theme choice, and a
+  **Reactivity** dial. The dial is carried on each generated
+  `VisualClip` (weighted per role) and scales the engine's
+  audio-derived uniforms (`iAudioLevel`, bands, `iKick`). Turning it
+  updates every live visual track.
+- Commit ensures one visual track per role (`V Drums`, `V Bass`, …),
+  reusing generated tracks on later commits. Each clip's audioSource
+  points at its lane's audio track, and the tracks get complementary
+  blend/opacity (drums Normal 100 %, bass Add, chords Screen, lead
+  Add) so the lanes visually interplay.
+- Clips land in the same generated scenes (tempo-synced, visual
+  follow actions), so launching a scene brings up all lanes.
+- Undo removes the scenes (visual clips included); redo re-commits both.
+
+Limitations: one visual per lane per section; shader selection is
+curated by theme/role rather than learned from audio; seed images are
+the bundled emblem.
+
 ## Commit model (P2)
 
 1. User selects destination tracks (multi-select), in lane order.
@@ -222,6 +256,12 @@ and timeline placement are P3.
   with follow-action chaining, undo, MIDI Learn targets for density/
   note length/swing/tempo/style weights, JSON presets, and
   `docs/generative-songs.md` (user guide + style authoring).
+- **P2.5 (landed):** style-aware visual plan (`visuals.lua`), host
+  shader catalog, Visuals toggle/theme/Reactivity in the panel, one
+  visual per audio lane, auto-created per-role visual tracks with
+  complementary blend/opacity and per-lane audio sources, VisualClip
+  commit into the generated scenes with visual follow actions,
+  `--visuals` CLI flag.
 - **P3:** virtual MIDI port, per-track MIDI TX, SMF export with cents,
   arrangement commit + section markers.
 - **P4:** CLAP generator plugin (MIDI out, no audio) using the same

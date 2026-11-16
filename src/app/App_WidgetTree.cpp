@@ -749,6 +749,11 @@ void App::buildWidgetTree() {
     m_generatorPanel->setOnLoadPreset(
         [this](const std::string& name) { onGeneratorLoadPreset(name); });
     m_generatorPanel->setOnSavePreset([this]() { onGeneratorSavePreset(); });
+    m_generatorPanel->setOnVisualReactivityChanged([this](float v) {
+        for (int t = 0; t < m_project.numTracks(); ++t)
+            if (m_project.track(t).type == Track::Type::Visual)
+                m_visualEngine.setLayerAudioReactivity(t, v);
+    });
     m_generatorPanel->setVisible(false);
 
     // Wire the 4-quadrant layout. ContentGrid and every panel including

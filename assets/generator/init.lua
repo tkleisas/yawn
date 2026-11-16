@@ -3,6 +3,7 @@ local melody = require("melody")
 local sections = require("sections")
 local blend = require("blend")
 local serial = require("serial")
+local visuals = require("visuals")
 
 local M = {}
 
@@ -121,8 +122,17 @@ function M.generate(params)
             id = sec.id,
             name = sec.name,
             bars = sec.bars,
+            energy = sec.energy,
             clips = clips,
         }
+    end
+
+    if params.generateVisuals then
+        local vplan = visuals.plan(rng, params, song.sections, entries,
+                                   params.visualCatalog or {})
+        for i, sec in ipairs(song.sections) do
+            sec.visuals = vplan[i] or {}
+        end
     end
 
     return song

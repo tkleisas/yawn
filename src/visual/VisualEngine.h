@@ -148,6 +148,9 @@ public:
     void setLayerChainPassBypass(int track, int passIdx, bool bypassed);
 
     void setLayerAudioSource(int track, int audioSource);
+    // Per-clip multiplier for iAudioLevel / bands / iKick (0..~2).
+    void setLayerAudioReactivity(int track, float reactivity);
+    float getLayerAudioReactivity(int track) const;
     void setLayerBlendMode(int track, BlendMode mode);
     void setLayerText(int track, const std::string& text);
     // Attach or detach a video file to the layer. Empty path → no video
@@ -408,6 +411,9 @@ private:
 
         // Per-layer audio source (-1 = master).
         int       audioSource = -1;
+        // Multiplier applied to the audio-derived uniforms (iKick etc.)
+        // after their envelope/filter state is updated.
+        float     audioReactivity = 1.0f;
         BlendMode blendMode   = BlendMode::Normal;
         float smoothedLevel    = 0.0f;
         float smoothedLow      = 0.0f;

@@ -79,7 +79,10 @@ GeneratorPanel::GeneratorPanel() {
     addChild(&m_density);
     addChild(&m_noteLength);
     addChild(&m_swing);
+    addChild(&m_visualReactivity);
     addChild(&m_autoMix);
+    addChild(&m_visualsOn);
+    addChild(&m_visualTheme);
     addChild(&m_generate);
     addChild(&m_commit);
     addChild(&m_reroll);
@@ -125,8 +128,26 @@ GeneratorPanel::GeneratorPanel() {
     m_noteLength.setValue(0.5f);
     m_swing.setValue(0.0f);
 
+    m_visualReactivity.setRange(0.0f, 2.0f);
+    m_visualReactivity.setFormat("%.2f");
+    m_visualReactivity.setStep(0.01f);
+    m_visualReactivity.setSuffix("x");
+    m_visualReactivity.setValue(1.0f);
+    m_visualReactivity.setOnChange([this](float v) {
+        if (m_onVisualReactivity) m_onVisualReactivity(v);
+    });
+
     m_autoMix.setLabel("Auto mix");
     m_autoMix.setState(true);
+
+    m_visualsOn.setLabel("Visuals");
+    m_visualsOn.setState(true);
+    m_visualTheme.setItems({ "Auto theme", "Sacred", "Cosmic", "Ink",
+                             "Abstract" });
+    m_visualTheme.setSelectedIndex(0);
+    m_visualTheme.setPlaceholder("Auto theme");
+    m_visualLanesHint = makeLabel("per-lane auto", TextColorToken::Secondary);
+    addChild(m_visualLanesHint.get());
 
     auto wireSlot = [this](FwNumberInput& n, int slot) {
         n.setOnRightClick([this, slot](Point p) {
@@ -167,16 +188,18 @@ GeneratorPanel::GeneratorPanel() {
     const char* paramNames[] = {
         "Seed", "Scale", "Root", "Movement", "Blend",
         "Tempo (0=auto)", "", "Density", "Note length", "Swing",
+        "Reactivity",
     };
     for (const char* name : paramNames)
         m_paramLabels.push_back(makeLabel(name, TextColorToken::Secondary));
     m_paramControls = {
         &m_seed, &m_scale, &m_root, &m_movement, &m_blend,
         &m_tempo, &m_autoMix, &m_density, &m_noteLength, &m_swing,
+        &m_visualReactivity,
     };
     m_paramWidths = {
         90.0f, 160.0f, 90.0f, 130.0f, 110.0f,
-        130.0f, 110.0f, 80.0f, 100.0f, 80.0f,
+        130.0f, 110.0f, 80.0f, 100.0f, 80.0f, 100.0f,
     };
     for (auto& l : m_paramLabels) addChild(l.get());
 
@@ -336,6 +359,16 @@ void GeneratorPanel::setParams(const generate::GeneratorParams& p) {
         if (p.movement == kMoves[i]) { moveIdx = i; break; }
     m_movement.setSelectedIndex(moveIdx);
     m_blend.setValue(p.blend == "rotate" ? 1 : 0);
+    m_visualsOn.setState(p.generateVisuals);
+    static const char* kThemes[] = {
+        "auto", "sacred", "cosmic", "ink", "abstract",
+    };
+    int themeIdx = 0;
+    for (int i = 0; i < 5; ++i)
+        if (p.visualTheme == kThemes[i]) { themeIdx = i; break; }
+    m_visualTheme.setSelectedIndex(themeIdx);
+    m_visualReactivity.setValue(
+        std::clamp(p.visualReactivity, 0.0f, 2.0f));
     m_seed.setValue(static_cast<float>(p.seed ? p.seed : 1));
     m_tempo.setValue(static_cast<float>(p.tempo));
     const bool autoMix = p.density < 0.0f || p.noteLength < 0.0f ||
@@ -388,6 +421,10 @@ void GeneratorPanel::setAutoMix(bool on) {
     invalidate();
 }
 
+bool GeneratorPanel::visualsRequested() const {
+    return m_visualsOn.state();
+}
+
 std::vector<int> GeneratorPanel::chosenTracks() const {
     std::vector<int> out;
     out.reserve(m_laneDrops.size());
@@ -412,6 +449,13 @@ generate::GeneratorParams GeneratorPanel::buildParams() const {
         "auto", "ascending", "descending", "arch", "valley", "random",
     };
     p.movement = kMoves[mv];
+    p.generateVisuals = visualsRequested();
+    static const char* kThemes[] = {
+        "auto", "sacred", "cosmic", "ink", "abstract",
+    };
+    const int th = std::clamp(m_visualTheme.selectedIndex(), 0, 4);
+    p.visualTheme = kThemes[th];
+    p.visualReactivity = m_visualReactivity.value();
     p.seed = static_cast<uint64_t>(std::llround(m_seed.value()));
     if (p.seed == 0) p.seed = 1;
     p.tempo = static_cast<int>(std::lround(m_tempo.value()));
@@ -525,15 +569,23 @@ void GeneratorPanel::onLayout(Rect bounds, UIContext& ctx) {
     }
 
     {
+        struct RowItem { Widget* w; float width; };
+        const RowItem row[] = {
+            { &m_generate, 110.0f },
+            { &m_commit, 100.0f },
+            { &m_reroll, 110.0f },
+            { &m_visualsOn, 100.0f },
+            { &m_visualTheme, 120.0f },
+            { m_visualLanesHint.get(), 110.0f },
+        };
         float x = x0;
-        const float bw = 110.0f;
-        for (FwButton* b : { &m_generate, &m_commit, &m_reroll }) {
-            if (x > x0 && x + bw > right) {
+        for (const auto& item : row) {
+            if (x > x0 && x + item.width > right) {
                 x = x0;
                 y += 30.0f;
             }
-            layoutChild(b, x, y, bw, 26.0f);
-            x += bw + kGap;
+            layoutChild(item.w, x, y, item.width, 26.0f);
+            x += item.width + kGap;
         }
         y += 36.0f;
     }

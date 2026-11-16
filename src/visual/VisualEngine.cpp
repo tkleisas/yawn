@@ -954,6 +954,18 @@ void VisualEngine::setLayerAudioSource(int track, int audioSource) {
     updateAudioWiring();
 }
 
+void VisualEngine::setLayerAudioReactivity(int track, float reactivity) {
+    auto it = m_layers.find(track);
+    if (it == m_layers.end()) return;
+    it->second.audioReactivity =
+        std::clamp(reactivity, 0.0f, 4.0f);
+}
+
+float VisualEngine::getLayerAudioReactivity(int track) const {
+    auto it = m_layers.find(track);
+    return it == m_layers.end() ? 1.0f : it->second.audioReactivity;
+}
+
 void VisualEngine::setLayerBlendMode(int track, BlendMode mode) {
     auto it = m_layers.find(track);
     if (it == m_layers.end()) return;
@@ -2281,9 +2293,13 @@ void VisualEngine::renderLayerToFBO(Layer& L, double transportSeconds,
     // readLayerLevel mutate the layer's envelope/decay state. The 3D
     // pass (scene script) and the later shader-uniform block both
     // consume these same values.
-    const float audioLevel = readLayerLevel(L);
-    const auto  audioBands = readLayerBands(L);
-    const float audioKick  = readLayerKick(L, tDelta);
+    const float react = std::clamp(L.audioReactivity, 0.0f, 4.0f);
+    const float audioLevel = readLayerLevel(L) * react;
+    auto audioBands = readLayerBands(L);
+    audioBands.low  *= react;
+    audioBands.mid  *= react;
+    audioBands.high *= react;
+    const float audioKick = readLayerKick(L, tDelta) * react;
 
 #if defined(YAWN_HAS_MODEL3D) && YAWN_HAS_MODEL3D
     // 3D pass: render the layer's model into the M3DRenderer's own FBO

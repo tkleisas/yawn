@@ -34,6 +34,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstdio>
+#include <set>
 #include <cstdlib>
 #include <cstring>
 #include <csignal>
@@ -434,6 +435,8 @@ static int runGenSong(int argc, char* argv[]) {
     params.styles.clear();
     std::string scriptsOverride;
     bool haveStyle = false;
+    bool wantVisuals = false;
+    std::string visualTheme = "auto";
 
     auto splitStyle = [&](const std::string& spec) {
         StyleMix mix;
@@ -479,6 +482,12 @@ static int runGenSong(int argc, char* argv[]) {
             params.beatsPerBar = std::atoi(next("4").c_str());
         } else if (a == "--seed") {
             params.seed = std::strtoull(next("1").c_str(), nullptr, 10);
+        } else if (a == "--visuals") {
+            wantVisuals = true;
+        } else if (a == "--visual-theme") {
+            visualTheme = next("auto");
+        } else if (a == "--visual-reactivity") {
+            params.visualReactivity = std::strtof(next("1").c_str(), nullptr);
         } else if (a == "--scripts") {
             scriptsOverride = next("");
         } else if (a == "--sections") {
@@ -521,6 +530,47 @@ static int runGenSong(int argc, char* argv[]) {
     std::fprintf(stderr, "gen-song: scripts %s\n",
                  engine.scriptsDir().c_str());
 
+    if (wantVisuals) {
+        std::vector<VisualShaderInfo> catalog;
+        std::set<std::string> seen;
+        std::error_code vec;
+        auto addDir = [&](const std::filesystem::path& dir) {
+            if (!std::filesystem::is_directory(dir, vec)) return;
+            for (const auto& entry :
+                 std::filesystem::directory_iterator(dir, vec)) {
+                if (vec) break;
+                if (!entry.is_regular_file()) continue;
+                if (entry.path().extension() != ".frag") continue;
+                const std::string id = entry.path().stem().string();
+                if (!seen.insert(id).second) continue;
+                VisualShaderInfo info;
+                info.id = id;
+                info.path = entry.path().string();
+                for (const auto& p :
+                     yawn::visual::VisualEngine::parseShaderFileParams(info.path)) {
+                    VisualShaderParamInfo pi;
+                    pi.name = p.name;
+                    pi.minValue = p.min;
+                    pi.maxValue = p.max;
+                    pi.defaultValue = p.defaultValue;
+                    info.params.push_back(std::move(pi));
+                }
+                catalog.push_back(std::move(info));
+            }
+        };
+        addDir(cwd / "assets" / "shaders" / "examples");
+        addDir(exeDir / "assets" / "shaders" / "examples");
+        std::sort(catalog.begin(), catalog.end(),
+                  [](const VisualShaderInfo& a, const VisualShaderInfo& b) {
+                      return a.id < b.id;
+                  });
+        std::fprintf(stderr, "gen-song: visual shader catalog %zu\n",
+                     catalog.size());
+        engine.setVisualShaderCatalog(std::move(catalog));
+        params.generateVisuals = true;
+        params.visualTheme = visualTheme;
+    }
+
     GeneratedSong song;
     if (!engine.generate(params, song, &error)) {
         std::fprintf(stderr, "gen-song: %s\n", error.c_str());
@@ -559,10 +609,22 @@ static int runGenSong(int argc, char* argv[]) {
 
     std::fprintf(stderr,
                  "gen-song: '%s' %d sections, %d notes (%d microtonal), "
-                 "%d bpm, %d/4\n",
+                 "%d visuals, %d bpm, %d/4\n",
                  song.title.c_str(), static_cast<int>(song.sections.size()),
-                 song.totalNotes(), microtonal, song.tempo,
-                 song.beatsPerBar);
+                 song.totalNotes(), microtonal, song.totalVisuals(),
+                 song.tempo, song.beatsPerBar);
+    if (wantVisuals) {
+        for (const auto& sec : song.sections) {
+            for (const auto& v : sec.visuals) {
+                std::fprintf(stderr,
+                             "gen-song: visual %s [%s] -> %s (%zu params, react %.2fx)%s\n",
+                             sec.name.c_str(), v.role.c_str(),
+                             v.shaderId.c_str(),
+                             v.params.size(), v.reactivity,
+                             v.image.empty() ? "" : " + seed image");
+            }
+        }
+    }
     std::fprintf(stderr, "gen-song: lanes");
     for (const auto& r : roles) std::fprintf(stderr, " %s", r.c_str());
     std::fprintf(stderr, " → %s\n", outPath.c_str());

@@ -44,6 +44,7 @@ void FwTextInput::setText(std::string t) {
     if (t == m_text) { m_cursor = clampCursor(m_cursor); return; }
     m_text = std::move(t);
     m_cursor = static_cast<int>(m_text.size());
+    m_selStart = m_selEnd = -1;
     m_scrollPx = 0.0f;
     // Not treated as user-typed — no onChange fire. Callers that want
     // to broadcast programmatic sets can emit onChange themselves.
@@ -57,6 +58,35 @@ void FwTextInput::setPlaceholder(std::string p) {
 
 void FwTextInput::setCursor(int pos) {
     m_cursor = clampCursor(pos);
+    clearSelection();
+}
+
+void FwTextInput::selectAll() {
+    m_selStart = 0;
+    m_selEnd = static_cast<int>(m_text.size());
+    m_cursor = m_selEnd;
+    invalidate();
+}
+
+void FwTextInput::clearSelection() {
+    if (m_selStart >= 0 || m_selEnd >= 0) {
+        m_selStart = m_selEnd = -1;
+        invalidate();
+    }
+}
+
+bool FwTextInput::hasSelection() const {
+    return m_selStart >= 0 && m_selEnd >= 0 && m_selStart != m_selEnd;
+}
+
+int FwTextInput::selectionStart() const {
+    if (!hasSelection()) return m_cursor;
+    return std::min(m_selStart, m_selEnd);
+}
+
+int FwTextInput::selectionEnd() const {
+    if (!hasSelection()) return m_cursor;
+    return std::max(m_selStart, m_selEnd);
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -86,11 +116,13 @@ void FwTextInput::beginEdit() {
     m_editing = true;
     m_savedText = m_text;
     m_cursor = static_cast<int>(m_text.size());
+    m_selStart = m_selEnd = -1;
 }
 
 void FwTextInput::endEdit(bool commit) {
     if (!m_editing) return;
     m_editing = false;
+    m_selStart = m_selEnd = -1;
     if (commit) {
         if (m_onCommit) m_onCommit(m_text);
     } else {
@@ -107,6 +139,14 @@ void FwTextInput::endEdit(bool commit) {
 void FwTextInput::takeTextInput(const std::string& text) {
     if (!m_editing) return;
     if (text.empty()) return;
+    if (hasSelection()) {
+        const int start = selectionStart();
+        const int end = selectionEnd();
+        m_text.erase(static_cast<size_t>(start),
+                     static_cast<size_t>(end - start));
+        m_cursor = start;
+        clearSelection();
+    }
     m_text.insert(static_cast<size_t>(m_cursor), text);
     m_cursor += static_cast<int>(text.size());
     if (m_onChange) m_onChange(m_text);
@@ -120,6 +160,7 @@ bool FwTextInput::onMouseDown(MouseEvent& e) {
     if (!m_enabled) return false;
     if (e.button != MouseButton::Left) return false;
     beginEdit();
+    m_selStart = m_selEnd = -1;
     // Click-to-position: the text starts at bounds.x + padX, scrolled
     // by the painter-maintained scrollPx; the shared TextMetrics
     // hit-test (same helper the Lua editor's click uses) maps the
@@ -146,7 +187,15 @@ bool FwTextInput::onKeyDown(KeyEvent& e) {
             endEdit(/*commit*/false);
             return true;
         case Key::Backspace:
-            if (m_cursor > 0 && !m_text.empty()) {
+            if (hasSelection()) {
+                const int start = selectionStart();
+                const int end = selectionEnd();
+                m_text.erase(static_cast<size_t>(start),
+                             static_cast<size_t>(end - start));
+                m_cursor = start;
+                clearSelection();
+                if (m_onChange) m_onChange(m_text);
+            } else if (m_cursor > 0 && !m_text.empty()) {
                 // Delete one full UTF-8 codepoint — a Greek / Cyrillic
                 // / emoji char is 2-4 bytes, not 1.
                 const int n = utf8PrevBytes(m_text, m_cursor);
@@ -156,7 +205,15 @@ bool FwTextInput::onKeyDown(KeyEvent& e) {
             }
             return true;
         case Key::Delete:
-            if (m_cursor < static_cast<int>(m_text.size())) {
+            if (hasSelection()) {
+                const int start = selectionStart();
+                const int end = selectionEnd();
+                m_text.erase(static_cast<size_t>(start),
+                             static_cast<size_t>(end - start));
+                m_cursor = start;
+                clearSelection();
+                if (m_onChange) m_onChange(m_text);
+            } else if (m_cursor < static_cast<int>(m_text.size())) {
                 const int n = utf8ByteCount(&m_text[m_cursor]);
                 m_text.erase(static_cast<size_t>(m_cursor), n);
                 if (m_onChange) m_onChange(m_text);
@@ -164,18 +221,30 @@ bool FwTextInput::onKeyDown(KeyEvent& e) {
             return true;
         case Key::Home:
             m_cursor = 0;
+            clearSelection();
             return true;
         case Key::End:
             m_cursor = static_cast<int>(m_text.size());
+            clearSelection();
             return true;
         case Key::Left:
-            if (m_cursor > 0) m_cursor -= utf8PrevBytes(m_text, m_cursor);
+            if (hasSelection()) {
+                m_cursor = selectionStart();
+                clearSelection();
+            } else if (m_cursor > 0) {
+                m_cursor -= utf8PrevBytes(m_text, m_cursor);
+            }
             return true;
         case Key::Right:
-            if (m_cursor < static_cast<int>(m_text.size()))
+            if (hasSelection()) {
+                m_cursor = selectionEnd();
+                clearSelection();
+            } else if (m_cursor < static_cast<int>(m_text.size())) {
                 m_cursor += utf8ByteCount(&m_text[m_cursor]);
+            }
             return true;
         default:
+            clearSelection();
             return true;   // swallow other keys while editing
     }
 }

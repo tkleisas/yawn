@@ -56,6 +56,7 @@ void FwTextInputDialog::prompt(std::string title,
     m_input.setText(std::move(defaultText));
     m_input.setCursor(static_cast<int>(m_input.text().size()));
     m_input.beginEdit();
+    m_input.selectAll();
 
     UIContext& ctx = UIContext::global();
     if (!ctx.layerStack) return;

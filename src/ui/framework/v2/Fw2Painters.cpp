@@ -1464,6 +1464,22 @@ static void paintTextInput(Widget& w, UIContext& ctx) {
 
     // Clip so scrolled / long text doesn't escape the box.
     ctx.renderer->pushClip(b.x + padX * 0.5f, b.y, b.w - padX, b.h);
+
+    // Selection highlight behind the text (prompt defaults start
+    // selected so typing replaces them).
+    if (editing && t.hasSelection()) {
+        const int s0 = t.selectionStart();
+        const int s1 = t.selectionEnd();
+        const float sx = drawX + ctx.textMetrics->textWidth(
+            t.text().substr(0, size_t(s0)), fs);
+        const float ex = drawX + ctx.textMetrics->textWidth(
+            t.text().substr(0, size_t(s1)), fs);
+        Color sel = p.accent;
+        sel.a = 90;
+        ctx.renderer->drawRect(sx, b.y + 2.0f, std::max(1.0f, ex - sx),
+                               b.h - 4.0f, sel);
+    }
+
     ctx.textMetrics->drawText(*ctx.renderer, display, drawX, ty, fs, tc);
 
     // Caret at cursor position while editing. Size + centre it to match the

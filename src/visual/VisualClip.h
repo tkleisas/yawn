@@ -65,6 +65,12 @@ struct VisualClip {
     //   0..N-1 = track index
     int audioSource = -1;
 
+    // Multiplies iAudioLevel / iAudioLow/Mid/High / iKick for this clip.
+    // 0 = ignore audio (static), 1 = normal shader reactivity, >1 =
+    // exaggerated. Generated visual clips set this from the Reactivity
+    // dial; hand-authored clips default to 1.
+    float audioReactivity = 1.0f;
+
     // Convenience accessors. Names kept matching the historical
     // shaderChain[0]-based API so existing call sites keep working
     // after the chain-on-track refactor; under the hood they all
@@ -177,6 +183,7 @@ struct VisualClip {
         c->lengthBeats   = lengthBeats;
         c->tempoSync     = tempoSync;
         c->audioSource   = audioSource;
+        c->audioReactivity = audioReactivity;
         c->text          = text;
         c->videoPath       = videoPath;
         c->thumbnailPath   = thumbnailPath;

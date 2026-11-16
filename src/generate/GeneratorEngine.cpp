@@ -493,6 +493,39 @@ void GeneratorEngine::pushParams(const GeneratorParams& p) {
     setStr("scale", p.scale);
     setStr("root", p.root);
     setStr("movement", p.movement);
+    lua_pushboolean(L, p.generateVisuals ? 1 : 0);
+    lua_setfield(L, -2, "generateVisuals");
+    setStr("visualTheme", p.visualTheme);
+    lua_pushnumber(L, p.visualReactivity);
+    lua_setfield(L, -2, "visualReactivity");
+
+    // Shader catalog for visuals.lua: id/path + @range metadata.
+    lua_newtable(L);
+    int ci = 1;
+    for (const auto& shader : m_visualCatalog) {
+        lua_newtable(L);
+        lua_pushstring(L, shader.id.c_str());
+        lua_setfield(L, -2, "id");
+        lua_pushstring(L, shader.path.c_str());
+        lua_setfield(L, -2, "path");
+        lua_newtable(L);
+        int pi = 1;
+        for (const auto& param : shader.params) {
+            lua_newtable(L);
+            lua_pushstring(L, param.name.c_str());
+            lua_setfield(L, -2, "name");
+            lua_pushnumber(L, param.minValue);
+            lua_setfield(L, -2, "min");
+            lua_pushnumber(L, param.maxValue);
+            lua_setfield(L, -2, "max");
+            lua_pushnumber(L, param.defaultValue);
+            lua_setfield(L, -2, "default");
+            lua_rawseti(L, -2, pi++);
+        }
+        lua_setfield(L, -2, "params");
+        lua_rawseti(L, -2, ci++);
+    }
+    lua_setfield(L, -2, "visualCatalog");
 
     lua_pushnumber(L, p.density);
     lua_setfield(L, -2, "density");
@@ -658,6 +691,98 @@ bool GeneratorEngine::readSong(GeneratedSong& out, std::string* error) {
             lua_pop(L, 1);  // clip
         }
         lua_pop(L, 1);  // clips
+
+        // Optional visual plan for this section (one clip for now).
+        lua_getfield(L, -1, "visuals");
+        if (!lua_isnil(L, -1)) {
+            if (!lua_istable(L, -1))
+                return fail(sctx + ".visuals must be an array");
+            const int numVisuals = static_cast<int>(luaL_len(L, -1));
+            if (numVisuals > 8)
+                return fail(sctx + ".visuals supports at most 8 visuals");
+            for (int vi = 1; vi <= numVisuals; ++vi) {
+                lua_rawgeti(L, -1, vi);
+                if (!lua_istable(L, -1))
+                    return fail(sctx + ".visuals[" + std::to_string(vi) +
+                                "] must be a table");
+                const std::string vctx =
+                    sctx + ".visuals[" + std::to_string(vi) + "]";
+                GeneratedVisual vis;
+                if (!getStringField(L, "shader", vis.shaderId, err, vctx,
+                                    true, ""))
+                    return fail(err);
+                if (vis.shaderId.empty())
+                    return fail(vctx + ".shader must not be empty");
+                if (m_visualCatalog.empty())
+                    return fail("visual shader catalog is empty");
+                bool found = false;
+                for (const auto& shader : m_visualCatalog) {
+                    if (shader.id == vis.shaderId) {
+                        vis.shaderPath = shader.path;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    return fail(vctx + ": unknown visual shader '" +
+                                vis.shaderId + "'");
+                if (!getStringField(L, "name", vis.name, err, vctx, false,
+                                    vis.shaderId))
+                    return fail(err);
+                if (!getStringField(L, "role", vis.role, err, vctx, false,
+                                    "visual"))
+                    return fail(err);
+                if (!getStringField(L, "audioRole", vis.audioRole, err, vctx,
+                                    false, vis.role))
+                    return fail(err);
+                if (!getStringField(L, "image", vis.image, err, vctx, false,
+                                    ""))
+                    return fail(err);
+                double reactivity = 1.0;
+                if (!getNumberField(L, "reactivity", 0.0, 4.0, reactivity,
+                                    err, vctx, false, 1.0))
+                    return fail(err);
+                vis.reactivity = static_cast<float>(reactivity);
+                if (!vis.image.empty() &&
+                    (vis.image.find('/') != std::string::npos ||
+                     vis.image.find('\\') != std::string::npos ||
+                     vis.image.find("..") != std::string::npos))
+                    return fail(vctx + ".image must be a plain filename");
+
+                lua_getfield(L, -1, "params");
+                if (!lua_isnil(L, -1)) {
+                    if (!lua_istable(L, -1))
+                        return fail(vctx + ".params must be a table");
+                    int count = 0;
+                    lua_pushnil(L);
+                    while (lua_next(L, -2) != 0) {
+                        if (!lua_isstring(L, -2) || !lua_isnumber(L, -1)) {
+                            return fail(vctx +
+                                ".params must map names to numbers");
+                        }
+                        const std::string key = lua_tostring(L, -2);
+                        const double value = lua_tonumber(L, -1);
+                        if (!std::isfinite(value) || std::abs(value) > 1e6)
+                            return fail(vctx + ".params['" + key +
+                                        "'] is out of range");
+                        vis.params.emplace_back(key,
+                            static_cast<float>(value));
+                        if (++count > 64)
+                            return fail(vctx + ".params has more than 64 entries");
+                        lua_pop(L, 1);  // pop value, keep key
+                    }
+                    lua_pop(L, 1);  // params table
+                } else {
+                    lua_pop(L, 1);  // nil
+                }
+
+                sec.visuals.push_back(std::move(vis));
+                lua_pop(L, 1);  // visual
+            }
+            lua_pop(L, 1);  // visuals table
+        } else {
+            lua_pop(L, 1);  // nil
+        }
 
         song.sections.push_back(std::move(sec));
         lua_pop(L, 1);  // section

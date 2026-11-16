@@ -13,6 +13,7 @@ TEST(VisualClipTest, DefaultsAreSane) {
     EXPECT_FALSE(c.hasSource());
     EXPECT_EQ(c.colorIndex, 0);
     EXPECT_EQ(c.audioSource, -1);
+    EXPECT_FLOAT_EQ(c.audioReactivity, 1.0f);
     EXPECT_TRUE(c.source.paramValues.empty());
     EXPECT_TRUE(c.text.empty());
     EXPECT_TRUE(c.videoPath.empty());
@@ -38,6 +39,7 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     c.colorIndex         = 7;
     c.lengthBeats        = 8.0;
     c.audioSource        = 3;
+    c.audioReactivity    = 1.75f;
     c.source.paramValues = {{"speed", 0.75f}, {"knobA", 0.2f}};
     c.text             = "LIVE";
     c.videoPath        = "/media/x.mp4";
@@ -65,6 +67,7 @@ TEST(VisualClipTest, ClonePreservesAllFields) {
     EXPECT_EQ(clone->colorIndex,         c.colorIndex);
     EXPECT_DOUBLE_EQ(clone->lengthBeats, c.lengthBeats);
     EXPECT_EQ(clone->audioSource,        c.audioSource);
+    EXPECT_FLOAT_EQ(clone->audioReactivity, c.audioReactivity);
     ASSERT_EQ(clone->source.paramValues.size(), c.source.paramValues.size());
     for (size_t i = 0; i < c.source.paramValues.size(); ++i) {
         EXPECT_EQ(clone->source.paramValues[i].first,

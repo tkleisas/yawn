@@ -36,6 +36,7 @@ public:
         std::function<void(int slot, float screenX, float screenY)>;
     using LoadPresetCallback = std::function<void(const std::string& name)>;
     using SavePresetCallback = std::function<void()>;
+    using ReactivityCallback = std::function<void(float)>;
 
     GeneratorPanel();
 
@@ -45,6 +46,9 @@ public:
     void setOnParamMenu(ParamMenuCallback cb) { m_onParamMenu = std::move(cb); }
     void setOnLoadPreset(LoadPresetCallback cb) { m_onLoadPreset = std::move(cb); }
     void setOnSavePreset(SavePresetCallback cb) { m_onSavePreset = std::move(cb); }
+    void setOnVisualReactivityChanged(ReactivityCallback cb) {
+        m_onVisualReactivity = std::move(cb);
+    }
 
     // Populated by App on open / after generation.
     void setStyleIds(const std::vector<std::string>& ids);
@@ -69,6 +73,7 @@ public:
     bool hasGenerated() const { return !m_roles.empty(); }
     const std::vector<std::string>& generatedRoles() const { return m_roles; }
     std::vector<int> chosenTracks() const;
+    bool visualsRequested() const;
     generate::GeneratorParams buildParams() const;
 
 protected:
@@ -97,7 +102,10 @@ private:
     FwNumberInput  m_density;
     FwNumberInput  m_noteLength;
     FwNumberInput  m_swing;
+    FwNumberInput  m_visualReactivity;
     FwToggle       m_autoMix;
+    FwToggle       m_visualsOn;
+    FwDropDown     m_visualTheme;
     FwButton       m_generate;
     FwButton       m_commit;
     FwButton       m_reroll;
@@ -111,6 +119,7 @@ private:
     std::unique_ptr<Label> m_paramsHeader;
     std::unique_ptr<Label> m_laneHeader;
     std::unique_ptr<Label> m_status;
+    std::unique_ptr<Label> m_visualLanesHint;
 
     std::vector<std::unique_ptr<Label>>      m_paramLabels;
     std::vector<Widget*>                     m_paramControls;
@@ -125,6 +134,7 @@ private:
     ParamMenuCallback  m_onParamMenu;
     LoadPresetCallback m_onLoadPreset;
     SavePresetCallback m_onSavePreset;
+    ReactivityCallback m_onVisualReactivity;
 };
 
 } // namespace fw2

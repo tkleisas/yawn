@@ -56,6 +56,15 @@ public:
     std::vector<std::string> listStyles() const;
     std::vector<std::string> listScales() const;
 
+    // Shader catalog used by the Lua visual planner. Set before
+    // generate() (App rebuilds it when opening the panel).
+    void setVisualShaderCatalog(std::vector<VisualShaderInfo> catalog) {
+        m_visualCatalog = std::move(catalog);
+    }
+    const std::vector<VisualShaderInfo>& visualShaderCatalog() const {
+        return m_visualCatalog;
+    }
+
     // Exposed for tests: deterministic RNG unit value.
     double rngUnit();
 
@@ -67,6 +76,7 @@ private:
     std::string tracebackFromTop(const char* context);
 
     std::vector<std::filesystem::path> m_roots;
+    std::vector<VisualShaderInfo> m_visualCatalog;
     lua_State* m_L = nullptr;
     uint64_t m_rngState = 1;
     bool m_ready = false;

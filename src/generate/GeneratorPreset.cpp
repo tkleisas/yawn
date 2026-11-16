@@ -18,6 +18,9 @@ nlohmann::json paramsToJson(const GeneratorParams& p) {
     j["scale"] = p.scale;
     j["root"] = p.root;
     j["movement"] = p.movement;
+    j["generateVisuals"] = p.generateVisuals;
+    j["visualTheme"] = p.visualTheme;
+    j["visualReactivity"] = p.visualReactivity;
     j["density"] = p.density;
     j["noteLength"] = p.noteLength;
     j["swing"] = p.swing;
@@ -39,6 +42,9 @@ bool paramsFromJson(const nlohmann::json& j, GeneratorParams& out,
     p.scale = j.value("scale", std::string{});
     p.root = j.value("root", std::string{});
     p.movement = j.value("movement", std::string("auto"));
+    p.generateVisuals = j.value("generateVisuals", false);
+    p.visualTheme = j.value("visualTheme", std::string("auto"));
+    p.visualReactivity = j.value("visualReactivity", 1.0f);
     p.density = j.value("density", -1.0f);
     p.noteLength = j.value("noteLength", -1.0f);
     p.swing = j.value("swing", -1.0f);

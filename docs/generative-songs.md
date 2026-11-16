@@ -73,6 +73,48 @@ uses 3.5 semitones for its neutral third). Generated notes carry a
 - Up to 15 simultaneously tuned notes per track; beyond that a note
   falls back to the nearest semitone.
 
+## Visuals
+
+Enable **Visuals** in the GeneratorPanel. The generator creates one
+visual track per generated audio lane (drums / bass / chords / lead,
+named **V Drums**, **V Bass**, …) and reuses them on later commits.
+Each lane reacts to its matching audio track and the lanes are mixed
+together: drums drive the full-strength background, bass/chords/lead
+add over it with Add/Screen blend and lower opacity. The generator:
+- chooses a theme per song automatically from the style blend
+  (sacred / cosmic / ink / abstract) or uses the theme you pick;
+- picks a shader per section by energy — calm for intro/outro, driving
+  for verses, brighter for chorus/drop;
+- sets shader parameters from the section energy (spin, drift, glow,
+  kick response) and the theme palette, within each shader's `@range`;
+- loads `seed_emblem.png` for the seed-picture shaders;
+- scales how hard each lane reacts to audio via the **Reactivity**
+  dial (0 = static, 1 = normal, 2 = exaggerated), with per-lane
+  weighting (drums strongest, chords subtler). This multiplies the
+  shader's `iAudioLevel` / `iAudioLow/Mid/High` / `iKick` and also
+  applies to scene-script inputs. While the panel is open it applies
+  live to every visual track; committed clips store the value.
+
+Commit writes one tempo-synced `VisualClip` per lane per section into
+the same scenes as the audio/MIDI clips, with visual follow actions.
+Launch the first scene and all lanes switch with the song: each visual
+listens to its own audio lane, and the layered blend gives the
+interplay. Undo/redo covers the visual clips as part of the generated
+scenes; the auto-created visual tracks remain (they are reused).
+
+The visual plan is deterministic with the song seed. The shader set is
+the bundled `assets/shaders/examples` plus any project `.frag` files;
+custom shaders are available to the catalog but the curated theme
+lists drive selection.
+
+CLI preview:
+
+```
+YAWN --gen-song /tmp/song.mid --style rock:0.5 --style techno:0.5      --visuals --visual-theme cosmic
+```
+
+This prints the per-section shader plan (the SMF remains audio-only).
+
 ## MIDI Learn
 
 Right-click a style-weight knob, Density, Note Length, Swing, or Tempo
@@ -157,3 +199,5 @@ the clip model but not yet written to SMF (MPE export lands in P3).
 - MIDI Learn targets the fixed parameter slots; style slots follow the
   sorted style list.
 - Virtual MIDI output and the CLAP plugin are future phases.
+- Undo removes generated scenes (and their visual clips) but leaves
+  the auto-created `V …` visual tracks in place for reuse.

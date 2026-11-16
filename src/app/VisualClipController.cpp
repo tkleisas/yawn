@@ -175,6 +175,7 @@ void VisualClipController::launchVisualClipData(int track,
 
     std::string resolved = resolveShaderPath(effectiveShader);
     m_visual.loadLayer(track, resolved, audioSource);
+    m_visual.setLayerAudioReactivity(track, vc.audioReactivity);
     m_visual.setLayerBlendMode(track,
         static_cast<visual::VisualEngine::BlendMode>(
             m_project.track(track).visualBlendMode));

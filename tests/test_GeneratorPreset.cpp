@@ -15,6 +15,9 @@ TEST(GeneratorPreset, ParamsRoundTrip) {
     p.scale = "rast";
     p.root = "D";
     p.movement = "ascending";
+    p.generateVisuals = true;
+    p.visualTheme = "sacred";
+    p.visualReactivity = 1.35f;
     p.density = 0.62f;
     p.noteLength = 0.45f;
     p.swing = 0.18f;
@@ -33,6 +36,9 @@ TEST(GeneratorPreset, ParamsRoundTrip) {
     EXPECT_EQ(back.scale, "rast");
     EXPECT_EQ(back.root, "D");
     EXPECT_EQ(back.movement, "ascending");
+    EXPECT_TRUE(back.generateVisuals);
+    EXPECT_EQ(back.visualTheme, "sacred");
+    EXPECT_FLOAT_EQ(back.visualReactivity, 1.35f);
     EXPECT_FLOAT_EQ(back.density, 0.62f);
     EXPECT_FLOAT_EQ(back.noteLength, 0.45f);
     EXPECT_FLOAT_EQ(back.swing, 0.18f);

@@ -60,6 +60,15 @@ public:
     int  cursor() const                    { return m_cursor; }
     void setCursor(int pos);
 
+    // Selection is used by modal prompts so the suggested default is
+    // selected and typing replaces it. Arrow/Home/End and mouse clicks
+    // collapse the selection (no shift-extend support yet).
+    void selectAll();
+    void clearSelection();
+    bool hasSelection() const;
+    int  selectionStart() const;
+    int  selectionEnd() const;
+
     // Horizontal scroll offset (px) so the caret stays visible when the
     // text is wider than the field. Maintained by the painter each frame
     // (it clamps to keep the caret in view); exposed so the painter can
@@ -94,6 +103,8 @@ private:
     std::string m_savedText;           // pre-edit snapshot for cancel
     std::string m_placeholder;
     int         m_cursor  = 0;         // byte offset into m_text
+    int         m_selStart = -1;
+    int         m_selEnd   = -1;
     bool        m_editing = false;
     float       m_scrollPx = 0.0f;     // horizontal scroll (painter-maintained)
 

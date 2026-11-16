@@ -414,3 +414,128 @@ TEST(GeneratorEngineTest, ReloadTwiceIsSafe) {
     ASSERT_TRUE(engine.reload(&error)) << error;
     EXPECT_TRUE(engine.ready());
 }
+
+namespace {
+
+std::vector<VisualShaderInfo> testVisualCatalog() {
+    VisualShaderInfo mandala;
+    mandala.id = "32_mandala_seed";
+    mandala.path = "assets/shaders/examples/32_mandala_seed.frag";
+    mandala.params = {
+        { "segments", 2, 32, 12 },
+        { "petals", 2, 24, 8 },
+        { "rings", 1, 8, 3 },
+        { "gold", 0, 1, 0.7f },
+        { "palette", 0, 1, 0.5f },
+        { "spin", -2, 2, 0.5f },
+        { "glow", 0, 1, 0.7f },
+        { "zoom", 0.5f, 1.4f, 1.0f },
+    };
+    VisualShaderInfo stars;
+    stars.id = "45_starfield";
+    stars.path = "assets/shaders/examples/45_starfield.frag";
+    stars.params = {
+        { "density", 0, 1, 0.7f },
+        { "drift", 0, 1, 0.2f },
+        { "nebula", 0, 1, 0.4f },
+        { "twinkle", 0, 1, 0.6f },
+        { "palette", 0, 1, 0.5f },
+    };
+    return { mandala, stars };
+}
+
+} // namespace
+
+TEST(GeneratorEngineTest, GenerateVisualsFromCatalog) {
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+    engine.setVisualShaderCatalog(testVisualCatalog());
+
+    GeneratorParams p = baseParams(51);
+    p.generateVisuals = true;
+    p.visualTheme = "sacred";
+    p.visualReactivity = 1.6f;
+    GeneratedSong song;
+    ASSERT_TRUE(engine.generate(p, song, &error)) << error;
+
+    ASSERT_EQ(song.sections.size(), 4u);
+    EXPECT_EQ(song.totalVisuals(), 16);   // 4 lanes × 4 sections
+    for (const auto& sec : song.sections) {
+        ASSERT_EQ(sec.visuals.size(), 4u);
+        const std::vector<std::string> expectedRoles = {
+            "drums", "bass", "chords", "lead"
+        };
+        for (size_t i = 0; i < sec.visuals.size(); ++i) {
+            const auto& v = sec.visuals[i];
+            EXPECT_FALSE(v.shaderPath.empty());
+            EXPECT_EQ(v.role, expectedRoles[i]);
+            EXPECT_EQ(v.audioRole, expectedRoles[i]);
+            const float scale = expectedRoles[i] == "drums" ? 1.25f
+                              : expectedRoles[i] == "bass" ? 0.9f
+                              : expectedRoles[i] == "chords" ? 0.7f : 1.0f;
+            EXPECT_NEAR(v.reactivity, 1.6f * scale, 1e-4f);
+            for (const auto& kv : v.params) {
+                EXPECT_TRUE(std::isfinite(kv.second));
+            }
+        }
+    }
+    // Seed-picture shaders must carry the bundled seed image.
+    for (const auto& sec : song.sections)
+        for (const auto& v : sec.visuals)
+            if (v.shaderId == "32_mandala_seed")
+                EXPECT_EQ(v.image, "seed_emblem.png");
+
+    // Deterministic.
+    GeneratedSong again;
+    ASSERT_TRUE(engine.generate(p, again, &error)) << error;
+    ASSERT_EQ(again.sections.size(), song.sections.size());
+    for (size_t i = 0; i < song.sections.size(); ++i) {
+        ASSERT_EQ(again.sections[i].visuals.size(),
+                  song.sections[i].visuals.size());
+        for (size_t j = 0; j < song.sections[i].visuals.size(); ++j) {
+            EXPECT_EQ(again.sections[i].visuals[j].shaderId,
+                      song.sections[i].visuals[j].shaderId);
+            EXPECT_EQ(again.sections[i].visuals[j].role,
+                      song.sections[i].visuals[j].role);
+            EXPECT_EQ(again.sections[i].visuals[j].params,
+                      song.sections[i].visuals[j].params);
+        }
+    }
+}
+
+TEST(GeneratorEngineTest, UnknownVisualShaderIsRejected) {
+    namespace fs = std::filesystem;
+    const fs::path dir =
+        fs::temp_directory_path() / "yawn_generator_bad_visual_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    {
+        std::ofstream f(dir / "init.lua");
+        f << "return { generate = function(params)\n"
+             "  return { tempo = 100, beatsPerBar = 4, sections = {\n"
+             "    { id = 'test', name = 'Test', bars = 2, visuals = {\n"
+             "      { shader = 'not_a_real_shader' } }, clips = {\n"
+             "      { role = 'lead', notes = {\n"
+             "        { beat = 0, dur = 1, pitch = 60 } } } } } } }\n"
+             "end }\n";
+    }
+
+    GeneratorEngine engine;
+    engine.setScriptRoots({ dir });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+    engine.setVisualShaderCatalog(testVisualCatalog());
+
+    GeneratorParams p = baseParams(1);
+    p.generateVisuals = true;
+    GeneratedSong song;
+    EXPECT_FALSE(engine.generate(p, song, &error));
+    EXPECT_NE(error.find("unknown visual shader"), std::string::npos)
+        << error;
+
+    fs::remove_all(dir, ec);
+}

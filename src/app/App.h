@@ -270,6 +270,11 @@ private:
                            const std::vector<int>& tracks);
     void pollGeneratorParams();
     void showGeneratorParamMenu(int slot, float mx, float my);
+    void buildVisualShaderCatalog();
+    bool commitGeneratedVisuals(const generate::GeneratedSong& song,
+                                const std::vector<std::string>& audioRoles,
+                                const std::vector<int>& audioTracks,
+                                int firstScene, std::string* error);
     void onGeneratorLoadPreset(const std::string& name);
     void onGeneratorSavePreset();
     std::vector<std::filesystem::path> generatorScriptRoots() const;
