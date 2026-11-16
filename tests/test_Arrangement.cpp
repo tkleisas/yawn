@@ -668,3 +668,27 @@ TEST(TransportLoop, ResetClearsLoop) {
     EXPECT_DOUBLE_EQ(t.loopStartBeats(), 0.0);
     EXPECT_DOUBLE_EQ(t.loopEndBeats(), 0.0);
 }
+
+TEST(Project, ArrangementContentEndIgnoresPaddedTail) {
+    Project p;
+    p.init(3, 1);
+
+    ArrangementClip a;
+    a.startBeat = 0.0;
+    a.lengthBeats = 16.0;
+    p.track(0).arrangementClips.push_back(a);
+
+    ArrangementClip b;
+    b.startBeat = 16.0;
+    b.lengthBeats = 8.0;
+    p.track(1).arrangementClips.push_back(b);
+
+    ArrangementClip c;
+    c.startBeat = 20.0;
+    c.lengthBeats = 4.0;
+    p.track(2).arrangementClips.push_back(c);
+
+    p.updateArrangementLength();
+    EXPECT_DOUBLE_EQ(p.arrangementContentEnd(), 24.0);
+    EXPECT_DOUBLE_EQ(p.arrangementLength(), 40.0);  // 24 + 16 padding
+}

@@ -603,6 +603,7 @@ private:
         bool                  haveAudio = false;
         int64_t               savedPos = 0;
         bool                  savedPlaying = false;
+        bool                  savedOutputVisible = true;
         std::vector<uint8_t>  restoreArr;       // per-track arrangementActive
         std::vector<uint8_t>  rgba;             // reused readback buffer
         audio::RenderProgress audioProg;        // sub-progress for the bounce

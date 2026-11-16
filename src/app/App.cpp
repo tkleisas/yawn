@@ -896,7 +896,11 @@ void App::exportVideo(const std::string& filePath) {
     }
     const double bpm        = std::max(1.0, m_audioEngine.transport().bpm());
     const double sampleRate = std::max(1.0, m_audioEngine.sampleRate());
-    const double lengthBeats = m_project.arrangementLength();
+    // Stop at the last actual clip; arrangementLength() includes a
+    // 16-beat tail so generated/captured songs don't cut off effects.
+    // Rendering that tail as video is pure dead air.
+    double lengthBeats = m_project.arrangementContentEnd();
+    if (lengthBeats <= 0.0) lengthBeats = m_project.arrangementLength();
     if (lengthBeats <= 0.0) {
         m_toastManager.show("Nothing on the arrangement timeline to export",
                             2.5f, ui::ToastManager::Severity::Info);
@@ -952,6 +956,12 @@ void App::exportVideo(const std::string& filePath) {
     j.savedPos     = transport.positionInSamples();
     j.savedPlaying = transport.isPlaying();
     j.restoreArr   = std::move(restoreArr);
+
+    // Hide the live visual output while offline-rendering: otherwise the
+    // preview window visibly flashes through every scene/shader switch
+    // while the export dialog (behind it) appears stalled.
+    j.savedOutputVisible = m_visualEngine.isOutputVisible();
+    m_visualEngine.setOutputVisible(false);
 }
 
 // Main-thread state machine, called once per frame while a job is live.
@@ -1043,6 +1053,7 @@ void App::pollVideoExport() {
         }
         auto& transport = m_audioEngine.transport();
         const auto budgetStart = std::chrono::steady_clock::now();
+        static auto lastFrameLog = std::chrono::steady_clock::now();
         const size_t frameBytes = static_cast<size_t>(j.w) * j.h * 4;
         bool pipeBroke = false;
         // Render a slice this UI frame, streaming each frame straight into
@@ -1067,8 +1078,20 @@ void App::pollVideoExport() {
                 break;
             }
             ++j.frame;
-            if ((j.frame % 60) == 0)
-                LOG_INFO("VideoExport", "  frame %d / %d", j.frame, j.totalFrames);
+            // Update per frame, not just per 12 ms slice: a slow shader
+            // must not leave the dialog frozen at the phase boundary.
+            progress.fraction.store(0.10f + 0.78f *
+                static_cast<float>(j.frame) / static_cast<float>(j.totalFrames));
+            if ((j.frame % 60) == 0) {
+                const auto now = std::chrono::steady_clock::now();
+                const double msPerFrame =
+                    std::chrono::duration<double, std::milli>(
+                        now - lastFrameLog).count() / 60.0;
+                lastFrameLog = now;
+                LOG_INFO("VideoExport",
+                         "  frame %d / %d (%.1f ms/frame)",
+                         j.frame, j.totalFrames, msPerFrame);
+            }
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - budgetStart).count();
             if (elapsed >= 12) break;   // ~12 ms/frame → keep the UI at speed
@@ -1134,6 +1157,7 @@ void App::finalizeVideoExport(bool ok, bool cancelled) {
         m_audioEngine.sendCommand(audio::SetTrackArrActiveMsg{t, j.restoreArr[t] != 0});
     }
     m_visualController->resetAllArrangementTracking();
+    m_visualEngine.setOutputVisible(j.savedOutputVisible);
 
     const std::string fname = fs::path(j.outPath).filename().string();
     m_exportDialog.setRendering(false);

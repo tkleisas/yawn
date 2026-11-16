@@ -667,6 +667,17 @@ public:
     void setViewMode(ViewMode m) { m_viewMode = m; }
 
     double arrangementLength() const { return m_arrangementLength; }
+
+    // Last beat covered by any arrangement clip (no end padding). Video
+    // export uses this instead of arrangementLength() so it doesn't
+    // render minutes of empty tail after the last clip.
+    double arrangementContentEnd() const {
+        double end = 0.0;
+        for (const auto& tr : m_tracks)
+            for (const auto& c : tr.arrangementClips)
+                end = std::max(end, c.endBeat());
+        return end;
+    }
     void setArrangementLength(double beats) { m_arrangementLength = beats; }
 
     // Recompute arrangement length from all track clips
