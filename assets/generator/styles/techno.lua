@@ -1,0 +1,25 @@
+return {
+    id = "techno",
+    name = "Techno",
+    tempo = { 122, 138 },
+    scales = { "phrygian", "natural_minor" },
+    roots = { "A", "C", "F" },
+    progressions = {
+        { "i", "i", "i", "i" },
+        { "i", "VII", "i", "VII" },
+    },
+    sections = {
+        "intro", "verse", "chorus", "break", "drop", "outro",
+    },
+    density = { 0.7, 0.9 },
+    noteLength = { 0.25, 0.5 },
+    swing = 0.0,
+    chordRhythm = "stab",
+    drums = {
+        kick = "x---x---x---x---",
+        clap = "----x-------x---",
+        hat = "--x---x---x---x-",
+        openhat = "--------x-------",
+    },
+    melody = { contour = "arch", ornament = 0.05 },
+}

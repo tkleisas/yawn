@@ -28,7 +28,11 @@
 #include "visual/VisualEngine.h"
 #include "util/Logger.h"
 #include "presets/PresetGenerator.h"
+#include "generate/GeneratorEngine.h"
+#include "util/MidiFileIO.h"
+#include "midi/MidiTypes.h"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -413,10 +417,169 @@ static int runGenPresets(int argc, char* argv[]) {
     return 0;
 }
 
+// ─── Headless generative-song CLI ───────────────────────────────────────────
+// `YAWN --gen-song <out.mid> [--style id[:weight]]... [--seed N]
+//        [--blend fuse|rotate] [--scale id] [--root note]
+//        [--movement ascending|descending|arch|valley|random|auto]
+//        [--density 0..1] [--note-length 0.1..2] [--swing 0..0.75]
+//        [--tempo BPM] [--beats-per-bar N] [--sections a,b,c]
+//        [--scripts <generator dir>]`
+// Writes a preview SMF (notes only; microtuning lands in the clip model
+// but SMF MPE export is a later phase).
+static int runGenSong(int argc, char* argv[]) {
+    using namespace yawn::generate;
+
+    std::string outPath = "generated.mid";
+    GeneratorParams params;
+    params.styles.clear();
+    std::string scriptsOverride;
+    bool haveStyle = false;
+
+    auto splitStyle = [&](const std::string& spec) {
+        StyleMix mix;
+        auto colon = spec.find(':');
+        if (colon == std::string::npos) {
+            mix.id = spec;
+        } else {
+            mix.id = spec.substr(0, colon);
+            mix.weight = std::strtof(spec.c_str() + colon + 1, nullptr);
+        }
+        if (!mix.id.empty()) {
+            params.styles.push_back(mix);
+            haveStyle = true;
+        }
+    };
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&](const char* def) -> std::string {
+            return (i + 1 < argc) ? std::string(argv[++i]) : std::string(def);
+        };
+        if (a == "--gen-song") {
+            outPath = next("generated.mid");
+        } else if (a == "--style") {
+            splitStyle(next("pop"));
+        } else if (a == "--blend") {
+            params.blend = next("fuse");
+        } else if (a == "--scale") {
+            params.scale = next("");
+        } else if (a == "--root") {
+            params.root = next("");
+        } else if (a == "--movement") {
+            params.movement = next("auto");
+        } else if (a == "--density") {
+            params.density = std::strtof(next("-1").c_str(), nullptr);
+        } else if (a == "--note-length") {
+            params.noteLength = std::strtof(next("-1").c_str(), nullptr);
+        } else if (a == "--swing") {
+            params.swing = std::strtof(next("-1").c_str(), nullptr);
+        } else if (a == "--tempo") {
+            params.tempo = std::atoi(next("0").c_str());
+        } else if (a == "--beats-per-bar") {
+            params.beatsPerBar = std::atoi(next("4").c_str());
+        } else if (a == "--seed") {
+            params.seed = std::strtoull(next("1").c_str(), nullptr, 10);
+        } else if (a == "--scripts") {
+            scriptsOverride = next("");
+        } else if (a == "--sections") {
+            std::string list = next("");
+            size_t pos = 0;
+            while (pos <= list.size()) {
+                auto comma = list.find(',', pos);
+                std::string id = list.substr(pos, comma == std::string::npos
+                                                    ? std::string::npos
+                                                    : comma - pos);
+                if (!id.empty()) params.sections.push_back(id);
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+        }
+    }
+    if (!haveStyle) params.styles.push_back({"pop", 1.0f});
+
+    std::vector<std::filesystem::path> roots;
+    if (!scriptsOverride.empty())
+        roots.emplace_back(scriptsOverride);
+    std::error_code ec;
+    auto cwd = std::filesystem::current_path(ec);
+    if (!ec) roots.push_back(cwd / "generator");
+    const char* home = std::getenv("HOME");
+    if (!home) home = std::getenv("USERPROFILE");
+    if (home)
+        roots.push_back(std::filesystem::path(home) / ".yawn" / "generator");
+    auto exeDir = std::filesystem::absolute(argv[0], ec).parent_path();
+    if (!ec) roots.push_back(cwd / "assets" / "generator");
+    if (!ec) roots.push_back(exeDir / "assets" / "generator");
+
+    GeneratorEngine engine;
+    engine.setScriptRoots(roots);
+    std::string error;
+    if (!engine.reload(&error)) {
+        std::fprintf(stderr, "gen-song: %s\n", error.c_str());
+        return 1;
+    }
+    std::fprintf(stderr, "gen-song: scripts %s\n",
+                 engine.scriptsDir().c_str());
+
+    GeneratedSong song;
+    if (!engine.generate(params, song, &error)) {
+        std::fprintf(stderr, "gen-song: %s\n", error.c_str());
+        return 1;
+    }
+
+    yawn::midi::MidiClip merged(song.totalBeats());
+    double offset = 0.0;
+    int microtonal = 0;
+    std::vector<std::string> roles;
+    for (const auto& sec : song.sections) {
+        for (const auto& clip : sec.clips) {
+            if (std::find(roles.begin(), roles.end(), clip.role) == roles.end())
+                roles.push_back(clip.role);
+            for (const auto& gn : clip.notes) {
+                yawn::midi::MidiNote n;
+                n.startBeat = offset + gn.startBeat;
+                n.duration = gn.duration;
+                n.pitch = static_cast<uint8_t>(gn.pitch);
+                n.channel = static_cast<uint8_t>(gn.channel);
+                n.velocity = yawn::midi::Convert::vel7to16(
+                    static_cast<uint8_t>(gn.velocity));
+                n.cents = gn.cents;
+                if (gn.cents != 0.0f) ++microtonal;
+                merged.addNote(n);
+            }
+        }
+        offset += static_cast<double>(sec.bars) * song.beatsPerBar;
+    }
+
+    if (!yawn::util::saveMidiFile(outPath, merged, song.tempo,
+                                  song.beatsPerBar, 4)) {
+        std::fprintf(stderr, "gen-song: failed to write %s\n", outPath.c_str());
+        return 1;
+    }
+
+    std::fprintf(stderr,
+                 "gen-song: '%s' %d sections, %d notes (%d microtonal), "
+                 "%d bpm, %d/4\n",
+                 song.title.c_str(), static_cast<int>(song.sections.size()),
+                 song.totalNotes(), microtonal, song.tempo,
+                 song.beatsPerBar);
+    std::fprintf(stderr, "gen-song: lanes");
+    for (const auto& r : roles) std::fprintf(stderr, " %s", r.c_str());
+    std::fprintf(stderr, " → %s\n", outPath.c_str());
+    if (microtonal > 0) {
+        std::fprintf(stderr,
+                     "gen-song: note — SMF preview drops cents; tuned playback "
+                     "uses the clip model (MPE export is a later phase).\n");
+    }
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gen-presets") == 0)
             return runGenPresets(argc, argv);
+        if (std::strcmp(argv[i], "--gen-song") == 0)
+            return runGenSong(argc, argv);
         if (std::strcmp(argv[i], "--probe-shader") == 0) {
             // Harness: same GL setup as the app, compiles a shader file
             // through the REAL VisualEngine preamble and reports the

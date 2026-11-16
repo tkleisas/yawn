@@ -700,6 +700,7 @@ json serializeMidiClip(const midi::MidiClip& clip) {
         if (n.pressure != 0.0f) nj["pressure"] = n.pressure;
         if (n.slide != 0.5f) nj["slide"] = n.slide;
         if (n.pitchBendOffset != 0.0f) nj["pbOff"] = n.pitchBendOffset;
+        if (n.cents != 0.0f) nj["cents"] = n.cents;
         notes.push_back(nj);
     }
     j["notes"] = notes;
@@ -738,6 +739,7 @@ std::unique_ptr<midi::MidiClip> deserializeMidiClip(const json& j) {
             n.pressure = nj.value("pressure", 0.0f);
             n.slide = nj.value("slide", 0.5f);
             n.pitchBendOffset = nj.value("pbOff", 0.0f);
+            n.cents = nj.value("cents", 0.0f);
             clip->addNote(n);
         }
     }

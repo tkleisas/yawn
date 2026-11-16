@@ -172,7 +172,8 @@ void VST3Instrument::convertMidiToEventList(const midi::MidiBuffer& midi,
                     e.noteOn.velocity = static_cast<float>(msg.velocity) / 65535.0f;
                     e.noteOn.length = 0;
                     e.noteOn.noteId = -1;
-                    e.noteOn.tuning = 0.0f;
+                    // VST3 defines tuning in cents (1.0 = +1 cent).
+                    e.noteOn.tuning = static_cast<float>(msg.tuningCents);
                 }
                 eventList.addEvent(e);
                 break;
@@ -183,7 +184,7 @@ void VST3Instrument::convertMidiToEventList(const midi::MidiBuffer& midi,
                 e.noteOff.pitch = msg.note;
                 e.noteOff.velocity = static_cast<float>(msg.velocity) / 65535.0f;
                 e.noteOff.noteId = -1;
-                e.noteOff.tuning = 0.0f;
+                e.noteOff.tuning = static_cast<float>(msg.tuningCents);
                 eventList.addEvent(e);
                 break;
             }

@@ -66,6 +66,25 @@ void MidiClipEngine::swapClip(int trackIndex, const midi::MidiClip* oldClip,
                 : newLen;
         }
 
+        // Release every microtuned note: its allocation is keyed to the
+        // old clip's note indices, which the replacement can't resolve,
+        // so leaving one sounding would hang it. Reset the bend too.
+        for (int ch = 1; ch < 16; ++ch) {
+            if (state.tunedNote[ch] < 0) continue;
+            for (int pitch = 0; pitch < 128; ++pitch) {
+                const size_t bit = heldBit(static_cast<uint8_t>(ch),
+                                           static_cast<uint8_t>(pitch));
+                if (!state.heldNotes.test(bit)) continue;
+                buffer.addMessage(midi::MidiMessage::noteOff(
+                    static_cast<uint8_t>(ch),
+                    static_cast<uint8_t>(pitch), 0, 0));
+                state.heldNotes.reset(bit);
+            }
+            buffer.addMessage(midi::MidiMessage::pitchBend32(
+                static_cast<uint8_t>(ch), 0x80000000u, 0));
+        }
+        state.clearTuned();
+
         // Release held notes the new clip doesn't keep sounding at the
         // current position — otherwise the old clip's in-flight notes
         // (whose note-offs lived in the now-replaced clip) hang forever.
@@ -252,6 +271,7 @@ void MidiClipEngine::launchNow(int trackIndex, int sceneIndex,
     state.active = true;
     state.stopping = false;
     state.heldNotes.reset();
+    state.clearTuned();
     state.sceneIndex = sceneIndex;
     state.clipAutomation = clipAutomation;
     state.followAction = followAction;
@@ -273,6 +293,7 @@ void MidiClipEngine::stopNow(int trackIndex) {
     // to the UI (prevents stale "playing" state blocking relaunch).
     state.playPositionBeats = 0.0;
     state.heldNotes.reset();
+    state.clearTuned();
     // Drop the cached automation-lane pointer (ClipEngine::scheduleStop
     // does the same). The automation context gates on `active`, so a
     // stale pointer is never dereferenced — but keeping it would let a
@@ -309,6 +330,22 @@ void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
     // A note-off occurs at startBeat + duration. Scan all notes whose
     // end falls in (scanStart, scanEnd] — a note ending exactly at
     // the buffer-end fires this buffer.
+
+    // Reserve microtuning channels for notes starting in this window
+    // before the off pass. A note hot-swapped or exceptionally short
+    // could otherwise emit its off before its on was allocated, and the
+    // off would land on the un-tuned channel while the on used a member
+    // channel — a hung note.
+    {
+        m_noteIndices.clear();
+        clip->getNotesInRange(scanStart, scanEnd, m_noteIndices);
+        for (int idx : m_noteIndices) {
+            const auto& n = clip->note(idx);
+            if (n.cents != 0.0f && state.findTunedChannel(idx) < 0)
+                state.allocTunedChannel(idx);
+        }
+    }
+
     for (int i = 0; i < clip->noteCount(); ++i) {
         const auto& n = clip->note(i);
         double noteEnd = n.startBeat + n.duration;
@@ -320,9 +357,26 @@ void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
             uint8_t relVel7 = static_cast<uint8_t>(
                 std::min(127, static_cast<int>(n.releaseVelocity >> 9)));
 
-            buffer.addMessage(
-                midi::MidiMessage::noteOff(n.channel, n.pitch, relVel7, frame));
-            state.heldNotes.reset(heldBit(n.channel, n.pitch));
+            // Microtuned notes played on an allocated member channel;
+            // send the off to the same channel.
+            int tunedCh = state.findTunedChannel(i);
+            uint8_t outCh = (tunedCh >= 0) ? static_cast<uint8_t>(tunedCh)
+                                           : n.channel;
+            auto offMsg = midi::MidiMessage::noteOff(outCh, n.pitch, relVel7, frame);
+            offMsg.tuningCents = static_cast<int8_t>(
+                std::max(-127, std::min(127,
+                    static_cast<int>(std::lround(n.cents)))));
+            buffer.addMessage(offMsg);
+            state.heldNotes.reset(heldBit(outCh, n.pitch));
+
+            // Do not release a channel whose note-on is still later in
+            // this scan window (sub-buffer note); its allocation is
+            // cleared on the next pass/final stop instead.
+            if (tunedCh >= 0 && n.startBeat < scanStart) {
+                buffer.addMessage(midi::MidiMessage::pitchBend32(
+                    outCh, 0x80000000u, frame));
+                state.releaseTunedChannel(tunedCh, noteEnd);
+            }
         }
         // Early exit: if note starts after scanEnd, no more note-offs possible
         if (n.startBeat >= scanEnd) break;
@@ -342,9 +396,30 @@ void MidiClipEngine::scanAndEmit(MidiClipPlayState& state,
             std::min(127, static_cast<int>(n.velocity >> 9)));
         if (vel7 == 0) vel7 = 1; // NoteOn with vel=0 is NoteOff
 
-        buffer.addMessage(
-            midi::MidiMessage::noteOn(n.channel, n.pitch, vel7, frame));
-        state.heldNotes.set(heldBit(n.channel, n.pitch));
+        // Microtuning: play on a dedicated member channel with a channel
+        // pitch bend (built-in instruments bend ±2 semitones), and carry
+        // the cents on the note event for hosts that take it directly
+        // (VST3 note tuning). The bend goes one frame early so
+        // frame-sorting MIDI effects keep it ahead of the note-on.
+        int cents = static_cast<int>(std::lround(n.cents));
+        uint8_t outCh = n.channel;
+        int tunedCh = (cents != 0) ? state.findTunedChannel(idx) : -1;
+        if (cents != 0 && tunedCh < 0)
+            tunedCh = state.allocTunedChannel(idx);
+        if (tunedCh >= 0) {
+            outCh = static_cast<uint8_t>(tunedCh);
+            int bendFrame = (frame > 0) ? frame - 1 : 0;
+            if (frame == 0) frame = 1;
+            float norm = std::max(-1.0f, std::min(1.0f, n.cents / 200.0f));
+            buffer.addMessage(midi::MidiMessage::pitchBend32(
+                outCh, midi::Convert::floatToPb32(norm), bendFrame));
+        }
+
+        auto onMsg = midi::MidiMessage::noteOn(outCh, n.pitch, vel7, frame);
+        onMsg.tuningCents = static_cast<int8_t>(
+            std::max(-127, std::min(127, cents)));
+        buffer.addMessage(onMsg);
+        state.heldNotes.set(heldBit(outCh, n.pitch));
     }
 
     // --- CC Events ---

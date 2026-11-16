@@ -84,7 +84,8 @@ struct MidiMessage {
     Type     type        = Type::None;
     uint8_t  channel     = 0;       // 0-15
     uint8_t  note        = 0;       // 0-127
-    uint8_t  _pad        = 0;
+    int8_t   tuningCents = 0;       // note tuning for hosts that take it
+                                    // (VST3 note events; ±127 cents)
     uint16_t velocity    = 0;       // 16-bit (0-65535)
     uint16_t ccNumber    = 0;       // CC number / per-note CC index
     uint32_t value       = 0;       // 32-bit: CC value, pitch bend, pressure

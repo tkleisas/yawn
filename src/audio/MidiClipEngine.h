@@ -35,6 +35,52 @@ struct MidiClipPlayState {
     int64_t barStartSample = 0;
     FollowAction followAction;
 
+    // Microtuning channel allocation. Notes with a non-zero cents offset
+    // are emitted on an MPE member channel (1..15, 0-indexed) with a
+    // channel pitch bend, so built-in instruments tune them individually.
+    // Indexed by channel; value = clip note index, -1 = free. The
+    // last-release beats feed LRU allocation so channel reuse prefers
+    // the notes that have been silent longest.
+    std::array<int16_t, 16> tunedNote = {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    std::array<double, 16> tunedLastOff = {
+        -1e9, -1e9, -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
+        -1e9, -1e9, -1e9, -1e9, -1e9, -1e9, -1e9, -1e9 };
+
+    void clearTuned() {
+        tunedNote.fill(-1);
+        tunedLastOff.fill(-1e9);
+    }
+
+    int findTunedChannel(int clipNoteIndex) const {
+        for (int ch = 1; ch < 16; ++ch)
+            if (tunedNote[ch] == clipNoteIndex) return ch;
+        return -1;
+    }
+
+    // Allocates a free member channel, preferring the one released
+    // longest ago. Returns -1 when all 15 are in use.
+    int allocTunedChannel(int clipNoteIndex) {
+        int best = -1;
+        double oldest = 1e30;
+        for (int ch = 1; ch < 16; ++ch) {
+            if (tunedNote[ch] < 0) {
+                if (tunedLastOff[ch] < oldest) {
+                    oldest = tunedLastOff[ch];
+                    best = ch;
+                }
+            }
+        }
+        if (best >= 0) tunedNote[best] = static_cast<int16_t>(clipNoteIndex);
+        return best;
+    }
+
+    void releaseTunedChannel(int ch, double nowBeats) {
+        if (ch < 1 || ch >= 16) return;
+        tunedNote[ch] = -1;
+        tunedLastOff[ch] = nowBeats;
+    }
+
     // Notes currently sounding on this track (note-on emitted, matching
     // note-off not yet emitted) as a 16-channel × 128-pitch bit set —
     // fixed size, no heap, so scanAndEmit never allocates on the audio

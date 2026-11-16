@@ -29,6 +29,12 @@ struct MidiNote {
     float    slide            = 0.5f;   // 0.0-1.0 (CC74 / timbre dimension)
     float    pitchBendOffset  = 0.0f;   // -1.0 to 1.0 (per-note pitch bend, in PB range units)
 
+    // Microtuning offset from `pitch`, in cents. Generated scales (maqams,
+    // ragas, just intonation, …) store the deviation here instead of
+    // rounding it away. Playback applies it via an MPE member-channel bend
+    // (built-in instruments) or the VST3 note event's tuning field.
+    float    cents            = 0.0f;   // -1200 .. +1200 (typically ±50)
+
     bool operator<(const MidiNote& o) const {
         if (startBeat != o.startBeat) return startBeat < o.startBeat;
         return pitch < o.pitch;

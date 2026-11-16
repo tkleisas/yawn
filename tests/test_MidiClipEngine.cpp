@@ -3,6 +3,7 @@
 #include "audio/Transport.h"
 #include "midi/MidiClip.h"
 #include "midi/MidiTypes.h"
+#include "util/ProjectSerializer.h"
 #include <cmath>
 
 using namespace yawn;
@@ -488,4 +489,104 @@ TEST_F(MidiClipEngineTest, ImmediateStopClearsCachedAutomationPointer) {
     m_engine.scheduleStop(0, QuantizeMode::None);
     EXPECT_EQ(m_engine.trackState(0).clipAutomation, nullptr);
     EXPECT_FALSE(m_engine.isTrackPlaying(0));
+}
+
+// ─── Microtuning playback ───────────────────────────────────────────────────
+
+// A note with a cents offset must play on an MPE member channel with a
+// pitch bend of cents/200 before the note-on, and the note-off must
+// return to the same channel. The note event also carries the cents for
+// hosts that accept tuning directly (VST3).
+TEST_F(MidiClipEngineTest, MicrotunedNoteUsesMemberChannelAndBend) {
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    MidiNote n;
+    n.startBeat = 0.0;
+    n.duration = 0.25;
+    n.pitch = 60;
+    n.channel = 0;
+    n.velocity = 40000;
+    n.cents = 50.0f;          // quarter-tone up
+    clip.addNote(n);
+
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
+    m_engine.checkAndFirePending();
+    m_transport.play();
+    m_engine.process(m_buffers, 256);
+
+    int tunedCh = -1;
+    int noteOnIdx = -1, bendIdx = -1;
+    for (int i = 0; i < m_buffers[0].count(); ++i) {
+        const auto& msg = m_buffers[0][i];
+        if (msg.type == MidiMessage::Type::PitchBend) {
+            tunedCh = msg.channel;
+            bendIdx = i;
+            EXPECT_GE(msg.channel, 1) << "microtuned notes use member channels";
+            EXPECT_NEAR(Convert::pb32toFloat(msg.value), 0.25f, 1e-3f)
+                << "+50 cents is a quarter of the ±2 semitone bend range";
+        } else if (msg.type == MidiMessage::Type::NoteOn && msg.note == 60) {
+            noteOnIdx = i;
+            EXPECT_EQ(msg.tuningCents, 50);
+        }
+    }
+    ASSERT_GE(noteOnIdx, 0) << "note-on missing";
+    ASSERT_GE(bendIdx, 0) << "tuning bend missing";
+    ASSERT_NE(tunedCh, -1);
+    EXPECT_EQ(m_buffers[0][noteOnIdx].channel, tunedCh);
+    EXPECT_LT(bendIdx, noteOnIdx) << "bend must precede the note-on";
+
+    // Run until the note ends; the off must use the same member channel.
+    int foundOffCh = -1;
+    for (int buf = 0; buf < 64 && foundOffCh < 0; ++buf) {
+        m_buffers[0].clear();
+        m_engine.process(m_buffers, 256);
+        for (int i = 0; i < m_buffers[0].count(); ++i) {
+            const auto& msg = m_buffers[0][i];
+            if (msg.type == MidiMessage::Type::NoteOff && msg.note == 60)
+                foundOffCh = msg.channel;
+        }
+    }
+    EXPECT_EQ(foundOffCh, tunedCh)
+        << "note-off must go to the allocated member channel";
+}
+
+// Notes without a cents offset keep their channel and emit no bend.
+TEST_F(MidiClipEngineTest, PlainNoteStaysOnOriginalChannel) {
+    MidiClip clip;
+    clip.setLengthBeats(4.0);
+    clip.addNote({0.0, 0.25, 60, 3, 40000, 0, 0, 0, 0});
+
+    m_engine.scheduleClip(0, 0, &clip, QuantizeMode::None);
+    m_engine.checkAndFirePending();
+    m_transport.play();
+    m_engine.process(m_buffers, 256);
+
+    bool sawOn = false;
+    for (int i = 0; i < m_buffers[0].count(); ++i) {
+        const auto& msg = m_buffers[0][i];
+        EXPECT_NE(msg.type, MidiMessage::Type::PitchBend);
+        if (msg.type == MidiMessage::Type::NoteOn && msg.note == 60) {
+            sawOn = true;
+            EXPECT_EQ(msg.channel, 3);
+            EXPECT_EQ(msg.tuningCents, 0);
+        }
+    }
+    EXPECT_TRUE(sawOn);
+}
+
+// Clip serialization must preserve the cents offset (project round-trip).
+TEST(MidiClipMicrotuning, SerializeRoundTripsCents) {
+    MidiClip clip(4.0);
+    MidiNote n;
+    n.startBeat = 0.0;
+    n.duration = 1.0;
+    n.pitch = 62;
+    n.cents = 37.5f;
+    clip.addNote(n);
+
+    const json j = serializeMidiClip(clip);
+    auto back = deserializeMidiClip(j);
+    ASSERT_NE(back, nullptr);
+    ASSERT_EQ(back->noteCount(), 1);
+    EXPECT_NEAR(back->note(0).cents, 37.5f, 1e-4f);
 }
