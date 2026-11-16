@@ -488,6 +488,10 @@ static int runGenSong(int argc, char* argv[]) {
             visualTheme = next("auto");
         } else if (a == "--visual-reactivity") {
             params.visualReactivity = std::strtof(next("1").c_str(), nullptr);
+        } else if (a == "--section-length") {
+            params.sectionLength = std::strtof(next("1").c_str(), nullptr);
+        } else if (a == "--repeats") {
+            params.repeats = std::atoi(next("1").c_str());
         } else if (a == "--scripts") {
             scriptsOverride = next("");
         } else if (a == "--sections") {
@@ -609,10 +613,11 @@ static int runGenSong(int argc, char* argv[]) {
 
     std::fprintf(stderr,
                  "gen-song: '%s' %d sections, %d notes (%d microtonal), "
-                 "%d visuals, %d bpm, %d/4\n",
+                 "%d visuals, %d bpm, %d/4, %d section(s)\n",
                  song.title.c_str(), static_cast<int>(song.sections.size()),
                  song.totalNotes(), microtonal, song.totalVisuals(),
-                 song.tempo, song.beatsPerBar);
+                 song.tempo, song.beatsPerBar,
+                 static_cast<int>(song.sections.size()));
     if (wantVisuals) {
         for (const auto& sec : song.sections) {
             for (const auto& v : sec.visuals) {

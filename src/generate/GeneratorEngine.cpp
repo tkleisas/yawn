@@ -537,6 +537,10 @@ void GeneratorEngine::pushParams(const GeneratorParams& p) {
     lua_setfield(L, -2, "tempo");
     lua_pushinteger(L, p.beatsPerBar);
     lua_setfield(L, -2, "beatsPerBar");
+    lua_pushnumber(L, p.sectionLength);
+    lua_setfield(L, -2, "sectionLength");
+    lua_pushinteger(L, p.repeats);
+    lua_setfield(L, -2, "repeats");
 
     lua_newtable(L);
     int si = 1;

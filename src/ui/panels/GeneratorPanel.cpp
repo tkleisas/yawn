@@ -80,6 +80,8 @@ GeneratorPanel::GeneratorPanel() {
     addChild(&m_noteLength);
     addChild(&m_swing);
     addChild(&m_visualReactivity);
+    addChild(&m_sectionLength);
+    addChild(&m_repeats);
     addChild(&m_autoMix);
     addChild(&m_visualsOn);
     addChild(&m_visualTheme);
@@ -133,6 +135,18 @@ GeneratorPanel::GeneratorPanel() {
     m_visualReactivity.setStep(0.01f);
     m_visualReactivity.setSuffix("x");
     m_visualReactivity.setValue(1.0f);
+
+    m_sectionLength.setRange(0.25f, 4.0f);
+    m_sectionLength.setFormat("%.2f");
+    m_sectionLength.setStep(0.05f);
+    m_sectionLength.setSuffix("x");
+    m_sectionLength.setValue(1.0f);
+
+    m_repeats.setRange(1.0f, 8.0f);
+    m_repeats.setFormat("%.0f");
+    m_repeats.setStep(1.0f);
+    m_repeats.setSuffix("x");
+    m_repeats.setValue(2.0f);
     m_visualReactivity.setOnChange([this](float v) {
         if (m_onVisualReactivity) m_onVisualReactivity(v);
     });
@@ -188,18 +202,19 @@ GeneratorPanel::GeneratorPanel() {
     const char* paramNames[] = {
         "Seed", "Scale", "Root", "Movement", "Blend",
         "Tempo (0=auto)", "", "Density", "Note length", "Swing",
-        "Reactivity",
+        "Reactivity", "Section len", "Repeats",
     };
     for (const char* name : paramNames)
         m_paramLabels.push_back(makeLabel(name, TextColorToken::Secondary));
     m_paramControls = {
         &m_seed, &m_scale, &m_root, &m_movement, &m_blend,
         &m_tempo, &m_autoMix, &m_density, &m_noteLength, &m_swing,
-        &m_visualReactivity,
+        &m_visualReactivity, &m_sectionLength, &m_repeats,
     };
     m_paramWidths = {
         90.0f, 160.0f, 90.0f, 130.0f, 110.0f,
         130.0f, 110.0f, 80.0f, 100.0f, 80.0f, 100.0f,
+        100.0f, 80.0f,
     };
     for (auto& l : m_paramLabels) addChild(l.get());
 
@@ -369,6 +384,8 @@ void GeneratorPanel::setParams(const generate::GeneratorParams& p) {
     m_visualTheme.setSelectedIndex(themeIdx);
     m_visualReactivity.setValue(
         std::clamp(p.visualReactivity, 0.0f, 2.0f));
+    m_sectionLength.setValue(std::clamp(p.sectionLength, 0.25f, 4.0f));
+    m_repeats.setValue(static_cast<float>(std::clamp(p.repeats, 1, 8)));
     m_seed.setValue(static_cast<float>(p.seed ? p.seed : 1));
     m_tempo.setValue(static_cast<float>(p.tempo));
     const bool autoMix = p.density < 0.0f || p.noteLength < 0.0f ||
@@ -456,6 +473,8 @@ generate::GeneratorParams GeneratorPanel::buildParams() const {
     const int th = std::clamp(m_visualTheme.selectedIndex(), 0, 4);
     p.visualTheme = kThemes[th];
     p.visualReactivity = m_visualReactivity.value();
+    p.sectionLength = m_sectionLength.value();
+    p.repeats = static_cast<int>(std::lround(m_repeats.value()));
     p.seed = static_cast<uint64_t>(std::llround(m_seed.value()));
     if (p.seed == 0) p.seed = 1;
     p.tempo = static_cast<int>(std::lround(m_tempo.value()));
@@ -554,7 +573,9 @@ void GeneratorPanel::onLayout(Rect bounds, UIContext& ctx) {
 
     {
         float x = x0;
-        for (size_t i = 0; i < m_paramControls.size(); ++i) {
+        for (size_t i = 0;
+             i < m_paramControls.size() && i < m_paramLabels.size() &&
+             i < m_paramWidths.size(); ++i) {
             const float w = m_paramWidths[i];
             if (x > x0 && x + w > right) {
                 x = x0;

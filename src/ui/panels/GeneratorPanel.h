@@ -103,6 +103,8 @@ private:
     FwNumberInput  m_noteLength;
     FwNumberInput  m_swing;
     FwNumberInput  m_visualReactivity;
+    FwNumberInput  m_sectionLength;
+    FwNumberInput  m_repeats;
     FwToggle       m_autoMix;
     FwToggle       m_visualsOn;
     FwDropDown     m_visualTheme;

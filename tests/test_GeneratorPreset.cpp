@@ -18,6 +18,8 @@ TEST(GeneratorPreset, ParamsRoundTrip) {
     p.generateVisuals = true;
     p.visualTheme = "sacred";
     p.visualReactivity = 1.35f;
+    p.sectionLength = 1.5f;
+    p.repeats = 3;
     p.density = 0.62f;
     p.noteLength = 0.45f;
     p.swing = 0.18f;
@@ -39,6 +41,8 @@ TEST(GeneratorPreset, ParamsRoundTrip) {
     EXPECT_TRUE(back.generateVisuals);
     EXPECT_EQ(back.visualTheme, "sacred");
     EXPECT_FLOAT_EQ(back.visualReactivity, 1.35f);
+    EXPECT_FLOAT_EQ(back.sectionLength, 1.5f);
+    EXPECT_EQ(back.repeats, 3);
     EXPECT_FLOAT_EQ(back.density, 0.62f);
     EXPECT_FLOAT_EQ(back.noteLength, 0.45f);
     EXPECT_FLOAT_EQ(back.swing, 0.18f);

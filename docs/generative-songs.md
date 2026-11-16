@@ -16,7 +16,7 @@ architecture.
 
 1. Open **Tools → Generative Song…**
 2. Set style blend weights (e.g. rock 0.3, classical 0.3, techno 0.4).
-3. Adjust parameters (optionally press **Reroll Seed**).
+3. Adjust parameters (optionally press **Reroll Seed**). Use **Section length** and **Repeats** for a longer song; repeats are newly generated variations.
 4. Press **Generate**. The panel reports sections, notes, tempo, lanes.
 5. Assign each lane (drums, bass, chords, lead, …) to a destination
    track. Lane counts vary by style — classical and serial have no
@@ -45,6 +45,8 @@ different seed and committing again appends a second set of scenes.
 | Mix | When **Auto mix** is on, density/note length/swing follow the style blend. Turn it off to override them |
 | Density, Note length, Swing | Per-section note generation biases |
 | Tempo | 0 = style decides |
+| Section length | Scales every section's bar count (0.25×…4×) |
+| Repeats | Repeats the whole section sequence 1–8 times; each pass is regenerated with the same style blend, so the second/third pass varies |
 | Presets | Save/load the complete parameter set |
 
 ## Styles

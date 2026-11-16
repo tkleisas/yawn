@@ -539,3 +539,34 @@ TEST(GeneratorEngineTest, UnknownVisualShaderIsRejected) {
 
     fs::remove_all(dir, ec);
 }
+
+TEST(GeneratorEngineTest, SectionLengthAndRepeatsExpandSong) {
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+
+    GeneratorParams p = baseParams(77);
+    p.sections = { "intro", "verse", "chorus", "outro" };
+    p.sectionLength = 2.0f;
+    p.repeats = 3;
+    GeneratedSong song;
+    ASSERT_TRUE(engine.generate(p, song, &error)) << error;
+
+    ASSERT_EQ(song.sections.size(), 12u);   // 4 sections × 3 repeats
+    EXPECT_EQ(song.sections[0].bars, 8);    // intro 4 → 8
+    EXPECT_EQ(song.sections[1].bars, 16);   // verse 8 → 16
+    EXPECT_EQ(song.sections[2].bars, 16);   // chorus 8 → 16
+    EXPECT_EQ(song.sections[3].bars, 8);    // outro 4 → 8
+    EXPECT_EQ(song.sections[4].id, "intro");
+    EXPECT_EQ(song.sections[8].id, "intro");
+
+    // Repeats are regenerated from the same RNG stream, so they vary.
+    std::vector<double> first, second;
+    for (const auto& c : song.sections[0].clips)
+        for (const auto& n : c.notes) first.push_back(n.startBeat);
+    for (const auto& c : song.sections[4].clips)
+        for (const auto& n : c.notes) second.push_back(n.startBeat);
+    EXPECT_FALSE(first.empty());
+    EXPECT_FALSE(second.empty());
+}

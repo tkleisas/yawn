@@ -29,7 +29,16 @@ function M.generate(params)
     else
         template = first.style.sections or sections.defaultTemplate
     end
-    local plan = sections.plan(template)
+    local plan = sections.plan(template, params.sectionLength or 1.0)
+    local repeats = math.floor(tonumber(params.repeats) or 1)
+    repeats = math.max(1, math.min(8, repeats))
+    if repeats > 1 then
+        local expanded = {}
+        for _ = 1, repeats do
+            for _, s in ipairs(plan) do expanded[#expanded + 1] = s end
+        end
+        plan = expanded
+    end
 
     local tempo = params.tempo
     if not tempo or tempo <= 0 then

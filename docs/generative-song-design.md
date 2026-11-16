@@ -106,6 +106,8 @@ C++ calls `require("init").generate(params)`. `params` fields:
 | `noteLength`  | number          | `-1` = style decides                 |
 | `swing`       | number          | `-1` = style decides                 |
 | `tempo`       | integer         | `0` = style decides                  |
+| `sectionLength` | number        | multiplier for every section's bars (0.25–4×) |
+| `repeats`     | integer         | repeat the section sequence 1–8×     |
 | `sections`    | array of strings| empty = style template               |
 | `beatsPerBar` | integer         | default 4                            |
 

@@ -37,6 +37,8 @@ struct GeneratorParams {
     float swing = -1.0f;
     int tempo = 0;
     int beatsPerBar = 4;
+    float sectionLength = 1.0f; // scales every section's bar count
+    int repeats = 1;            // repeat the whole section sequence
     std::vector<std::string> sections;
 };
 

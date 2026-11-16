@@ -26,6 +26,8 @@ nlohmann::json paramsToJson(const GeneratorParams& p) {
     j["swing"] = p.swing;
     j["tempo"] = p.tempo;
     j["beatsPerBar"] = p.beatsPerBar;
+    j["sectionLength"] = p.sectionLength;
+    j["repeats"] = p.repeats;
     j["sections"] = p.sections;
     return j;
 }
@@ -50,6 +52,8 @@ bool paramsFromJson(const nlohmann::json& j, GeneratorParams& out,
     p.swing = j.value("swing", -1.0f);
     p.tempo = j.value("tempo", 0);
     p.beatsPerBar = j.value("beatsPerBar", 4);
+    p.sectionLength = j.value("sectionLength", 1.0f);
+    p.repeats = j.value("repeats", 1);
     p.sections.clear();
     if (j.contains("sections") && j["sections"].is_array()) {
         for (const auto& s : j["sections"])
