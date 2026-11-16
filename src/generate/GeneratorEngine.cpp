@@ -84,16 +84,26 @@ int l_rng_chance(lua_State* L) {
 
 // Only .lua modules under the engine's script roots; no C modules, no
 // package.searchpath, no filesystem escape (`..`, absolute paths).
-int l_require(lua_State* L) {
+//
+// Errors are returned through `error` and raised by the thin wrapper
+// after every C++ object has been destroyed: luaL_error longjmps, and
+// longjmping with a live std::string/filesystem::path skips their
+// destructors (LeakSanitizer caught exactly that in the error paths).
+int requireImpl(lua_State* L, std::string& error) {
     auto* engine = engineFromLua(L);
-    if (!engine) return luaL_error(L, "generator engine not available");
+    if (!engine) {
+        error = "generator engine not available";
+        return -1;
+    }
 
+    const int base = lua_gettop(L);
     const char* cname = luaL_checkstring(L, 1);
     std::string name = cname;
     if (name.empty() || name[0] == '/' || name[0] == '\\' ||
         name.find("..") != std::string::npos ||
         name.find('\\') != std::string::npos) {
-        return luaL_error(L, "invalid generator module name '%s'", cname);
+        error = "invalid generator module name '" + name + "'";
+        return -1;
     }
 
     // Cache lookup. A "loading" marker detects require cycles.
@@ -101,10 +111,15 @@ int l_require(lua_State* L) {
     lua_getfield(L, -1, name.c_str());
     if (lua_isstring(L, -1) &&
         std::strcmp(lua_tostring(L, -1), "loading") == 0) {
-        return luaL_error(L, "circular require of module '%s'", cname);
+        error = "circular require of module '" + name + "'";
+        lua_settop(L, base);
+        return -1;
     }
-    if (!lua_isnil(L, -1)) return 1;
-    lua_pop(L, 2);
+    if (!lua_isnil(L, -1)) {
+        lua_remove(L, -2);  // drop the cache table, keep the value
+        return 1;
+    }
+    lua_settop(L, base);
 
     std::string rel = name;
     std::replace(rel.begin(), rel.end(), '.', '/');
@@ -118,8 +133,10 @@ int l_require(lua_State* L) {
         if (std::filesystem::is_regular_file(nested, ec)) { found = nested; break; }
     }
     if (found.empty()) {
-        return luaL_error(L, "generator module '%s' not found in %d script root(s)",
-                          cname, static_cast<int>(engine->scriptRoots().size()));
+        error = "generator module '" + name + "' not found in " +
+                std::to_string(engine->scriptRoots().size()) +
+                " script root(s)";
+        return -1;
     }
 
     // Mark as loading before executing so cycles fail cleanly.
@@ -130,13 +147,23 @@ int l_require(lua_State* L) {
 
     if (luaL_loadfilex(L, found.string().c_str(), "t") != LUA_OK) {
         const char* msg = lua_tostring(L, -1);
-        return luaL_error(L, "cannot load generator module '%s': %s",
-                          cname, msg ? msg : "unknown error");
+        error = "cannot load generator module '" + name + "': " +
+                (msg ? msg : "unknown error");
+        lua_getfield(L, LUA_REGISTRYINDEX, kCacheKey);
+        lua_pushnil(L);
+        lua_setfield(L, -2, name.c_str());
+        lua_settop(L, base);
+        return -1;
     }
     if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
         const char* msg = lua_tostring(L, -1);
-        return luaL_error(L, "error in generator module '%s': %s",
-                          cname, msg ? msg : "unknown error");
+        error = "error in generator module '" + name + "': " +
+                (msg ? msg : "unknown error");
+        lua_getfield(L, LUA_REGISTRYINDEX, kCacheKey);
+        lua_pushnil(L);
+        lua_setfield(L, -2, name.c_str());
+        lua_settop(L, base);
+        return -1;
     }
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
@@ -148,6 +175,19 @@ int l_require(lua_State* L) {
     lua_setfield(L, -2, name.c_str());
     lua_pop(L, 1);
     return 1;
+}
+
+int l_require(lua_State* L) {
+    const int base = lua_gettop(L);
+    std::string error;
+    const int result = requireImpl(L, error);
+    if (result < 0) {
+        lua_settop(L, base);
+        lua_pushlstring(L, error.data(), error.size());
+        std::string().swap(error);  // free before lua_error longjmps
+        return lua_error(L);
+    }
+    return result;
 }
 
 bool getIntField(lua_State* L, const char* field, int lo, int hi,
