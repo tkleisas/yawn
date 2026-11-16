@@ -14,6 +14,10 @@ return {
     density = { 0.3, 0.5 },
     noteLength = { 0.8, 1.6 },
     swing = 0.0,
+    chordSize = 3,
     chordRhythm = "whole",
+    bassStyle = "arp",
+    bassOctave = 2,
+    motifRepeat = 0.5,
     melody = { contour = "arch", ornament = 0.35 },
 }

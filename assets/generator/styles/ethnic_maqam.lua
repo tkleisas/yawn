@@ -1,0 +1,28 @@
+return {
+    id = "ethnic_maqam",
+    name = "Ethnic / Maqam",
+    tempo = { 80, 110 },
+    scales = { "hijaz", "rast", "bayati", "saba", "kurd", "nahawand" },
+    roots = { "D", "G", "A", "C" },
+    progressions = {
+        { "i", "i", "i", "i" },
+        { "i", "VII", "i", "VII" },
+    },
+    sections = { "intro", "verse", "chorus", "bridge", "chorus", "outro" },
+    density = { 0.35, 0.6 },
+    noteLength = { 0.3, 0.8 },
+    swing = 0.0,
+    chordVoicing = "drone",
+    chordRhythm = "drone",
+    bassStyle = "drone",
+    bassOctave = 2,
+    motifRepeat = 0.5,
+    drums = {
+        kick = "x-----x-x-------",
+        snare = "----x---x---x---",
+        hat = "x-x-x-x-x-x-x-x-",
+        openhat = "--------x-------",
+        crash = "x---------------",
+    },
+    melody = { contour = "arch", ornament = 0.45 },
+}

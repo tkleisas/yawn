@@ -21,27 +21,70 @@ M.scales = {
     pentatonic_major = { 0, 2, 4, 7, 9 },
     pentatonic_minor = { 0, 3, 5, 7, 10 },
     blues = { 0, 3, 5, 6, 7, 10 },
+    chromatic = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
+
+    ajam = { 0, 2, 4, 5, 7, 9, 11 },
     hijaz = { 0, 1, 4, 5, 7, 8, 10 },
+    hijaz_kar = { 0, 1, 4, 5, 7, 8, 11 },
     rast = { 0, 2, 3.5, 5, 7, 9, 10.5 },
     bayati = { 0, 1.5, 3, 5, 7, 8.5, 10 },
     saba = { 0, 1.5, 3, 4, 7, 8, 10 },
     kurd = { 0, 1, 3, 5, 7, 8, 10 },
     nahawand = { 0, 2, 3, 5, 7, 8, 10 },
-    raga_bhairav = { 0, 1, 4, 5, 7, 8, 11 },
-    raga_yaman = { 0, 2, 4, 6, 7, 9, 11 },
-    raga_bhairavi = { 0, 1, 3, 5, 7, 8, 10 },
+
+    just_major = { 0, 2.0391, 3.8631, 4.9804, 7.0196, 8.8436, 10.8827 },
+    just_minor = { 0, 2.0391, 3.1561, 4.9804, 7.0196, 8.1361, 10.1761 },
+    tet24 = {
+        0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5,
+        6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5,
+    },
+}
+
+-- Ragas are scales plus a melodic grammar: `asc`/`desc` list the
+-- permitted scale-degree indices (0-based) in each direction.
+M.ragas = {
+    raga_yaman = {
+        degrees = { 0, 2, 4, 6, 7, 9, 11 },
+        asc = { 0, 1, 2, 3, 4, 5, 6 },
+        desc = { 0, 1, 2, 3, 4, 5, 6 },
+    },
+    raga_bhairav = {
+        degrees = { 0, 1, 4, 5, 7, 8, 11 },
+        asc = { 0, 1, 2, 3, 4, 5, 6 },
+        desc = { 0, 1, 2, 3, 4, 5, 6 },
+    },
+    raga_bhimpalasi = {
+        degrees = { 0, 2, 3, 5, 7, 8, 10 },
+        asc = { 0, 2, 3, 4, 6 },
+        desc = { 0, 1, 2, 3, 4, 5, 6 },
+    },
+    raga_bageshri = {
+        degrees = { 0, 2, 3, 5, 7, 9, 10 },
+        asc = { 0, 3, 4, 5, 6 },
+        desc = { 0, 1, 2, 3, 4, 5, 6 },
+    },
+    raga_todi = {
+        degrees = { 0, 1, 3, 5, 7, 8, 11 },
+        asc = { 0, 1, 2, 3, 4, 5, 6 },
+        desc = { 0, 1, 2, 3, 4, 5, 6 },
+    },
 }
 
 M.scaleIds = {}
 for id in pairs(M.scales) do M.scaleIds[#M.scaleIds + 1] = id end
+for id in pairs(M.ragas) do M.scaleIds[#M.scaleIds + 1] = id end
 table.sort(M.scaleIds)
 
 local ROMAN = { I = 0, II = 1, III = 2, IV = 3, V = 4, VI = 5, VII = 6 }
 
+function M.scaleDef(id)
+    if M.scales[id] then return { degrees = M.scales[id] } end
+    if M.ragas[id] then return M.ragas[id] end
+    error("unknown scale '" .. tostring(id) .. "'")
+end
+
 function M.scale(id)
-    local s = M.scales[id]
-    if not s then error("unknown scale '" .. tostring(id) .. "'") end
-    return s
+    return M.scaleDef(id).degrees
 end
 
 function M.rootSemitone(root)
@@ -63,7 +106,6 @@ function M.semitone(root, scaleId, degree, octave)
          + 12 * ((octave or 4) - 4 + oct)
 end
 
--- Returns (midiPitch, cents) for the nearest semitone + remainder.
 function M.pitch(root, scaleId, degree, octave)
     local semis = M.semitone(root, scaleId, degree, octave)
     local pitch = math.floor(semis + 0.5)
@@ -86,6 +128,30 @@ function M.chord(root, scaleId, degree, octave, size)
         out[#out + 1] = { pitch = p, cents = c }
     end
     return out
+end
+
+function M.allowedDegrees(scaleId, rising)
+    local def = M.scaleDef(scaleId)
+    local n = #def.degrees
+    local list = rising and def.asc or def.desc
+    if not list then
+        list = {}
+        for i = 0, n - 1 do list[#list + 1] = i end
+    end
+    return list, n
+end
+
+-- Nearest permitted degree index (within one octave), mapped back to
+-- the caller's degree register.
+function M.nearestAllowed(scaleId, degree, rising)
+    local list, n = M.allowedDegrees(scaleId, rising)
+    local oct = math.floor(degree / n)
+    local idx = degree - oct * n
+    local best = list[1]
+    for _, d in ipairs(list) do
+        if math.abs(d - idx) < math.abs(best - idx) then best = d end
+    end
+    return oct * n + best
 end
 
 return M

@@ -16,11 +16,16 @@ return {
     density = { 0.45, 0.65 },
     noteLength = { 0.4, 0.8 },
     swing = 0.0,
+    chordSize = 3,
     chordRhythm = "half",
+    bassStyle = "root",
+    bassOctave = 2,
+    motifRepeat = 0.4,
     drums = {
         kick = "x---x---x---x---",
         snare = "----x-------x---",
         hat = "x-x-x-x-x-x-x-x-",
+        crash = "x---------------",
     },
     melody = { contour = "arch", ornament = 0.15 },
 }

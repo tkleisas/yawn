@@ -1,0 +1,32 @@
+return {
+    id = "metal",
+    name = "Metal / Djent",
+    tempo = { 120, 180 },
+    scales = { "natural_minor", "phrygian", "harmonic_minor" },
+    roots = { "E", "D", "A", "C" },
+    progressions = {
+        { "i", "VI", "III", "VII" },
+        { "i", "iv", "VII", "III" },
+        { "i", "i", "VI", "VII" },
+    },
+    sections = {
+        "intro", "verse", "chorus", "bridge", "chorus", "outro",
+    },
+    density = { 0.75, 0.95 },
+    noteLength = { 0.2, 0.4 },
+    swing = 0.0,
+    chordVoicing = "power",
+    chordRhythm = "16th",
+    chordOctave = 3,
+    bassStyle = "chug",
+    bassOctave = 1,
+    motifRepeat = 0.4,
+    drums = {
+        kick = "x-xx-xx-x-xx-xx-",
+        snare = "----x-------x---",
+        hat = "x-x-x-x-x-x-x-x-",
+        crash = "x---------------",
+        fill = "x-x-x-x-x-x-x-xx",
+    },
+    melody = { contour = "ascending", ornament = 0.0 },
+}

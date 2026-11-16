@@ -1,0 +1,30 @@
+return {
+    id = "raga",
+    name = "Raga",
+    tempo = { 60, 90 },
+    scales = {
+        "raga_yaman", "raga_bhairav", "raga_bhimpalasi",
+        "raga_bageshri", "raga_todi",
+    },
+    roots = { "C", "D", "G" },
+    progressions = {
+        { "I", "I", "I", "I" },
+    },
+    sections = { "intro", "verse", "chorus", "verse", "outro" },
+    density = { 0.3, 0.55 },
+    noteLength = { 0.5, 1.2 },
+    swing = 0.0,
+    chordVoicing = "drone",
+    chordRhythm = "drone",
+    bassStyle = "drone",
+    bassOctave = 2,
+    motifRepeat = 0.6,
+    drums = {
+        kick = "x-------x-------",
+        tom = "x---x-x-x---x-x-",
+        ltom = "--x-------x-----",
+        hat = "x-x-x-x-x-x-x-x-",
+        crash = "x---------------",
+    },
+    melody = { contour = "arch", ornament = 0.5 },
+}

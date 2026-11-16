@@ -1,0 +1,18 @@
+return {
+    id = "serial",
+    name = "Serial",
+    serial = true,
+    tempo = { 90, 130 },
+    scales = { "chromatic" },
+    roots = { "C" },
+    progressions = { { "I" } },
+    sections = { "intro", "verse", "bridge", "outro" },
+    lanes = { "bass", "chords", "lead" },
+    density = { 0.45, 0.7 },
+    noteLength = { 0.4, 0.8 },
+    swing = 0.0,
+    bassStyle = "root",
+    bassOctave = 2,
+    motifRepeat = 0.0,
+    melody = { contour = "random", ornament = 0.0 },
+}

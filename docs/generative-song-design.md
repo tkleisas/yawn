@@ -1,7 +1,8 @@
 # Generative Songs — design
 
-Status: P0 scaffold landed (engine host, Lua layout, microtuning plumbing,
-CLI). UI arrives in P2.
+Status: P0 + P1 core landed — Lua host, microtuning, CLI, full theory
+(maqams/ragas/just intonation/TET24), 10 styles, both blend modes.
+UI (P2) is next.
 
 This document is the agreed design for YAWN's generative song/pattern
 feature. The generator composes **notes only** (no sound design); the
@@ -205,20 +206,42 @@ and timeline placement are P3.
 
 ## Phases
 
-- **P0 (this scaffold):** design doc; `GeneratorEngine` Lua host;
-  script layout; 4 starter styles; theory/rhythm/melody/drums/sections/
-  blend skeleton; cents data model + playback plumbing; CLI
-  `--gen-song`; tests.
-- **P1:** full theory (maqams, ragas with aroha/avarohana), blend
-  engine both modes, 10 styles (pop, rock, classical, techno, house,
-  jazz, metal/djent, ethnic-maqam, raga, serial), richer melody/drums/
-  fills, deterministic golden tests, demo song.
-- **P2:** GeneratorPanel (style weights, all params, seed, sections,
-  locks, preview/commit), presets, MIDI Learn targets, docs/tutorial.
+- **P0 (landed):** design doc; `GeneratorEngine` Lua host;
+  script layout; theory/rhythm/melody/drums/sections/blend skeleton;
+  cents data model + playback plumbing; CLI `--gen-song`; tests.
+- **P1 (landed):** full theory (maqams, ragas with aroha/avarohana,
+  just intonation, TET24), both blend modes, 10 styles (pop, rock,
+  classical, techno, house, jazz, metal/djent, ethnic-maqam, raga,
+  serial), walking/arpeggio/drone/chug bass lines, motif melody reuse,
+  grace-note ornaments, richer drum lanes/fills, serial tone rows,
+  deterministic + theory + style + blend tests.
+- **P2 (next):** GeneratorPanel (style weights, all params, seed,
+  sections, locks, preview/commit), presets, MIDI Learn targets,
+  docs/tutorial.
 - **P3:** virtual MIDI port, per-track MIDI TX, SMF export with cents,
   arrangement commit + section markers.
 - **P4:** CLAP generator plugin (MIDI out, no audio) using the same
   Lua engine and validation.
+
+### Try it
+
+```
+# pop song preview (SMF, notes only)
+YAWN --gen-song /tmp/pop.mid --style pop --seed 7
+
+# blended: 30% rock, 30% classical, 40% techno
+YAWN --gen-song /tmp/blend.mid \
+     --style rock:0.3 --style classical:0.3 --style techno:0.4 \
+     --blend fuse --seed 5
+
+# microtonal maqam (Rast) with an ascending melodic line
+YAWN --gen-song /tmp/maqam.mid --style ethnic_maqam \
+     --scale rast --root D --movement ascending --seed 3
+
+# raga with aroha/avarohana and tabla
+YAWN --gen-song /tmp/raga.mid --style raga \
+     --scale raga_bhimpalasi --seed 4
+```
 
 ## Non-goals
 

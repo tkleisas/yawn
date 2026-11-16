@@ -321,6 +321,16 @@ bool GeneratorEngine::initState(std::string* error) {
     lua_setfield(m_L, -2, "lua_version");
     lua_setglobal(m_L, "yawn");
 
+    // Determinism: only yawn.rng is allowed to produce randomness.
+    lua_getglobal(m_L, "math");
+    if (lua_istable(m_L, -1)) {
+        lua_pushnil(m_L);
+        lua_setfield(m_L, -2, "random");
+        lua_pushnil(m_L);
+        lua_setfield(m_L, -2, "randomseed");
+    }
+    lua_pop(m_L, 1);
+
     lua_getglobal(m_L, "require");
     lua_pushstring(m_L, "init");
     if (lua_pcall(m_L, 1, 1, 0) != LUA_OK) {

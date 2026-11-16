@@ -1,0 +1,28 @@
+return {
+    id = "jazz",
+    name = "Jazz",
+    tempo = { 90, 140 },
+    scales = { "major", "dorian", "mixolydian" },
+    roots = { "C", "F", "Bb", "G" },
+    progressions = {
+        { "ii", "V", "I", "I" },
+        { "I", "vi", "ii", "V" },
+        { "iii", "vi", "ii", "V" },
+    },
+    sections = { "intro", "verse", "chorus", "verse", "outro" },
+    density = { 0.4, 0.6 },
+    noteLength = { 0.4, 0.8 },
+    swing = 0.62,
+    chordSize = 4,
+    chordRhythm = "stab",
+    bassStyle = "walk",
+    bassOctave = 2,
+    motifRepeat = 0.5,
+    drums = {
+        kick = "x-----x---------",
+        snare = "----x--g----x--g",
+        ride = "x--x--x-x--x--x-",
+        crash = "x---------------",
+    },
+    melody = { contour = "arch", ornament = 0.3 },
+}

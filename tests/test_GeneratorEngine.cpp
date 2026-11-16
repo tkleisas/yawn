@@ -247,3 +247,143 @@ TEST(GeneratorEngineTest, ScriptSyntaxErrorIsReported) {
 
     fs::remove_all(dir, ec);
 }
+
+namespace {
+
+bool semisInScale(double semis, const std::vector<double>& degrees) {
+    double pc = std::fmod(semis, 12.0);
+    if (pc < 0) pc += 12.0;
+    for (double d : degrees) {
+        double dpc = std::fmod(d, 12.0);
+        if (std::abs(pc - dpc) < 1e-2) return true;
+        if (std::abs(pc - dpc - 12.0) < 1e-2) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(GeneratorEngineTest, AllBundledStylesGenerate) {
+    namespace fs = std::filesystem;
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+
+    int styles = 0;
+    for (const auto& entry :
+         fs::directory_iterator(fs::path(YAWN_GENERATOR_DIR) / "styles")) {
+        if (entry.path().extension() != ".lua") continue;
+        const std::string id = entry.path().stem().string();
+        GeneratorParams p;
+        p.seed = 3;
+        p.styles = { { id, 1.0f } };
+        p.sections = { "intro", "verse", "chorus", "outro" };
+        GeneratedSong song;
+        ASSERT_TRUE(engine.generate(p, song, &error))
+            << id << ": " << error;
+        EXPECT_GT(song.totalNotes(), 0) << id;
+        ASSERT_FALSE(song.sections.empty()) << id;
+        for (const auto& sec : song.sections)
+            EXPECT_GE(sec.clips.size(), 3u) << id;
+        ++styles;
+    }
+    EXPECT_GE(styles, 10) << "expected the 10-style P1 batch";
+}
+
+TEST(GeneratorEngineTest, MicrotonalScalesStayInScale) {
+    struct ScaleCase {
+        const char* id;
+        std::vector<double> degrees;
+        bool expectCents;
+    };
+    const std::vector<ScaleCase> cases = {
+        { "rast", { 0, 2, 3.5, 5, 7, 9, 10.5 }, true },
+        { "bayati", { 0, 1.5, 3, 5, 7, 8.5, 10 }, true },
+        { "just_major",
+          { 0, 2.0391, 3.8631, 4.9804, 7.0196, 8.8436, 10.8827 }, true },
+        { "tet24",
+          { 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5,
+            6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5 }, true },
+        { "raga_bhimpalasi", { 0, 2, 3, 5, 7, 8, 10 }, false },
+    };
+
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+
+    for (const auto& sc : cases) {
+        GeneratorParams p;
+        p.seed = 4;
+        p.styles = { { "pop", 1.0f } };
+        p.scale = sc.id;
+        p.root = "C";
+        p.sections = { "verse", "chorus" };
+        GeneratedSong song;
+        ASSERT_TRUE(engine.generate(p, song, &error))
+            << sc.id << ": " << error;
+
+        int centsCount = 0;
+        for (const auto& sec : song.sections) {
+            for (const auto& clip : sec.clips) {
+                for (const auto& n : clip.notes) {
+                    if (n.channel == 9) continue;
+                    if (n.cents != 0.0f) ++centsCount;
+                    double semis = n.pitch + n.cents / 100.0;
+                    EXPECT_TRUE(semisInScale(semis, sc.degrees))
+                        << sc.id << " pitch " << n.pitch
+                        << " cents " << n.cents;
+                }
+            }
+        }
+        if (sc.expectCents)
+            EXPECT_GT(centsCount, 0) << sc.id;
+    }
+}
+
+TEST(GeneratorEngineTest, SerialStyleUsesTwelveToneRows) {
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+
+    GeneratorParams p = baseParams(21);
+    p.styles = { { "serial", 1.0f } };
+    GeneratedSong song;
+    ASSERT_TRUE(engine.generate(p, song, &error)) << error;
+    ASSERT_FALSE(song.sections.empty());
+
+    std::vector<bool> pc(12, false);
+    for (const auto& sec : song.sections)
+        for (const auto& clip : sec.clips)
+            for (const auto& n : clip.notes)
+                if (n.channel != 9) pc[n.pitch % 12] = true;
+
+    int used = 0;
+    for (bool b : pc) if (b) ++used;
+    EXPECT_EQ(used, 12) << "a twelve-tone row should use all pitch classes";
+}
+
+TEST(GeneratorEngineTest, BlendAllTenStylesBothModes) {
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+
+    const std::vector<std::string> ids = {
+        "pop", "rock", "classical", "techno", "house",
+        "jazz", "metal", "ethnic_maqam", "raga", "serial",
+    };
+    for (const char* mode : { "fuse", "rotate" }) {
+        GeneratorParams p = baseParams(31);
+        p.styles.clear();
+        for (const auto& id : ids) p.styles.push_back({ id, 1.0f });
+        p.blend = mode;
+        GeneratedSong song;
+        ASSERT_TRUE(engine.generate(p, song, &error))
+            << mode << ": " << error;
+        EXPECT_GT(song.totalNotes(), 0) << mode;
+        EXPECT_EQ(song.sections.size(), 4u) << mode;
+    }
+}
