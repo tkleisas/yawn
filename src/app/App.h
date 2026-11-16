@@ -33,6 +33,8 @@ int runAppProbeShader(int, char*[], int);
 #include "ui/panels/TransportPanel.h"
 #include "ui/panels/BrowserPanel.h"
 #include "ui/panels/VisualParamsPanel.h"
+#include "ui/panels/GeneratorPanel.h"
+#include "generate/GeneratorEngine.h"
 #include "ui/panels/LiveCodeConsole.h"
 #include "library/LibraryDatabase.h"
 #include "library/LibraryScanner.h"
@@ -258,6 +260,20 @@ private:
     void updateDetailForReturnBus(int bus);
     void updateDetailForMaster();
     void switchToView(ViewMode mode);
+
+    // Generative song panel + commit (docs/generative-song-design.md).
+    void initSongGenerator();
+    void showGeneratorPanel();
+    void hideGeneratorPanel();
+    void onGeneratorGenerate(const generate::GeneratorParams& params);
+    void onGeneratorCommit(const std::vector<std::string>& roles,
+                           const std::vector<int>& tracks);
+    void pollGeneratorParams();
+    void showGeneratorParamMenu(int slot, float mx, float my);
+    void onGeneratorLoadPreset(const std::string& name);
+    void onGeneratorSavePreset();
+    std::vector<std::filesystem::path> generatorScriptRoots() const;
+    std::vector<std::filesystem::path> generatorPresetDirs() const;
     void syncArrangementClipsToEngine(int trackIdx);
     // Empty a track's (or every track's) arrangement lane and return it to
     // session control. Undoable. See the "Clear Arrangement" menu items.
@@ -437,6 +453,14 @@ private:
     ui::fw2::ReturnMasterPanel*                 m_returnMasterPanel  = nullptr;
     std::unique_ptr<ui::fw2::VisualParamsPanel> m_visualParamsPanelOwner;
     ui::fw2::VisualParamsPanel*                 m_visualParamsPanel  = nullptr;
+    std::unique_ptr<ui::fw2::GeneratorPanel> m_generatorPanelOwner;
+    ui::fw2::GeneratorPanel*                 m_generatorPanel  = nullptr;
+    generate::GeneratorEngine m_songGenerator;
+    generate::GeneratedSong   m_generatedSong;
+    std::vector<std::string>  m_generatedRoles;
+    bool                      m_songGeneratorReady = false;
+    bool                      m_generatorOpen      = false;
+    uint32_t                  m_generatorParamVersion = 0;
     // v1 m_aboutDialog retired — use fw2::Dialog.
     // v1 m_confirmDialog retired — use fw2::ConfirmDialog.
     // TextInputDialog migrated to fw2 — value-typed member now.

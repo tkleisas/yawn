@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <set>
 
 extern "C" {
 #include <lua.h>
@@ -265,6 +266,56 @@ std::string GeneratorEngine::scriptsDir() const {
             return root.string();
     }
     return {};
+}
+
+std::vector<std::string> GeneratorEngine::listStyles() const {
+    std::set<std::string> seen;
+    std::vector<std::string> out;
+    for (const auto& root : m_roots) {
+        std::error_code ec;
+        const auto dir = root / "styles";
+        if (!std::filesystem::is_directory(dir, ec)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (ec) break;
+            if (!entry.is_regular_file()) continue;
+            if (entry.path().extension() != ".lua") continue;
+            const std::string id = entry.path().stem().string();
+            if (seen.insert(id).second) out.push_back(id);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<std::string> GeneratorEngine::listScales() const {
+    std::vector<std::string> out;
+    if (!m_ready || !m_L) return out;
+
+    lua_State* L = m_L;
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "require");
+    lua_pushstring(L, "theory");
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        lua_settop(L, base);
+        return out;
+    }
+    if (!lua_istable(L, -1)) {
+        lua_settop(L, base);
+        return out;
+    }
+    lua_getfield(L, -1, "scaleIds");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(luaL_len(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_isstring(L, -1))
+                out.emplace_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    lua_settop(L, base);
+    return out;
 }
 
 std::string GeneratorEngine::tracebackFromTop(const char* context) {

@@ -387,3 +387,30 @@ TEST(GeneratorEngineTest, BlendAllTenStylesBothModes) {
         EXPECT_EQ(song.sections.size(), 4u) << mode;
     }
 }
+
+TEST(GeneratorEngineTest, ListsStylesAndScales) {
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+
+    const auto styles = engine.listStyles();
+    EXPECT_GE(styles.size(), 10u);
+    EXPECT_NE(std::find(styles.begin(), styles.end(), "pop"), styles.end());
+    EXPECT_NE(std::find(styles.begin(), styles.end(), "serial"), styles.end());
+
+    const auto scales = engine.listScales();
+    EXPECT_NE(std::find(scales.begin(), scales.end(), "rast"), scales.end());
+    EXPECT_NE(std::find(scales.begin(), scales.end(), "major"), scales.end());
+    EXPECT_NE(std::find(scales.begin(), scales.end(), "raga_yaman"),
+              scales.end());
+}
+
+TEST(GeneratorEngineTest, ReloadTwiceIsSafe) {
+    GeneratorEngine engine;
+    engine.setScriptRoots({ YAWN_GENERATOR_DIR });
+    std::string error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+    ASSERT_TRUE(engine.reload(&error)) << error;
+    EXPECT_TRUE(engine.ready());
+}

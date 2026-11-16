@@ -37,6 +37,7 @@
 #include "ui/framework/v2/TabView.h"
 #include "ui/framework/v2/SplitView.h"
 #include "ui/framework/v2/ContentGrid.h"
+#include "ui/panels/GeneratorPanel.h"
 
 #include <cmath>
 
@@ -1813,6 +1814,16 @@ static void paintSplitView(Widget& w, UIContext& ctx) {
 // Children have already been rendered by ContentGrid::render() before
 // Widget::render() calls this painter.
 
+static void paintGeneratorPanel(Widget& w, UIContext& ctx) {
+    if (!ctx.renderer) return;
+    const Rect& b = w.bounds();
+    if (b.w <= 0.0f || b.h <= 0.0f) return;
+    const ThemePalette& p = theme().palette;
+    ctx.renderer->drawRect(b.x, b.y, b.w, b.h, p.panelBg);
+    ctx.renderer->drawRect(b.x, b.y, b.w, 3.0f, p.accent);
+    ctx.renderer->drawRectOutline(b.x, b.y, b.w, b.h, p.border, 1.0f);
+}
+
 static void paintContentGrid(Widget& w, UIContext& ctx) {
     if (!ctx.renderer) return;
     auto& cg = static_cast<ContentGrid&>(w);
@@ -1862,6 +1873,7 @@ void registerAllFw2Painters() {
     registerPainter(typeid(TabView),       &paintTabView);
     registerPainter(typeid(SplitView),     &paintSplitView);
     registerPainter(typeid(ContentGrid),   &paintContentGrid);
+    registerPainter(typeid(GeneratorPanel), &paintGeneratorPanel);
     // FwRadioGroup has no painter — it overrides render() to paint
     // its buttons directly. Stack is pure layout, also painter-less.
     // DropDown's popup is NOT a registered widget painter — it's a

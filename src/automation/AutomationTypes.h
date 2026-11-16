@@ -15,7 +15,8 @@ enum class TargetType : uint8_t {
     Mixer,          // Mixer channel control (volume, pan, send, etc.)
     Transport,      // Transport controls (BPM, play, stop, record)
     VisualKnob,     // Generic A..H knob on a visual layer (paramIndex = 0..7)
-    VisualParam     // Shader @range uniform on a visual layer (paramName)
+    VisualParam,    // Shader @range uniform on a visual layer (paramName)
+    GeneratorParam  // Generative-song parameter (paramIndex = GeneratorParamSlot)
 };
 
 // Sub-types for mixer automation (volume, pan, sends, etc.)

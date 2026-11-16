@@ -27,6 +27,7 @@ public:
     using ValueCallback   = std::function<void(float)>;
     using DragEndCallback = std::function<void(float startValue, float endValue)>;
     using ValueFormatter  = std::function<std::string(float)>;
+    using RightClickCallback = std::function<void(Point screen)>;
 
     FwNumberInput();
 
@@ -57,6 +58,7 @@ public:
     // ─── Callbacks ────────────────────────────────────────────────
     void setOnChange(ValueCallback cb)    { m_onChange = std::move(cb); }
     void setOnDragEnd(DragEndCallback cb) { m_onDragEnd = std::move(cb); }
+    void setOnRightClick(RightClickCallback cb) { m_onRightClick = std::move(cb); }
 
     // ─── Behaviour ────────────────────────────────────────────────
     // Pixels of vertical drag that sweep the full [min, max] range.
@@ -83,6 +85,7 @@ public:
 protected:
     // ─── Widget overrides ────────────────────────────────────────
     Size onMeasure(Constraints c, UIContext& ctx) override;
+    void onRightClick(const ClickEvent& e) override;
 
     void onDragStart(const DragEvent&) override;
     void onDrag(const DragEvent&)      override;
@@ -120,6 +123,7 @@ private:
     // Callbacks
     ValueCallback   m_onChange;
     DragEndCallback m_onDragEnd;
+    RightClickCallback m_onRightClick;
 
     // Inline edit state
     bool        m_editing = false;

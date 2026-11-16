@@ -492,6 +492,8 @@ void App::setupMenuBar() {
     });
 
     m_menuBar.addMenu("Tools", {
+        M::item("Generative Song...", [this]() { showGeneratorPanel(); }),
+        M::separator(),
         M::item("Generate Preset Library (balanced names)", [this]() {
             startPresetGeneration(0.5f, /*selectedDeviceOnly*/false);
         }),
@@ -530,6 +532,7 @@ void App::buildWidgetTree() {
     m_contentGridOwner       = std::make_unique<ContentGrid>();
     m_detailPanelOwner       = std::make_unique<DetailPanelWidget>();
     m_visualParamsPanelOwner = std::make_unique<VisualParamsPanel>();
+    m_generatorPanelOwner    = std::make_unique<GeneratorPanel>();
     m_pianoRollOwner         = std::make_unique<PianoRollPanel>();
     // v1 AboutDialog retired — fw2::Dialog drives the Help → About
     // prompt inline from the menu handler.
@@ -551,6 +554,7 @@ void App::buildWidgetTree() {
     m_contentGrid       = m_contentGridOwner.get();
     m_detailPanel       = m_detailPanelOwner.get();
     m_visualParamsPanel = m_visualParamsPanelOwner.get();
+    m_generatorPanel    = m_generatorPanelOwner.get();
     m_pianoRoll         = m_pianoRollOwner.get();
 
     m_preferencesDialog.setOnResult([this](ui::fw2::PreferencesResult result) {
@@ -727,6 +731,25 @@ void App::buildWidgetTree() {
             }
         });
     m_arrangementPanel->setVisible(false); // start in session view
+
+    // Generative song panel — shown in the ContentGrid top-left slot
+    // via showGeneratorPanel(); not part of the root column.
+    m_generatorPanel->setOnGenerate(
+        [this](const generate::GeneratorParams& p) { onGeneratorGenerate(p); });
+    m_generatorPanel->setOnCommit(
+        [this](const std::vector<std::string>& roles,
+               const std::vector<int>& tracks) {
+            onGeneratorCommit(roles, tracks);
+        });
+    m_generatorPanel->setOnClose([this]() { hideGeneratorPanel(); });
+    m_generatorPanel->setOnParamMenu(
+        [this](int slot, float x, float y) {
+            showGeneratorParamMenu(slot, x, y);
+        });
+    m_generatorPanel->setOnLoadPreset(
+        [this](const std::string& name) { onGeneratorLoadPreset(name); });
+    m_generatorPanel->setOnSavePreset([this]() { onGeneratorSavePreset(); });
+    m_generatorPanel->setVisible(false);
 
     // Wire the 4-quadrant layout. ContentGrid and every panel including
     // ArrangementPanel are fw2 now — panels plug in directly and the

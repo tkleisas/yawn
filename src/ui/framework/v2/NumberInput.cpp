@@ -229,6 +229,10 @@ void FwNumberInput::fireOnChange(ValueChangeSource src) {
     if (m_onChange) m_onChange(m_value);
 }
 
+void FwNumberInput::onRightClick(const ClickEvent& e) {
+    if (m_onRightClick) m_onRightClick(e.screen);
+}
+
 } // namespace fw2
 } // namespace ui
 } // namespace yawn

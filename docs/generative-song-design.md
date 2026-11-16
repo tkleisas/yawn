@@ -1,8 +1,10 @@
 # Generative Songs — design
 
-Status: P0 + P1 core landed — Lua host, microtuning, CLI, full theory
-(maqams/ragas/just intonation/TET24), 10 styles, both blend modes.
-UI (P2) is next.
+Status: P0–P2 landed — Lua host, microtuning, CLI, full theory
+(maqams/ragas/just intonation/TET24), 10 styles, both blend modes,
+GeneratorPanel with lane→track commit (session scenes, follow actions,
+undo), MIDI Learn targets, presets, and a user guide. Next: P3
+(virtual MIDI output, SMF cents export, arrangement markers).
 
 This document is the agreed design for YAWN's generative song/pattern
 feature. The generator composes **notes only** (no sound design); the
@@ -215,9 +217,11 @@ and timeline placement are P3.
   serial), walking/arpeggio/drone/chug bass lines, motif melody reuse,
   grace-note ornaments, richer drum lanes/fills, serial tone rows,
   deterministic + theory + style + blend tests.
-- **P2 (next):** GeneratorPanel (style weights, all params, seed,
-  sections, locks, preview/commit), presets, MIDI Learn targets,
-  docs/tutorial.
+- **P2 (landed):** GeneratorPanel (style weights, parameters, seed,
+  blend mode, lane→track mapping, generate/commit), session scenes
+  with follow-action chaining, undo, MIDI Learn targets for density/
+  note length/swing/tempo/style weights, JSON presets, and
+  `docs/generative-songs.md` (user guide + style authoring).
 - **P3:** virtual MIDI port, per-track MIDI TX, SMF export with cents,
   arrangement commit + section markers.
 - **P4:** CLAP generator plugin (MIDI out, no audio) using the same

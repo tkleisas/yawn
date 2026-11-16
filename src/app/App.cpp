@@ -503,6 +503,10 @@ void App::updateWindowTitle() {
 }
 
 void App::switchToView(ViewMode mode) {
+    if (m_generatorOpen) {
+        m_generatorOpen = false;
+        if (m_generatorPanel) m_generatorPanel->setVisible(false);
+    }
     m_project.setViewMode(mode);
     bool showArrangement = (mode == ViewMode::Arrangement);
     // ContentGrid and ArrangementPanel are both fw2 — swap the topLeft

@@ -180,6 +180,7 @@ void App::update() {
     // TCP UI command channel (YAWN_CMD) — accept/read/flush client
     // lines. No-op when the env var wasn't set at startup.
     pumpUiCommands();
+    pollGeneratorParams();
 
     // Piano roll holds a raw midi::MidiClip* pointer to whatever the
     // user opened for editing. Several slot-mutation paths (recording

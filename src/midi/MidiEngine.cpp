@@ -1,4 +1,5 @@
 #include "midi/MidiEngine.h"
+#include "generate/GeneratorParamBus.h"
 
 namespace yawn {
 namespace midi {
@@ -264,6 +265,9 @@ void MidiEngine::resolveAndSend(const automation::AutomationTarget& target, floa
             target.trackIndex, target.paramIndex, value);
         break;
     case TargetType::VisualParam:
+        break;
+    case TargetType::GeneratorParam:
+        generate::GeneratorParamBus::instance().write(target.paramIndex, value);
         break;
     }
 }

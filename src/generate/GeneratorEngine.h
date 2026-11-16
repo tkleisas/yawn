@@ -50,6 +50,12 @@ public:
     // First script root that contains init.lua (empty when none).
     std::string scriptsDir() const;
 
+    // Discovery for UI dropdowns. Styles come from styles/*.lua across
+    // all roots (higher-priority roots win; sorted). Scales come from
+    // theory.scaleIds in the loaded Lua state.
+    std::vector<std::string> listStyles() const;
+    std::vector<std::string> listScales() const;
+
     // Exposed for tests: deterministic RNG unit value.
     double rngUnit();
 

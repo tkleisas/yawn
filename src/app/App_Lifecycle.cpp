@@ -617,6 +617,9 @@ bool App::init() {
     m_controllerManager.scanScripts("scripts/controllers");
     m_controllerManager.autoConnect();
 
+    // Generative song engine (Lua composition layer).
+    initSongGenerator();
+
     // ── Live coding (docs/live-coding.md, phase 0) ──
     m_liveCode.init(&m_audioEngine, &m_project);
     m_liveCode.setToastHandler([this](const std::string& msg, float dur, int sev) {

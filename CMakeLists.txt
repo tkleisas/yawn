@@ -465,6 +465,9 @@ set(YAWN_CORE_SOURCES
     # Generative song layer — sandboxed Lua composition host + validation.
     # Lua is linked unconditionally below; no GL/audio deps here.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/generate/GeneratorEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/generate/GeneratorParamBus.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/generate/SongCommitter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/generate/GeneratorPreset.cpp
     # Audio subsystem (implementations split from headers)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TimeStretcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Transport.cpp
