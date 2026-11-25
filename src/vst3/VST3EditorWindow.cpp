@@ -36,6 +36,7 @@ bool VST3EditorWindow::open(VST3PluginInstance* instance,
     if (!instance) return false;
 
     m_instance = instance;
+    m_initialStateSent = false;
 
     // ── Create anonymous pipes for bidirectional IPC ──
     SECURITY_ATTRIBUTES sa;
@@ -149,6 +150,7 @@ void VST3EditorWindow::close() {
         m_pipeWrite = INVALID_HANDLE_VALUE;
     }
     m_readBuffer.clear();
+    m_initialStateSent = false;
     m_instance = nullptr;
 }
 
@@ -224,6 +226,7 @@ bool VST3EditorWindow::open(VST3PluginInstance* instance,
     (void)_ignore_sigpipe;
 
     m_instance = instance;
+    m_initialStateSent = false;
 
     int childIn[2]  = {-1, -1};  // parent writes childIn[1] -> child stdin childIn[0]
     int childOut[2] = {-1, -1};  // child writes childOut[1] -> parent reads childOut[0]
@@ -318,6 +321,7 @@ void VST3EditorWindow::close() {
     if (m_pipeRead  >= 0) { ::close(m_pipeRead);  m_pipeRead  = -1; }
     if (m_pipeWrite >= 0) { ::close(m_pipeWrite); m_pipeWrite = -1; }
     m_readBuffer.clear();
+    m_initialStateSent = false;
     m_instance = nullptr;
 }
 
@@ -382,6 +386,50 @@ void VST3EditorWindow::sendParamChange(unsigned int, double) {}
 #endif // _WIN32 / __linux__
 
 // ── Platform-agnostic line parser ──
+static std::string toHex(const std::vector<uint8_t>& data) {
+    static const char hex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(data.size() * 2);
+    for (uint8_t b : data) {
+        out.push_back(hex[b >> 4]);
+        out.push_back(hex[b & 0xF]);
+    }
+    return out;
+}
+
+void VST3EditorWindow::sendInitialState() {
+    if (!m_instance) return;
+
+    auto sendRaw = [this](const std::string& msg) {
+        if (msg.empty()) return;
+#ifdef _WIN32
+        if (m_pipeWrite == INVALID_HANDLE_VALUE) return;
+        DWORD written = 0;
+        WriteFile(m_pipeWrite, msg.data(), (DWORD)msg.size(), &written, nullptr);
+#else
+        if (m_pipeWrite < 0) return;
+        size_t off = 0;
+        while (off < msg.size()) {
+            ssize_t n = ::write(m_pipeWrite, msg.data() + off, msg.size() - off);
+            if (n <= 0) break;
+            off += (size_t)n;
+        }
+#endif
+    };
+
+    std::vector<uint8_t> processorState;
+    if (m_instance->getProcessorState(processorState) && !processorState.empty()) {
+        LOG_INFO("VST3", "Sending initial processor state (%zu bytes)", processorState.size());
+        sendRaw("STATE " + toHex(processorState) + "\n");
+    }
+    std::vector<uint8_t> controllerState;
+    if (m_instance->getControllerState(controllerState) && !controllerState.empty()) {
+        LOG_INFO("VST3", "Sending initial controller state (%zu bytes)", controllerState.size());
+        sendRaw("CSTATE " + toHex(controllerState) + "\n");
+    }
+    m_initialStateSent = true;
+}
+
 void VST3EditorWindow::processLine(const std::string& line) {
     if (line.size() > 6 && line[0] == 'P' && line[1] == 'A') {
         // "PARAM <id> <value>"
@@ -410,6 +458,8 @@ void VST3EditorWindow::processLine(const std::string& line) {
         }
     } else if (line == "READY") {
         LOG_INFO("VST3", "Editor process ready");
+        if (!m_initialStateSent)
+            sendInitialState();
     }
 }
 

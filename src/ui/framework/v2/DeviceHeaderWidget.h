@@ -55,6 +55,8 @@ public:
     void setOnRemove(ActionCallback cb)            { m_onRemove      = std::move(cb); }
     void setOnDragStart(ActionCallback cb)         { m_onDragStart   = std::move(cb); }
     void setOnPresetClick(PresetClickCallback cb)  { m_onPresetClick = std::move(cb); }
+    void setOnOpenEditor(ActionCallback cb)         { m_onOpenEditor = std::move(cb); }
+    void setEditorButtonVisible(bool v)             { m_showEditor = v; }
 
     // ─── Device-type stripe color ──────────────────────────────────────
     Color deviceColor() const {
@@ -87,6 +89,7 @@ public:
     Rect bypassBtnRect() const { return m_bypassBtn; }
     Rect removeBtnRect() const { return m_removeBtn; }
     Rect presetBtnRect() const { return m_presetBtn; }
+    Rect editorBtnRect() const { return m_editorBtn; }
 
     // ─── Layout ─────────────────────────────────────────────────────────
 
@@ -100,6 +103,9 @@ public:
         m_expandBtn = {x + 4,  y + 4, kBtnSize, kBtnSize};
         m_bypassBtn = {x + 22, y + 4, kBypassW, kBtnSize};
         m_removeBtn = m_removable ? Rect{x + w - 20, y + 4, kBtnSize, kBtnSize}
+                                   : Rect{};
+        const float buttonRight = m_removable ? (x + w - 24) : (x + w - 4);
+        m_editorBtn = m_showEditor ? Rect{buttonRight - 30, y + 4, 28, kBtnSize}
                                    : Rect{};
         recomputePresetRect(bounds, ctx);
     }
@@ -154,6 +160,20 @@ public:
                                          : ::yawn::ui::Theme::textPrimary;
         const float nameX = x + 22 + kBypassW + 6;
         if (tm) tm->drawText(r, m_name, nameX, m_expandBtn.y, kFsMed, nameC);
+
+        // VST3 editor button
+        if (m_showEditor) {
+            r.drawRect(m_editorBtn.x, m_editorBtn.y, m_editorBtn.w, m_editorBtn.h,
+                       Color{40, 70, 110, 255});
+            r.drawRectOutline(m_editorBtn.x, m_editorBtn.y, m_editorBtn.w, m_editorBtn.h,
+                              Color{90, 140, 200, 255});
+            if (tm) {
+                const float tw = tm->textWidth("UI", kFsTiny);
+                tm->drawText(r, "UI",
+                             m_editorBtn.x + (m_editorBtn.w - tw) * 0.5f,
+                             m_editorBtn.y + 3, kFsTiny, Color{190, 220, 255, 255});
+            }
+        }
 
         // Remove button
         if (m_removable) {
@@ -216,6 +236,11 @@ public:
                  m_presetBtn.w, m_presetBtn.h,
                  static_cast<int>(static_cast<bool>(m_onPresetClick)));
 
+        if (m_showEditor && hitTestRect(m_editorBtn, px, py)) {
+            if (m_onOpenEditor) m_onOpenEditor();
+            return true;
+        }
+
         if (hitTestRect(m_expandBtn, px, py)) {
             m_expanded = !m_expanded;
             if (m_onExpandToggle) m_onExpandToggle(m_expanded);
@@ -256,11 +281,14 @@ private:
     ActionCallback       m_onRemove;
     ActionCallback       m_onDragStart;
     PresetClickCallback  m_onPresetClick;
+    ActionCallback       m_onOpenEditor;
+    bool                 m_showEditor = false;
 
     Rect m_expandBtn{};
     Rect m_bypassBtn{};
     Rect m_removeBtn{};
     Rect m_presetBtn{};
+    Rect m_editorBtn{};
     float m_presetMarqueeFrame = 0.0f;  // billboard scroll for long preset names
 
     std::string presetButtonLabel() const {
@@ -288,7 +316,8 @@ private:
         const float presetH  = kHeaderH - kStripeH - 2;
         const float presetY  = y + kStripeH + 1;
         float       presetW  = labelW + 10;
-        const float maxRight = m_removable ? (x + w - 24) : (x + w - 4);
+        const float maxRight = m_showEditor ? (m_editorBtn.x - 4)
+                                            : (m_removable ? (x + w - 24) : (x + w - 4));
         if (presetX + presetW > maxRight) presetW = maxRight - presetX;
         if (presetW < 20) presetW = 20;
         m_presetBtn = {presetX, presetY, presetW, presetH};

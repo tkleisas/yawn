@@ -298,6 +298,10 @@ public:
         });
     }
     void setPresetName(const std::string& name) { m_header.setPresetName(name); }
+    void setEditorButtonVisible(bool v) { m_header.setEditorButtonVisible(v); }
+    void setOnOpenEditor(DeviceHeaderWidget::ActionCallback cb) {
+        m_header.setOnOpenEditor(std::move(cb));
+    }
 
     // ─── Knob edit forwarding (customBody is handled by wrapper) ────
 

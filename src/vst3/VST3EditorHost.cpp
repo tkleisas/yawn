@@ -136,6 +136,8 @@ static HWND g_mainHwnd = nullptr;
 
 class MemoryStream : public IBStream {
 public:
+    MemoryStream() = default;
+    explicit MemoryStream(const std::vector<uint8_t>& data) : m_data(data) {}
     tresult PLUGIN_API read(void* buffer, int32 numBytes, int32* numBytesRead) override {
         int32 avail = static_cast<int32>(m_data.size()) - m_pos;
         int32 toRead = (numBytes < avail) ? numBytes : avail;
@@ -667,10 +669,13 @@ static ::Atom g_wmDeleteAtom = 0;
 static const int g_stdoutFd = STDOUT_FILENO;
 static const int g_stdinFd = STDIN_FILENO;
 static volatile bool g_quit = false;
+static std::vector<uint8_t> g_lastSentState;
 
 // ── MemoryStream ──
 class MemoryStream : public IBStream {
 public:
+    MemoryStream() = default;
+    explicit MemoryStream(const std::vector<uint8_t>& data) : m_data(data) {}
     tresult PLUGIN_API read(void* buffer, int32 numBytes, int32* numBytesRead) override {
         int32 avail = static_cast<int32>(m_data.size()) - m_pos;
         int32 toRead = (numBytes < avail) ? numBytes : avail;
@@ -739,6 +744,11 @@ static void sendState() {
     auto* stream = new MemoryStream();
     if (g_component->getState(static_cast<IBStream*>(stream)) == kResultOk &&
         !stream->data().empty()) {
+        if (stream->data() == g_lastSentState) {
+            stream->release();
+            return;
+        }
+        g_lastSentState = stream->data();
         std::string hex = toHex(stream->data());
         std::string msg = "STATE " + hex + "\n";
         writePipe(msg.c_str(), static_cast<int>(msg.size()));
@@ -895,6 +905,38 @@ static EditorComponentHandler g_componentHandler;
 // ── stdin command parser ──
 static std::string g_stdinBuf;
 
+static bool decodeHex(const std::string& hex, std::vector<uint8_t>& out) {
+    if (hex.size() % 2 != 0 || hex.size() > (size_t)64 * 1024 * 1024) return false;
+    out.clear();
+    out.reserve(hex.size() / 2);
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+        unsigned byte = 0;
+        if (std::sscanf(hex.c_str() + i, "%2x", &byte) != 1) return false;
+        out.push_back(static_cast<uint8_t>(byte));
+    }
+    return true;
+}
+
+static void applyProcessorState(const std::vector<uint8_t>& data) {
+    if (!g_component || data.empty()) return;
+    auto* s = new MemoryStream(data);
+    Steinberg::IPtr<Steinberg::IBStream> sp(s, false);
+    if (g_component->setState(sp) != Steinberg::kResultOk) return;
+    g_lastSentState = data;
+    if (g_controller) {
+        auto* s2 = new MemoryStream(data);
+        Steinberg::IPtr<Steinberg::IBStream> sp2(s2, false);
+        g_controller->setComponentState(sp2);
+    }
+}
+
+static void applyControllerState(const std::vector<uint8_t>& data) {
+    if (!g_controller || data.empty()) return;
+    auto* s = new MemoryStream(data);
+    Steinberg::IPtr<Steinberg::IBStream> sp(s, false);
+    g_controller->setState(sp);
+}
+
 static void handleStdinLine(const std::string& line) {
     if (line.size() > 6 && line[0] == 'P' && line[1] == 'A') {
         unsigned rawId = 0;
@@ -903,6 +945,20 @@ static void handleStdinLine(const std::string& line) {
             if (g_controller) {
                 g_controller->setParamNormalized(static_cast<Vst::ParamID>(rawId), value);
             }
+        }
+    } else if (line.rfind("STATE ", 0) == 0) {
+        std::vector<uint8_t> data;
+        if (decodeHex(line.substr(6), data)) {
+            std::fprintf(stderr, "[yawn_vst3_host] applying initial processor state (%zu bytes)\n",
+                         data.size());
+            applyProcessorState(data);
+        }
+    } else if (line.rfind("CSTATE ", 0) == 0) {
+        std::vector<uint8_t> data;
+        if (decodeHex(line.substr(7), data)) {
+            std::fprintf(stderr, "[yawn_vst3_host] applying initial controller state (%zu bytes)\n",
+                         data.size());
+            applyControllerState(data);
         }
     } else if (line == "CLOSE") {
         g_quit = true;
@@ -1186,6 +1242,11 @@ int main(int argc, char* argv[]) {
         }
 
         int64_t now = RunLoopImpl::nowMs();
+        static int64_t lastStatePollMs = 0;
+        if (now - lastStatePollMs >= 500) {
+            lastStatePollMs = now;
+            sendState();
+        }
         int64_t nextDeadline = now + 50;  // 50 ms ceiling so we re-poll regularly
         for (auto& t : g_runLoop.m_timers) {
             if (t.nextFireMs < nextDeadline) nextDeadline = t.nextFireMs;

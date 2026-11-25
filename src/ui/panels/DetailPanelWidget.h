@@ -37,6 +37,10 @@
 #include "ui/framework/v2/Toggle.h"
 #include "ui/framework/v2/UIContext.h"
 #include "ui/Theme.h"
+#ifdef YAWN_HAS_VST3
+#include "vst3/VST3Instrument.h"
+#include "vst3/VST3Effect.h"
+#endif
 #include "audio/Clip.h"
 #include "audio/FollowAction.h"
 #include "audio/TransientDetector.h"
@@ -238,6 +242,8 @@ public:
     // Preset click: (DeviceType, chainIndex, screenX, screenY)
     using PresetClickCallback = std::function<void(DeviceType, int, float, float)>;
     void setOnPresetClick(PresetClickCallback cb) { m_onPresetClick = std::move(cb); }
+    using OpenEditorCallback = std::function<void(DeviceType, int)>;
+    void setOnOpenEditor(OpenEditorCallback cb) { m_onOpenEditor = std::move(cb); }
 
     // Update preset name shown on a device header
     void setDevicePresetName(DeviceType type, int chainIndex, const std::string& name) {
@@ -1560,6 +1566,20 @@ private:
 
     // ── Build params and wire callbacks for a DeviceWidget ──
     void configureDeviceWidget(DeviceWidget* dw, const DeviceRef& ref) {
+        bool isVst3 = false;
+#ifdef YAWN_HAS_VST3
+        if (ref.type == DeviceType::Instrument && ref.instrument)
+            isVst3 = dynamic_cast<vst3::VST3Instrument*>(ref.instrument) != nullptr;
+        else if (ref.type == DeviceType::AudioFx && ref.audioEffect)
+            isVst3 = dynamic_cast<vst3::VST3Effect*>(ref.audioEffect) != nullptr;
+#endif
+        dw->setEditorButtonVisible(isVst3);
+        if (isVst3) {
+            dw->setOnOpenEditor([this, type = ref.type, chainIdx = ref.chainIndex]() {
+                if (m_onOpenEditor) m_onOpenEditor(type, chainIdx);
+            });
+        }
+
         std::vector<DeviceWidget::ParamInfo> params;
         int count = ref.paramCount();
         for (int p = 0; p < count; ++p) {
@@ -1784,6 +1804,15 @@ private:
     bool setupInstrumentDisplay(DeviceWidget* dw, instruments::Instrument* inst,
                                 const DeviceRef& ref) {
         if (!inst) return false;
+#ifdef YAWN_HAS_VST3
+        // VST3 instruments have their own editor (and their own parameter
+        // names/ranges). The native YAWN display builders are matched by
+        // instrument name and assume the native parameter enum, so a VST3
+        // plugin called "Polivoks 1982" must use the generic host parameter
+        // grid instead of the native PolivoksPanel.
+        if (dynamic_cast<vst3::VST3Instrument*>(inst) != nullptr)
+            return false;
+#endif
         auto* builder = findInstrumentDisplayBuilder(inst->name());
         if (!builder) return false;
 
@@ -1864,6 +1893,12 @@ private:
     bool setupAudioEffectDisplay(DeviceWidget* dw, effects::AudioEffect* fx,
                                  const DeviceRef& ref) {
         if (!fx) return false;
+#ifdef YAWN_HAS_VST3
+        // Same name/id collision rule as instruments: a hosted VST3 effect
+        // has its own editor and must not be fed to a native effect panel.
+        if (dynamic_cast<vst3::VST3Effect*>(fx) != nullptr)
+            return false;
+#endif
         auto* builder = findAudioFxDisplayBuilder(fx->id());
         if (!builder) return false;
 
@@ -2037,6 +2072,7 @@ private:
     }
 
     std::function<void(DeviceType, int)> m_onRemoveDevice;
+    std::function<void(DeviceType, int)> m_onOpenEditor;
     std::function<void(DeviceType, int, int)> m_onMoveDevice;
     ParamTouchCallback     m_onParamTouch;
     ParamRightClickCallback m_onParamRightClick;

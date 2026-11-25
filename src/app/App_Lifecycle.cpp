@@ -1,6 +1,10 @@
 // App_Lifecycle.cpp — init() (SDL/GL/audio/MIDI/panel wiring), run()
 // and shutdown(). Split out of App.cpp.
 #include "app/App.h"
+#ifdef YAWN_HAS_VST3
+#include "vst3/VST3Instrument.h"
+#include "vst3/VST3Effect.h"
+#endif
 
 #include <cstdlib>
 #include "Version.h"
@@ -1335,6 +1339,36 @@ bool App::init() {
             }
             showMacroMappingMenu(t, mx, my);
         });
+
+#ifdef YAWN_HAS_VST3
+    m_detailPanel->setOnOpenEditor([this](ui::fw2::DetailPanelWidget::DeviceType type,
+                                           int chainIndex) {
+        auto getAudioEffect = [this](int ci) -> effects::AudioEffect* {
+            switch (m_detailTarget) {
+                case DetailTarget::Track:     return m_audioEngine.mixer().trackEffects(m_selectedTrack).effectAt(ci);
+                case DetailTarget::ReturnBus: return m_audioEngine.mixer().returnEffects(m_detailReturnBus).effectAt(ci);
+                case DetailTarget::Master:    return m_audioEngine.mixer().masterEffects().effectAt(ci);
+            }
+            return nullptr;
+        };
+        if (type == ui::fw2::DetailPanelWidget::DeviceType::Instrument) {
+            if (m_detailTarget != DetailTarget::Track) return;
+            if (m_selectedTrack < 0 || m_selectedTrack >= m_project.numTracks()) return;
+            auto* inst = m_audioEngine.instrument(m_selectedTrack);
+            auto* v = dynamic_cast<vst3::VST3Instrument*>(inst);
+            if (v && v->instance())
+                openVST3Editor(v->instance(), v->modulePath(), v->classIDString(),
+                               std::string(v->name()) + " - Track " +
+                                   std::to_string(m_selectedTrack + 1));
+        } else if (type == ui::fw2::DetailPanelWidget::DeviceType::AudioFx) {
+            auto* fx = getAudioEffect(chainIndex);
+            auto* v = dynamic_cast<vst3::VST3Effect*>(fx);
+            if (v && v->instance())
+                openVST3Editor(v->instance(), v->modulePath(), v->classIDString(),
+                               std::string(v->name()) + " - Editor");
+        }
+    });
+#endif
 
     // Wire preset click: open context menu with preset list + Save
     m_detailPanel->setOnPresetClick([this](ui::fw2::DetailPanelWidget::DeviceType type,

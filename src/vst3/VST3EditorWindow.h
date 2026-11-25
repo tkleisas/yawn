@@ -51,8 +51,10 @@ public:
 
 private:
     void processLine(const std::string& line);
+    void sendInitialState();
 
     VST3PluginInstance* m_instance = nullptr;
+    bool m_initialStateSent = false;
 
 #ifdef _WIN32
     HANDLE m_process = nullptr;

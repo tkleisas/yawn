@@ -557,9 +557,11 @@ public:
             float colW[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
             for (size_t i = 0; i < sec.params.size(); ++i)
             {
+                const int idx = sec.params[i];
+                if (idx < 0 || idx >= static_cast<int>(m_controls.size())) continue;
                 const int col = static_cast<int>(i) % cols;
                 if (col < 4)
-                    colW[col] = std::max(colW[col], cellWidth(m_controls[(size_t)sec.params[i]]));
+                    colW[col] = std::max(colW[col], cellWidth(m_controls[(size_t)idx]));
             }
 
             float cx = x;
@@ -568,8 +570,10 @@ public:
                 for (size_t i = 0; i < sec.params.size(); ++i)
                 {
                     if (static_cast<int>(i) % cols != col) continue;
+                    const int idx = sec.params[i];
+                    if (idx < 0 || idx >= static_cast<int>(m_controls.size())) continue;
                     const int row = static_cast<int>(i) / cols;
-                    auto& c = m_controls[(size_t)sec.params[i]];
+                    auto& c = m_controls[(size_t)idx];
                     const float cw = cellWidth(c);
                     Rect r{cx, bounds.y + 20.0f + row * 68.0f, cw, 64.0f};
                     c.bounds = r;
@@ -852,9 +856,11 @@ private:
         float colW[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         for (int i = 0; i < n; ++i)
         {
+            const int idx = s.params[(size_t)i];
+            if (idx < 0 || idx >= static_cast<int>(m_controls.size())) continue;
             const int col = i % cols;
             if (col < 4)
-                colW[col] = std::max(colW[col], cellWidth(m_controls[(size_t)s.params[i]]));
+                colW[col] = std::max(colW[col], cellWidth(m_controls[(size_t)idx]));
         }
         float w = 0.0f;
         for (int col = 0; col < cols && col < 4; ++col) w += colW[col];
