@@ -312,11 +312,14 @@ if(YAWN_HAS_NAM)
 endif()
 
 # ONNX Runtime (prebuilt) — inference engine shared by Basic Pitch and
-# Demucs stem separation. We grab the official prebuilt release for the
-# platform and locate its include/ + lib/ (the archive nests everything
-# under a versioned subdir).
-#   * Linux x64 : .tgz, link + run libonnxruntime.so (rpath).
-#   * Windows x64: .zip, link onnxruntime.lib, run onnxruntime.dll (copied
+# Demucs stem separation. We fetch Microsoft's official NuGet package,
+# which ships the C/C++ headers plus native binaries for every platform.
+#
+# (The GitHub release tarballs used before were removed when
+# microsoft/onnxruntime went 404 in November 2026. NuGet is the same
+# signed 1.20.1 build, distributed by Microsoft, and is still available.)
+#   * Linux x64 : runtimes/linux-x64/native/libonnxruntime.so (rpath).
+#   * Windows x64: runtimes/win-x64/native/onnxruntime.lib + .dll (copied
 #                  next to the exe — Windows has no rpath).
 # macOS is intentionally not wired (no test machine) — disable there.
 if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
@@ -327,52 +330,48 @@ if(YAWN_HAS_BASIC_PITCH OR YAWN_HAS_STEM_SEPARATION)
         set(YAWN_HAS_STEM_SEPARATION OFF CACHE BOOL "" FORCE)
     else()
         set(_ort_ver 1.20.1)
+        set(_ort_url https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${_ort_ver}/microsoft.ml.onnxruntime.${_ort_ver}.nupkg)
+        set(_ort_sha256 9c32108e9a1c78b090a95c2a219f244dd5f067d4caf68fb0f967103f3f20839c)
         if(WIN32)
-            set(_ort_url https://github.com/microsoft/onnxruntime/releases/download/v${_ort_ver}/onnxruntime-win-x64-${_ort_ver}.zip)
-            set(_ort_sha256 78d447051e48bd2e1e778bba378bec4ece11191c9e538cf7b2c4a4565e8f5581)
+            set(_ort_platform win-x64)
         else()
-            set(_ort_url https://github.com/microsoft/onnxruntime/releases/download/v${_ort_ver}/onnxruntime-linux-x64-${_ort_ver}.tgz)
-            set(_ort_sha256 67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105)
+            set(_ort_platform linux-x64)
         endif()
         # Integrity-pinned: without a hash, a silently corrupted or
-        # swapped archive would unpack straight into the build.
-        FetchContent_Declare(onnxruntime URL ${_ort_url}
-            URL_HASH SHA256=${_ort_sha256})
+        # swapped archive would unpack straight into the build. CMake
+        # extracts by extension, so give the .nupkg a .zip download name.
+        FetchContent_Declare(onnxruntime
+            URL ${_ort_url}
+            URL_HASH SHA256=${_ort_sha256}
+            DOWNLOAD_NAME onnxruntime-${_ort_ver}.zip)
         FetchContent_GetProperties(onnxruntime)
         if(NOT onnxruntime_POPULATED)
             FetchContent_Populate(onnxruntime)
         endif()
-        # Find the header + libs wherever the archive landed (it nests
-        # under onnxruntime-<platform>-x64-<ver>/).
-        file(GLOB_RECURSE _ort_hdrs
-            ${onnxruntime_SOURCE_DIR}/onnxruntime_cxx_api.h
-            ${onnxruntime_SOURCE_DIR}/*/onnxruntime_cxx_api.h)
+
+        set(_ort_include_dir ${onnxruntime_SOURCE_DIR}/build/native/include)
+        set(_ort_native_dir ${onnxruntime_SOURCE_DIR}/runtimes/${_ort_platform}/native)
         if(WIN32)
-            # Link against the import lib; the DLL is the runtime artifact
-            # copied beside the exe (see CMakeLists.txt POST_BUILD step).
-            file(GLOB _ort_link_libs
-                ${onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib
-                ${onnxruntime_SOURCE_DIR}/*/lib/onnxruntime.lib)
-            file(GLOB _ort_runtime_libs
-                ${onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll
-                ${onnxruntime_SOURCE_DIR}/*/lib/onnxruntime.dll)
+            set(ORT_SHARED_LIB ${_ort_native_dir}/onnxruntime.lib)
+            set(ORT_RUNTIME_LIB ${_ort_native_dir}/onnxruntime.dll)
         else()
-            file(GLOB _ort_link_libs
-                ${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.so
-                ${onnxruntime_SOURCE_DIR}/*/lib/libonnxruntime.so)
-            set(_ort_runtime_libs ${_ort_link_libs})
-        endif()
-        if(_ort_hdrs AND _ort_link_libs)
-            list(GET _ort_hdrs 0 _ort_hdr)
-            list(GET _ort_link_libs 0 ORT_SHARED_LIB)   # link target (import lib on Win)
-            get_filename_component(ORT_INCLUDE_DIR ${_ort_hdr} DIRECTORY)
-            get_filename_component(ORT_LIB_DIR ${ORT_SHARED_LIB} DIRECTORY)
-            if(_ort_runtime_libs)
-                list(GET _ort_runtime_libs 0 ORT_RUNTIME_LIB) # .dll on Win, .so on Linux
-            else()
-                set(ORT_RUNTIME_LIB ${ORT_SHARED_LIB})
+            set(ORT_SHARED_LIB ${_ort_native_dir}/libonnxruntime.so)
+            set(ORT_RUNTIME_LIB ${ORT_SHARED_LIB})
+            # NuGet ships the unversioned .so only, but its SONAME is
+            # libonnxruntime.so.1. Add the matching soname link so both
+            # build-tree runs and release packaging resolve the library.
+            if(EXISTS "${ORT_SHARED_LIB}" AND
+               NOT EXISTS "${_ort_native_dir}/libonnxruntime.so.1")
+                file(CREATE_LINK libonnxruntime.so
+                     "${_ort_native_dir}/libonnxruntime.so.1" SYMBOLIC)
             endif()
-            message(STATUS "ONNX Runtime at ${ORT_LIB_DIR}")
+        endif()
+
+        if(EXISTS "${_ort_include_dir}/onnxruntime_cxx_api.h" AND
+           EXISTS "${ORT_SHARED_LIB}" AND EXISTS "${ORT_RUNTIME_LIB}")
+            set(ORT_INCLUDE_DIR "${_ort_include_dir}")
+            set(ORT_LIB_DIR "${_ort_native_dir}")
+            message(STATUS "ONNX Runtime at ${ORT_LIB_DIR} (NuGet ${_ort_ver})")
         else()
             message(WARNING "ONNX feature on but ONNX Runtime headers/lib not "
                             "found under ${onnxruntime_SOURCE_DIR} — disabling.")

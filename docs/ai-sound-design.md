@@ -36,7 +36,7 @@ The LLM contributes semantic knowledge ("a supersaw needs detuned oscillators");
 
 The integration points all exist, verified in the codebase:
 
-- **ONNX Runtime** — vendored via FetchContent (ORT 1.20.1, SHA-pinned), already used offline/CPU-only with worker threads, cancellation atomics, and progress callbacks (`src/transcribe/`). Two model-delivery precedents: small models embedded as byte arrays (Basic Pitch), large models file-based with on-demand `curl` download (Demucs, ~170 MB).
+- **ONNX Runtime** — fetched via FetchContent from Microsoft's NuGet package (ORT 1.20.1, SHA-pinned), already used offline/CPU-only with worker threads, cancellation atomics, and progress callbacks (`src/transcribe/`). Two model-delivery precedents: small models embedded as byte arrays (Basic Pitch), large models file-based with on-demand `curl` download (Demucs, ~170 MB).
 - **Feature gating** — every heavy ML dep is an off-by-default CMake option (`YAWN_HAS_BASIC_PITCH`, `YAWN_HAS_STEM_SEPARATION`) with runtime `available()` + stub fallback. A new `YAWN_HAS_CLAP` fits this shape exactly.
 - **Self-describing parameters** — every instrument/effect exposes `parameterCount()` / `parameterInfo(i)` / `get/setParameter(i, v)` (`src/core/ParameterInfo.h`, `src/instruments/Instrument.h`, `src/effects/AudioEffect.h`), including names, ranges, categorical value labels, and formatting. Full JSON serialization of any device's params already exists (`src/presets/DevicePresetHelpers.h`).
 - **Prior art for parameter search** — `PresetGenerator` already does randomized param generation through the render pipeline (`src/app/App.cpp` `startPresetGeneration()`), with the exact worker-thread + atomic-progress + per-frame-poll pattern a scoring loop would reuse.

@@ -147,8 +147,10 @@ are gated behind CMake options:
 
 \* **Off by default for source builds, but ON in official release builds.**
 The two ONNX features share a prebuilt ONNX Runtime + Eigen, fetched via
-FetchContent when either flag is on. macOS is not wired (no test machine)
-and auto-disables.
+FetchContent when either flag is on. ONNX Runtime comes from Microsoft's
+official `Microsoft.ML.OnnxRuntime` NuGet package (SHA-pinned; its GitHub
+release archives were removed in November 2026). macOS is not wired (no
+test machine) and auto-disables.
 
 ```bash
 # Build with the ONNX audio-analysis features, like the official releases:

@@ -282,8 +282,9 @@ jobs:
           fi
           # Bundle the ONNX Runtime shared lib beside the binary (its rpath
           # includes $ORIGIN) so stem separation / Basic Pitch run from the
-          # package; -P preserves the libonnxruntime.so.1 -> .so.1.20.1 chain.
-          find build/_deps -path '*onnxruntime*/lib/libonnxruntime.so*' -print0 \
+          # package. NuGet ships the unversioned .so plus the
+          # libonnxruntime.so.1 soname link created by CMake.
+          find build/_deps -path '*onnxruntime*/runtimes/linux-x64/native/libonnxruntime.so*' -print0 \
             | xargs -0 cp -P -t "$dir/"
           # Bundle the Demucs stem-separation model (self-contained app).
           mkdir -p "$dir/models"
@@ -320,7 +321,7 @@ jobs:
 
           # ONNX Runtime (rpath $ORIGIN covers usr/bin, but LD_LIBRARY_PATH
           # in AppRun also covers usr/lib — put it with the other libs).
-          find build/_deps -path '*onnxruntime*/lib/libonnxruntime.so*' -print0 \
+          find build/_deps -path '*onnxruntime*/runtimes/linux-x64/native/libonnxruntime.so*' -print0 \
             | xargs -0 cp -P -t "$appdir/usr/lib/"
 
           # Demucs model (size-verified, same as the tarball).

@@ -174,7 +174,7 @@ under `build/_deps/`. Each carries its own LICENSE file:
 - **minimp3** — CC0 — https://github.com/lieff/minimp3
 - **Eigen** — MPL 2.0 — https://gitlab.com/libeigen/eigen
 - **NeuralAmpModelerCore** — MIT — https://github.com/sdatkinson/NeuralAmpModelerCore
-- **ONNX Runtime** — MIT — https://github.com/microsoft/onnxruntime (prebuilt, behind `YAWN_HAS_BASIC_PITCH`)
+- **ONNX Runtime** — MIT — https://onnxruntime.ai/ (prebuilt from Microsoft's `Microsoft.ML.OnnxRuntime` NuGet package, behind `YAWN_HAS_BASIC_PITCH`)
 - **basicpitch.cpp** — MIT — https://github.com/sevagh/basicpitch.cpp (vendored + adapted in `third_party/basicpitch/`)
 - **demucs.onnx** — MIT — https://github.com/sevagh/demucs.onnx (vendored + adapted in `third_party/demucs/`)
 - **tinygltf** — MIT — https://github.com/syoyo/tinygltf
